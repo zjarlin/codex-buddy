@@ -32,6 +32,7 @@ export interface DesktopControllerDependencies {
     rendererSource: string;
     enabledAgents: readonly string[];
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<RendererCdpControlSession>;
   startAttachmentServer(
     options: StartControllerAttachmentServerOptions,
@@ -278,6 +279,7 @@ export async function runDesktopController(
           "kimi-code",
         ],
         timeoutMs: PRODUCTION_INSTALL_TIMEOUT_MS,
+        signal,
       },
       dependencies,
     );

@@ -1001,6 +1001,9 @@ fn launch(
         }
     };
 
+    // Windows uses this loop to restart or retry after interactive Desktop conflicts.
+    // On macOS every branch returns, so Clippy's never_loop lint is a platform-specific false positive.
+    #[cfg_attr(target_os = "macos", allow(clippy::never_loop))]
     loop {
         let roots = desktop_root_process_ids_for_installation(&installation)?;
         let descriptor_path = default_descriptor_path()?;

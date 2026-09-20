@@ -64,7 +64,7 @@ describe("Renderer CDP Control Session", () => {
     ).toBeNull();
   });
 
-  it("registers future-document injection before evaluating the current document", async () => {
+  it("evaluates the current document before registering future-document injection", async () => {
     const client = rendererClient();
     const source = "globalThis.__codexhostInstalled = true";
     const session = await createRendererCdpControlSession({
@@ -85,11 +85,11 @@ describe("Renderer CDP Control Session", () => {
     expect(client.commands).toEqual([
       { method: "Runtime.enable" },
       { method: "Page.enable" },
-      { method: "Page.addScriptToEvaluateOnNewDocument", params: { source } },
       {
         method: "Runtime.evaluate",
         params: { expression: source, awaitPromise: true },
       },
+      { method: "Page.addScriptToEvaluateOnNewDocument", params: { source } },
     ]);
     expect(session.snapshot.binding).toEqual(readyBinding());
     session.close();

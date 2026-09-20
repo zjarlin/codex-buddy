@@ -299,6 +299,8 @@ describe("Renderer fixed Model request client", () => {
     expect(Object.keys(client).sort()).toEqual([
       "buddyCancel",
       "buddyConfigure",
+      "buddyContinue",
+      "buddyInterrupted",
       "buddyModels",
       "buddyPrivate",
       "buddyStatus",

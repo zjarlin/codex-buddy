@@ -1,4 +1,5 @@
 import { retainRendererHostResponses } from "./renderer-host-response-ownership.js";
+import { buddyTurnStartOptions } from "./buddy-turn-start-policy.js";
 
 export interface RendererDebugger {
   isAttached(): boolean;
@@ -52,6 +53,7 @@ export function installDraftPrewarmPolicyBridge(
   prewarmedThreadManager: RendererPrewarmedThreadManager,
   isCurrentManager?: () => boolean,
   retainResponses: typeof retainRendererHostResponses = retainRendererHostResponses,
+  turnStartOptions: typeof buddyTurnStartOptions = buddyTurnStartOptions,
 ): { state: "ready"; reason: "owned-request-bridge" } {
   const existing = target.__codexhostDraftPrewarmPolicyV1 as
     | {
@@ -528,14 +530,15 @@ export function installDraftPrewarmPolicyBridge(
   };
   const routedSend = (method: string, parameters: unknown, options?: unknown): unknown => {
     const routedParameters = method === "thread/start" ? routeThreadStart(parameters) : parameters;
+    const routedOptions = turnStartOptions(hostId, method, routedParameters, options);
     const sendBridged = (): Promise<unknown> =>
       initializeBridge().then(
-        () => enqueueBridgeRequest(method, routedParameters, options) as Promise<unknown>,
+        () => enqueueBridgeRequest(method, routedParameters, routedOptions) as Promise<unknown>,
       );
     const sendDirect = (): unknown =>
-      options === undefined
+      routedOptions === undefined
         ? originalSend.call(bridge, method, routedParameters)
-        : originalSend.call(bridge, method, routedParameters, options);
+        : originalSend.call(bridge, method, routedParameters, routedOptions);
     const unresolvedThreadId = shouldResolveThreadOwnership(method, routedParameters);
     if (unresolvedThreadId) {
       return resolveThreadOwnership(unresolvedThreadId).then(

@@ -843,9 +843,9 @@ mod tests {
             NativeHarnessBrokerPaths {
                 harness_id: "claude-code",
                 home: Path::new("/Users/moka"),
-                node: Path::new("/Applications/codexhost.app/Contents/Resources/runtime/node"),
+                node: Path::new("/Applications/codex-buddy.app/Contents/Resources/runtime/node"),
                 host_runtime: Path::new(
-                    "/Applications/codexhost.app/Contents/Resources/app/host-runtime.mjs",
+                    "/Applications/codex-buddy.app/Contents/Resources/app/host-runtime.mjs",
                 ),
             },
             501,
@@ -861,8 +861,8 @@ mod tests {
         assert_eq!(
             plan.program_arguments,
             [
-                "/Applications/codexhost.app/Contents/Resources/runtime/node",
-                "/Applications/codexhost.app/Contents/Resources/app/host-runtime.mjs",
+                "/Applications/codex-buddy.app/Contents/Resources/runtime/node",
+                "/Applications/codex-buddy.app/Contents/Resources/app/host-runtime.mjs",
                 "--codexhost-harness-broker",
             ]
         );

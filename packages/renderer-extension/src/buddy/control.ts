@@ -1,6 +1,6 @@
 import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
-import { createPrivateControl } from "./private-control.js";
+import { interruptedControl } from "./continuation.js";
 
 const messages = {
   "zh-CN": {
@@ -8,9 +8,18 @@ const messages = {
     disabled: "已关闭",
     disconnected: "未连接路由",
     enabled: "自动路由",
-    privateMode: "离线隐私模式（退出会清空）",
-    privateActive: "离线隐私 · 在线发送已阻止",
+    privateMode: "隐私",
+    privateActive: "隐私 · 自动选择离线模型",
     bypass: "精确命令旁路",
+    modeGroup: "运行模式",
+    routeGroup: "路由策略",
+    modelGroup: "模型偏好",
+    enabledHint: "按任务难度自动选择规划与执行模型",
+    privateHint: "只使用离线 q3 模型，优先于普通路由",
+    bypassHint: "精确命令直接执行，不请求模型",
+    roleHint: "自动时按任务类型选择 Git、IO 或编码角色",
+    plannerHint: "复杂任务只读规划",
+    workerHint: "指定后由单个模型执行，不使用子代理或自动换模",
     auto: "自动选择角色",
     git: "Git 智能体",
     io: "IO 操作智能体",
@@ -20,6 +29,8 @@ const messages = {
     choose: "动态选择",
     refresh: "刷新模型",
     cancel: "取消规划",
+    cancelRecovery: "取消自动续接",
+    retrying: "等待自动续接",
     roleLabel: "执行角色",
     reason: "路由依据",
     score: "规则难度分",
@@ -29,11 +40,12 @@ const messages = {
     steps: "执行步骤",
     checks: "验收条件",
     accepted: "服务端已接受",
+    involvedModels: "本次任务模型",
     plan: "执行任务包",
     command: "旁路命令",
     exit: "退出码",
-    note: "GPT / Claude 归夯，其余归垃。名称排序仅作偏好，不代表实时价格。仅 Codex 执行链启用。",
-    idle: "下一轮自动选择；简单操作直接由垃处理。",
+    note: "GPT / Claude 归夯，其余归垃。隐私模式自动选择可用的离线 q3 模型，不走夯规划。",
+    idle: "下一轮自动选择；隐私模式仅使用离线 q3 模型。",
     unknown: "未确认",
     noModel: "无模型 · 零推理请求",
     discovering: "读取实时候选",
@@ -49,9 +61,18 @@ const messages = {
     disabled: "Off",
     disconnected: "Router disconnected",
     enabled: "Auto Router",
-    privateMode: "Offline private mode (clears on exit)",
-    privateActive: "Private · Online sending blocked",
+    privateMode: "Private",
+    privateActive: "Private · Automatic offline model",
     bypass: "Exact command bypass",
+    modeGroup: "Mode",
+    routeGroup: "Routing",
+    modelGroup: "Models",
+    enabledHint: "Choose planning and execution models by task difficulty",
+    privateHint: "Use offline q3 models and take priority over normal routing",
+    bypassHint: "Run exact commands without a model request",
+    roleHint: "Automatically pick Git, IO, or code execution by task type",
+    plannerHint: "Read-only planning for complex tasks",
+    workerHint: "A fixed executor works alone, without subagents or automatic model switching",
     auto: "Automatic role",
     git: "Git agent",
     io: "IO agent",
@@ -61,6 +82,8 @@ const messages = {
     choose: "Dynamic selection",
     refresh: "Refresh models",
     cancel: "Cancel planning",
+    cancelRecovery: "Cancel recovery",
+    retrying: "Waiting to continue",
     roleLabel: "Execution role",
     reason: "Routing reason",
     score: "Rule difficulty score",
@@ -70,11 +93,12 @@ const messages = {
     steps: "Steps",
     checks: "Checks",
     accepted: "Accepted by server",
+    involvedModels: "Models for this task",
     plan: "Task packet",
     command: "Bypass command",
     exit: "Exit code",
-    note: "GPT / Claude = 夯; other models = 垃. Name ordering is a preference, not live pricing. Applies to Codex execution only.",
-    idle: "The next turn is routed automatically; simple operations use 垃 directly.",
+    note: "GPT / Claude = 夯; other models = 垃. Private mode automatically selects an available offline q3 model without 夯 planning.",
+    idle: "The next turn is routed automatically; private mode only uses offline q3 models.",
     unknown: "Unconfirmed",
     noModel: "No model · Zero inference requests",
     discovering: "Discovering models",
@@ -89,23 +113,34 @@ const messages = {
 
 const style = `
 [data-buddy-router]{position:relative;font:12px/1.5 system-ui;color:inherit;margin:6px 0;max-width:100%;z-index:20}
-[data-buddy-router] summary{cursor:pointer;display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;list-style:none;background:color-mix(in srgb,#4385ff 8%,transparent)}
-[data-buddy-router] summary:focus-visible,[data-buddy-router] button:focus-visible,[data-buddy-router] select:focus-visible{outline:2px solid #4385ff;outline-offset:2px}
-[data-buddy-router] summary b{color:#508df2;white-space:nowrap}[data-buddy-router] summary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-buddy-router] summary{cursor:pointer;display:flex;align-items:baseline;gap:8px;padding:6px 10px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;list-style:none;background:color-mix(in srgb,#4385ff 8%,transparent)}
+[data-buddy-router] summary:focus-visible,[data-buddy-router] button:focus-visible,[data-buddy-router] select:focus-visible,[data-buddy-router] .buddy-switch:focus-visible{outline:2px solid #4385ff;outline-offset:2px}
+[data-buddy-router] summary b{color:#508df2;white-space:nowrap}[data-buddy-router] summary span{min-width:0;overflow-wrap:anywhere;white-space:normal}
 [data-buddy-router] .buddy-panel{padding:12px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;margin-top:5px;background:var(--color-token-bg-primary,Canvas);color:var(--color-token-text-primary,CanvasText);max-height:380px;overflow:auto;color-scheme:light dark}
-[data-buddy-router] .buddy-settings{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
-[data-buddy-router] label{display:flex;gap:6px;align-items:center;max-width:100%}[data-buddy-router] select{max-width:250px;min-width:90px;flex-shrink:1}
-[data-buddy-router] select,[data-buddy-router] button{font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:6px;padding:4px 8px}
+[data-buddy-router] .buddy-settings{display:grid;gap:0;margin-bottom:10px}
+[data-buddy-router] .buddy-section{display:grid;gap:8px;padding:9px 0}
+[data-buddy-router] .buddy-section:first-child{padding-top:0}
+[data-buddy-router] .buddy-section:last-child{padding-bottom:0}
+[data-buddy-router] .buddy-section + .buddy-section{border-top:1px solid color-mix(in srgb,currentColor 14%,transparent)}
+[data-buddy-router] .buddy-section-title{font-size:11px;line-height:16px;font-weight:600;color:color-mix(in srgb,currentColor 62%,transparent)}
+[data-buddy-router] .buddy-setting{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
+[data-buddy-router] .buddy-setting + .buddy-setting{border-top:1px solid color-mix(in srgb,currentColor 9%,transparent);padding-top:8px}
+[data-buddy-router] .buddy-setting-copy{display:grid;gap:1px;min-width:0}
+[data-buddy-router] .buddy-setting-copy b{font-weight:500;line-height:18px}
+[data-buddy-router] .buddy-setting-copy small{font-size:11px;line-height:16px;color:color-mix(in srgb,currentColor 60%,transparent);white-space:normal}
+[data-buddy-router] .buddy-switch{appearance:none;position:relative;flex:0 0 auto;width:34px;height:20px;margin:0;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;background:color-mix(in srgb,currentColor 12%,transparent);cursor:pointer;transition:background-color .16s,border-color .16s}
+[data-buddy-router] .buddy-switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgb(0 0 0 / 28%);transition:transform .16s}
+[data-buddy-router] .buddy-switch:checked{border-color:#508df2;background:#508df2}
+[data-buddy-router] .buddy-switch:checked::after{transform:translateX(14px)}
+[data-buddy-router] .buddy-select{max-width:230px;min-width:120px;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:5px 8px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
+[data-buddy-router] .buddy-section>button{justify-self:start;margin-top:2px}
+[data-buddy-router] .buddy-actions:not(:empty){display:flex;gap:6px;margin:-2px 0 10px}
+[data-buddy-router] button{font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;padding:4px 10px}
 [data-buddy-router] option{background:Canvas;color:CanvasText}[data-buddy-router] button{cursor:pointer}
 [data-buddy-router] dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 12px;margin:10px 0}
 [data-buddy-router] dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}[data-buddy-router] dt{opacity:.65}
 [data-buddy-router] .buddy-note{opacity:.65;margin:6px 0 0}[data-buddy-router] [role=alert]{color:#d65f55;white-space:pre-wrap}
-@media(max-width:500px){[data-buddy-router] label{flex-wrap:wrap}[data-buddy-router] dl{grid-template-columns:minmax(0,1fr);gap:2px}[data-buddy-router] dd{margin-bottom:8px}}
-[data-buddy-private]{border-top:1px solid #508df2;margin-top:12px;padding-top:10px}
-[data-buddy-private][hidden]{display:none}[data-buddy-private] h3{font-size:14px;margin:0}
-[data-buddy-private] textarea{box-sizing:border-box;display:block;width:100%;resize:vertical;font:inherit;color:inherit;background:transparent;border:1px solid #508df2;border-radius:8px;padding:10px;margin:10px 0}
-[data-buddy-private] pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
-[data-buddy-private] .buddy-private-transcript{max-height:280px;overflow:auto}[data-buddy-private] [role=alert]{color:#d65f55}
+@media(max-width:500px){[data-buddy-router] .buddy-setting{align-items:flex-start}[data-buddy-router] .buddy-select{width:min(52vw,220px);min-width:0}[data-buddy-router] dl{grid-template-columns:minmax(0,1fr);gap:2px}[data-buddy-router] dd{margin-bottom:8px}}
 `;
 
 export interface BuddyControlContext {
@@ -117,7 +152,7 @@ export interface BuddyControlContext {
 export function installBuddyControl(
   getContext: () => BuddyControlContext | null,
   getLocale: () => "zh-CN" | "en",
-): { dispose(): void; refresh(): Promise<void> } {
+): { dispose(): void; refresh(): Promise<void>; refreshContext(): void } {
   const root = document.createElement("details");
   root.dataset.buddyRouter = "";
   const styles = document.createElement("style");
@@ -131,36 +166,23 @@ export function installBuddyControl(
   panel.className = "buddy-panel";
   const controls = document.createElement("div");
   controls.className = "buddy-settings";
+  const actions = document.createElement("div");
+  actions.className = "buddy-actions";
   const fields = document.createElement("dl");
   const error = document.createElement("p");
   error.setAttribute("role", "alert");
   const note = document.createElement("p");
-  const privateControl = createPrivateControl(getLocale);
   note.className = "buddy-note";
-  panel.append(controls, fields, error, note, privateControl.element);
+  panel.append(controls, actions, fields, error, note);
+  const recovery = document.createElement("div");
+  panel.append(recovery);
   root.append(styles, summary, panel);
   let disposed = false;
   let busy = false;
   let snapshot: BuddySnapshot | null = null;
   let context: BuddyControlContext | null = null;
   let fingerprint = "";
-  let guardedAnchor: HTMLElement | null = null;
-  let originalHidden: HTMLElement["hidden"] = false;
-  let originalInert = false;
-  const guardComposer = (anchor: Element | null, enabled: boolean): void => {
-    if (guardedAnchor && (guardedAnchor !== anchor || !enabled)) {
-      guardedAnchor.hidden = originalHidden;
-      guardedAnchor.inert = originalInert;
-      guardedAnchor = null;
-    }
-    if (enabled && anchor instanceof HTMLElement && guardedAnchor !== anchor) {
-      guardedAnchor = anchor;
-      originalHidden = anchor.hidden;
-      originalInert = anchor.inert;
-      anchor.hidden = true;
-      anchor.inert = true;
-    }
-  };
+  let recoveryClient: RendererModelClient | null = null;
   const t = () => messages[getLocale()];
   const report = (failure: unknown): void => {
     error.textContent = failure instanceof Error ? failure.message : String(failure);
@@ -184,26 +206,63 @@ export function installBuddyControl(
     dd.textContent = value;
     fields.append(dt, dd);
   };
-  const check = (label: string, key: "enabled" | "bypass" | "privateMode"): void => {
+  const section = (title: string): HTMLElement => {
+    const section = document.createElement("section");
+    section.className = "buddy-section";
+    const heading = document.createElement("div");
+    heading.className = "buddy-section-title";
+    heading.textContent = title;
+    section.append(heading);
+    controls.append(section);
+    return section;
+  };
+  const switchRow = (
+    parent: HTMLElement,
+    label: string,
+    key: "enabled" | "bypass" | "privateMode",
+    hint: string,
+  ): void => {
     const wrapper = document.createElement("label");
+    wrapper.className = "buddy-setting";
+    const copy = document.createElement("span");
+    copy.className = "buddy-setting-copy";
+    const title = document.createElement("b");
+    title.textContent = label;
+    const detail = document.createElement("small");
+    detail.textContent = hint;
+    copy.append(title, detail);
     const input = document.createElement("input");
     input.type = "checkbox";
+    input.className = "buddy-switch";
+    input.setAttribute("role", "switch");
     input.checked = snapshot?.settings[key] ?? false;
+    input.setAttribute("aria-checked", String(input.checked));
     input.addEventListener("change", () => {
+      input.setAttribute("aria-checked", String(input.checked));
       void setting({ [key]: input.checked });
     });
-    wrapper.append(input, document.createTextNode(label));
-    controls.append(wrapper);
+    wrapper.append(copy, input);
+    parent.append(wrapper);
   };
   const select = (
+    parent: HTMLElement,
     label: string,
+    hint: string,
     entries: [string, string][],
     selected: string,
     change: (id: string) => void,
   ): void => {
     const wrapper = document.createElement("label");
-    wrapper.append(document.createTextNode(label));
+    wrapper.className = "buddy-setting";
+    const copy = document.createElement("span");
+    copy.className = "buddy-setting-copy";
+    const title = document.createElement("b");
+    title.textContent = label;
+    const detail = document.createElement("small");
+    detail.textContent = hint;
+    copy.append(title, detail);
     const input = document.createElement("select");
+    input.className = "buddy-select";
     input.setAttribute("aria-label", label || t().roleLabel);
     for (const [id, text] of entries) {
       const option = document.createElement("option");
@@ -213,17 +272,17 @@ export function installBuddyControl(
     }
     input.value = selected;
     input.addEventListener("change", () => change(input.value));
-    wrapper.append(input);
-    controls.append(wrapper);
+    wrapper.append(copy, input);
+    parent.append(wrapper);
   };
-  const button = (label: string, action: () => Promise<void>): void => {
+  const button = (parent: HTMLElement, label: string, action: () => Promise<void>): void => {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = label;
     button.addEventListener("click", () => {
       void action().catch(report);
     });
-    controls.append(button);
+    parent.append(button);
   };
   const render = (): void => {
     const m = t();
@@ -231,16 +290,33 @@ export function installBuddyControl(
       status.textContent = m.disconnected;
       return;
     }
+    if (snapshot.settings.privateMode) {
+      recovery.replaceChildren();
+      recoveryClient = null;
+    } else if (context && recoveryClient !== context.client) {
+      recoveryClient = context.client;
+      recovery.replaceChildren(interruptedControl(context.client, getLocale() === "zh-CN"));
+    }
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
-    guardComposer(context?.anchor ?? null, snapshot.settings.privateMode);
-    privateControl.update(snapshot.settings.privateMode, context?.client ?? null);
+    const involvedModels = decision
+      ? [
+          ...new Set(
+            [
+              decision.plannerModel,
+              ...(decision.involvedModels ?? []),
+              decision.executorModel,
+              decision.acceptedModel,
+            ].filter((model): model is string => typeof model === "string" && model.length > 0),
+          ),
+        ]
+      : [];
     const phase = (d: BuddyDecision): string => (d.phase === "bypass" ? m.bypassPhase : m[d.phase]);
     status.textContent = snapshot.settings.privateMode
       ? m.privateActive
       : !snapshot.settings.enabled
         ? m.disabled
         : decision
-          ? `${phase(decision)} · ${decision.command ? m.noModel : decision.phase === "planning" ? (decision.plannerModel ?? m.waiting) : (decision.acceptedModel ?? decision.executorModel ?? m.waiting)}`
+          ? `${phase(decision)} · ${decision.command ? m.noModel : involvedModels.join(" · ") || m.waiting}`
           : m.waiting;
     const signature = JSON.stringify([snapshot, context?.threadId, getLocale()]);
     if (signature === fingerprint) {
@@ -248,57 +324,61 @@ export function installBuddyControl(
     }
     fingerprint = signature;
     controls.replaceChildren();
+    actions.replaceChildren();
     fields.replaceChildren();
     error.textContent = "";
-    check(m.privateMode, "privateMode");
-    if (snapshot.settings.privateMode) {
-      root.open = true;
-      note.textContent = "";
-      return;
-    }
-    check(m.enabled, "enabled");
-    check(m.bypass, "bypass");
-    select(
-      "",
-      ["auto", "git", "io", "executor"].map((role) => [
-        role,
-        m[role as "auto" | "git" | "io" | "executor"],
-      ]),
-      snapshot.settings.role,
-      (role) => {
-        void setting({ role: role as BuddySettings["role"] });
-      },
-    );
-    for (const [key, tier, label] of [
-      ["plannerModel", "夯", m.planner],
-      ["executorModel", "垃", m.worker],
-    ] as const) {
-      const options: [string, string][] = [
-        ["", m.choose],
-        ...snapshot.models
-          .filter((model) => model.eligible && model.tier === tier)
-          .map((model): [string, string] => [model.id, model.id]),
-      ];
-      const configured = snapshot.settings[key];
-      if (configured && !options.some(([id]) => id === configured)) {
-        options.push([configured, `${configured} (${m.unknown})`]);
+    const mode = section(m.modeGroup);
+    switchRow(mode, m.privateMode, "privateMode", m.privateHint);
+    switchRow(mode, m.enabled, "enabled", m.enabledHint);
+    if (!snapshot.settings.privateMode && snapshot.settings.enabled) {
+      const route = section(m.routeGroup);
+      switchRow(route, m.bypass, "bypass", m.bypassHint);
+      select(
+        route,
+        m.roleLabel,
+        m.roleHint,
+        ["auto", "git", "io", "executor"].map((role) => [
+          role,
+          m[role as "auto" | "git" | "io" | "executor"],
+        ]),
+        snapshot.settings.role,
+        (role) => {
+          void setting({ role: role as BuddySettings["role"] });
+        },
+      );
+      const models = section(m.modelGroup);
+      for (const [key, tier, label, hint] of [
+        ["plannerModel", "夯", m.planner, m.plannerHint],
+        ["executorModel", "垃", m.worker, m.workerHint],
+      ] as const) {
+        const options: [string, string][] = [
+          ["", m.choose],
+          ...snapshot.models
+            .filter((model) => model.eligible && model.tier === tier)
+            .map((model): [string, string] => [model.id, model.id]),
+        ];
+        const configured = snapshot.settings[key];
+        if (configured && !options.some(([id]) => id === configured)) {
+          options.push([configured, `${configured} (${m.unknown})`]);
+        }
+        select(models, label, hint, options, configured ?? "", (id) => {
+          void setting({ [key]: id || null });
+        });
       }
-      select(label, options, configured ?? "", (id) => {
-        void setting({ [key]: id || null });
+      button(models, m.refresh, async () => {
+        const client = context?.client;
+        if (!client?.buddyModels) {
+          return;
+        }
+        snapshot = await client.buddyModels();
+        render();
       });
     }
-    button(m.refresh, async () => {
-      const client = context?.client;
-      if (!client?.buddyModels) {
-        return;
-      }
-      snapshot = await client.buddyModels();
-      render();
-    });
     if (decision) {
       row(m.score, `${decision.score}/100 · ${m[decision.difficulty]}`);
       row(m.reason, decision.reason);
       row(m.planner, decision.plannerModel ?? "—");
+      row(m.involvedModels, decision.command ? m.noModel : involvedModels.join("\n") || m.unknown);
       row(m.worker, decision.command ? m.noModel : (decision.executorModel ?? "—"));
       row(m.accepted, decision.acceptedModel ?? (decision.command ? m.noModel : m.unknown));
       if (decision.command) {
@@ -325,8 +405,8 @@ export function installBuddyControl(
         }
         row(m.plan, packet);
       }
-      if (["planning", "discovering"].includes(decision.phase)) {
-        button(m.cancel, async () => {
+      if (["planning", "discovering", "retrying"].includes(decision.phase)) {
+        button(actions, decision.phase === "retrying" ? m.cancelRecovery : m.cancel, async () => {
           await context?.client.buddyCancel?.(decision.threadId);
           await refresh();
         });
@@ -336,21 +416,22 @@ export function installBuddyControl(
     }
     note.textContent = m.note;
   };
-  const refresh = async (): Promise<void> => {
-    if (disposed || busy) {
-      return;
-    }
-    const next = getContext();
+  const refreshContext = (): void => {
+    const next = disposed ? null : getContext();
+    context = next;
     if (!next) {
       root.remove();
-      context = null;
-      privateControl.update(false, null);
-      guardComposer(null, false);
       return;
     }
-    context = next;
     if (root.parentElement !== next.anchor.parentElement) {
       next.anchor.before(root);
+    }
+  };
+  const refresh = async (): Promise<void> => {
+    refreshContext();
+    const next = context;
+    if (!next || busy) {
+      return;
     }
     if (!next.client.buddyStatus) {
       status.textContent = t().disconnected;
@@ -367,9 +448,6 @@ export function installBuddyControl(
     } catch (failure) {
       status.textContent = t().disconnected;
       report(failure);
-      if (snapshot?.settings.privateMode) {
-        guardComposer(next.anchor, true);
-      }
     } finally {
       busy = false;
     }
@@ -380,11 +458,10 @@ export function installBuddyControl(
   void refresh();
   return {
     refresh,
+    refreshContext,
     dispose() {
       disposed = true;
       window.clearInterval(timer);
-      privateControl.dispose();
-      guardComposer(null, false);
       root.remove();
     },
   };

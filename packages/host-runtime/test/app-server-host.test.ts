@@ -1,6 +1,7 @@
 import type { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8154,6 +8155,30 @@ describe("AppServerHost HarnessAdapter projection", () => {
 });
 
 describe("Buddy privacy send boundary", () => {
+  async function startModelCatalog(ids: string[]) {
+    const server = createServer((req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      if (req.url === "/v1/models") {
+        res.end(JSON.stringify({ data: ids.map((id) => ({ id })) }));
+        return;
+      }
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: "not found" }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("fixture address missing");
+    }
+    return {
+      baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      close: async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      },
+    };
+  }
+
   it("keeps startup metadata available while privacy mode stays enabled", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "buddy-private-startup-"));
     writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
@@ -8182,16 +8207,151 @@ describe("Buddy privacy send boundary", () => {
         method: "turn/start",
         params: { threadId: "synthetic", input: [{ type: "text", text: "SYNTHETIC_PRIVATE" }] },
       });
+      const modelList = await readJsonLine(fixture.official.stdin);
+      fixture.official.stdout.write(
+        `${JSON.stringify({ id: modelList.id, error: { code: -1, message: "catalog unavailable" } })}\n`,
+      );
       await expect(
         fixture.collector.waitFor((message) => message.id === 660),
-      ).resolves.toMatchObject({ error: { code: -32091 } });
+      ).resolves.toMatchObject({ error: { code: -32090 } });
     } finally {
       await stopFixture(fixture);
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("blocks ordinary native and external task entry points before any private text is forwarded", async () => {
+  it("blocks private input when no deployed q3 model is available", async () => {
+    const catalog = await startModelCatalog(["gpt-6", "q3-4b-online"]);
+    const home = mkdtempSync(path.join(tmpdir(), "buddy-private-host-"));
+    writeFileSync(
+      path.join(home, "config.toml"),
+      `model_provider = "gateway"\n[model_providers.gateway]\nbase_url = ${JSON.stringify(catalog.baseUrl)}\nexperimental_bearer_token = "fixture-token"\n`,
+    );
+    writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
+    const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
+    const native = new JsonLineCollector(fixture.official.stdin);
+    await fixture.ready;
+    try {
+      fixture.desktopInput.write(
+        JSON.stringify({
+          id: 700,
+          method: "turn/start",
+          params: {
+            threadId: "synthetic-thread",
+            input: [{ type: "text", text: "SYNTHETIC_PRIVATE_CANARY" }],
+          },
+        }) + "\n",
+      );
+      const threadRead = await native.waitFor((message) => message.method === "thread/read");
+      fixture.official.stdout.write(
+        `${JSON.stringify({
+          id: threadRead.id,
+          result: {
+            thread: {
+              id: "synthetic-thread",
+              modelProvider: "gateway",
+              cwd: "/synthetic",
+              ephemeral: false,
+            },
+          },
+        })}\n`,
+      );
+      const modelList = await native.waitFor((message) => message.method === "model/list");
+      fixture.official.stdout.write(
+        `${JSON.stringify({ id: modelList.id, result: { data: [{ model: "gpt-6" }, { model: "q3-4b-online" }] } })}\n`,
+      );
+      await expect(
+        fixture.collector.waitFor((message) => message.id === 700),
+      ).resolves.toMatchObject({ id: 700, error: { code: -32090 } });
+      expect(JSON.stringify(native.messages)).not.toContain("SYNTHETIC_PRIVATE_CANARY");
+      expect(fixture.adapter.sessions).toHaveLength(0);
+      expect(fixture.diagnosticOutput.read()?.toString() ?? "").not.toContain(
+        "SYNTHETIC_PRIVATE_CANARY",
+      );
+    } finally {
+      await stopFixture(fixture);
+      await catalog.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it.each([null, "gpt-6", "q3-4b"])(
+    "automatically forwards private input with preference %s without leaking the internal marker",
+    async (executorModel) => {
+      const catalog = await startModelCatalog(["gpt-6", "q3-4b", "q3-14b"]);
+      const home = mkdtempSync(path.join(tmpdir(), "buddy-private-native-"));
+      writeFileSync(
+        path.join(home, "config.toml"),
+        `model_provider = "gateway"\n[model_providers.gateway]\nbase_url = ${JSON.stringify(catalog.baseUrl)}\nexperimental_bearer_token = "fixture-token"\n`,
+      );
+      writeFileSync(
+        path.join(home, "buddy-router.json"),
+        JSON.stringify({ privateMode: true, executorModel }),
+      );
+      const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
+      await fixture.ready;
+      try {
+        fixture.desktopInput.write(
+          JSON.stringify({
+            id: 710,
+            method: "turn/start",
+            params: {
+              threadId: "official-thread",
+              cwd: "/synthetic",
+              input: [{ type: "text", text: "SYNTHETIC_PRIVATE_NATIVE" }],
+              collaborationMode: { mode: "default", settings: {} },
+            },
+          }) + "\n",
+        );
+        const threadRead = await readJsonLine(fixture.official.stdin);
+        expect(threadRead).toMatchObject({ method: "thread/read" });
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: threadRead.id,
+            result: {
+              thread: {
+                id: "official-thread",
+                modelProvider: "gateway",
+                cwd: "/synthetic",
+                ephemeral: false,
+              },
+            },
+          })}\n`,
+        );
+        const modelList = await readJsonLine(fixture.official.stdin);
+        expect(modelList).toMatchObject({ method: "model/list" });
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: modelList.id,
+            result: { data: [{ model: "gpt-6" }, { model: "q3-4b" }, { model: "q3-14b" }] },
+          })}\n`,
+        );
+        const turnStart = await readJsonLine(fixture.official.stdin);
+        expect(turnStart).toMatchObject({
+          id: 710,
+          method: "turn/start",
+          params: {
+            threadId: "official-thread",
+            model: executorModel === "q3-4b" ? "q3-4b" : "q3-14b",
+            effort: null,
+          },
+        });
+        expect(JSON.stringify(turnStart)).not.toContain("codexhostBuddyPrivateTurn");
+        fixture.official.stdout.write(
+          `${JSON.stringify({ id: 710, result: { turn: { id: "private-turn" } } })}\n`,
+        );
+        await expect(
+          fixture.collector.waitFor((message) => message.id === 710),
+        ).resolves.toMatchObject({ result: { turn: { id: "private-turn" } } });
+      } finally {
+        await stopFixture(fixture);
+        await catalog.close();
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("blocks non-turn task entry points before any private text is forwarded", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "buddy-private-host-"));
     writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
@@ -8199,7 +8359,6 @@ describe("Buddy privacy send boundary", () => {
     await fixture.ready;
     try {
       const methods = [
-        "turn/start",
         "turn/steer",
         "thread/start",
         "thread/resume",
@@ -8211,7 +8370,7 @@ describe("Buddy privacy send boundary", () => {
         "codexhost/thread/fork",
       ];
       for (const [index, method] of methods.entries()) {
-        const id = 700 + index;
+        const id = 720 + index;
         fixture.desktopInput.write(
           JSON.stringify({
             id,

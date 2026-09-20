@@ -37,7 +37,7 @@ export interface DesktopControllerDependencies {
     options: StartControllerAttachmentServerOptions,
   ): Promise<ControllerAttachmentServer>;
   ready(readiness: DesktopControllerReadiness): void;
-  sleep(milliseconds: number): Promise<void>;
+  sleep(milliseconds: number, signal?: AbortSignal): Promise<void>;
   now?(): number;
   monitorIntervalMs: number;
 }
@@ -48,8 +48,11 @@ const RENDERER_CSP_BOOTSTRAP =
 const DESKTOP_CONTROLLER_READINESS_MAX_BYTES = 512;
 const TRANSIENT_INSTALL_ATTEMPTS = 3;
 const TRANSIENT_INSTALL_RETRY_MS = 250;
+const STARTUP_RENDERER_INSTALL_DELAY_MS = 3_000;
 const RECOVERY_RETRY_INITIAL_MS = 30_000;
 const RECOVERY_RETRY_MAX_MS = 300_000;
+// 默认在就绪发布后延迟注入，避开首屏提交；显式 attach 仍可提前恢复。
+const INSTALL_RENDERER_ON_STARTUP = process.env.CODEXHOST_STARTUP_RENDERER_INSTALL === "1";
 const startupTraceStartedAt = Date.now();
 
 function startupTrace(stage: string, detail?: unknown): void {
@@ -85,7 +88,21 @@ const defaultDependencies: DesktopControllerDependencies = {
   ready: (readiness) => {
     process.stdout.write(`${serializeDesktopControllerReadiness(readiness)}\n`);
   },
-  sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  sleep: (milliseconds, signal) =>
+    new Promise((resolve) => {
+      if (signal?.aborted) {
+        resolve();
+        return;
+      }
+      const timeout = setTimeout(finish, milliseconds);
+      signal?.addEventListener("abort", finish, { once: true });
+
+      function finish(): void {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", finish);
+        resolve();
+      }
+    }),
   monitorIntervalMs: 500,
 };
 
@@ -266,13 +283,17 @@ export async function runDesktopController(
     return installed;
   };
   startupTrace("initialization started");
-  try {
-    session = await createSession();
-    recordRecoverySuccess();
-  } catch (error) {
-    startupTrace("initial Renderer Session unavailable", error);
-    session = undefined;
-    recordRecoveryFailure();
+  if (INSTALL_RENDERER_ON_STARTUP) {
+    try {
+      session = await createSession();
+      recordRecoverySuccess();
+    } catch (error) {
+      startupTrace("initial Renderer Session unavailable", error);
+      session = undefined;
+      recordRecoveryFailure();
+    }
+  } else {
+    startupTrace("initial Renderer Session deferred");
   }
 
   let operation = Promise.resolve<unknown>(undefined);
@@ -324,8 +345,23 @@ export async function runDesktopController(
       state: "compatible",
       issues: [],
     });
+    if (!INSTALL_RENDERER_ON_STARTUP && !signal.aborted) {
+      startupTrace("waiting for Renderer startup stability");
+      await dependencies.sleep(STARTUP_RENDERER_INSTALL_DELAY_MS, signal);
+      if (!signal.aborted) {
+        await useSession(async () => {
+          try {
+            const current = await recoverSession();
+            await current.activateDesktop();
+            startupTrace("deferred Renderer Session activated");
+          } catch (error) {
+            startupTrace("deferred Renderer Session unavailable", error);
+          }
+        });
+      }
+    }
     while (!signal.aborted) {
-      await dependencies.sleep(dependencies.monitorIntervalMs);
+      await dependencies.sleep(dependencies.monitorIntervalMs, signal);
       if (signal.aborted) continue;
       await useSession(async () => {
         if (!session && now() < nextRecoveryAt) return;

@@ -4,6 +4,7 @@ import {
   CdpClient,
   getCdpBrowserVersion,
   listCdpTargets,
+  waitForRendererTarget,
   type CdpFetch,
   type CdpSocketFactory,
 } from "../src/index.js";
@@ -64,6 +65,29 @@ class FakeSocket {
 }
 
 describe("CDP client", () => {
+  it("does not let a navigating webview hide the primary renderer", async () => {
+    const targets = [
+      {
+        id: "loading",
+        type: "webview",
+        title: "",
+        url: "",
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/loading",
+      },
+      {
+        id: "main",
+        type: "page",
+        title: "Codex",
+        url: "app://-/index.html",
+        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/main",
+      },
+    ];
+    const fetchImpl: CdpFetch = async () => ({ ok: true, status: 200, json: async () => targets });
+    await expect(listCdpTargets("http://127.0.0.1:9222", fetchImpl)).resolves.toEqual(targets);
+    await expect(waitForRendererTarget("http://127.0.0.1:9222", { fetchImpl })).resolves.toEqual(
+      targets[1],
+    );
+  });
   it("validates and returns loopback page targets", async () => {
     const fetchImpl: CdpFetch = async (url) => ({
       ok: true,

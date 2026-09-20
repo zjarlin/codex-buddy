@@ -3,6 +3,8 @@ import type { HarnessCommandDescriptor, HarnessPermissionMode } from "@codexhost
 import type { RendererSettingsLocale } from "./settings/localization.js";
 
 export interface RendererHarnessMessages {
+  readonly refreshModels: string;
+  readonly refreshingModels: string;
   readonly commands: string;
   readonly harnessCommands: string;
   readonly commandsUnavailable: string;
@@ -17,6 +19,8 @@ export interface RendererHarnessMessages {
 }
 
 const ENGLISH_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
+  refreshModels: "Refresh models",
+  refreshingModels: "Refreshing models...",
   commands: "Commands",
   harnessCommands: "Harness commands",
   commandsUnavailable: "No Harness commands available yet",
@@ -32,6 +36,8 @@ const ENGLISH_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
 });
 
 const CHINESE_HARNESS_MESSAGES: RendererHarnessMessages = Object.freeze({
+  refreshModels: "刷新模型列表",
+  refreshingModels: "正在刷新模型列表...",
   commands: "命令",
   harnessCommands: "Harness 命令",
   commandsUnavailable: "暂无可用的 Harness 命令",

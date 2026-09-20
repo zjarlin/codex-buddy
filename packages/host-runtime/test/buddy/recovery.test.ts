@@ -27,6 +27,19 @@ function fixture() {
 }
 
 describe("automatic recovery", () => {
+  it("keeps an explicitly selected executor and stops after three failures", async () => {
+    const f = fixture();
+    f.service.watch("thread", "cheap-a", false);
+    for (let i = 1; i <= 3; i++) await f.fail(`turn-${i}`);
+    expect(f.resume.mock.calls.map((args: unknown[]) => args[2])).toEqual(["cheap-a", "cheap-a"]);
+    expect(f.nextModel).not.toHaveBeenCalled();
+    expect(f.report).toHaveBeenLastCalledWith(
+      "thread",
+      expect.stringContaining("未切换模型"),
+      "cheap-a",
+      true,
+    );
+  });
   it("continues twice on the same model, switches on the third failure and stops at nine", async () => {
     const f = fixture();
     for (let i = 1; i <= 9; i++) await f.fail(`turn-${i}`);

@@ -3,6 +3,7 @@ import { harnessModelRefSchema } from "@codexhost/shared-contracts";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import type * as RendererComposerDom from "../src/renderer-composer-dom.js";
+import type { BuddyControlContext } from "../src/buddy/control.js";
 import {
   isRendererModelPickerDisabled,
   type RendererModelControlView,
@@ -18,15 +19,24 @@ const testState = vi.hoisted(() => ({
   sendButton: null as unknown as HTMLButtonElement,
   renderedModelViews: [] as RendererModelControlView[],
   selectModel: null as null | ((modelId: string) => void),
+  refreshModels: undefined as undefined | (() => void),
   getConnectionDiagnostics: null as null | (() => RendererConnectionDiagnostics | null),
   getSessionImportClient: null as null | (() => RendererSessionImportClient | null),
   sidebarOptions: null as null | Parameters<typeof installRendererSidebarAgentIcons>[0],
   documentListeners: new Map<string, EventListener>(),
   modelTarget: ["conversation", "thread-a"] as readonly unknown[],
+  buddyContext: null as null | (() => BuddyControlContext | null),
 }));
 
 vi.mock("../src/buddy/control.js", () => ({
-  installBuddyControl: () => ({ refresh: vi.fn(async () => undefined), dispose: vi.fn() }),
+  installBuddyControl: (getContext: () => BuddyControlContext | null) => {
+    testState.buddyContext = getContext;
+    return {
+      refresh: vi.fn(async () => undefined),
+      refreshContext: vi.fn(),
+      dispose: vi.fn(),
+    };
+  },
 }));
 
 vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
@@ -41,6 +51,7 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
       ...args: Parameters<typeof RendererComposerDom.mountComposerAgentControl>
     ) => {
       testState.selectModel = args[7];
+      testState.refreshModels = args[11];
       return {
         composer: testState.composer,
         composerId: "composer-1",
@@ -232,6 +243,113 @@ afterEach(() => {
 });
 
 describe("Renderer binding Host-scoped Claude catalogs", () => {
+  it.each(["codex", "claude-code"])(
+    "exposes Auto Router only after confirming Codex ownership: %s",
+    async (owner) => {
+      installFakeBrowser();
+      let resolveOwnership!: (value: unknown) => void;
+      const ownership = new Promise((resolve) => {
+        resolveOwnership = resolve;
+      });
+      const host = {
+        inspectHarness: vi.fn(async () => readyInspection()),
+        inspectThread: vi.fn(() => ownership),
+        inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+        inspectThreadUsage: vi.fn(async () => ({ usage: null, accountCredits: null })),
+        subscribeThreadUsage: () => () => undefined,
+      };
+      const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex", "claude-code"],
+        defaultAgent: "codex",
+      });
+      probe.setAdapter(
+        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+        undefined,
+        vi.fn(() => true),
+        { ...host, currentHostId: () => "local", clientForHost: () => host } as never,
+      );
+      await vi.waitFor(() => expect(host.inspectThread).toHaveBeenCalled());
+      expect(testState.buddyContext?.()).toBeNull();
+      resolveOwnership(
+        owner === "codex"
+          ? { owner: "codex", locked: true }
+          : {
+              owner: "external",
+              harnessId: owner,
+              locked: true,
+              transportModelId: "codexhost/claude-code-native@claude-model-v1.b3B1cw",
+              effectiveModel: readyInspection().catalog.defaultModel,
+              history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
+            },
+      );
+      await vi.waitFor(() => expect(probe.status().selections[0]?.phase).toBe("locked"));
+      if (owner === "codex") {
+        expect(testState.buddyContext?.()).toMatchObject({ threadId: "thread-a", client: host });
+      } else {
+        expect(testState.buddyContext?.()).toBeNull();
+      }
+    },
+  );
+
+  it("refreshes the current catalog without replacing the selected Model and permits retry", async () => {
+    installFakeBrowser();
+    const initial = readyInspection();
+    const selected = initial.catalog.defaultModel;
+    const host = {
+      inspectHarness: vi.fn(async () => initial),
+      inspectThread: vi.fn(async () => ({
+        owner: "external",
+        harnessId: "claude-code",
+        locked: true,
+        transportModelId: "codexhost/claude-code-native@claude-model-v1.b3B1cw",
+        effectiveModel: selected,
+        history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
+      })),
+      inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+      inspectThreadUsage: vi.fn(async () => ({
+        threadId: "thread-a",
+        usage: null,
+        accountCredits: null,
+      })),
+      selectThreadModel: vi.fn(),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      vi.fn(() => true),
+      { ...host, currentHostId: () => "local", clientForHost: () => host } as never,
+    );
+    await vi.waitFor(() => expect(testState.renderedModelViews.at(-1)?.status).toBe("ready"));
+    host.inspectHarness.mockClear();
+    host.inspectHarness.mockRejectedValueOnce(new Error("Refresh failed"));
+    assert(testState.refreshModels);
+    testState.refreshModels();
+    testState.refreshModels();
+    await vi.waitFor(() =>
+      expect(testState.renderedModelViews.at(-1)?.error).toBe("Refresh failed"),
+    );
+    expect(host.inspectHarness).toHaveBeenCalledExactlyOnceWith({
+      harnessId: "claude-code",
+      refresh: true,
+    });
+    expect(testState.renderedModelViews.at(-1)?.catalog).toEqual(initial.catalog);
+    const updated = readyInspection("claude-model-v1.new");
+    host.inspectHarness.mockResolvedValueOnce(updated);
+    testState.refreshModels();
+    await vi.waitFor(() =>
+      expect(testState.renderedModelViews.at(-1)?.catalog).toEqual(updated.catalog),
+    );
+    expect(testState.renderedModelViews.at(-1)?.selected).toEqual(selected);
+    expect(host.selectThreadModel).not.toHaveBeenCalled();
+  });
+
   it("does not rediscover the request route for unrelated sidebar rows", async () => {
     installFakeBrowser();
     const host = {

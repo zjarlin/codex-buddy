@@ -4,9 +4,10 @@ import { parse } from "smol-toml";
 import { readConnection as readVendorConnection } from "./vendor/config/index.mjs";
 
 // 跟随 Codex 的已登录凭据，避免终端继承的其他供应商 OPENAI_API_KEY 覆盖 requires_openai_auth。
-export async function readConnection(home, environment = process.env) {
+export async function readConnection(home, environment = process.env, providerId) {
   const config = parse(await readFile(join(home, "config.toml"), "utf8"));
-  const provider = config.model_providers?.[config.model_provider || "openai"];
+  const activeProvider = providerId || config.model_provider || "openai";
+  const provider = config.model_providers?.[activeProvider];
   if (
     provider?.requires_openai_auth &&
     !provider.env_key &&
@@ -22,8 +23,12 @@ export async function readConnection(home, environment = process.env) {
       }
     }
     if (typeof auth?.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY) {
-      return readVendorConnection(home, { ...environment, OPENAI_API_KEY: auth.OPENAI_API_KEY });
+      return readVendorConnection(
+        home,
+        { ...environment, OPENAI_API_KEY: auth.OPENAI_API_KEY },
+        activeProvider,
+      );
     }
   }
-  return readVendorConnection(home, environment);
+  return readVendorConnection(home, environment, activeProvider);
 }

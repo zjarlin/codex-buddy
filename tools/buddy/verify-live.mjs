@@ -13,13 +13,14 @@ await writeFile(join(cwd, "README.md"), "Buddy read-only validation fixture.\n")
 const input = new PassThrough();
 const output = new PassThrough();
 const diagnostic = new PassThrough();
+diagnostic.resume();
 const host = new AppServerHost({
   stockCodexPath:
     process.env.CODEXHOST_STOCK_CODEX_PATH ?? "/Applications/ChatGPT.app/Contents/Resources/codex",
   arguments: ["app-server", "--listen", "stdio://"],
   defaultAgent: "codex",
   buddyRouting: true,
-  environment: process.env,
+  environment: { ...process.env, CODEXHOST_DATA_DIR: join(cwd, "host-data") },
   desktopInput: input,
   desktopOutput: output,
   diagnosticOutput: diagnostic,
@@ -101,7 +102,7 @@ try {
       input: [
         {
           type: "text",
-          text: "为只读验证设计一个最小方案并执行：读取当前目录 README.md，确认内容含 Buddy，然后报告结果。不要修改、创建、删除任何文件；不需要询问用户。",
+          text: "执行一次跨模块架构审查的只读演练：先生成最小验证计划，再执行唯一检查，读取当前目录 README.md 并确认内容含 Buddy，然后报告结果。演练范围只有这个文件，不需要审查其他架构；不要修改、创建、删除任何文件，不需要询问用户，不要委派。",
         },
       ],
     });
@@ -126,7 +127,16 @@ try {
     assert.ok(commands.length > 0, "Executor must perform the read-only check itself");
     assert.ok(commands.every((item) => item.exitCode === 0));
     console.log("PLANNING_EXECUTION", JSON.stringify(execution));
-    console.log("EXECUTOR_EVIDENCE", JSON.stringify(items));
+    console.log(
+      "EXECUTOR_EVIDENCE",
+      JSON.stringify(
+        commands.map(({ command, exitCode, aggregatedOutput }) => ({
+          command,
+          exitCode,
+          output: aggregatedOutput,
+        })),
+      ),
+    );
   }
 } finally {
   clearInterval(poll);

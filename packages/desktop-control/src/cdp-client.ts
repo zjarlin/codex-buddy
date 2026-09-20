@@ -90,7 +90,8 @@ function parseTarget(value: unknown): CdpTarget {
     id: nonEmptyString(value.id, "id"),
     type: nonEmptyString(value.type, "type"),
     title: typeof value.title === "string" ? value.title : "",
-    url: nonEmptyString(value.url, "url"),
+    // 新建的 webview 在导航前可能返回空 URL，不能让它阻断主窗口发现。
+    url: typeof value.url === "string" ? value.url : nonEmptyString(value.url, "url"),
     webSocketDebuggerUrl: nonEmptyString(value.webSocketDebuggerUrl, "webSocketDebuggerUrl"),
   };
   loopbackUrl(target.webSocketDebuggerUrl, ["ws:", "wss:"]);

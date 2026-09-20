@@ -667,6 +667,7 @@ export function installRendererBindingProbe(
     ...(options.defaultAgent ? { defaultAgent: options.defaultAgent } : {}),
   });
   const mountedByComposer = new Map<Element, MountedComposer>();
+  let buddyControl: ReturnType<typeof installBuddyControl> | null = null;
   const pendingReplacements = new Map<Element, PendingComposerReplacement>();
   let disposed = false;
   const disposeReasoningSoftWrap = installReasoningTranscriptSoftWrap(document);
@@ -851,6 +852,7 @@ export function installRendererBindingProbe(
   };
 
   const renderMounted = (mounted: MountedComposer): void => {
+    buddyControl?.refreshContext();
     const accounts = composerCodexAccounts(mounted.composer);
     const currentCodexAccount = accounts?.accounts.find(
       ({ accountId }) => accountId === accounts.readyAccountId,
@@ -1237,8 +1239,14 @@ export function installRendererBindingProbe(
     return true;
   };
 
-  const loadExternalCatalog = async (mounted: MountedComposer): Promise<void> => {
-    void refreshCommands(mounted);
+  const loadExternalCatalog = async (mounted: MountedComposer, refresh = false): Promise<void> => {
+    if (
+      refresh &&
+      (mounted.modelView.status === "loading" || mounted.modelView.status === "selecting")
+    )
+      return;
+    const previousView = mounted.modelView;
+    if (!refresh) void refreshCommands(mounted);
     const state = controller.get(mounted.composer);
     if (state.agent === "codex") return;
     const agent = state.agent;
@@ -1273,10 +1281,11 @@ export function installRendererBindingProbe(
       return;
     }
     mounted.modelView = {
+      ...(refresh ? previousView : {}),
       status: adapterStatus.state === "ready" ? "loading" : "waitingForAdapter",
-      thinkingSelectionSupported: false,
+      ...(!refresh ? { thinkingSelectionSupported: false } : {}),
     };
-    mounted.permissionModeView = { status: "idle" };
+    if (!refresh) mounted.permissionModeView = { status: "idle" };
     renderMounted(mounted);
     if (adapterStatus.state !== "ready") return;
     const generation = controller.beginModelRequest(mounted.composer);
@@ -1290,6 +1299,7 @@ export function installRendererBindingProbe(
       }
       const inspection = await client.inspectHarness({
         harnessId: externalHarnessIds[agent],
+        ...(refresh ? { refresh: true } : {}),
       });
       if (
         !isCurrentModelRequest(mounted, generation) ||
@@ -1302,6 +1312,19 @@ export function installRendererBindingProbe(
         return;
       }
       if (inspection.status !== "ready") throw new Error(inspection.error.message);
+      if (refresh && previousView.selected) {
+        const selectedAvailable = inspection.catalog.models.some(
+          ({ ref }) => ref.id === previousView.selected?.id,
+        );
+        mounted.modelView = {
+          ...previousView,
+          catalog: inspection.catalog,
+          status: selectedAvailable ? "ready" : "error",
+        };
+        if (selectedAvailable) delete mounted.modelView.error;
+        else mounted.modelView.error = "Selected Model is absent from the current Catalog";
+        return;
+      }
       const current = controller.get(mounted.composer);
       const previousModel = controller.modelForAgent(mounted.composer, agent);
       const previousModelAvailable =
@@ -1476,6 +1499,14 @@ export function installRendererBindingProbe(
       }
     } catch (error) {
       if (!isCurrentModelRequest(mounted, generation)) return;
+      if (refresh) {
+        mounted.modelView = {
+          ...previousView,
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        };
+        return;
+      }
       const selected = controller.modelForAgent(mounted.composer, agent);
       const selectedThinkingOptionId = controller.thinkingOptionForAgent(mounted.composer, agent);
       const selectedPermissionModeId = controller.permissionModeForAgent(mounted.composer, agent);
@@ -2330,6 +2361,10 @@ export function installRendererBindingProbe(
         const mounted = mountedByComposer.get(composer);
         if (mounted) selectCommand(mounted, command);
       },
+      () => {
+        const mounted = mountedByComposer.get(composer);
+        if (composer.isConnected && mounted) void loadExternalCatalog(mounted, true);
+      },
     );
     const mounted: MountedComposer = {
       composer,
@@ -2687,10 +2722,15 @@ export function installRendererBindingProbe(
       (mounted) => mounted.composer.isConnected && mounted.control.root.isConnected,
     );
 
-  const buddyControl = installBuddyControl(
+  buddyControl = installBuddyControl(
     () => {
       const mounted = connectedComposers()[0];
-      if (!mounted) {
+      if (
+        !mounted ||
+        controller.get(mounted.composer).agent !== "codex" ||
+        controller.isSwitching(mounted.composer) ||
+        isOwnershipSubmissionBlocked(mounted.ownershipStatus)
+      ) {
         return null;
       }
       const client = modelClientForHost(mounted.hostId ?? activeModelHostId() ?? "local");
@@ -2811,7 +2851,7 @@ export function installRendererBindingProbe(
     dispose() {
       if (disposed) return;
       disposed = true;
-      buddyControl.dispose();
+      buddyControl?.dispose();
       usageNotificationDispose?.();
       usageNotificationDispose = null;
       adapterDispose?.();

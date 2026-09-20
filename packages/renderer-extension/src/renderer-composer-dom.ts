@@ -609,6 +609,7 @@ export function mountComposerAgentControl(
   onSelectThinking: (thinkingOptionId: string) => void,
   onSelectPermissionMode: (permissionModeId: string) => void,
   onSelectCommand: (command: HarnessCommandDescriptor) => void,
+  onRefreshModels?: () => void,
 ): ComposerAgentControl {
   const nativeModelControl = captureNativeControl(nativeModelControlForComposer(composer));
   const nativeContextUsageControl = captureNativeControl(
@@ -627,7 +628,12 @@ export function mountComposerAgentControl(
     onDownload,
     onOpenProviderPicker,
   );
-  const modelPicker = mountRendererModelPicker(composerId, onSelectModel, onSelectThinking);
+  const modelPicker = mountRendererModelPicker(
+    composerId,
+    onSelectModel,
+    onSelectThinking,
+    onRefreshModels,
+  );
   const permissionModePicker = mountRendererPermissionModePicker(
     composerId,
     onSelectPermissionMode,
@@ -731,7 +737,13 @@ export function renderComposerAgentControl(
     pickerView.nativeModelHidden,
     switching || state.agent !== "codex",
   );
-  renderRendererModelPicker(control.modelPicker, modelView, state.agent !== "codex", state.agent);
+  renderRendererModelPicker(
+    control.modelPicker,
+    modelView,
+    state.agent !== "codex",
+    state.agent,
+    locale,
+  );
   const permissionModeVisible =
     state.agent !== "codex" &&
     permissionModeView.status !== "idle" &&

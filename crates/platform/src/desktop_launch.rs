@@ -33,6 +33,9 @@ pub type DesktopProcess = Child;
 
 const CODEXHOST_RELEASES_LATEST_URL: &str = "https://github.com/org-aio/codex-host/releases/latest";
 const REMOTE_SSH_MANAGED_ENV: &str = "CODEXHOST_REMOTE_SSH_MANAGED";
+// NODE_OPTIONS is intended for the launcher Node process. Passing Node-only
+// flags such as --openssl-legacy-provider into Electron can abort startup.
+const NODE_OPTIONS_ENV: &str = "NODE_OPTIONS";
 const REMOTE_PROFILE_ONLY_ENVIRONMENT: [&str; 3] = [
     "CODEX_INSTALL_DIR",
     "CODEXHOST_DATA_DIR",
@@ -42,6 +45,7 @@ const REMOTE_PROFILE_ONLY_ENVIRONMENT: [&str; 3] = [
 fn remove_codexhost_environment(command: &mut Command, names: impl IntoIterator<Item = OsString>) {
     for name in names {
         if name == CODEX_CLI_PATH_ENV
+            || name == NODE_OPTIONS_ENV
             || (cfg!(target_os = "windows") && name == "CODEX_NODE_REPL_PATH")
             || name.to_string_lossy().starts_with("CODEXHOST_")
         {
@@ -201,6 +205,7 @@ fn configure_managed_desktop_environment(
     managed: &[(OsString, OsString)],
 ) {
     let inherited = inherited.into_iter().collect::<Vec<_>>();
+    remove_codexhost_environment(command, inherited.iter().map(|(name, _)| name.clone()));
     let inherited_remote_profile = inherited
         .iter()
         .any(|(name, value)| name == REMOTE_SSH_MANAGED_ENV && value == std::ffi::OsStr::new("1"));
@@ -940,8 +945,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     use super::desktop_launch_command;
     use super::{
-        CODEXHOST_RELEASES_LATEST_URL, DesktopSession, configure_managed_desktop_environment,
-        external_url_command, remove_codexhost_environment,
+        CODEXHOST_RELEASES_LATEST_URL, DesktopSession, NODE_OPTIONS_ENV,
+        configure_managed_desktop_environment, external_url_command, remove_codexhost_environment,
     };
     #[cfg(target_os = "linux")]
     use super::{
@@ -1294,6 +1299,7 @@ mod tests {
                 OsString::from("CODEX_CLI_PATH"),
                 OsString::from("CODEXHOST_HOST_RUNTIME_PATH"),
                 OsString::from("UNRELATED"),
+                OsString::from(NODE_OPTIONS_ENV),
             ],
         );
         let environment = command.get_envs().collect::<Vec<_>>();
@@ -1301,6 +1307,7 @@ mod tests {
         assert!(
             environment.contains(&(std::ffi::OsStr::new("CODEXHOST_HOST_RUNTIME_PATH"), None,))
         );
+        assert!(environment.contains(&(std::ffi::OsStr::new(NODE_OPTIONS_ENV), None)));
         assert!(!environment.iter().any(|(name, _)| *name == "UNRELATED"));
     }
 
@@ -1355,11 +1362,7 @@ mod tests {
         for name in ["CODEX_INSTALL_DIR", "CODEXHOST_REMOTE_SSH_MANAGED"] {
             assert!(environment.contains(&(std::ffi::OsStr::new(name), None)));
         }
-        assert!(
-            !environment
-                .iter()
-                .any(|(name, _)| *name == "CODEXHOST_NPM_PACKAGE_ROOT")
-        );
+        assert!(environment.contains(&(std::ffi::OsStr::new("CODEXHOST_NPM_PACKAGE_ROOT"), None,)));
     }
 
     #[cfg(target_os = "macos")]

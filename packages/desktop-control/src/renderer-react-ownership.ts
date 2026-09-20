@@ -6,9 +6,9 @@ type Fiber = Record<string, unknown>;
  */
 export function committedReactAncestors(value: unknown): readonly Fiber[] {
   // Self-contained: Desktop Control serializes this function for Renderer evaluation.
-  // Bound traversal work, not valid UI nesting. Existing Thread layouts can
-  // exceed 200 ancestors even when their request manager is nearby.
-  const MAX_VISITED_FIBERS = 20_000;
+  // 长会话的历史区域可能超过两万个节点；树宽度与祖先深度分别设上限。
+  const MAX_VISITED_FIBERS = 100_000;
+  const MAX_PARENT_FIBERS = 20_000;
   const fiber = (value: unknown): Fiber | null =>
     typeof value === "object" && value !== null ? (value as Fiber) : null;
   const first = fiber(value);
@@ -16,7 +16,7 @@ export function committedReactAncestors(value: unknown): readonly Fiber[] {
   const previous: Fiber[] = [];
   const seen = new Set<Fiber>();
   for (let node: Fiber | null = first; node; node = fiber(node.return)) {
-    if (seen.has(node) || seen.size >= MAX_VISITED_FIBERS) return [];
+    if (seen.has(node) || seen.size >= MAX_PARENT_FIBERS) return [];
     seen.add(node);
     previous.push(node);
   }

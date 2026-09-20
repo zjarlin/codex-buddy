@@ -1,6 +1,7 @@
 import type { CdpClient } from "./cdp-client.js";
 import { committedReactAncestors } from "./renderer-react-ownership.js";
 import { retainRendererHostResponses } from "./renderer-host-response-ownership.js";
+import { buddyTurnStartOptions } from "./buddy-turn-start-policy.js";
 import {
   installDraftPrewarmPolicyBridge,
   installDraftPrewarmPolicyInRenderer,
@@ -188,6 +189,7 @@ const INSTALL_RENDERER_POLICY_FUNCTION = `function(requestClient, hostId, prewar
     prewarmedThreadManager,
     () => (${IS_CURRENT_REQUEST_MANAGER})(this, requestClient, hostId, prewarmedThreadManager),
     (${retainRendererHostResponses.toString()}),
+    (${buddyTurnStartOptions.toString()}),
   );
 }`;
 const REQUEST_MANAGER_WAIT_TIMEOUT_MS = 60_000;
@@ -218,6 +220,7 @@ function directRendererInstaller(): string {
         selected.manager, selected.requestClient, selected.hostId, selected.prewarmedThreadManager,
       ),
       (${retainRendererHostResponses.toString()}),
+      (${buddyTurnStartOptions.toString()}),
     );
   })()`;
 }

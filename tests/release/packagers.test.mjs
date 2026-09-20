@@ -17,11 +17,11 @@ describe("platform packagers", () => {
     expect(source).toContain("sips -s format png");
     expect(source).toContain("iconutil -c icns");
     expect(source).toContain("CFBundleIconFile");
-    expect(source).toContain("codexhost.icns");
+    expect(source).toContain("codex-buddy.icns");
     expect(source).toContain("create-dmg");
     expect(source).toContain("--window-size 800 400");
     expect(source).toContain("--window-pos 200 120");
-    expect(source).toContain('--icon "codexhost.app" 200 190');
+    expect(source).toContain('--icon "codex-buddy.app" 200 190');
     expect(source).toContain("--app-drop-link 600 185");
     expect(source).toContain("installer-background.png");
     expect(source).not.toContain("layout_dmg_window");
@@ -53,7 +53,7 @@ describe("platform packagers", () => {
     expect(workflow).toContain("Revalidate tag and CI immediately before npm publication");
     expect(workflow).toContain("Revalidate tag and CI immediately before GitHub publication");
 
-    expect(workflow).toContain("codexhost-*.dmg");
+    expect(workflow).toContain("codex-buddy-*.dmg");
     expect(workflow).toContain("codexhost-*.exe");
     expect(workflow).not.toContain("codexhost-*.msi");
     expect(workflow).toContain("npm run release:npm --");

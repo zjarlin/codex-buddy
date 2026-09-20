@@ -8,6 +8,15 @@ export {
   buddyDecisionSchema,
 } from "./buddy-router.js";
 export type { BuddySettings, BuddySnapshot, BuddyDecision, BuddyModel } from "./buddy-router.js";
+export { buddyPlanSchema, buddyPlanTaskSchema, buddyPlanOutputSchema } from "./buddy-plan.js";
+export type { BuddyPlan, BuddyPlanTask } from "./buddy-plan.js";
+export {
+  BUDDY_INTERRUPTED_METHOD,
+  BUDDY_CONTINUE_METHOD,
+  buddyContinueSchema,
+  buddyInterruptedSchema,
+  type BuddyInterrupted,
+} from "./buddy-router.js";
 import { z } from "zod";
 import { WORKSPACE_CONTRACT_VERSION } from "./version.js";
 export {

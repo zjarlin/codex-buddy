@@ -35,6 +35,7 @@ export function homePath(value?: string): string;
 export function readConnection(
   home: string,
   env?: NodeJS.ProcessEnv,
+  providerId?: string,
 ): Promise<{
   config: Record<string, unknown>;
   providerId: string;

@@ -169,6 +169,8 @@ describe("production Desktop Controller", () => {
       state: "compatible",
       issues: [],
     });
+    expect(ready.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0]);
+    expect(activateDesktop).toHaveBeenCalledOnce();
     expect(ensureInstalled).toHaveBeenCalledOnce();
     expect(server.close).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
@@ -177,12 +179,14 @@ describe("production Desktop Controller", () => {
 
   it("retries a transient Renderer evaluation failure during cold startup", async () => {
     const abort = new AbortController();
-    abort.abort();
     const close = vi.fn();
     const session: RendererCdpControlSession = {
       snapshot: controllerSnapshot(),
       ensureInstalled: vi.fn(),
-      activateDesktop: vi.fn(async () => 1),
+      activateDesktop: vi.fn(async () => {
+        abort.abort();
+        return 1;
+      }),
 
       executeRenderer: vi.fn(),
       close,
@@ -209,7 +213,8 @@ describe("production Desktop Controller", () => {
     });
 
     expect(install).toHaveBeenCalledTimes(3);
-    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledWith(3_000, abort.signal);
     expect(sleep).toHaveBeenCalledWith(250);
     expect(ready).toHaveBeenCalledWith({ schemaVersion: 2, state: "compatible", issues: [] });
     expect(close).toHaveBeenCalledOnce();
@@ -248,14 +253,13 @@ describe("production Desktop Controller", () => {
     });
 
     expect(install).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(1);
+    expect(sleep).toHaveBeenCalledWith(1, abort.signal);
     expect(ready).toHaveBeenCalledWith({ schemaVersion: 2, state: "compatible", issues: [] });
     expect(close).toHaveBeenCalledOnce();
   });
 
   it("suppresses a structural installation failure and starts attachment", async () => {
     const abort = new AbortController();
-    abort.abort();
     const ready = vi.fn();
     const startAttachmentServer = vi.fn(async () => attachmentServer());
     const install = vi.fn(async () => {
@@ -267,7 +271,9 @@ describe("production Desktop Controller", () => {
       install,
       startAttachmentServer,
       ready,
-      sleep: vi.fn(async () => {}),
+      sleep: vi.fn(async (milliseconds) => {
+        if (milliseconds === 1) abort.abort();
+      }),
       monitorIntervalMs: 1,
     });
 
@@ -279,7 +285,6 @@ describe("production Desktop Controller", () => {
 
   it("suppresses an unclassified inspection failure without leaking its error", async () => {
     const abort = new AbortController();
-    abort.abort();
     const ready = vi.fn();
     const startAttachmentServer = vi.fn(async () => attachmentServer());
     await runDesktopController(controllerOptions(), abort.signal, {
@@ -289,7 +294,9 @@ describe("production Desktop Controller", () => {
       install: vi.fn(),
       startAttachmentServer,
       ready,
-      sleep: vi.fn(async () => {}),
+      sleep: vi.fn(async (milliseconds) => {
+        if (milliseconds === 1) abort.abort();
+      }),
       monitorIntervalMs: 1,
     });
 
@@ -298,7 +305,7 @@ describe("production Desktop Controller", () => {
     expect(startAttachmentServer).toHaveBeenCalledOnce();
   });
 
-  it("installs on demand when attachment arrives during recovery", async () => {
+  it("installs on demand when attachment arrives during the startup stability delay", async () => {
     const abort = new AbortController();
     const activateDesktop = vi.fn(async () => 1);
     const close = vi.fn();
@@ -310,18 +317,17 @@ describe("production Desktop Controller", () => {
       executeRenderer: vi.fn(),
       close,
     };
-    const install = vi
-      .fn<DesktopControllerDependencies["install"]>()
-      .mockRejectedValueOnce(new Error("Composer is not ready"))
-      .mockResolvedValueOnce(session);
+    const install = vi.fn<DesktopControllerDependencies["install"]>().mockResolvedValue(session);
     let attach: (() => Promise<void>) | undefined;
     const startAttachmentServer = vi.fn(async (options) => {
       attach = options.attach;
       return attachmentServer();
     });
-    const sleep = vi.fn(async () => {
-      await attach?.();
-      abort.abort();
+    const sleep = vi.fn(async (milliseconds: number) => {
+      if (milliseconds === 3_000) {
+        await attach?.();
+        abort.abort();
+      }
     });
 
     await runDesktopController(controllerOptions(), abort.signal, {
@@ -333,7 +339,7 @@ describe("production Desktop Controller", () => {
       monitorIntervalMs: 1,
     });
 
-    expect(install).toHaveBeenCalledTimes(2);
+    expect(install).toHaveBeenCalledOnce();
     expect(activateDesktop).toHaveBeenCalledOnce();
     expect(close).toHaveBeenCalledOnce();
   });
@@ -366,7 +372,8 @@ describe("production Desktop Controller", () => {
       .mockResolvedValueOnce(second);
     let monitorCycles = 0;
     let currentTime = 0;
-    const sleep = vi.fn(async () => {
+    const sleep = vi.fn(async (milliseconds: number) => {
+      if (milliseconds !== 1) return;
       monitorCycles += 1;
       currentTime += 30_000;
       if (monitorCycles === 3) abort.abort();
@@ -385,5 +392,27 @@ describe("production Desktop Controller", () => {
     expect(install).toHaveBeenCalledTimes(2);
     expect(firstClose).toHaveBeenCalledOnce();
     expect(secondClose).toHaveBeenCalledOnce();
+  });
+
+  it("cancels deferred installation when shutdown arrives during the stability delay", async () => {
+    const abort = new AbortController();
+    const install = vi.fn<DesktopControllerDependencies["install"]>();
+    const ready = vi.fn();
+    const sleep = vi.fn(async (milliseconds: number) => {
+      if (milliseconds === 3_000) abort.abort();
+    });
+
+    await runDesktopController(controllerOptions(), abort.signal, {
+      readRenderer: vi.fn(async () => "production renderer"),
+      install,
+      startAttachmentServer: vi.fn(async () => attachmentServer()),
+      ready,
+      sleep,
+      monitorIntervalMs: 1,
+    });
+
+    expect(ready).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledWith(3_000, abort.signal);
+    expect(install).not.toHaveBeenCalled();
   });
 });

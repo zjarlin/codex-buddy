@@ -1027,8 +1027,10 @@ fn launch(
             StartupState::Attach => {
                 #[cfg(target_os = "macos")]
                 {
-                    codexhost_platform::force_stop_desktop(&installation, Duration::from_secs(10))?;
-                    continue;
+                    return Err(
+                        "official ChatGPT is already running; Codex Buddy will not interrupt it. Quit the official instance before starting Codex Buddy"
+                            .into(),
+                    );
                 }
                 #[cfg(target_os = "windows")]
                 {
@@ -1243,6 +1245,8 @@ fn main() -> ExitCode {
         Err(error) => {
             let message = format!("codexhost launcher: {error}");
             eprintln!("{message}");
+            #[cfg(target_os = "macos")]
+            show_macos_error_dialog(&message);
             #[cfg(target_os = "windows")]
             if start_menu_launch {
                 show_error_dialog(&message);
@@ -1250,6 +1254,17 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn show_macos_error_dialog(message: &str) {
+    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display dialog \"{escaped}\" with title \"Codex Buddy 启动失败\" buttons {{\"好\"}} default button \"好\""
+    );
+    let _ = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .status();
 }
 
 #[cfg(test)]

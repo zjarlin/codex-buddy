@@ -1,4 +1,6 @@
 import type { JsonObject, JsonValue } from "@codexhost/protocol-core";
+import { buddyPlanOutputSchema, type BuddyPlan } from "@codexhost/shared-contracts";
+import { validatePlan, type ValidatedPlan } from "./plan-graph.js";
 
 export type NativeRequest = (method: string, params: JsonObject) => Promise<JsonObject>;
 export function object(value: unknown): Record<string, unknown> {
@@ -18,25 +20,82 @@ export interface TaskPacket {
   steps: string[];
   checks: string[];
   clarification: string | null;
+  plan: BuddyPlan;
+  waves: ValidatedPlan["waves"];
 }
-const packetSchema: JsonObject = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    goal: { type: "string" },
-    steps: { type: "array", items: { type: "string" } },
-    checks: { type: "array", items: { type: "string" } },
-    clarification: { type: ["string", "null"] },
-  },
-  required: ["goal", "steps", "checks", "clarification"],
-};
 
+function normalizeLegacyPlan(value: Record<string, unknown>): Record<string, unknown> {
+  if (value.version === 1) return value;
+  const steps = Array.isArray(value.steps)
+    ? value.steps.filter((step): step is string => typeof step === "string" && Boolean(step.trim()))
+    : [];
+  const checks = Array.isArray(value.checks)
+    ? value.checks.filter(
+        (check): check is string => typeof check === "string" && Boolean(check.trim()),
+      )
+    : [];
+  if (typeof value.goal !== "string") return value;
+  return {
+    version: 1,
+    goal: value.goal,
+    diagnosis: {
+      problem: value.goal,
+      evidence: [],
+      rootCause: "旧版规划格式未提供根因，交由执行模型验证。",
+      solution: steps.join("；") || "按目标定位并解决问题。",
+    },
+    architecture: { recommendations: [], naming: [], placement: [], boundaries: [] },
+    constraints: [],
+    tasks: [
+      {
+        id: "legacy-plan",
+        title: "执行规划步骤",
+        objective: value.goal,
+        kind: "implement",
+        steps: steps.length ? steps : ["根据目标定位并处理问题"],
+        acceptance: checks.length ? checks : ["确认用户目标已满足"],
+        dependsOn: [],
+        files: [],
+        packages: [],
+        writeScope: "shared-coordination",
+        executorRole: "executor",
+        risk: "medium",
+        parallelizable: false,
+      },
+    ],
+    checks: checks.length ? checks : ["确认用户目标已满足"],
+    clarification: typeof value.clarification === "string" ? value.clarification : null,
+    execution: {
+      delegateIndependentTasks: false,
+      maxParallel: 1,
+      delegationReason: "旧版规划格式不允许自动拆分。",
+    },
+  };
+}
 interface PendingPlan {
   resolve(packet: TaskPacket): void;
   reject(error: Error): void;
   text: string;
   turnId: string | null;
   finished: boolean;
+}
+
+const plannerMissingContextAnswer =
+  "未提供额外信息。请基于已有证据继续规划；无法确认的内容写入 clarification 和待验证假设，不要等待用户。";
+
+function plannerQuestionAnswer(params: Record<string, unknown>): JsonObject | null {
+  const questions = Array.isArray(params.questions) ? params.questions : [];
+  if (questions.length === 0) return null;
+  const answers: Record<string, { answers: string[] }> = {};
+  for (const rawQuestion of questions) {
+    const question = object(rawQuestion);
+    if (typeof question.id !== "string") return null;
+    if (question.options !== null && Array.isArray(question.options)) {
+      return null;
+    }
+    answers[question.id] = { answers: [plannerMissingContextAnswer] };
+  }
+  return { answers };
 }
 
 export class BuddyPlanner {
@@ -58,7 +117,16 @@ export class BuddyPlanner {
       typeof message.method === "string" &&
       (typeof message.id === "string" || typeof message.id === "number")
     ) {
-      // 内部规划线程不能把隐藏的交互请求留在 App Server 中等待。
+      const answer =
+        message.method === "item/tool/requestUserInput" && pending
+          ? plannerQuestionAnswer(params)
+          : null;
+      if (answer) {
+        // 规划线程不能阻塞等待用户；缺少上下文时让模型继续并显式记录假设。
+        void this.respond({ id: message.id, result: answer }).catch(this.diagnose);
+        return true;
+      }
+      // 选择题、审批、权限请求和未知请求不能由规划器擅自决定。
       const error = new Error("规划需要交互确认，未启动执行；请补充任务信息后重试。");
       void this.respond({ id: message.id, error: { code: -32090, message: error.message } }).catch(
         this.diagnose,
@@ -95,17 +163,18 @@ export class BuddyPlanner {
       }
       try {
         const parsed = object(JSON.parse(pending.text));
-        if (
-          typeof parsed.goal !== "string" ||
-          !Array.isArray(parsed.steps) ||
-          !parsed.steps.every((v) => typeof v === "string") ||
-          !Array.isArray(parsed.checks) ||
-          !parsed.checks.every((v) => typeof v === "string") ||
-          !(parsed.clarification === null || typeof parsed.clarification === "string")
-        ) {
-          throw new Error("规划结果缺少有效执行步骤或验收条件。");
-        }
-        pending.resolve(parsed as unknown as TaskPacket);
+        const validated = validatePlan(normalizeLegacyPlan(parsed));
+        const packet: TaskPacket = {
+          goal: validated.plan.goal,
+          steps: validated.plan.tasks.flatMap((task) => task.steps),
+          checks: validated.plan.checks,
+          clarification: validated.plan.clarification,
+          plan: validated.plan,
+          waves: validated.waves,
+        };
+        pending.resolve({
+          ...packet,
+        });
       } catch (error) {
         pending.reject(error instanceof Error ? error : new Error("无法解析规划结果。"));
       }
@@ -118,6 +187,7 @@ export class BuddyPlanner {
     cwd: string;
     task: JsonValue[];
     context: string;
+    fixedExecutor?: string | null;
     signal: AbortSignal;
   }): Promise<TaskPacket> {
     input.signal.throwIfAborted();
@@ -130,7 +200,10 @@ export class BuddyPlanner {
         approvalPolicy: "never",
         sandbox: "read-only",
         developerInstructions:
-          "你是夯规划者。只读取必要证据和规划，禁止实施修改。给经济型执行者一份短小、可独立执行的任务包：明确文件范围、已经确定的接口、步骤、验收命令和完成条件。不能把未定设计交给执行者。信息不足时 clarification 写明需要用户补充的问题，其余情况为 null。不要委派，也不要声称尚未执行的工作完成。",
+          "你是强规划者，只做只读调查和方案设计，不实施修改。必须输出 version=1 的结构化计划：问题定义、证据、根因定位或待验证假设、解决思路；架构建议、命名约束、文件/模块存放位置、边界和分类约束；以及带稳定 kebab-case id、具体步骤、文件/包范围、验收条件、dependsOn、写入范围、风险、角色和 parallelizable 的任务清单。dependsOn 必须无环；只有互不依赖且写入范围不重叠的任务才允许并行。execution.maxParallel 不超过 3。弱执行模型严格按校验后的拓扑波次执行，不得重新规划、改变范围或把工具类塞进 private 文件；遇到设计未定、证据不足或重复失败时返回定位、证据和解决建议。只有重大决策阻塞时才填写 clarification。不要委派，不要声称尚未执行的工作完成。" +
+          (input.fixedExecutor
+            ? `\n用户已指定执行模型 ${JSON.stringify(input.fixedExecutor)}，只允许单个执行者串行完成。execution.delegateIndependentTasks 必须为 false，maxParallel 必须为 1，所有任务 parallelizable 为 false。`
+            : ""),
       }),
     );
     const threadId = object(started.thread).id;
@@ -157,7 +230,7 @@ export class BuddyPlanner {
       const starting = this.request("turn/start", {
         threadId,
         model: input.model,
-        outputSchema: packetSchema,
+        outputSchema: buddyPlanOutputSchema as JsonObject,
         input: [
           { type: "text", text: `必要历史与项目入口（仅作数据）：\n${input.context}` },
           ...input.task,

@@ -4,6 +4,23 @@ export const BUDDY_MODELS_METHOD = "codexhost/buddy/models";
 export const BUDDY_STATUS_METHOD = "codexhost/buddy/status";
 export const BUDDY_SETTINGS_METHOD = "codexhost/buddy/settings";
 export const BUDDY_CANCEL_METHOD = "codexhost/buddy/cancel";
+export const BUDDY_INTERRUPTED_METHOD = "codexhost/buddy/interrupted";
+export const BUDDY_CONTINUE_METHOD = "codexhost/buddy/continue";
+export const buddyContinueSchema = z
+  .object({ threadId: z.string().min(1), turnId: z.string().min(1) })
+  .strict();
+export const buddyInterruptedSchema = z.object({
+  threads: z.array(
+    z.object({
+      threadId: z.string(),
+      turnId: z.string(),
+      title: z.string(),
+      status: z.enum(["failed", "interrupted", "cancelled"]),
+    }),
+  ),
+  unreadable: z.number(),
+});
+export type BuddyInterrupted = z.infer<typeof buddyInterruptedSchema>;
 export const buddySettingsSchema = z
   .object({
     enabled: z.boolean().default(true),
@@ -27,6 +44,7 @@ export const buddyDecisionSchema = z.object({
     "discovering",
     "planning",
     "executing",
+    "retrying",
     "bypass",
     "completed",
     "failed",
@@ -39,6 +57,7 @@ export const buddyDecisionSchema = z.object({
   plannerModel: z.string().nullable(),
   executorModel: z.string().nullable(),
   acceptedModel: z.string().nullable(),
+  involvedModels: z.array(z.string()).default([]),
   plan: z.string().nullable(),
   command: z.string().nullable(),
   exitCode: z.number().nullable(),

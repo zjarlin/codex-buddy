@@ -4,6 +4,25 @@ import { committedReactAncestors } from "../src/renderer-react-ownership.js";
 type Fiber = Record<string, unknown>;
 
 describe("committed React ownership", () => {
+  it("finds the committed composer after a large conversation history", () => {
+    const root: Fiber = {};
+    const composer: Fiber = { return: root };
+    let history: Fiber = { sibling: composer };
+    for (let i = 0; i < 30_000; i++) history = { sibling: history };
+    root.child = history;
+    root.stateNode = { current: root };
+    expect(committedReactAncestors(composer)).toEqual([composer, root]);
+  });
+
+  it("still bounds oversized committed tree scans", () => {
+    const root: Fiber = {};
+    const composer: Fiber = { return: root };
+    let history: Fiber = { sibling: composer };
+    for (let i = 0; i < 100_010; i++) history = { sibling: history };
+    root.child = history;
+    root.stateNode = { current: root };
+    expect(committedReactAncestors(composer)).toEqual([]);
+  });
   it("uses the committed parent path for a bailout child with stale return pointers", () => {
     const state: { current?: Fiber } = {};
     const oldRoot: Fiber = { stateNode: state };

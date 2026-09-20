@@ -13,6 +13,7 @@ import {
   type ThreadContext,
 } from "@codexhost/buddy-engine";
 import {
+  buddyPrivateModelSchema,
   buddySettingsSchema,
   type BuddyDecision,
   type BuddyModel,
@@ -20,13 +21,24 @@ import {
 } from "@codexhost/shared-contracts";
 import type { JsonObject, JsonRpcRequest, JsonValue } from "@codexhost/protocol-core";
 import { BuddyPlanner, object, result, type NativeRequest } from "./planner.js";
-import { discoverModels } from "./models.js";
+import { discoverModels, type NativeModelCatalog } from "./models.js";
+import { recentMessages } from "./history.js";
+import { parallelExecutionGuidance, singleExecutorPacket } from "./delegation.js";
+import { AutomaticRecovery } from "./recovery.js";
+import { InterruptedConversations } from "./continuation.js";
+import { formatExecutionTopology } from "./plan-graph.js";
+import {
+  executePlanWaves,
+  summarizeSubagentResults,
+  type SubagentRunResult,
+  type SubagentRunner,
+} from "./subagent-scheduler.js";
 
 const roleInstructions = {
   git: "你是 Git 智能体。先确认仓库、工作区、暂存区和冲突状态，只做用户已授权的 Git 操作。保留他人修改；推送、提交、合并以真实结果为准。遇到业务语义冲突或未定设计，停止猜测并返回现有证据与需要规划者解决的问题。",
   io: "你是 IO 操作智能体。负责文件查看、查找、移动，以及项目 CLI 启动、构建、测试和日志检查。严格按任务范围执行，保留原有权限和审批。启动进程不代表服务或页面已就绪；返回真实退出码和验证证据。",
   executor:
-    "你是垃执行者。只实施已经确定的任务步骤并验收，不重新扩展架构设计。禁止递归委派。出现未定设计、范围变化或同一问题两次实施失败时，返回已改文件、真实错误和需要规划者决定的问题，不盲目重复具有副作用的操作。",
+    "你是垃执行者。普通问答直接回答，简单任务直接处理，不要为回答编造 TODO。复杂任务依据目标、约束和简短 TODO 自主定位文件、作常规实现选择、编写代码并验证，不需要规划者预先提供每个文件的修改内容。有原生 update_plan 工具时用它维护结果导向的 TODO 和实际进度，每次最多一个 in_progress；简单任务可跳过计划。已有 TODO 直接沿用，不再重复做完整规划。禁止递归委派。只有重大架构决策、权限边界变化、任务范围变化或同一问题两次实施失败时，才携证据报告阻塞，不盲目重复具有副作用的操作。",
 };
 
 export function specialist(text: string, intent: string): BuddyDecision["role"] {
@@ -49,13 +61,16 @@ export function specialist(text: string, intent: string): BuddyDecision["role"] 
 }
 
 const quote = (text: string): string => `'${text.replaceAll("'", "'\"'\"'")}'`;
+export const BUDDY_PRIVATE_TURN_MARKER = "codexhostBuddyPrivateTurn";
 export interface BuddyRouterOptions {
+  activeWorkChanged?(): void;
   environment: NodeJS.ProcessEnv;
   request: NativeRequest;
   respond(message: JsonObject): Promise<void>;
   send(message: JsonObject): Promise<void>;
   forward(request: JsonRpcRequest): Promise<void>;
   diagnose(error: unknown): void;
+  runSubagents?: SubagentRunner;
 }
 
 export class BuddyRouter {
@@ -66,13 +81,78 @@ export class BuddyRouter {
   readonly #decisions = new Map<string, BuddyDecision>();
   readonly #jobs = new Map<string, AbortController>();
   readonly #active = new Set<string>();
+  readonly #clarifications = new Map<
+    string,
+    { task: JsonValue[]; question: string; recent: unknown[] }
+  >();
   readonly #dispatch: ReturnType<typeof dispatchLifecycle>;
+  readonly #recovery: AutomaticRecovery;
+  readonly #recoveryContext = new Map<string, JsonObject>();
   #settings = buddySettingsSchema.parse({});
   #models: BuddyModel[] = [];
 
   constructor(private readonly options: BuddyRouterOptions) {
     this.#home = homePath(options.environment.CODEX_HOME);
     this.#planner = new BuddyPlanner(options.request, options.respond, options.diagnose);
+    const continuation = new InterruptedConversations(
+      options.request,
+      (id) => this.#active.has(id) || this.#jobs.has(id),
+      async () => {
+        await this.#loadSettings();
+        return this.#settings.enabled && !this.#settings.privateMode;
+      },
+    );
+    this.#recovery = new AutomaticRecovery({
+      changed: () => options.activeWorkChanged?.(),
+      nextModel: async (threadId, excluded, signal) => {
+        await this.#loadSettings();
+        if (!this.#settings.enabled || this.#settings.privateMode)
+          throw new Error("自动恢复已关闭。");
+        const inventory = await discoverModels({
+          home: this.#home,
+          environment: options.environment,
+          settings: this.#settings,
+          nativeModels: await this.#nativeModels(threadId),
+          signal,
+          tier: this.#decisions.get(threadId)?.difficulty === "simple" ? "simple" : "standard",
+        });
+        return inventory.executors.find((candidate) => !excluded.has(candidate.id))?.id ?? null;
+      },
+      resume: async (threadId, turnId, model, signal) => {
+        const context = this.#recoveryContext.get(threadId) ?? {};
+        const mode = object(context.collaborationMode) as JsonObject;
+        const nextTurnId = await continuation.continue(threadId, turnId, {
+          signal,
+          model,
+          context,
+          ...(mode
+            ? {
+                collaborationMode: {
+                  ...mode,
+                  settings: {
+                    ...(object(mode.settings) as JsonObject),
+                    model,
+                    reasoning_effort: null,
+                    developer_instructions: `${String(object(mode.settings).developer_instructions ?? "")}\n本次续接请求的模型 ID 已更新为 ${JSON.stringify(model)}，此前的模型身份描述不再适用。`,
+                  },
+                },
+              }
+            : {}),
+        });
+        if (!signal.aborted && this.#recovery.started(threadId, nextTurnId)) {
+          this.#active.add(threadId);
+          this.#update(threadId, { acceptedModel: model, turnId: nextTurnId });
+        }
+      },
+      report: (threadId, reason, model, stopped, waiting) => {
+        if (stopped) this.#recoveryContext.delete(threadId);
+        this.#update(threadId, {
+          reason,
+          executorModel: model,
+          phase: stopped ? "failed" : waiting ? "retrying" : "executing",
+        });
+      },
+    });
     this.#dispatch = dispatchLifecycle({
       send: (message) => {
         void options.send(message as JsonObject).catch(options.diagnose);
@@ -129,7 +209,7 @@ export class BuddyRouter {
       home: this.#home,
       environment: this.options.environment,
       settings: this.#settings,
-      nativeIds: await this.#nativeModels(),
+      nativeModels: await this.#nativeModels(),
       signal: AbortSignal.timeout(10000),
     });
     this.#models = inventory.models;
@@ -145,6 +225,12 @@ export class BuddyRouter {
     await rename(temporary, file);
     this.#settings = settings;
     if (!settings.enabled || settings.privateMode) {
+      for (const [id, decision] of this.#decisions) {
+        if (decision.phase === "retrying") this.cancel(id);
+      }
+      this.#recovery.close();
+      this.#recoveryContext.clear();
+      this.#clarifications.clear();
       for (const controller of this.#jobs.values()) {
         controller.abort();
       }
@@ -153,6 +239,11 @@ export class BuddyRouter {
   }
 
   cancel(threadId: string): void {
+    this.#recovery.cancel(threadId);
+    this.#recoveryContext.delete(threadId);
+    if (this.#decisions.get(threadId)?.phase === "retrying") {
+      this.#update(threadId, { phase: "cancelled", reason: "已取消自动续接。" });
+    }
     this.#jobs.get(threadId)?.abort();
   }
 
@@ -162,7 +253,7 @@ export class BuddyRouter {
   }
 
   get hasActiveWork(): boolean {
-    return this.#jobs.size > 0 || this.#active.size > 0;
+    return this.#jobs.size > 0 || this.#active.size > 0 || this.#recovery.pending;
   }
 
   track(request: JsonRpcRequest): void {
@@ -180,7 +271,23 @@ export class BuddyRouter {
   #update(threadId: string, patch: Partial<BuddyDecision>): void {
     const current = this.#decisions.get(threadId);
     if (current) {
-      this.#decisions.set(threadId, { ...current, ...patch, updatedAt: new Date().toISOString() });
+      const next = { ...current, ...patch };
+      const involvedModels = [
+        ...new Set(
+          [
+            ...current.involvedModels,
+            ...(patch.involvedModels ?? []),
+            next.plannerModel,
+            next.executorModel,
+            next.acceptedModel,
+          ].filter((model): model is string => typeof model === "string" && model.length > 0),
+        ),
+      ];
+      this.#decisions.set(threadId, {
+        ...next,
+        involvedModels,
+        updatedAt: new Date().toISOString(),
+      });
     }
   }
 
@@ -194,6 +301,17 @@ export class BuddyRouter {
     const value = object(message);
     const params = object(value.params);
     const threadId = typeof params.threadId === "string" ? params.threadId : "";
+    const item = object(params.item);
+    if (
+      (value.method === "item/started" || value.method === "item/completed") &&
+      item.type === "collabAgentToolCall" &&
+      Array.isArray(item.receiverThreadIds) &&
+      item.receiverThreadIds.length > 0 &&
+      typeof item.model === "string" &&
+      (!params.turnId || this.#decisions.get(threadId)?.turnId === params.turnId)
+    ) {
+      this.#update(threadId, { involvedModels: [item.model] });
+    }
     const request =
       typeof value.id === "number" || typeof value.id === "string"
         ? this.#tracked.get(value.id)
@@ -209,6 +327,8 @@ export class BuddyRouter {
       if (request.method === "turn/start" && typeof original.threadId === "string") {
         const id = original.threadId;
         if (value.error) {
+          this.#recovery.cancel(id);
+          this.#recoveryContext.delete(id);
           this.#update(id, {
             phase: "failed",
             acceptedModel: null,
@@ -226,6 +346,7 @@ export class BuddyRouter {
     if (value.method === "turn/started" && threadId) {
       this.#active.add(threadId);
       const turn = object(params.turn);
+      if (typeof turn.id === "string") this.#recovery.started(threadId, turn.id);
       this.#update(threadId, { turnId: typeof turn.id === "string" ? turn.id : null });
     }
     if (value.method === "turn/completed" && threadId) {
@@ -242,12 +363,29 @@ export class BuddyRouter {
                 : "failed",
         });
       }
+      const turn = object(params.turn);
+      if (typeof turn.id === "string") {
+        this.#recovery.completed(threadId, turn.id, String(turn.status), turn.error);
+      }
+      if (turn.status !== "failed") this.#recoveryContext.delete(threadId);
     }
     return false;
   }
 
-  async #nativeModels(): Promise<Set<string>> {
+  async #nativeModels(threadId?: string): Promise<NativeModelCatalog> {
     const ids = new Set<string>();
+    const contextWindows = new Map<string, number>();
+    let provider: string | null = null;
+    if (threadId) {
+      const response = await this.options.request("thread/read", {
+        threadId,
+        includeTurns: false,
+      });
+      const thread = object(result(response).thread);
+      if (typeof thread.modelProvider === "string" && thread.modelProvider.trim()) {
+        provider = thread.modelProvider;
+      }
+    }
     let cursor: string | null = null;
     const seen = new Set<string>();
     do {
@@ -256,9 +394,21 @@ export class BuddyRouter {
       );
       for (const item of Array.isArray(listing.data) ? listing.data : []) {
         const row = object(item);
-        for (const id of [row.id, row.model]) {
-          if (typeof id === "string") {
-            ids.add(id);
+        const id =
+          typeof row.id === "string" ? row.id : typeof row.model === "string" ? row.model : null;
+        if (id) {
+          ids.add(id);
+          const contextWindow = [
+            row.contextWindow,
+            row.context_window,
+            row.maxContextWindow,
+            row.max_context_window,
+          ].find(
+            (value): value is number =>
+              typeof value === "number" && Number.isSafeInteger(value) && value > 0,
+          );
+          if (contextWindow !== undefined) {
+            contextWindows.set(id, contextWindow);
           }
         }
       }
@@ -270,13 +420,19 @@ export class BuddyRouter {
         seen.add(cursor);
       }
     } while (cursor);
-    return ids;
+    return { ids, provider, contextWindows };
   }
 
   async route(request: JsonRpcRequest): Promise<boolean> {
+    const incomingThread = object(request.params).threadId;
+    if (typeof incomingThread === "string") {
+      this.#recovery.cancel(incomingThread);
+      this.#recoveryContext.delete(incomingThread);
+    }
     await this.#loadSettings();
     if (this.#settings.privateMode) {
-      throw new Error("隐私模式已阻止普通模型路由，请使用离线隐私输入区。");
+      await this.#routePrivate(request);
+      return true;
     }
     const params = object(request.params) as JsonObject;
     if (
@@ -284,7 +440,8 @@ export class BuddyRouter {
       typeof params.threadId !== "string" ||
       !Array.isArray(params.input) ||
       !params.input.length ||
-      params.toolOutput
+      params.toolOutput ||
+      params.outputSchema != null
     ) {
       return false;
     }
@@ -327,14 +484,118 @@ export class BuddyRouter {
     return true;
   }
 
+  async #routePrivate(request: JsonRpcRequest): Promise<void> {
+    const params = object(request.params) as JsonObject;
+    if (
+      typeof params.threadId !== "string" ||
+      !Array.isArray(params.input) ||
+      !params.input.length ||
+      params.toolOutput
+    ) {
+      throw new Error("隐私模式只允许原生对话输入发起新的纯文本回合。");
+    }
+    const threadId = params.threadId;
+    if (this.#active.has(threadId) || this.#jobs.has(threadId)) {
+      throw new Error("当前任务仍有回合在运行；请等待或取消后再发送隐私回合。");
+    }
+    const nativeModels = await this.#nativeModels(threadId);
+    const inventory = await discoverModels({
+      home: this.#home,
+      environment: this.options.environment,
+      settings: this.#settings,
+      nativeModels,
+      signal: AbortSignal.timeout(10_000),
+    });
+    this.#models = inventory.models;
+    const privateModels = inventory.models.filter(
+      (model) => model.eligible && buddyPrivateModelSchema.safeParse(model.id).success,
+    );
+    const privateModel =
+      privateModels.find((model) => model.id === this.#settings.executorModel) ??
+      privateModels.find((model) => model.id === "q3-14b") ??
+      privateModels[0];
+    if (!privateModel) {
+      throw new Error("没有可用的离线 q3 模型；隐私回合未发送，不会回退到在线模型。");
+    }
+    const originalMode = object(params.collaborationMode);
+    const originalSettings = object(originalMode.settings);
+    const rewritten: JsonRpcRequest = {
+      id: request.id,
+      method: request.method,
+      params: {
+        ...params,
+        [BUDDY_PRIVATE_TURN_MARKER]: true,
+        model: privateModel.id,
+        effort: null,
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            ...originalSettings,
+            model: privateModel.id,
+            reasoning_effort: null,
+          },
+        },
+      },
+    };
+    this.#decisions.set(threadId, {
+      threadId,
+      turnId: null,
+      phase: "executing",
+      role: "executor",
+      difficulty: "simple",
+      score: 0,
+      reason: "隐私 chip 已开启；跳过夯规划和普通自动路由，自动选择可用的离线 q3 模型。",
+      plannerModel: null,
+      executorModel: privateModel.id,
+      acceptedModel: null,
+      involvedModels: [privateModel.id],
+      plan: null,
+      command: null,
+      exitCode: null,
+      updatedAt: new Date().toISOString(),
+    });
+    if (this.#decisions.size > 100) {
+      const first = this.#decisions.keys().next().value;
+      if (first) {
+        this.#decisions.delete(first);
+      }
+    }
+    this.track(rewritten);
+    this.#active.add(threadId);
+    try {
+      await this.options.forward(rewritten);
+    } catch (error) {
+      this.#active.delete(threadId);
+      throw error;
+    }
+  }
+
   async #route(
     request: JsonRpcRequest,
     params: JsonObject,
     threadId: string,
     signal: AbortSignal,
   ): Promise<void> {
+    const settings = this.#settings;
+    const fixedExecutor = settings.executorModel;
     const context = this.#threads.get(threadId);
-    const cwd = typeof params.cwd === "string" ? params.cwd : context?.cwd;
+    let cwd = typeof params.cwd === "string" ? params.cwd : context?.cwd;
+    if (!cwd) {
+      try {
+        const response = await this.options.request("thread/read", {
+          threadId,
+          includeTurns: false,
+        });
+        const thread = object(result(response).thread);
+        if (typeof thread.cwd === "string" && thread.cwd.trim()) {
+          cwd = thread.cwd;
+          this.#threads.set(threadId, { ...context, cwd });
+        }
+      } catch {
+        // Keep the explicit error below. A Host process directory is not a safe
+        // substitute for the user's workspace.
+      }
+    }
     const input = params.input as JsonValue[];
     const text = input
       .map(object)
@@ -343,8 +604,10 @@ export class BuddyRouter {
       .join("\n");
     const project = await inspectProject(cwd);
     const assessment = await assess(input, cwd, project);
-    const role =
-      this.#settings.role === "auto" ? specialist(text, assessment.intent) : this.#settings.role;
+    const conversational = assessment.intent === "conversation";
+    const pendingClarification = conversational ? undefined : this.#clarifications.get(threadId);
+    const needsPlanning = assessment.tier === "advanced" || pendingClarification !== undefined;
+    const role = settings.role === "auto" ? specialist(text, assessment.intent) : settings.role;
     const decision: BuddyDecision = {
       threadId,
       turnId: null,
@@ -356,6 +619,7 @@ export class BuddyRouter {
       plannerModel: null,
       executorModel: null,
       acceptedModel: null,
+      involvedModels: [],
       plan: null,
       command: null,
       exitCode: null,
@@ -366,13 +630,14 @@ export class BuddyRouter {
       const first = this.#decisions.keys().next().value;
       if (first) {
         this.#decisions.delete(first);
+        this.#clarifications.delete(first);
       }
     }
     if (!cwd) {
       throw new Error("未确认工作目录，无法路由。");
     }
     signal.throwIfAborted();
-    if (this.#settings.bypass && compatibleTurn(params, context)) {
+    if (!pendingClarification && settings.bypass && compatibleTurn(params, context)) {
       let direct = await resolveDispatch(text, cwd, { project });
       const commands: Record<string, string[]> = {
         当前目录: ["pwd"],
@@ -406,77 +671,126 @@ export class BuddyRouter {
         return;
       }
     }
-    const nativeIds = await this.#nativeModels();
+    const nativeModels = await this.#nativeModels(threadId);
     signal.throwIfAborted();
     const inventory = await discoverModels({
       home: this.#home,
       environment: this.options.environment,
-      settings: this.#settings,
-      nativeIds,
+      settings,
+      nativeModels,
       signal,
+      tier: assessment.tier === "simple" ? "simple" : "standard",
     });
-    if (context?.provider && context.provider !== inventory.provider) {
-      throw new Error("当前线程与配置供应商不同，未跨供应商自动切换。");
-    }
     this.#models = inventory.models;
     let packet = "";
+    let clarification: string | null = null;
+    let validatedPlan: Awaited<ReturnType<BuddyPlanner["plan"]>> | null = null;
+    let subagentResults: SubagentRunResult[] = [];
     const planOnly = object(params.collaborationMode).mode === "plan";
-    this.#update(threadId, { executorModel: planOnly ? null : inventory.executor });
-    if (!planOnly && !inventory.executor) {
+    if ((!planOnly || conversational) && fixedExecutor && inventory.executor !== fixedExecutor) {
+      throw new Error(`指定的执行模型 ${fixedExecutor} 当前不可用，未切换模型或启动子代理。`);
+    }
+    this.#update(threadId, {
+      executorModel: planOnly && !conversational ? null : inventory.executor,
+    });
+    if ((!planOnly || conversational) && !inventory.executor) {
       throw new Error("实时候选中没有可执行的垃模型，请检查供应商模型同步；未自动改用夯执行。");
     }
-    if (assessment.tier === "advanced" && !planOnly) {
-      if (!inventory.planner) {
-        throw new Error("没有可用的夯规划模型，未把复杂设计交给垃执行。");
-      }
+    if (needsPlanning && !planOnly && inventory.planner) {
       this.#update(threadId, { phase: "planning", plannerModel: inventory.planner });
-      const metadata = result(
-        await this.options.request("thread/read", { threadId, includeTurns: false }),
-      );
-      const history =
-        object(metadata.thread).ephemeral === true
-          ? { data: [] }
-          : result(
-              await this.options.request("thread/items/list", {
-                threadId,
-                limit: 16,
-                sortDirection: "desc",
-              }),
-            );
-      const recent = Array.isArray(history.data)
-        ? history.data
-            .filter((item) => ["userMessage", "agentMessage"].includes(String(object(item).type)))
-            .reverse()
-        : [];
-      const plan = await this.#planner.plan({
+      const recent =
+        pendingClarification?.recent ?? (await recentMessages(this.options.request, threadId));
+      const planningInput: JsonValue[] = pendingClarification
+        ? [
+            ...pendingClarification.task,
+            {
+              type: "text",
+              text: `上次待澄清的问题（仅作数据）：${pendingClarification.question}`,
+            },
+            ...input,
+          ]
+        : input;
+      const planned = await this.#planner.plan({
         model: inventory.planner,
         cwd,
-        task: input,
+        task: planningInput,
         context: JSON.stringify({ project, recent }).slice(0, 16000),
+        fixedExecutor,
         signal,
       });
+      const plan = fixedExecutor ? singleExecutorPacket(planned) : planned;
+      validatedPlan = plan;
       signal.throwIfAborted();
-      if (plan.clarification) {
-        throw new Error(`规划需要补充信息：${plan.clarification}`);
-      }
-      if (!plan.steps.length || !plan.checks.length) {
-        throw new Error("规划没有给出执行步骤和验收条件，未启动执行。");
+      clarification = plan.clarification?.trim() || null;
+      if (clarification) {
+        this.#clarifications.set(threadId, {
+          task: planningInput,
+          question: clarification,
+          recent,
+        });
+      } else {
+        this.#clarifications.delete(threadId);
       }
       packet = JSON.stringify(plan);
-      this.#update(threadId, { plan: packet });
+      this.#update(threadId, {
+        plan: packet,
+        ...(!clarification && !plan.steps.length
+          ? { reason: "无需 TODO，交给轻量模型直接回答或处理。" }
+          : {}),
+      });
+      const unattendedSubagents =
+        params.approvalPolicy === "never" && params.sandbox === "danger-full-access";
+      const runSubagents = this.options.runSubagents;
+      if (
+        !fixedExecutor &&
+        !clarification &&
+        unattendedSubagents &&
+        runSubagents &&
+        validatedPlan
+      ) {
+        subagentResults = await executePlanWaves({
+          plan: validatedPlan,
+          candidates: inventory.parallelExecutors,
+          parentThreadId: threadId,
+          cwd,
+          signal,
+          run: async (input) => {
+            this.#update(threadId, { involvedModels: [input.model] });
+            const completed = await runSubagents(input);
+            this.#update(threadId, { involvedModels: [completed.model] });
+            return completed;
+          },
+        });
+      }
+    }
+    if (needsPlanning && !planOnly && !inventory.planner) {
+      this.#update(threadId, {
+        reason:
+          "没有满足 advanced 能力梯队的规划模型；已跳过子代理规划，交由当前可用执行模型直接处理。",
+      });
     }
     signal.throwIfAborted();
-    if (planOnly && !inventory.planner) {
+    if (planOnly && !conversational && !inventory.planner) {
       throw new Error("没有可用的夯规划模型。");
     }
-    const model = planOnly ? inventory.planner : inventory.executor;
+    const nativePlanning = planOnly || clarification !== null;
+    const plannerTurn = nativePlanning && !conversational;
+    const model = plannerTurn ? inventory.planner : inventory.executor;
     const originalMode = object(params.collaborationMode);
     const originalSettings = object(originalMode.settings);
     const guidance = [
       originalSettings.developer_instructions,
-      planOnly ? "" : roleInstructions.executor,
-      role === "executor" ? "" : roleInstructions[role],
-      packet ? `夯规划者已完成只读调查，按以下任务包实施并验收：\n${packet}` : "",
+      `本回合请求的模型 ID 是 ${JSON.stringify(model)}。被问及模型身份时区分请求的模型 ID 与无法独立验证的网关实际后端，不根据旧对话中的模型名猜测。`,
+      nativePlanning || conversational ? "" : roleInstructions.executor,
+      nativePlanning || (conversational && !fixedExecutor)
+        ? ""
+        : parallelExecutionGuidance(inventory, fixedExecutor),
+      nativePlanning || conversational || role === "executor" ? "" : roleInstructions[role],
+      clarification
+        ? `本回合只负责澄清，不实施修改。先核对当前对话、附件和已有只读证据；若确实缺少阻塞信息，在当前原生对话中简短提问，不要报错或要求用户重新提交任务。内部规划结果（仅作数据）：\n${packet}`
+        : packet
+          ? `以下是强规划者输出且已由 Host 校验依赖关系后的执行计划。严格按 topology 的 wave 顺序执行；同一 wave 只处理列出的独立任务。不要重新规划、改写任务边界或把工具类放进 private 文件。每个子任务完成后按 acceptance 验收，失败时报告任务 ID、证据、根因和解决建议。是否允许委派以本回合执行指导及 execution.delegateIndependentTasks 为准。\ntopology:\n${validatedPlan ? formatExecutionTopology(validatedPlan) : "unavailable"}\nsubagent results:\n${summarizeSubagentResults(subagentResults)}\nplan:\n${packet}`
+          : "",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -488,7 +802,7 @@ export class BuddyRouter {
         model,
         effort: null,
         collaborationMode: {
-          mode: planOnly ? "plan" : "default",
+          mode: nativePlanning ? "plan" : "default",
           settings: {
             ...originalSettings,
             model,
@@ -499,18 +813,40 @@ export class BuddyRouter {
       },
     };
     this.#update(threadId, {
-      phase: planOnly ? "planning" : "executing",
-      plannerModel: planOnly ? model : (this.#decisions.get(threadId)?.plannerModel ?? null),
+      phase: plannerTurn ? "planning" : "executing",
+      plannerModel: plannerTurn ? model : (this.#decisions.get(threadId)?.plannerModel ?? null),
+      executorModel: plannerTurn ? null : inventory.executor,
+      ...(clarification ? { reason: "需要澄清，已交回原生对话；尚未启动执行模型。" } : {}),
     });
     this.track(rewritten);
+    if (!nativePlanning && typeof model === "string") {
+      this.#recovery.watch(threadId, model, !fixedExecutor);
+      const recoveryContext: JsonObject = {};
+      const original = object(rewritten.params) as JsonObject;
+      for (const key of [
+        "collaborationMode",
+        "cwd",
+        "approvalPolicy",
+        "sandboxPolicy",
+        "permissions",
+        "permissionProfile",
+        "outputSchema",
+      ]) {
+        if (original[key] !== undefined) recoveryContext[key] = original[key];
+      }
+      this.#recoveryContext.set(threadId, recoveryContext);
+    }
     this.#active.add(threadId);
     await this.options.forward(rewritten);
   }
 
   close(): void {
+    this.#recovery.close();
+    this.#recoveryContext.clear();
     for (const controller of this.#jobs.values()) {
       controller.abort();
     }
     this.#dispatch.close();
+    this.#clarifications.clear();
   }
 }

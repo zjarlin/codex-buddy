@@ -1,4 +1,10 @@
-import { BuddyRouter } from "./buddy/router.js";
+import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
+import { InterruptedConversations } from "./buddy/continuation.js";
+import {
+  BUDDY_INTERRUPTED_METHOD,
+  BUDDY_CONTINUE_METHOD,
+  buddyContinueSchema,
+} from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
 import { BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
 import {
@@ -62,6 +68,7 @@ import {
   harnessWebUiOpenResultSchema,
   harnessModelSelectionStateSchema,
   harnessThinkingOptionIdSchema,
+  harnessModelRefSchema,
   hostItemIdSchema,
   hostThreadIdSchema,
   hostTurnIdSchema,
@@ -491,6 +498,11 @@ class OrderedWriter {
 
 export class AppServerHost {
   #buddy: BuddyRouter | undefined;
+  #interrupted = new InterruptedConversations(
+    (method, params) => this.#requestOfficial(method, params),
+    (id) => this.#activeOfficialTurns.has(id),
+    async () => !(await this.#buddy?.privateMode()),
+  );
   #privateChat: BuddyPrivateChat | undefined;
   readonly #options: Required<
     Pick<AppServerHostOptions, "desktopInput" | "desktopOutput" | "diagnosticOutput">
@@ -600,16 +612,61 @@ export class AppServerHost {
       this.#privateChat = new BuddyPrivateChat(environment);
       this.#buddy = new BuddyRouter({
         environment,
+        activeWorkChanged: () => this.#signalActiveWorkChanged(),
         request: (method, params) => this.#requestOfficial(method, params),
         respond: (message) => this.#officialRuntime.send(message),
         send: (message) => this.#writer.json(message),
         forward: async (request) => {
-          if (await this.#buddy?.privateMode()) {
+          const params = isRecord(request.params) ? request.params : null;
+          const privateTurn = params?.[BUDDY_PRIVATE_TURN_MARKER] === true;
+          if ((await this.#buddy?.privateMode()) && !privateTurn) {
             throw new Error("隐私模式已阻止在线执行。");
           }
-          await this.#officialRuntime.send(jsonValueSchema.parse(request) as JsonObject);
+          const forwarded =
+            privateTurn && params ? this.#withoutPrivateTurnMarker(request, params) : request;
+          await this.#officialRuntime.send(jsonValueSchema.parse(forwarded) as JsonObject);
         },
         diagnose: (error) => this.#diagnose(error),
+        runSubagents: async (input) => {
+          const started = await this.#delegationCoordinator.start({
+            harnessId: "codex",
+            parentThreadId: input.parentThreadId,
+            cwd: input.cwd,
+            task: input.task,
+            model: harnessModelRefSchema.parse({ id: input.model }),
+            requestId: input.requestId,
+          });
+          const abort = (): void => {
+            void this.#delegationCoordinator
+              .cancel({ threadId: started.threadId })
+              .catch(() => undefined);
+          };
+          input.signal.addEventListener("abort", abort, { once: true });
+          try {
+            const snapshot = await this.#delegationCoordinator.wait({
+              threadId: started.threadId,
+              view: "result",
+              timeoutMs: 3_600_000,
+              limit: 100,
+            });
+            return {
+              taskId: input.requestId.split(":").at(-1) ?? input.requestId,
+              model: input.model,
+              status:
+                snapshot.status === "completed"
+                  ? "completed"
+                  : snapshot.status === "interrupted"
+                    ? "cancelled"
+                    : "failed",
+              summary:
+                snapshot.result.text ??
+                snapshot.result.message ??
+                (snapshot.timedOut ? "子代理等待超时。" : `子代理状态：${snapshot.status}`),
+            };
+          } finally {
+            input.signal.removeEventListener("abort", abort);
+          }
+        },
       });
     }
     this.#nativeAccountObserver = this.#accountControl.refresh
@@ -962,6 +1019,23 @@ export class AppServerHost {
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
     if (this.#closeRequested) return;
+    if (request.method === BUDDY_INTERRUPTED_METHOD || request.method === BUDDY_CONTINUE_METHOD) {
+      try {
+        if (request.method === BUDDY_CONTINUE_METHOD) {
+          const params = buddyContinueSchema.parse(request.params);
+          this.#buddy?.cancel(params.threadId);
+          await this.#interrupted.continue(params.threadId, params.turnId);
+          await this.#writer.json(rpcEnvelope(request, { result: {} }));
+        } else {
+          await this.#writer.json(
+            rpcEnvelope(request, { result: jsonValueSchema.parse(await this.#interrupted.list()) }),
+          );
+        }
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+      }
+      return;
+    }
     if (request.method === BUDDY_PRIVATE_METHOD) {
       try {
         if (!this.#privateChat || !this.#buddy) {
@@ -1016,17 +1090,19 @@ export class AppServerHost {
     }
     if (this.#buddy) {
       try {
+        const privateMode = await this.#buddy.privateMode();
         if (
-          (await this.#buddy.privateMode()) &&
+          privateMode &&
+          request.method !== "turn/start" &&
           !privacySafeRequest(request.method, request.params)
         ) {
           throw new Error(
-            "离线隐私模式已阻止普通任务、工具和在线发送。请使用独立隐私输入区，或清空隐私对话后退出。",
+            "隐私模式已阻止普通任务、工具和在线发送。请关闭隐私 chip 或使用原生输入发起 q3 隐私回合。",
           );
         }
-        if (explicitlyPrivate(request.params)) {
+        if (!privateMode && explicitlyPrivate(request.params)) {
           throw new Error(
-            "检测到明确隐私标记，内容尚未发送。请先开启离线隐私模式并使用独立输入区。",
+            "检测到明确隐私标记，内容尚未发送。请先开启隐私 chip 并在垃 chip 选择 q3-4b 或 q3-14b。",
           );
         }
       } catch (error) {
@@ -1574,6 +1650,24 @@ export class AppServerHost {
       return;
     }
     await this.#officialRuntime.sendFrame(frame);
+  }
+
+  #withoutPrivateTurnMarker(
+    request: JsonRpcRequest,
+    params: Record<string, unknown>,
+  ): JsonRpcRequest {
+    const sanitized = Object.fromEntries(
+      Object.entries(params).filter(([key]) => key !== BUDDY_PRIVATE_TURN_MARKER),
+    ) as JsonObject;
+    const forwarded: JsonRpcRequest = {
+      id: request.id,
+      method: request.method,
+      params: sanitized,
+    };
+    if (request.jsonrpc) {
+      forwarded.jsonrpc = request.jsonrpc;
+    }
+    return forwarded;
   }
 
   async #forwardOfficialRequest(

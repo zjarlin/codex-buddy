@@ -20,12 +20,12 @@ export function modelUrl(baseUrl) {
   return url;
 }
 
-export async function readConnection(home, env = process.env) {
+export async function readConnection(home, env = process.env, providerIdOverride) {
   const configFile = join(home, 'config.toml');
   const source = await readFile(configFile, 'utf8');
   let config;
   try { config = parse(source); } catch { throw new Error('Cannot parse Codex config.toml.'); }
-  const providerId = config.model_provider || 'openai';
+  const providerId = providerIdOverride || config.model_provider || 'openai';
   const provider = config.model_providers?.[providerId] || {};
   const base = provider.base_url || (providerId === 'openai' && (env.OPENAI_BASE_URL || 'https://api.openai.com/v1'));
   if (!base) throw new Error(`Provider ${providerId} has no base_url.`);

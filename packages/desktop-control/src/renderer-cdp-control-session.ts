@@ -209,8 +209,11 @@ async function installTarget(
   try {
     await renderer.command("Runtime.enable");
     await renderer.command("Page.enable");
-    await renderer.command("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
+    // Install the current document before registering the next-document hook.
+    // Registering a multi-megabyte bundle while Electron is still committing its
+    // first renderer can crash the embedded V8 context on recent Desktop builds.
     await evaluateSource(renderer, rendererSource);
+    await renderer.command("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
     const draftPrewarmPolicy = await operations.installDraftPrewarmPolicy(renderer);
     const binding = await waitForBinding(renderer, enabledAgents, timeoutMs, pollIntervalMs);
     return { renderer, snapshot: { target, draftPrewarmPolicy, binding } };

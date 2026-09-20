@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 interface RecoveryState {
   model: string;
+  allowModelSwitch: boolean;
   used: Set<string>;
   failures: number;
   total: number;
@@ -35,10 +36,11 @@ export class AutomaticRecovery {
     return this.#waiting > 0;
   }
 
-  watch(threadId: string, model: string): void {
+  watch(threadId: string, model: string, allowModelSwitch = true): void {
     this.cancel(threadId);
     this.#states.set(threadId, {
       model,
+      allowModelSwitch,
       used: new Set([model]),
       failures: 0,
       total: 0,
@@ -95,6 +97,16 @@ export class AutomaticRecovery {
     }
     state.failures++;
     state.total++;
+    if (!state.allowModelSwitch && state.failures >= 3) {
+      this.options.report(
+        threadId,
+        "指定的执行模型连续失败 3 次，已停止自动续接；未切换模型。",
+        state.model,
+        true,
+      );
+      this.cancel(threadId);
+      return;
+    }
     if (state.total >= 9) {
       this.options.report(threadId, "累计失败 9 次，已停止自动续接。", state.model, true);
       this.cancel(threadId);

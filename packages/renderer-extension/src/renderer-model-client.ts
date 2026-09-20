@@ -1,4 +1,8 @@
 import {
+  BUDDY_INTERRUPTED_METHOD,
+  BUDDY_CONTINUE_METHOD,
+  buddyInterruptedSchema,
+  type BuddyInterrupted,
   BUDDY_PRIVATE_METHOD,
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
@@ -170,6 +174,8 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 }
 
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
+  buddyInterrupted?(): Promise<BuddyInterrupted>;
+  buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
@@ -339,6 +345,11 @@ export function createRendererModelClient(
     },
     buddyStatus: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
+    buddyInterrupted: async () =>
+      buddyInterruptedSchema.parse(await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {})),
+    buddyContinue: async (threadId: string, turnId: string) => {
+      await manager.sendRequest(BUDDY_CONTINUE_METHOD, { threadId, turnId });
+    },
     buddyModels: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_MODELS_METHOD, {})),
     buddyConfigure: async (settings: BuddySettings) =>

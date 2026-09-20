@@ -83,6 +83,7 @@ const { outputFiles } = await build({
       globalThis.threadCommandRequests = [];
       globalThis.commandCatalogRequests = [];
       globalThis.appliedConfiguration = null;
+      globalThis.buddyStatusRequests = 0;
       const binding = installRendererBindingProbe({
         enabledAgents: ["codex", "pi", "deepseek-harness", "opencode", "claude-code", "grok", "omp", "kiro-cli"],
         defaultAgent: globalThis.startupAgent ?? "pi",
@@ -95,6 +96,13 @@ const { outputFiles } = await build({
           return true;
         },
         {
+          buddyStatus: async () => {
+            globalThis.buddyStatusRequests += 1;
+            return {
+              settings: { enabled: true, privateMode: false, bypass: true, role: "auto", plannerModel: null, executorModel: null },
+              models: [], decisions: [],
+            };
+          },
           inspectHarness: async () => inspection,
           inspectHarnessCommands: async (input) => {
             globalThis.commandCatalogRequests.push(input);
@@ -151,6 +159,13 @@ const { outputFiles } = await build({
 
 const browserBundle = outputFiles[0]?.text;
 if (!browserBundle) throw new Error("Renderer binding startup E2E bundle was not generated");
+
+test.beforeEach(async ({ page }) => {
+  await page.route("http://codexhost.test/**", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }),
+  );
+  await page.goto("http://codexhost.test/");
+});
 
 test("a new conversation shows Harness commands but disables compact before a Thread exists", async ({
   page,
@@ -217,6 +232,47 @@ test("a native Codex draft hides the external Harness command button", async ({ 
   const root = page.locator("[data-codexhost-harness-command-control]");
   await expect(root).toHaveAttribute("hidden", "");
   await expect(root).toBeHidden();
+});
+
+test("Auto Router follows the draft Harness and stops polling for external Harnesses", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await page.setContent(`<!doctype html>
+    <style>
+      body { margin:0; padding:460px 24px 24px; background:#202020; color:#eee; font:14px system-ui; color-scheme:dark; }
+      [data-codex-composer-root] { min-height:80px; }
+      [role=menu] { background:#282828; color:#eee; }
+    </style><body></body>`);
+  await page.clock.install();
+  await page.addScriptTag({ content: browserBundle });
+  await page.clock.runFor(100);
+  const router = page.locator("[data-buddy-router]");
+  const picker = page.locator('[data-codexhost-agent-control] > button[aria-haspopup="menu"]');
+  await expect(
+    page.locator('[data-codexhost-model-control] > button[aria-haspopup="menu"]'),
+  ).toContainText("Startup Model");
+  await page.clock.runFor(2_400);
+  await expect(router).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(0);
+
+  await picker.click();
+  await page.locator('[role="menuitemradio"][data-agent="codex"]').click();
+  await expect(router).toBeVisible();
+  await page.clock.runFor(1_200);
+  const polls = await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"));
+  expect(polls).toBeGreaterThan(0);
+
+  await picker.click();
+  await page.locator('[role="menuitemradio"][data-agent="opencode"]').click();
+  await expect(router).toHaveCount(0);
+  await page.clock.runFor(2_400);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(polls);
+  await page.screenshot({ path: testInfo.outputPath("opencode-without-auto-router.png") });
+
+  await picker.click();
+  await page.locator('[role="menuitemradio"][data-agent="codex"]').click();
+  await expect(router).toBeVisible();
 });
 
 test("a draft waits for the Desktop prewarm policy before applying its Model", async ({ page }) => {

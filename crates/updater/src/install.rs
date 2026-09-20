@@ -164,9 +164,9 @@ fn install_macos(request: &UpdateRequest, macos: &MacOsInstallation) -> Result<(
     }
 
     let prepare_result = (|| -> Result<(), Box<dyn Error>> {
-        let source = mount.join("codexhost.app");
+        let source = mount.join("codex-buddy.app");
         if !source.is_dir() {
-            return Err("macOS DMG does not contain codexhost.app".into());
+            return Err("macOS DMG does not contain codex-buddy.app".into());
         }
         run_checked(
             Command::new("/usr/bin/ditto").arg(&source).arg(&staged),

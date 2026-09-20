@@ -188,7 +188,7 @@ jobs:
         with:
           name: codexhost-${{ matrix.target }}
           path: |
-            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-*.dmg
+            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-*.dmg
             build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-*.exe
             build/npm/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-cli-*-${{ matrix.target }}.tgz
             build/npm/${{ needs.prepare.outputs.version }}/meta/codexhost-cli-${{ needs.prepare.outputs.version }}.tgz

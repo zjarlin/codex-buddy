@@ -53,7 +53,7 @@ describe("platform packagers", () => {
     expect(workflow).toContain("Revalidate tag and CI immediately before npm publication");
     expect(workflow).toContain("Revalidate tag and CI immediately before GitHub publication");
 
-    expect(workflow).toContain("codex-buddy-*.dmg");
+    expect(workflow).toContain("codexhost-*.dmg");
     expect(workflow).toContain("codexhost-*.exe");
     expect(workflow).not.toContain("codexhost-*.msi");
     expect(workflow).toContain("npm run release:npm --");

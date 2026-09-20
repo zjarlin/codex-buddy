@@ -1261,6 +1261,11 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "macos")]
 fn show_macos_error_dialog(message: &str) {
+    // Finder launches have no controlling terminal; CLI and CI invocations should
+    // keep their stderr result instead of blocking on a modal dialog.
+    if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        return;
+    }
     let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         "display dialog \"{escaped}\" with title \"Codex Buddy 启动失败\" buttons {{\"好\"}} default button \"好\""

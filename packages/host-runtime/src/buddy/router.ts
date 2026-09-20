@@ -2,7 +2,6 @@ import { readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
-  assess,
   compatibleTurn,
   dispatchLifecycle,
   homePath,
@@ -23,6 +22,7 @@ import type { JsonObject, JsonRpcRequest, JsonValue } from "@codexhost/protocol-
 import { BuddyPlanner, object, result, type NativeRequest } from "./planner.js";
 import { discoverModels, type NativeModelCatalog } from "./models.js";
 import { recentMessages } from "./history.js";
+import { assessWithContext, refersToPreviousTask } from "./assessment-context.js";
 import { parallelExecutionGuidance, singleExecutorPacket } from "./delegation.js";
 import { AutomaticRecovery } from "./recovery.js";
 import { InterruptedConversations } from "./continuation.js";
@@ -603,7 +603,11 @@ export class BuddyRouter {
       .map((v) => v.text)
       .join("\n");
     const project = await inspectProject(cwd);
-    const assessment = await assess(input, cwd, project);
+    const previousPlan = this.#decisions.get(threadId)?.plan;
+    const recent = refersToPreviousTask(input)
+      ? await recentMessages(this.options.request, threadId)
+      : null;
+    const assessment = await assessWithContext(input, cwd, project, recent ?? [], previousPlan);
     const conversational = assessment.intent === "conversation";
     const pendingClarification = conversational ? undefined : this.#clarifications.get(threadId);
     const needsPlanning = assessment.tier === "advanced" || pendingClarification !== undefined;
@@ -698,8 +702,10 @@ export class BuddyRouter {
     }
     if (needsPlanning && !planOnly && inventory.planner) {
       this.#update(threadId, { phase: "planning", plannerModel: inventory.planner });
-      const recent =
-        pendingClarification?.recent ?? (await recentMessages(this.options.request, threadId));
+      const planningRecent =
+        pendingClarification?.recent ??
+        recent ??
+        (await recentMessages(this.options.request, threadId));
       const planningInput: JsonValue[] = pendingClarification
         ? [
             ...pendingClarification.task,
@@ -714,7 +720,11 @@ export class BuddyRouter {
         model: inventory.planner,
         cwd,
         task: planningInput,
-        context: JSON.stringify({ project, recent }).slice(0, 16000),
+        context: JSON.stringify({
+          project,
+          previousPlan: recent ? previousPlan : undefined,
+          recent: planningRecent,
+        }).slice(0, 32000),
         fixedExecutor,
         signal,
       });
@@ -726,7 +736,7 @@ export class BuddyRouter {
         this.#clarifications.set(threadId, {
           task: planningInput,
           question: clarification,
-          recent,
+          recent: planningRecent,
         });
       } else {
         this.#clarifications.delete(threadId);

@@ -1,4 +1,6 @@
 import { installBuddyControl } from "./buddy/control.js";
+import { selectFixedModel } from "./renderer-fixed-model-selection.js";
+import { nativeModelBinding } from "./renderer-native-model-binding.js";
 import {
   decodeHarnessPluginRoute,
   harnessIdSchema,
@@ -542,6 +544,7 @@ interface MountedComposer {
   hostId: string | null;
   usageRequestGeneration: number;
   commandRequestGeneration: number;
+  shortcutSelectionPending?: boolean;
 }
 
 interface PendingComposerReplacement {
@@ -861,7 +864,9 @@ export function installRendererBindingProbe(
       mounted.control,
       controller.get(mounted.composer),
       adapterStatus.state,
-      controller.isSwitching(mounted.composer) || mounted.ownershipStatus === "loading",
+      controller.isSwitching(mounted.composer) ||
+        mounted.ownershipStatus === "loading" ||
+        mounted.shortcutSelectionPending === true,
       activeHarnessAvailabilityState().availability,
       mounted.modelView,
       mounted.permissionModeView,
@@ -1534,6 +1539,44 @@ export function installRendererBindingProbe(
       }
     } finally {
       if (isCurrentModelRequest(mounted, generation)) renderMounted(mounted);
+    }
+  };
+
+  const selectShortcut = async (mounted: MountedComposer, modelId: string): Promise<void> => {
+    if (mounted.shortcutSelectionPending) return;
+    if (controller.get(mounted.composer).agent !== "codex") {
+      await selectExternalModel(mounted, modelId);
+      return;
+    }
+    const hostId = mounted.hostId ?? activeModelHostId();
+    const client = hostId ? modelClientForHost(hostId) : null;
+    if (!client) throw new Error("Model selection connection is unavailable");
+    const target = JSON.stringify(mounted.modelTarget);
+    const isCurrent = (): boolean =>
+      mounted.composer.isConnected &&
+      mountedByComposer.get(mounted.composer) === mounted &&
+      controller.get(mounted.composer).agent === "codex" &&
+      activeModelHostId() === hostId &&
+      JSON.stringify(mounted.modelTarget) === target;
+    const binding = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null);
+    if (
+      !binding ||
+      binding.view.disabled ||
+      !binding.view.models.some((model) => model.id === modelId && !model.disabled)
+    )
+      throw new Error("Model selection is unavailable");
+    mounted.shortcutSelectionPending = true;
+    renderMounted(mounted);
+    try {
+      await selectFixedModel(client, isCurrent, () => {
+        const current = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null);
+        if (!current) throw new Error("Native model selection is unavailable");
+        current.select(modelId);
+      });
+      await buddyControl?.refresh();
+    } finally {
+      mounted.shortcutSelectionPending = false;
+      if (mounted.composer.isConnected) renderMounted(mounted);
     }
   };
 
@@ -2365,6 +2408,10 @@ export function installRendererBindingProbe(
         const mounted = mountedByComposer.get(composer);
         if (composer.isConnected && mounted) void loadExternalCatalog(mounted, true);
       },
+      async (modelId) => {
+        const mounted = mountedByComposer.get(composer);
+        if (composer.isConnected && mounted) await selectShortcut(mounted, modelId);
+      },
     );
     const mounted: MountedComposer = {
       composer,
@@ -2575,7 +2622,11 @@ export function installRendererBindingProbe(
     const mounted = mountedByComposer.get(composer);
     if (!mounted) return null;
     const current = controller.get(composer);
-    if (controller.isSwitching(composer) || isOwnershipSubmissionBlocked(mounted.ownershipStatus)) {
+    if (
+      controller.isSwitching(composer) ||
+      mounted.shortcutSelectionPending ||
+      isOwnershipSubmissionBlocked(mounted.ownershipStatus)
+    ) {
       return false;
     }
     if (!isExternalConfigurationReady(mounted)) return false;

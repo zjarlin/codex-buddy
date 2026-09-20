@@ -5,9 +5,9 @@ import { interruptedControl } from "./continuation.js";
 const messages = {
   "zh-CN": {
     waiting: "夯规划 → 垃执行",
-    disabled: "已关闭",
+    disabled: "固定模型 · 不规划",
     disconnected: "未连接路由",
-    enabled: "自动路由",
+    enabled: "自动规划",
     privateMode: "隐私",
     privateActive: "隐私 · 自动选择离线模型",
     bypass: "精确命令旁路",
@@ -58,9 +58,9 @@ const messages = {
   },
   en: {
     waiting: "夯 plans → 垃 executes",
-    disabled: "Off",
+    disabled: "Fixed model · No planning",
     disconnected: "Router disconnected",
-    enabled: "Auto Router",
+    enabled: "Automatic planning",
     privateMode: "Private",
     privateActive: "Private · Automatic offline model",
     bypass: "Exact command bypass",
@@ -113,34 +113,32 @@ const messages = {
 
 const style = `
 [data-buddy-router]{position:relative;font:12px/1.5 system-ui;color:inherit;margin:6px 0;max-width:100%;z-index:20}
-[data-buddy-router] summary{cursor:pointer;display:flex;align-items:baseline;gap:8px;padding:6px 10px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;list-style:none;background:color-mix(in srgb,#4385ff 8%,transparent)}
+[data-buddy-router] summary{cursor:pointer;display:flex;align-items:baseline;gap:8px;padding:4px 8px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;list-style:none;background:color-mix(in srgb,#4385ff 8%,transparent)}
 [data-buddy-router] summary:focus-visible,[data-buddy-router] button:focus-visible,[data-buddy-router] select:focus-visible,[data-buddy-router] .buddy-switch:focus-visible{outline:2px solid #4385ff;outline-offset:2px}
 [data-buddy-router] summary b{color:#508df2;white-space:nowrap}[data-buddy-router] summary span{min-width:0;overflow-wrap:anywhere;white-space:normal}
-[data-buddy-router] .buddy-panel{padding:12px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;margin-top:5px;background:var(--color-token-bg-primary,Canvas);color:var(--color-token-text-primary,CanvasText);max-height:380px;overflow:auto;color-scheme:light dark}
-[data-buddy-router] .buddy-settings{display:grid;gap:0;margin-bottom:10px}
-[data-buddy-router] .buddy-section{display:grid;gap:8px;padding:9px 0}
-[data-buddy-router] .buddy-section:first-child{padding-top:0}
-[data-buddy-router] .buddy-section:last-child{padding-bottom:0}
-[data-buddy-router] .buddy-section + .buddy-section{border-top:1px solid color-mix(in srgb,currentColor 14%,transparent)}
-[data-buddy-router] .buddy-section-title{font-size:11px;line-height:16px;font-weight:600;color:color-mix(in srgb,currentColor 62%,transparent)}
-[data-buddy-router] .buddy-setting{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0}
-[data-buddy-router] .buddy-setting + .buddy-setting{border-top:1px solid color-mix(in srgb,currentColor 9%,transparent);padding-top:8px}
-[data-buddy-router] .buddy-setting-copy{display:grid;gap:1px;min-width:0}
-[data-buddy-router] .buddy-setting-copy b{font-weight:500;line-height:18px}
-[data-buddy-router] .buddy-setting-copy small{font-size:11px;line-height:16px;color:color-mix(in srgb,currentColor 60%,transparent);white-space:normal}
+[data-buddy-router] .buddy-panel{padding:8px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;margin-top:5px;background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:inherit;max-height:300px;overflow:auto;color-scheme:inherit}
+[data-buddy-router] .buddy-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin-bottom:6px}
+[data-buddy-router] .buddy-section{display:contents}
+[data-buddy-router] .buddy-section-title{display:none}
+[data-buddy-router] .buddy-setting{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;min-height:28px}
+[data-buddy-router] .buddy-setting-copy{min-width:0;flex-shrink:0}
+[data-buddy-router] .buddy-setting-copy b{font-weight:500;font-size:11px;line-height:16px}
+[data-buddy-router] .buddy-setting-copy small{display:none}
 [data-buddy-router] .buddy-switch{appearance:none;position:relative;flex:0 0 auto;width:34px;height:20px;margin:0;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;background:color-mix(in srgb,currentColor 12%,transparent);cursor:pointer;transition:background-color .16s,border-color .16s}
 [data-buddy-router] .buddy-switch::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgb(0 0 0 / 28%);transition:transform .16s}
 [data-buddy-router] .buddy-switch:checked{border-color:#508df2;background:#508df2}
 [data-buddy-router] .buddy-switch:checked::after{transform:translateX(14px)}
-[data-buddy-router] .buddy-select{max-width:230px;min-width:120px;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:5px 8px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
+[data-buddy-router] .buddy-select{width:100%;max-width:190px;min-width:0;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:3px 5px;font-size:11px;height:26px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
 [data-buddy-router] .buddy-section>button{justify-self:start;margin-top:2px}
-[data-buddy-router] .buddy-actions:not(:empty){display:flex;gap:6px;margin:-2px 0 10px}
-[data-buddy-router] button{font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;padding:4px 10px}
-[data-buddy-router] option{background:Canvas;color:CanvasText}[data-buddy-router] button{cursor:pointer}
-[data-buddy-router] dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 12px;margin:10px 0}
+[data-buddy-router] .buddy-actions:not(:empty){display:flex;gap:6px;margin:0}
+[data-buddy-router] .buddy-footer{display:flex;align-items:center;justify-content:flex-end;gap:6px}
+[data-buddy-router] :is(dl,p):empty{display:none}
+[data-buddy-router] button{display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;padding:4px 10px}
+[data-buddy-router] option{background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:inherit}[data-buddy-router] button{cursor:pointer}
+[data-buddy-router] dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 8px;margin:6px 0}
 [data-buddy-router] dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}[data-buddy-router] dt{opacity:.65}
 [data-buddy-router] .buddy-note{opacity:.65;margin:6px 0 0}[data-buddy-router] [role=alert]{color:#d65f55;white-space:pre-wrap}
-@media(max-width:500px){[data-buddy-router] .buddy-setting{align-items:flex-start}[data-buddy-router] .buddy-select{width:min(52vw,220px);min-width:0}[data-buddy-router] dl{grid-template-columns:minmax(0,1fr);gap:2px}[data-buddy-router] dd{margin-bottom:8px}}
+@media(max-width:420px){[data-buddy-router] .buddy-setting{flex-direction:column;align-items:stretch;gap:3px}[data-buddy-router] .buddy-select{max-width:none}[data-buddy-router] .buddy-switch{align-self:flex-start}[data-buddy-router] dl{grid-template-columns:minmax(0,1fr);gap:2px}[data-buddy-router] dd{margin-bottom:8px}}
 `;
 
 export interface BuddyControlContext {
@@ -173,9 +171,11 @@ export function installBuddyControl(
   error.setAttribute("role", "alert");
   const note = document.createElement("p");
   note.className = "buddy-note";
-  panel.append(controls, actions, fields, error, note);
   const recovery = document.createElement("div");
-  panel.append(recovery);
+  const footer = document.createElement("div");
+  footer.className = "buddy-footer";
+  footer.append(actions, recovery);
+  panel.append(controls, fields, error, note, footer);
   root.append(styles, summary, panel);
   let disposed = false;
   let busy = false;
@@ -224,6 +224,7 @@ export function installBuddyControl(
   ): void => {
     const wrapper = document.createElement("label");
     wrapper.className = "buddy-setting";
+    wrapper.title = hint;
     const copy = document.createElement("span");
     copy.className = "buddy-setting-copy";
     const title = document.createElement("b");
@@ -254,6 +255,7 @@ export function installBuddyControl(
   ): void => {
     const wrapper = document.createElement("label");
     wrapper.className = "buddy-setting";
+    wrapper.title = hint;
     const copy = document.createElement("span");
     copy.className = "buddy-setting-copy";
     const title = document.createElement("b");
@@ -290,7 +292,7 @@ export function installBuddyControl(
       status.textContent = m.disconnected;
       return;
     }
-    if (snapshot.settings.privateMode) {
+    if (snapshot.settings.privateMode || !snapshot.settings.enabled) {
       recovery.replaceChildren();
       recoveryClient = null;
     } else if (context && recoveryClient !== context.client) {
@@ -365,7 +367,7 @@ export function installBuddyControl(
           void setting({ [key]: id || null });
         });
       }
-      button(models, m.refresh, async () => {
+      button(actions, m.refresh, async () => {
         const client = context?.client;
         if (!client?.buddyModels) {
           return;
@@ -374,7 +376,7 @@ export function installBuddyControl(
         render();
       });
     }
-    if (decision) {
+    if (decision && snapshot.settings.enabled) {
       row(m.score, `${decision.score}/100 · ${m[decision.difficulty]}`);
       row(m.reason, decision.reason);
       row(m.planner, decision.plannerModel ?? "—");
@@ -411,10 +413,13 @@ export function installBuddyControl(
           await refresh();
         });
       }
-    } else {
-      row("", m.idle);
     }
-    note.textContent = m.note;
+    note.textContent = "";
+    summary.title = snapshot.settings.enabled
+      ? m.note
+      : getLocale() === "zh-CN"
+        ? "使用当前选定模型直接执行；开启自动规划可恢复规划与执行分工。"
+        : "Use the selected model directly. Enable automatic planning to resume routing.";
   };
   const refreshContext = (): void => {
     const next = disposed ? null : getContext();

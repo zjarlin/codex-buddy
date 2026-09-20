@@ -1,4 +1,5 @@
 const STORAGE_KEY = "codexhost.model-favorites.v1";
+export const MODEL_FAVORITES_CHANGED = "codexhost:model-favorites-changed";
 
 export interface ModelFavoritesStorage {
   getItem(key: string): string | null;
@@ -37,6 +38,7 @@ export function writeModelFavorites(
 ): void {
   try {
     storage?.setItem(`${STORAGE_KEY}:${harnessId}`, JSON.stringify([...favorites]));
+    if (typeof window !== "undefined") window.dispatchEvent(new Event(MODEL_FAVORITES_CHANGED));
   } catch {
     // A storage failure must not interrupt model selection.
   }

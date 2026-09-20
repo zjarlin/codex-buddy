@@ -169,7 +169,7 @@ describe("production Desktop Controller", () => {
       state: "compatible",
       issues: [],
     });
-    expect(ready.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0]);
+    expect(ready.mock.invocationCallOrder[0]).toBeLessThan(install.mock.invocationCallOrder[0] ?? 0);
     expect(activateDesktop).toHaveBeenCalledOnce();
     expect(ensureInstalled).toHaveBeenCalledOnce();
     expect(server.close).toHaveBeenCalledOnce();

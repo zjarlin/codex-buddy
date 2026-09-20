@@ -108,9 +108,10 @@ test("shows all task models without clipping and explains a fixed executor", asy
   await page
     .getByRole("combobox", { name: "垃 · 执行模型", exact: true })
     .selectOption("deepseek-flash");
-  await expect(
-    page.getByText("指定后由单个模型执行，不使用子代理或自动换模", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "垃 · 执行模型" }).locator("..")).toHaveAttribute(
+    "title",
+    "指定后由单个模型执行，不使用子代理或自动换模",
+  );
   expect(
     await page.evaluate(() => Reflect.get(globalThis, "buddyWrites").at(-1).executorModel),
   ).toBe("deepseek-flash");
@@ -167,11 +168,11 @@ test("Auto Router switches reveal only meaningful configuration", async ({ page 
   await page.addScriptTag({ content: browserBundle });
   await page.locator("[data-buddy-router] summary").click();
 
-  const enabled = page.getByRole("switch", { name: /自动路由/ });
+  const enabled = page.getByRole("switch", { name: /自动规划/ });
   const privateMode = page.getByRole("switch", { name: /隐私/ });
   await expect(enabled).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText("路由策略", { exact: true })).toBeVisible();
-  await expect(page.getByText("模型偏好", { exact: true })).toBeVisible();
+  await expect(page.getByText("路由策略", { exact: true })).toBeHidden();
+  await expect(page.getByText("模型偏好", { exact: true })).toBeHidden();
   await expect(page.getByRole("combobox", { name: "执行角色" })).toBeVisible();
 
   await enabled.click();
@@ -181,7 +182,7 @@ test("Auto Router switches reveal only meaningful configuration", async ({ page 
   await expect(page.getByRole("combobox", { name: "执行角色" })).toHaveCount(0);
 
   await enabled.click();
-  await expect(page.getByText("路由策略", { exact: true })).toBeVisible();
+  await expect(page.getByText("路由策略", { exact: true })).toBeHidden();
   await privateMode.click();
   await expect(privateMode).toHaveAttribute("aria-checked", "true");
   await expect(page.getByText("路由策略", { exact: true })).toHaveCount(0);

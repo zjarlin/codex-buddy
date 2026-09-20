@@ -43,6 +43,8 @@ import {
   type RendererUsageControl,
 } from "./renderer-usage-control.js";
 import type { RendererSettingsLocale } from "./settings/localization.js";
+import { mountModelShortcuts } from "./renderer-model-shortcuts.js";
+import { nativeModelBinding } from "./renderer-native-model-binding.js";
 import type { RendererAdapterStatus } from "./versioned-renderer-adapter.js";
 import {
   mountRendererHarnessCommandControl,
@@ -84,6 +86,7 @@ export interface ComposerAgentControl {
   root: HTMLElement;
   picker: RendererAgentPickerControl;
   modelPicker: RendererModelPickerControl;
+  modelShortcuts?: ReturnType<typeof mountModelShortcuts>;
   permissionModePicker: RendererPermissionModePickerControl;
   nativeModelControl: NativeModelControlState | null;
   nativePermissionModeControl: NativePermissionModeControlState | null;
@@ -610,6 +613,7 @@ export function mountComposerAgentControl(
   onSelectPermissionMode: (permissionModeId: string) => void,
   onSelectCommand: (command: HarnessCommandDescriptor) => void,
   onRefreshModels?: () => void,
+  onSelectShortcut?: (modelId: string) => void | Promise<void>,
 ): ComposerAgentControl {
   const nativeModelControl = captureNativeControl(nativeModelControlForComposer(composer));
   const nativeContextUsageControl = captureNativeControl(
@@ -639,6 +643,8 @@ export function mountComposerAgentControl(
     onSelectPermissionMode,
   );
   const credits = mountRendererCreditsControl(composerId);
+  const modelShortcuts = mountModelShortcuts(onSelectShortcut ?? onSelectModel);
+  composer.before(modelShortcuts.root);
 
   const toolbar = sendButton.parentElement;
   const harnessCommands = mountRendererHarnessCommandControl(
@@ -661,6 +667,7 @@ export function mountComposerAgentControl(
     root: picker.root,
     picker,
     modelPicker,
+    modelShortcuts,
     permissionModePicker,
     nativeModelControl,
     nativePermissionModeControl,
@@ -737,6 +744,25 @@ export function renderComposerAgentControl(
     pickerView.nativeModelHidden,
     switching || state.agent !== "codex",
   );
+  const native =
+    state.agent === "codex"
+      ? nativeModelBinding(control.nativeModelControl?.element ?? null)
+      : null;
+  control.modelShortcuts?.update(
+    {
+      ...(native?.view ?? {
+        models:
+          state.agent === "codex"
+            ? []
+            : (modelView.catalog?.models ?? []).map(({ ref, label }) => ({ id: ref.id, label })),
+        selected: modelView.selected?.id,
+        disabled: modelView.status === "loading" || modelView.status === "selecting",
+      }),
+      ...(switching || ownershipError ? { disabled: true } : {}),
+    },
+    state.agent,
+    locale,
+  );
   renderRendererModelPicker(
     control.modelPicker,
     modelView,
@@ -786,5 +812,6 @@ export function disposeComposerAgentControl(control: ComposerAgentControl): void
   control.harnessCommands.dispose();
   control.permissionModePicker.dispose();
   control.modelPicker.dispose();
+  control.modelShortcuts?.dispose();
   control.picker.dispose();
 }

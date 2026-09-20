@@ -60,4 +60,34 @@ describe("Buddy unmaterialized history", () => {
       expect(request).toHaveBeenCalledWith("thread/items/list", expect.any(Object));
     },
   );
+  it("finds the proposal before a page of tool calls and retains compaction summaries", async () => {
+    const request = vi.fn<NativeRequest>(async (method, params) => {
+      if (method === "thread/read") return { result: { thread: { preview: "existing" } } };
+      if (!params.cursor)
+        return {
+          result: {
+            data: Array.from({ length: 64 }, (_, id) => ({
+              type: "commandExecution",
+              id: String(id),
+            })),
+            nextCursor: "before-tools",
+          },
+        };
+      return {
+        result: {
+          data: [
+            { type: "contextCompaction", summary: "保留数据库迁移方案" },
+            { type: "agentMessage", text: "先统一认证，再迁移数据库。" },
+            { type: "userMessage", content: [{ type: "text", text: "修登录" }] },
+          ],
+          nextCursor: null,
+        },
+      };
+    });
+    expect(await recentMessages(request, "work")).toEqual([
+      { type: "userMessage", content: [{ type: "text", text: "修登录" }] },
+      { type: "agentMessage", text: "先统一认证，再迁移数据库。" },
+      { type: "contextCompaction", summary: "保留数据库迁移方案" },
+    ]);
+  });
 });

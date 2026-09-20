@@ -20,7 +20,7 @@ export async function recentMessages(request: NativeRequest, threadId: string): 
   }
   const response = await request("thread/items/list", {
     threadId,
-    limit: 16,
+    limit: 64,
     sortDirection: "desc",
   });
   const error = object(response.error);
@@ -45,13 +45,33 @@ export async function recentMessages(request: NativeRequest, threadId: string): 
     items = Array.isArray(turns)
       ? turns.flatMap((turn: JsonObject) => (Array.isArray(turn.items) ? turn.items : []))
       : [];
-    items = items.slice(-16);
   } else {
     const history = result(response);
-    items = Array.isArray(history.data) ? [...history.data].reverse() : [];
+    const descending = Array.isArray(history.data) ? [...history.data] : [];
+    let cursor = history.nextCursor;
+    // 工具输出可能淹没最近一页；有限翻页以找到之前的任务和方案。
+    for (let page = 1; page < 4 && typeof cursor === "string" && cursor; page += 1) {
+      if (descending.filter(isContextMessage).length >= 12) break;
+      const next = result(
+        await request("thread/items/list", {
+          threadId,
+          limit: 64,
+          sortDirection: "desc",
+          cursor,
+        }),
+      );
+      if (Array.isArray(next.data)) descending.push(...next.data);
+      if (next.nextCursor === cursor) break;
+      cursor = next.nextCursor;
+    }
+    items = descending.reverse();
   }
-  return items.filter((item) =>
-    ["userMessage", "agentMessage"].includes(String(object(item).type)),
+  return items.filter(isContextMessage).slice(-12);
+}
+
+function isContextMessage(item: unknown): boolean {
+  return ["userMessage", "agentMessage", "contextCompaction", "compaction"].includes(
+    String(object(item).type),
   );
 }
 import { stat } from "node:fs/promises";

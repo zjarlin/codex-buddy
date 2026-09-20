@@ -772,7 +772,7 @@ describe("Buddy native routing", () => {
       { type: "agentMessage", text: "RECENT_AGENT" },
       { type: "userMessage", content: [{ type: "text", text: "RECENT_USER" }] },
     ];
-    const f = await fixture({ historyItems: [...oldHistory.slice(-14).reverse(), ...recent] });
+    const f = await fixture({ historyItems: [...recent, ...oldHistory.slice(-14).reverse()] });
     await f.router.route(f.turn("设计数据库迁移"));
     const planningInput = JSON.stringify(
       f.requested.find((request) => request.method === "turn/start")?.params.input,
@@ -841,6 +841,24 @@ describe("Buddy native routing", () => {
     expect(await f.router.route(f.turn("重构数据库"))).toBe(false);
     expect(f.requested).toEqual([]);
     expect(f.providerRequests()).toBe(0);
+  });
+  it("assesses a short follow-up against the previous proposal before choosing to plan", async () => {
+    const f = await fixture({
+      historyItems: [
+        { type: "agentMessage", text: "先迁移数据库事务，再跨服务统一认证，最后验证并发登录。" },
+        { type: "userMessage", content: [{ type: "text", text: "解决登录不一致" }] },
+      ],
+    });
+    await f.router.route(f.turn("按你说的修"));
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      difficulty: "advanced",
+      reason: expect.stringContaining("结合最近任务"),
+      plannerModel: "gpt-planner",
+    });
+    const planner = f.requested.find(
+      (request) => request.method === "turn/start" && request.params.threadId === "planner",
+    );
+    expect(JSON.stringify(planner)).toContain("跨服务统一认证");
   });
   it("uses the thread provider for model discovery and ignores candidates below the input limit", async () => {
     const f = await fixture({

@@ -43,19 +43,18 @@ describe("buddy plan graph", () => {
       ["write-api", "inspect-docs"],
       ["write-ui"],
     ]);
-    expect(formatExecutionTopology(result)).toContain("wave-1: write-api (executor), inspect-docs (executor)");
+    expect(formatExecutionTopology(result)).toContain(
+      "wave-1: write-api (executor), inspect-docs (executor)",
+    );
   });
 
   it("rejects cycles and overlapping writes in a parallel wave", () => {
-    expect(() => validatePlan(plan([task("aa", { dependsOn: ["bb"] }), task("bb", { dependsOn: ["aa"] })]))).toThrow(
-      "循环依赖",
-    );
+    expect(() =>
+      validatePlan(plan([task("aa", { dependsOn: ["bb"] }), task("bb", { dependsOn: ["aa"] })])),
+    ).toThrow("循环依赖");
     expect(() =>
       validatePlan(
-        plan([
-          task("aa", { files: ["shared.ts"] }),
-          task("bb", { files: ["shared.ts"] }),
-        ]),
+        plan([task("aa", { files: ["shared.ts"] }), task("bb", { files: ["shared.ts"] })]),
       ),
     ).toThrow("写入范围重叠");
   });

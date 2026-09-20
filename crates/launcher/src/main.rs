@@ -1265,6 +1265,9 @@ fn main() -> ExitCode {
 
 #[cfg(target_os = "macos")]
 fn show_macos_error_dialog(message: &str) {
+    if std::env::var_os("CI").is_some() {
+        return;
+    }
     let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         "display dialog \"{escaped}\" with title \"Codex Buddy 启动失败\" buttons {{\"好\"}} default button \"好\""

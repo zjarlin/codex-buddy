@@ -48,6 +48,7 @@ import {
 } from "./renderer-composer-dom.js";
 import { rendererHarnessMessages } from "./renderer-harness-localization.js";
 import { installReasoningTranscriptSoftWrap } from "./renderer-transcript-dom.js";
+import { installTranscriptAutoScroll } from "./renderer-transcript-scroll.js";
 import { RendererCodexAccountState } from "./renderer-codex-account-state.js";
 import {
   decodeAntigravityTransportModelId,
@@ -674,6 +675,7 @@ export function installRendererBindingProbe(
   const pendingReplacements = new Map<Element, PendingComposerReplacement>();
   let disposed = false;
   const disposeReasoningSoftWrap = installReasoningTranscriptSoftWrap(document);
+  const disposeTranscriptAutoScroll = installTranscriptAutoScroll(document);
   let scanScheduled = false;
   let refreshTargetsOnNextScan = false;
   let adapterDispose: (() => void) | null = null;
@@ -2911,6 +2913,7 @@ export function installRendererBindingProbe(
       modelControl = null;
       mutationObserver.disconnect();
       disposeReasoningSoftWrap();
+      disposeTranscriptAutoScroll();
       sidebarAgentIcons.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);

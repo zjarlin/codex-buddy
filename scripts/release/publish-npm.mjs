@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import { NPM_PACKAGE_NAME, npmPlatformPackageName, npmTarballFileName } from "./prepare-npm.mjs";
 import { npmMetaTarballFileName } from "./prepare-npm-meta.mjs";
-import { supportedReleaseTargets, releaseTarget } from "./targets.mjs";
+import { publishedReleaseTargets, releaseTarget } from "./targets.mjs";
 
 const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 
@@ -61,7 +61,7 @@ export async function createNpmPublishPlan({ artifactsRoot, version }) {
     if (matches.length > 1) throw new Error(`duplicate npm release tarball: ${fileName}`);
     return matches[0];
   };
-  const platforms = supportedReleaseTargets().map((targetId) => {
+  const platforms = publishedReleaseTargets().map((targetId) => {
     const target = releaseTarget(targetId);
     return {
       kind: "platform",

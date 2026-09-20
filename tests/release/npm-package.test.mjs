@@ -39,7 +39,11 @@ import {
   expectedNpmMetaPackagePaths,
   validateNpmMetaPackage,
 } from "../../scripts/release/prepare-npm-meta.mjs";
-import { hostReleaseTargetId, releaseTarget } from "../../scripts/release/targets.mjs";
+import {
+  hostReleaseTargetId,
+  publishedReleaseTargets,
+  releaseTarget,
+} from "../../scripts/release/targets.mjs";
 
 async function temporaryDirectory() {
   return mkdtemp(path.join(os.tmpdir(), "codexhost-npm-package-"));
@@ -452,8 +456,11 @@ describe("npm package release", () => {
     expect(manifest.os).toBeUndefined();
     expect(manifest.cpu).toBeUndefined();
     expect(manifest.optionalDependencies).toEqual(
-      Object.fromEntries(Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((name) => [name, "0.1.0"])),
+      Object.fromEntries(
+        publishedReleaseTargets().map((target) => [NPM_PLATFORM_PACKAGE_NAMES[target], "0.1.0"]),
+      ),
     );
+    expect(manifest.optionalDependencies).not.toHaveProperty("@codexhost/cli-darwin-x64");
   });
 
   it("injects package resources when the user runs codexhost with no args", () => {
@@ -720,7 +727,7 @@ describe("npm package release", () => {
     expect(source).toContain('access: "public"');
   });
 
-  it("names npm tarballs with the release target so four matrix jobs do not collide", () => {
+  it("names npm tarballs with the release target so matrix jobs do not collide", () => {
     expect(npmTarballFileName({ version: "0.1.0", target: releaseTarget("macos-arm64") })).toBe(
       "codexhost-cli-0.1.0-macos-arm64.tgz",
     );

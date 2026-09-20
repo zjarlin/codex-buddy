@@ -10,6 +10,7 @@ import {
   packNpmPackage,
   resolveNpmPackageVersion,
 } from "./prepare-npm.mjs";
+import { publishedReleaseTargets } from "./targets.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -27,7 +28,7 @@ export function createNpmMetaPackageManifest({ version }) {
     files: ["bin/**", "README.md"],
     engines: { node: ">=22" },
     optionalDependencies: Object.fromEntries(
-      Object.values(NPM_PLATFORM_PACKAGE_NAMES).map((packageName) => [packageName, version]),
+      publishedReleaseTargets().map((target) => [NPM_PLATFORM_PACKAGE_NAMES[target], version]),
     ),
     keywords: ["codex", "codexhost", "pi", "claude-code", "agent", "harness"],
     repository: {
@@ -51,7 +52,7 @@ ${NPM_PACKAGE_DESCRIPTION}
 npm install -g ${NPM_PACKAGE_NAME}@${version}
 \`\`\`
 
-npm automatically installs the matching macOS, Windows, or Linux platform package. Node.js 22 or 24 and the official ChatGPT/Codex Desktop are required.
+npm automatically installs the matching Apple Silicon macOS, Windows, or Linux platform package. Node.js 22 or 24 and the official ChatGPT/Codex Desktop are required.
 
 ## Usage
 

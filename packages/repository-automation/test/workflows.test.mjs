@@ -10,6 +10,7 @@ const read = (file) => readFile(path.join(root, file), "utf8");
 describe("workflow and form contracts", () => {
   it.each([
     ".github/workflows/ci.yml",
+    ".github/workflows/buddy-macos-dmg.yml",
     ".github/workflows/repository-maintenance.yml",
     ".github/workflows/release-packages.yml",
     ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -74,6 +75,32 @@ describe("workflow and form contracts", () => {
       "github.event_name == 'workflow_dispatch' && inputs.skip_npm && needs.publish-npm.result == 'skipped'",
     );
     expect(publishRelease).toContain("await verifyRelease(");
+  });
+
+  it("keeps installer release CI to Apple Silicon macOS and Windows installers", async () => {
+    const workflow = await read(".github/workflows/release-packages.yml");
+    expect(workflow).toContain("- target: macos-arm64\n            runner: macos-14");
+    expect(workflow).toContain("- target: windows-x64\n            runner: windows-latest");
+    expect(workflow).toContain("- target: windows-arm64\n            runner: windows-latest");
+    expect(workflow).not.toContain("macos-x64");
+    expect(workflow).not.toContain("macos-15-intel");
+    expect(workflow).not.toContain("x86_64-apple-darwin");
+    const publishRelease = workflow.slice(workflow.indexOf("  publish-release:"));
+    expect(publishRelease).toContain('"codexhost-${VERSION}-macos-arm64.dmg"');
+    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-x64.exe"');
+    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-arm64.exe"');
+    expect(publishRelease).not.toContain("macos-x64");
+  });
+
+  it("keeps the Buddy macOS preview workflow Apple Silicon only", async () => {
+    const workflow = await read(".github/workflows/buddy-macos-dmg.yml");
+    expect(workflow).toContain('description: "Mac architecture (Apple Silicon: arm64)"');
+    expect(workflow).toContain("          - macos-arm64\n");
+    expect(workflow).not.toContain("macos-x64");
+    expect(workflow).not.toContain("macos-15-intel");
+    expect(workflow).not.toContain("x86_64-apple-darwin");
+    expect(workflow).toContain("runs-on: macos-14");
+    expect(workflow).toContain("targets: aarch64-apple-darwin");
   });
 
   it("pins external Actions and release build/publish checkouts to immutable SHAs", async () => {

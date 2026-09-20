@@ -66,12 +66,30 @@ export const RELEASE_TARGETS = Object.freeze({
   }),
 });
 
+const PUBLISHED_RELEASE_TARGETS = Object.freeze([
+  "macos-arm64",
+  "windows-x64",
+  "windows-arm64",
+  "linux-x64",
+  "linux-arm64",
+]);
+
 export function supportedReleaseTargets() {
   return Object.keys(RELEASE_TARGETS);
 }
 
+export function publishedReleaseTargets() {
+  return [...PUBLISHED_RELEASE_TARGETS];
+}
+
 export function installerReleaseTargets() {
   return supportedReleaseTargets().filter(
+    (target) => RELEASE_TARGETS[target].installerArchitecture !== undefined,
+  );
+}
+
+export function publishedInstallerReleaseTargets() {
+  return publishedReleaseTargets().filter(
     (target) => RELEASE_TARGETS[target].installerArchitecture !== undefined,
   );
 }

@@ -4,12 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Mac architecture (Apple Silicon: arm64; Intel: x64)"
+        description: "Mac architecture (Apple Silicon: arm64)"
         type: choice
         default: macos-arm64
         options:
           - macos-arm64
-          - macos-x64
 
 permissions:
   contents: read
@@ -21,7 +20,7 @@ concurrency:
 jobs:
   package:
     name: Build ${{ inputs.target }} DMG
-    runs-on: ${{ inputs.target == 'macos-x64' && 'macos-15-intel' || 'macos-14' }}
+    runs-on: macos-14
     timeout-minutes: 45
     env:
       RELEASE_TARGET: ${{ inputs.target }}
@@ -44,7 +43,7 @@ jobs:
         uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
         with:
           toolchain: 1.97.1
-          targets: ${{ inputs.target == 'macos-x64' && 'x86_64-apple-darwin' || 'aarch64-apple-darwin' }}
+          targets: aarch64-apple-darwin
 
       - name: Install dependencies
         run: npm ci
@@ -77,7 +76,13 @@ jobs:
         run: brew install create-dmg
 
       - name: Build and verify DMG
-        run: npm run release:package -- --target "$RELEASE_TARGET"
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE_TARGET" != "macos-arm64" ]; then
+            echo "macos-arm64 is the only supported macOS preview target" >&2
+            exit 1
+          fi
+          npm run release:package -- --target "$RELEASE_TARGET"
 
       - name: Record build and checksum
         env:

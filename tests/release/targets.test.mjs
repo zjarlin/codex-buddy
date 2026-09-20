@@ -5,6 +5,8 @@ import {
   RELEASE_TARGETS,
   installerReleaseTargets,
   parseReleaseArguments,
+  publishedInstallerReleaseTargets,
+  publishedReleaseTargets,
   releaseTarget,
   releaseTargetForHost,
   releaseUsage,
@@ -26,6 +28,18 @@ describe("release targets", () => {
     expect(installerReleaseTargets()).toEqual(
       expectedTargets.filter((target) => !target.startsWith("linux-")),
     );
+    expect(publishedReleaseTargets()).toEqual([
+      "macos-arm64",
+      "windows-x64",
+      "windows-arm64",
+      "linux-x64",
+      "linux-arm64",
+    ]);
+    expect(publishedInstallerReleaseTargets()).toEqual([
+      "macos-arm64",
+      "windows-x64",
+      "windows-arm64",
+    ]);
     expect(NODE_VERSION).toBe("24.13.1");
     expect(Object.values(RELEASE_TARGETS).map((target) => target.rustTarget)).toEqual([
       "aarch64-apple-darwin",

@@ -33,7 +33,7 @@ describe("platform packagers", () => {
     expect(source).not.toContain("cargo-packager");
   });
 
-  it("publishes one tag-bound four-platform installer and npm release", async () => {
+  it("publishes one tag-bound three-installer and npm release", async () => {
     const [workflow, releaseBuilder, releaseClient, releaseValidation] = await Promise.all([
       readFile(path.join(root, ".github/workflows/release-packages.yml"), "utf8"),
       readFile(path.join(root, "scripts/release/prepare-payload.mjs"), "utf8"),
@@ -90,8 +90,10 @@ describe("platform packagers", () => {
     expect(publishRelease).toContain("gh release create");
     expect(publishRelease).toContain('"codexhost-${VERSION}-windows-x64.exe"');
     expect(publishRelease).toContain('"codexhost-${VERSION}-windows-arm64.exe"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-macos-x64.dmg"');
     expect(publishRelease).toContain('"codexhost-${VERSION}-macos-arm64.dmg"');
+    expect(publishRelease).not.toContain('"codexhost-${VERSION}-macos-x64.dmg"');
+    expect(workflow).not.toContain("macos-x64");
+    expect(workflow).not.toContain("macos-15-intel");
     expect(publishRelease).not.toContain('"codexhost-cli-${VERSION}');
     expect(workflow).not.toContain("softprops/action-gh-release");
     expect(workflow).not.toContain("codexhost-*.sha256");

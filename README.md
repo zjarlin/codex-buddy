@@ -22,7 +22,7 @@
 
 ## 启动 Buddy 客户端
 
-macOS 可从 [Buddy macOS DMG 构建](https://github.com/org-aio/codex-host/actions/workflows/buddy-macos-dmg.yml) 下载成功运行的 Artifacts。Apple Silicon 选择 `macos-arm64`。解压后打开 DMG，将 `codexhost.app` 拖到 Applications。需要先安装 Codex Desktop；保存任务、完全退出 Codex 后，启动 `codexhost`。
+macOS 可从 [Buddy macOS DMG 构建](https://github.com/org-aio/codex-host/actions/workflows/buddy-macos-dmg.yml) 下载成功运行的 Artifacts。Apple Silicon 选择 `macos-arm64`。解压后打开 DMG，将 `CodexBuddy.app` 拖到 Applications。需要先安装 Codex Desktop；保存任务、完全退出 Codex 后，启动 `codexhost`。
 
 构建包包含 `SHA256SUMS.txt` 和标明源码提交的 `build-info.json`，可在解压目录执行 `shasum -a 256 -c SHA256SUMS.txt` 校验。预览包使用临时签名，未做 Apple 公证；首次打开如被拦截，按系统设置中的安全提示允许打开。Actions 产物保留 30 天，下载需要登录 GitHub。仓库维护者可通过 **Run workflow** 重新构建，或运行：
 
@@ -130,7 +130,7 @@ Buddy macOS 预览包见 [GitHub Actions 构建](https://github.com/org-aio/code
 首次打开时如提示应用无法验证，请执行：
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/codexhost.app
+xattr -dr com.apple.quarantine /Applications/CodexBuddy.app
 ```
 
 **Windows** - 绿色解压版 Codex Desktop

@@ -463,7 +463,7 @@ export async function packageReleaseTarget({ target, root = repositoryRoot }) {
         args: [
           path.join(root, "scripts", "release", "macos", "package.sh"),
           prepared.payloadRoot,
-          path.join(prepared.outputRoot, "codex-buddy.app"),
+          path.join(prepared.outputRoot, "CodexBuddy.app"),
           artifactPath,
           prepared.installerVersion,
         ],

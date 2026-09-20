@@ -17,11 +17,11 @@ describe("platform packagers", () => {
     expect(source).toContain("sips -s format png");
     expect(source).toContain("iconutil -c icns");
     expect(source).toContain("CFBundleIconFile");
-    expect(source).toContain("codex-buddy.icns");
+    expect(source).toContain("CodexBuddy.icns");
     expect(source).toContain("create-dmg");
     expect(source).toContain("--window-size 800 400");
     expect(source).toContain("--window-pos 200 120");
-    expect(source).toContain('--icon "codex-buddy.app" 200 190');
+    expect(source).toContain('--icon "CodexBuddy.app" 200 190');
     expect(source).toContain("--app-drop-link 600 185");
     expect(source).toContain("installer-background.png");
     expect(source).not.toContain("layout_dmg_window");
@@ -115,9 +115,11 @@ describe("platform packagers", () => {
     expect(script).toContain('ValidateSet("x64", "arm64")');
     expect(script).toContain("Inno Setup 6\\ISCC.exe");
     expect(script).toContain("Inno Setup build");
-    expect(installer).toContain("DefaultDirName={localappdata}\\Programs\\codexhost");
+    expect(installer).toContain("DefaultDirName={localappdata}\\Programs\\CodexBuddy");
     expect(installer).toContain("PrivilegesRequired=lowest");
     expect(installer).toContain("DisableProgramGroupPage=yes");
+    expect(installer).toContain("AppName=CodexBuddy");
+    expect(installer).toContain("UninstallDisplayName=CodexBuddy");
     expect(installer).toContain("ArchitecturesAllowed=x64compatible");
     expect(installer).toContain("ArchitecturesAllowed=arm64");
   });

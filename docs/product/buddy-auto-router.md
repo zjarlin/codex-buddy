@@ -1,6 +1,6 @@
 # Buddy Auto Router
 
-本功能属于 `org-aio/codex-host` fork。通过源码根目录的 `npm ci`、`npm start` 启动；启动命令会重新打开桌面端。输入框上方的 Auto Router 是功能入口，仅对 Codex Harness 生效。选择外部 Harness 时隐藏面板并停止路由状态轮询；历史会话归属尚未确认或读取失败时也不显示，切回 Codex 后恢复。
+本功能属于 `zjarlin/codex-buddy` fork。通过源码根目录的 `npm ci`、`npm start` 启动；启动命令会重新打开桌面端。输入框上方的 Auto Router 是功能入口，仅对 Codex Harness 生效。选择外部 Harness 时隐藏面板并停止路由状态轮询；历史会话归属尚未确认或读取失败时也不显示，切回 Codex 后恢复。
 
 ## 收藏与固定模型
 

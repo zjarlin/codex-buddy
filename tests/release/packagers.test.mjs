@@ -53,8 +53,8 @@ describe("platform packagers", () => {
     expect(workflow).toContain("Revalidate tag and CI immediately before npm publication");
     expect(workflow).toContain("Revalidate tag and CI immediately before GitHub publication");
 
-    expect(workflow).toContain("codexhost-*.dmg");
-    expect(workflow).toContain("codexhost-*.exe");
+    expect(workflow).toContain("codex-buddy-*.dmg");
+    expect(workflow).toContain("codex-buddy-*.exe");
     expect(workflow).not.toContain("codexhost-*.msi");
     expect(workflow).toContain("npm run release:npm --");
     expect(workflow).toContain("Build npm package from installer outputs");
@@ -67,7 +67,7 @@ describe("platform packagers", () => {
     expect(linuxPackageCommand).not.toContain("--skip-build");
     expect(workflow).toContain("--skip-build");
     expect(workflow).toContain("--pack");
-    expect(workflow).toContain("codexhost-cli-*-${{ matrix.target }}.tgz");
+    expect(workflow).toContain("codex-buddy-cli-*-${{ matrix.target }}.tgz");
     expect(workflow).toContain("Build installer package");
     expect(workflow).toContain("if: runner.os != 'Linux'");
     expect(workflow).toContain("target: linux-x64");
@@ -88,10 +88,10 @@ describe("platform packagers", () => {
     expect(workflow).toContain("publish-release:");
     const publishRelease = workflow.slice(workflow.indexOf("  publish-release:"));
     expect(publishRelease).toContain("gh release create");
-    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-x64.exe"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-arm64.exe"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-macos-arm64.dmg"');
-    expect(publishRelease).not.toContain('"codexhost-${VERSION}-macos-x64.dmg"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-windows-x64.exe"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-windows-arm64.exe"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-macos-arm64.dmg"');
+    expect(publishRelease).not.toContain('"codex-buddy-${VERSION}-macos-x64.dmg"');
     expect(workflow).not.toContain("macos-x64");
     expect(workflow).not.toContain("macos-15-intel");
     expect(publishRelease).not.toContain('"codexhost-cli-${VERSION}');

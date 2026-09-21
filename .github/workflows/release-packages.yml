@@ -188,10 +188,10 @@ jobs:
         with:
           name: codexhost-${{ matrix.target }}
           path: |
-            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-*.dmg
-            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-*.exe
-            build/npm/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-cli-*-${{ matrix.target }}.tgz
-            build/npm/${{ needs.prepare.outputs.version }}/meta/codexhost-cli-${{ needs.prepare.outputs.version }}.tgz
+            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-*.dmg
+            build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-*.exe
+            build/npm/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-cli-*-${{ matrix.target }}.tgz
+            build/npm/${{ needs.prepare.outputs.version }}/meta/codex-buddy-cli-${{ needs.prepare.outputs.version }}.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -342,9 +342,9 @@ jobs:
         run: |
           set -euo pipefail
           expected=(
-            "codexhost-${VERSION}-macos-arm64.dmg"
-            "codexhost-${VERSION}-windows-x64.exe"
-            "codexhost-${VERSION}-windows-arm64.exe"
+            "codex-buddy-${VERSION}-macos-arm64.dmg"
+            "codex-buddy-${VERSION}-windows-x64.exe"
+            "codex-buddy-${VERSION}-windows-arm64.exe"
           )
           files=()
           for name in "${expected[@]}"; do
@@ -370,7 +370,7 @@ jobs:
             flags=(
               --repo "${{ github.repository }}"
               --verify-tag
-              --title "codexhost ${VERSION}"
+              --title "codex-buddy ${VERSION}"
               --notes-file release-metadata/release-notes.md
             )
             if [[ "$PRERELEASE" == "true" ]]; then

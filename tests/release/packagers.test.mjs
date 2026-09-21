@@ -67,7 +67,7 @@ describe("platform packagers", () => {
     expect(linuxPackageCommand).not.toContain("--skip-build");
     expect(workflow).toContain("--skip-build");
     expect(workflow).toContain("--pack");
-    expect(workflow).toContain("codex-buddy-cli-*-${{ matrix.target }}.tgz");
+    expect(workflow).toContain("codexhost-cli-*-${{ matrix.target }}.tgz");
     expect(workflow).toContain("Build installer package");
     expect(workflow).toContain("if: runner.os != 'Linux'");
     expect(workflow).toContain("target: linux-x64");

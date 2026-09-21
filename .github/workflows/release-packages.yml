@@ -186,12 +186,12 @@ jobs:
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: codexhost-${{ matrix.target }}
+          name: codex-buddy-${{ matrix.target }}
           path: |
             build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-*.dmg
             build/release/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-*.exe
-            build/npm/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codex-buddy-cli-*-${{ matrix.target }}.tgz
-            build/npm/${{ needs.prepare.outputs.version }}/meta/codex-buddy-cli-${{ needs.prepare.outputs.version }}.tgz
+            build/npm/${{ needs.prepare.outputs.version }}/${{ matrix.target }}/codexhost-cli-*-${{ matrix.target }}.tgz
+            build/npm/${{ needs.prepare.outputs.version }}/meta/codexhost-cli-${{ needs.prepare.outputs.version }}.tgz
           if-no-files-found: error
           retention-days: 7
 
@@ -237,7 +237,7 @@ jobs:
       - name: Download npm artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: codexhost-*
+          pattern: codex-buddy-*
           path: build/npm-publish
           merge-multiple: true
 
@@ -303,7 +303,7 @@ jobs:
       - name: Download packaged artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: codexhost-*
+          pattern: codex-buddy-*
           path: release-assets
           merge-multiple: true
 

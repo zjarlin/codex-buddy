@@ -86,9 +86,9 @@ describe("workflow and form contracts", () => {
     expect(workflow).not.toContain("macos-15-intel");
     expect(workflow).not.toContain("x86_64-apple-darwin");
     const publishRelease = workflow.slice(workflow.indexOf("  publish-release:"));
-    expect(publishRelease).toContain('"codexhost-${VERSION}-macos-arm64.dmg"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-x64.exe"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-arm64.exe"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-macos-arm64.dmg"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-windows-x64.exe"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-windows-arm64.exe"');
     expect(publishRelease).not.toContain("macos-x64");
   });
 

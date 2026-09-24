@@ -49,7 +49,12 @@ describe("buddy subagent scheduler", () => {
         order.push(`${model}:${task.includes("alpha") ? "alpha" : "bravo"}`);
         await new Promise((resolve) => setTimeout(resolve, 5));
         active.count -= 1;
-        return { taskId: task.includes("alpha") ? "alpha" : "bravo", model, status: "completed", summary: "ok" };
+        return {
+          taskId: task.includes("alpha") ? "alpha" : "bravo",
+          model,
+          status: "completed",
+          summary: "ok",
+        };
       },
     });
     expect(active.max).toBe(2);

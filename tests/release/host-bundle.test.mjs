@@ -175,7 +175,13 @@ describe("release Host and independent plugin Bundles", () => {
         repositoryRoot,
         outputPath: path.join(app, "host-runtime.mjs"),
       });
-      expect(hostAudit.runtimePackages).toEqual(["diff", "smol-toml", "ws", "zod"]);
+      expect(hostAudit.runtimePackages).toEqual([
+        "@typesafe-ai/sdk",
+        "diff",
+        "smol-toml",
+        "ws",
+        "zod",
+      ]);
       const pluginAudits = await buildPreinstalledHarnessPlugins({
         repositoryRoot,
         outputDirectory: path.join(app, "plugins"),

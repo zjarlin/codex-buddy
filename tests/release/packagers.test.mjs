@@ -17,11 +17,11 @@ describe("platform packagers", () => {
     expect(source).toContain("sips -s format png");
     expect(source).toContain("iconutil -c icns");
     expect(source).toContain("CFBundleIconFile");
-    expect(source).toContain("codex-buddy.icns");
+    expect(source).toContain("CodexBuddy.icns");
     expect(source).toContain("create-dmg");
     expect(source).toContain("--window-size 800 400");
     expect(source).toContain("--window-pos 200 120");
-    expect(source).toContain('--icon "codex-buddy.app" 200 190');
+    expect(source).toContain('--icon "CodexBuddy.app" 200 190');
     expect(source).toContain("--app-drop-link 600 185");
     expect(source).toContain("installer-background.png");
     expect(source).not.toContain("layout_dmg_window");
@@ -54,7 +54,7 @@ describe("platform packagers", () => {
     expect(workflow).toContain("Revalidate tag and CI immediately before GitHub publication");
 
     expect(workflow).toContain("codex-buddy-*.dmg");
-    expect(workflow).toContain("codexhost-*.exe");
+    expect(workflow).toContain("codex-buddy-*.exe");
     expect(workflow).not.toContain("codexhost-*.msi");
     expect(workflow).toContain("npm run release:npm --");
     expect(workflow).toContain("Build npm package from installer outputs");
@@ -88,10 +88,10 @@ describe("platform packagers", () => {
     expect(workflow).toContain("publish-release:");
     const publishRelease = workflow.slice(workflow.indexOf("  publish-release:"));
     expect(publishRelease).toContain("gh release create");
-    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-x64.exe"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-windows-arm64.exe"');
-    expect(publishRelease).toContain('"codexhost-${VERSION}-macos-arm64.dmg"');
-    expect(publishRelease).not.toContain('"codexhost-${VERSION}-macos-x64.dmg"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-windows-x64.exe"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-windows-arm64.exe"');
+    expect(publishRelease).toContain('"codex-buddy-${VERSION}-macos-arm64.dmg"');
+    expect(publishRelease).not.toContain('"codex-buddy-${VERSION}-macos-x64.dmg"');
     expect(workflow).not.toContain("macos-x64");
     expect(workflow).not.toContain("macos-15-intel");
     expect(publishRelease).not.toContain('"codexhost-cli-${VERSION}');
@@ -115,9 +115,11 @@ describe("platform packagers", () => {
     expect(script).toContain('ValidateSet("x64", "arm64")');
     expect(script).toContain("Inno Setup 6\\ISCC.exe");
     expect(script).toContain("Inno Setup build");
-    expect(installer).toContain("DefaultDirName={localappdata}\\Programs\\codexhost");
+    expect(installer).toContain("DefaultDirName={localappdata}\\Programs\\CodexBuddy");
     expect(installer).toContain("PrivilegesRequired=lowest");
     expect(installer).toContain("DisableProgramGroupPage=yes");
+    expect(installer).toContain("AppName=CodexBuddy");
+    expect(installer).toContain("UninstallDisplayName=CodexBuddy");
     expect(installer).toContain("ArchitecturesAllowed=x64compatible");
     expect(installer).toContain("ArchitecturesAllowed=arm64");
   });

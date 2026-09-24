@@ -75,6 +75,9 @@ export async function executePlanWaves(input: {
 export function summarizeSubagentResults(results: readonly SubagentRunResult[]): string {
   if (results.length === 0) return "没有启动并行子代理；由当前执行模型完成任务。";
   return results
-    .map((result) => `[${result.taskId}] model=${result.model} status=${result.status}\n${result.summary}`)
+    .map(
+      (result) =>
+        `[${result.taskId}] model=${result.model} status=${result.status}\n${result.summary}`,
+    )
     .join("\n\n");
 }

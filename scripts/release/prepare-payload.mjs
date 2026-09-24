@@ -32,6 +32,12 @@ const runtimeLicenses = [
     output: "Anthropic-SDK-LICENSE.txt",
   },
   {
+    packageName: "@typesafe-ai/sdk",
+    license: "MIT",
+    source: "LICENSE",
+    output: "TypeSafe-SDK-LICENSE.txt",
+  },
+  {
     packageName: "@modelcontextprotocol/sdk",
     license: "MIT",
     source: "LICENSE",
@@ -275,6 +281,7 @@ export function expectedPayloadPaths(target) {
     "licenses/Node.js-LICENSE.txt",
     "licenses/Agent-Client-Protocol-SDK-LICENSE.txt",
     "licenses/Anthropic-SDK-LICENSE.txt",
+    "licenses/TypeSafe-SDK-LICENSE.txt",
     "licenses/Claude-Agent-SDK-LICENSE.md",
     "licenses/create-dmg-background-LICENSE.txt",
     "licenses/MCP-SDK-LICENSE.txt",
@@ -447,7 +454,10 @@ async function requireNonEmptyArtifact(artifactPath) {
 export async function packageReleaseTarget({ target, root = repositoryRoot }) {
   const prepared = await prepareReleasePayload({ target, root });
   const extension = target.hostPlatform === "darwin" ? ".dmg" : ".exe";
-  const artifactBase = path.join(prepared.outputRoot, `codex-buddy-${prepared.version}-${target.id}`);
+  const artifactBase = path.join(
+    prepared.outputRoot,
+    `codex-buddy-${prepared.version}-${target.id}`,
+  );
   const artifactPath = `${artifactBase}${extension}`;
   const priorExtensions =
     target.hostPlatform === "darwin" ? [".app.zip", ".dmg"] : [".msi", ".exe"];
@@ -463,7 +473,7 @@ export async function packageReleaseTarget({ target, root = repositoryRoot }) {
         args: [
           path.join(root, "scripts", "release", "macos", "package.sh"),
           prepared.payloadRoot,
-          path.join(prepared.outputRoot, "codex-buddy.app"),
+          path.join(prepared.outputRoot, "CodexBuddy.app"),
           artifactPath,
           prepared.installerVersion,
         ],

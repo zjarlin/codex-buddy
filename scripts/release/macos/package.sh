@@ -12,8 +12,8 @@ DMG_PATH="$3"
 BUNDLE_VERSION="$4"
 
 case "$APP_PATH" in
-  */codex-buddy.app) ;;
-  *) echo "error: app output must end with /codex-buddy.app" >&2; exit 2 ;;
+  */CodexBuddy.app) ;;
+  *) echo "error: app output must end with /CodexBuddy.app" >&2; exit 2 ;;
 esac
 case "$DMG_PATH" in
   *.dmg) ;;
@@ -43,8 +43,8 @@ for relative in \
 done
 
 OUTPUT_DIRECTORY="$(dirname "$DMG_PATH")"
-DMG_STAGE="$OUTPUT_DIRECTORY/.codex-buddy-dmg-stage-$$"
-ASSETS_DIR="$OUTPUT_DIRECTORY/.codex-buddy-dmg-assets-$$"
+DMG_STAGE="$OUTPUT_DIRECTORY/.CodexBuddy-dmg-stage-$$"
+ASSETS_DIR="$OUTPUT_DIRECTORY/.CodexBuddy-dmg-assets-$$"
 cleanup() {
   rm -rf "$DMG_STAGE" "$ASSETS_DIR"
 }
@@ -81,7 +81,7 @@ for size in 16 32 128 256 512; do
     --out "$ASSETS_DIR/codexhost.iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 /usr/bin/iconutil -c icns "$ASSETS_DIR/codexhost.iconset" -o "$ASSETS_DIR/codexhost.icns"
-cp "$ASSETS_DIR/codexhost.icns" "$RESOURCES/codex-buddy.icns"
+cp "$ASSETS_DIR/codexhost.icns" "$RESOURCES/CodexBuddy.icns"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 cat > "$CONTENTS/Info.plist" <<PLIST
@@ -90,17 +90,17 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Codex Buddy</string>
+  <string>CodexBuddy</string>
   <key>CFBundleExecutable</key>
   <string>codexhost</string>
   <key>CFBundleIconFile</key>
-  <string>codex-buddy.icns</string>
+  <string>CodexBuddy.icns</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.bytepioneer.codex-buddy</string>
+  <string>ai.bytepioneer.CodexBuddy</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Codex Buddy</string>
+  <string>CodexBuddy</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -127,21 +127,21 @@ PLIST
 "$RESOURCES/runtime/node" -e 'if (process.version !== "v24.13.1") process.exit(1)'
 
 mkdir -p "$DMG_STAGE"
-/usr/bin/ditto "$APP_PATH" "$DMG_STAGE/codex-buddy.app"
-/usr/bin/codesign --verify --deep --strict "$DMG_STAGE/codex-buddy.app"
+/usr/bin/ditto "$APP_PATH" "$DMG_STAGE/CodexBuddy.app"
+/usr/bin/codesign --verify --deep --strict "$DMG_STAGE/CodexBuddy.app"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # create-dmg (https://github.com/create-dmg/create-dmg) builds the styled
 # standard DMG: window size, icon positions, Applications drop link, volume
 # icon and background are matched to the official example template.
 create-dmg \
-  --volname "Codex Buddy" \
-  --volicon "$RESOURCES/codex-buddy.icns" \
+  --volname "CodexBuddy" \
+  --volicon "$RESOURCES/CodexBuddy.icns" \
   --background "$SCRIPT_DIR/assets/installer-background.png" \
   --window-pos 200 120 \
   --window-size 800 400 \
   --icon-size 100 \
-  --icon "codex-buddy.app" 200 190 \
-  --hide-extension "codex-buddy.app" \
+  --icon "CodexBuddy.app" 200 190 \
+  --hide-extension "CodexBuddy.app" \
   --app-drop-link 600 185 \
   "$DMG_PATH" \
   "$DMG_STAGE" >/dev/null

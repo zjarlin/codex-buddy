@@ -14,17 +14,17 @@ import {
 function release(overrides: Record<string, unknown> = {}) {
   return {
     tag_name: "v1.2.3",
-    html_url: "https://github.com/org-aio/codex-host/releases/tag/v1.2.3",
+    html_url: "https://github.com/zjarlin/codex-buddy/releases/tag/v1.2.3",
     draft: false,
     prerelease: false,
     body: "## Changes\n\n- Safer updates",
     assets: [
       {
-        name: "codexhost-1.2.3-windows-x64.exe",
+        name: "codex-buddy-1.2.3-windows-x64.exe",
         size: 42,
         digest: `sha256:${"ab".repeat(32)}`,
         browser_download_url:
-          "https://github.com/org-aio/codex-host/releases/download/v1.2.3/codexhost-1.2.3-windows-x64.exe",
+          "https://github.com/zjarlin/codex-buddy/releases/download/v1.2.3/codex-buddy-1.2.3-windows-x64.exe",
         uploader: { login: "github-actions" },
       },
     ],
@@ -47,7 +47,7 @@ describe("GitHub Release update discovery", () => {
             {
               ...release().assets[0],
               browser_download_url:
-                "https://github.com/BytePioneer-AI/codex-host/releases/download/v1.2.3/codexhost-1.2.3-windows-x64.exe",
+                "https://github.com/BytePioneer-AI/codex-host/releases/download/v1.2.3/codex-buddy-1.2.3-windows-x64.exe",
             },
           ],
         }),
@@ -59,15 +59,15 @@ describe("GitHub Release update discovery", () => {
     expect(parsed.version).toBe("1.2.3");
     expect(parsed.releaseNotes).toBe("## Changes\n\n- Safer updates");
     expect(selectInstallerReleaseArtifact(parsed, "windows-x64")).toEqual({
-      name: "codexhost-1.2.3-windows-x64.exe",
+      name: "codex-buddy-1.2.3-windows-x64.exe",
       source: {
-        url: "https://github.com/org-aio/codex-host/releases/download/v1.2.3/codexhost-1.2.3-windows-x64.exe",
+        url: "https://github.com/zjarlin/codex-buddy/releases/download/v1.2.3/codex-buddy-1.2.3-windows-x64.exe",
         sha256: "ab".repeat(32),
         size: 42,
       },
     });
     expect(expectedInstallerAssetName("1.2.3", "macos-arm64")).toBe(
-      "codexhost-1.2.3-macos-arm64.dmg",
+      "codex-buddy-1.2.3-macos-arm64.dmg",
     );
   });
 
@@ -76,7 +76,7 @@ describe("GitHub Release update discovery", () => {
     expect(() =>
       parseLatestGitHubRelease(
         release({
-          html_url: "https://github.com/org-aio/codex-host/releases/tag/v9.9.9",
+          html_url: "https://github.com/zjarlin/codex-buddy/releases/tag/v9.9.9",
         }),
       ),
     ).toThrow("does not match");
@@ -84,10 +84,10 @@ describe("GitHub Release update discovery", () => {
       release({
         assets: [
           {
-            name: "codexhost-1.2.3-windows-x64.exe",
+            name: "codex-buddy-1.2.3-windows-x64.exe",
             size: 42,
             browser_download_url:
-              "https://github.com/org-aio/codex-host/releases/download/v1.2.3/codexhost-1.2.3-windows-x64.exe",
+              "https://github.com/zjarlin/codex-buddy/releases/download/v1.2.3/codex-buddy-1.2.3-windows-x64.exe",
           },
         ],
       }),
@@ -155,7 +155,7 @@ describe("GitHub Release update discovery", () => {
         "Accept: application/vnd.github+json",
         "--header",
         "X-GitHub-Api-Version: 2022-11-28",
-        "repos/org-aio/codex-host/releases/latest",
+        "repos/zjarlin/codex-buddy/releases/latest",
       ],
       { environment: { PATH: "/usr/bin:/bin" } },
     );

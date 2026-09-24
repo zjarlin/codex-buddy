@@ -25,7 +25,8 @@ export function validatePlan(value: unknown): ValidatedPlan {
   if (byId.size !== plan.tasks.length) throw new Error("规划包含重复的任务 ID。");
   for (const task of plan.tasks) {
     for (const dependency of task.dependsOn) {
-      if (!byId.has(dependency)) throw new Error(`任务 ${task.id} 依赖不存在的任务 ${dependency}。`);
+      if (!byId.has(dependency))
+        throw new Error(`任务 ${task.id} 依赖不存在的任务 ${dependency}。`);
       if (dependency === task.id) throw new Error(`任务 ${task.id} 不能依赖自身。`);
     }
   }

@@ -107,6 +107,22 @@ describe("platform packagers", () => {
     expect(releaseClient).toContain("sha256:");
   });
 
+  it("keeps the Buddy DMG workflow aligned with the packaged asset name", async () => {
+    const [workflow, releaseBuilder, updater] = await Promise.all([
+      readFile(path.join(root, ".github/workflows/buddy-macos-dmg.yml"), "utf8"),
+      readFile(path.join(root, "scripts/release/prepare-payload.mjs"), "utf8"),
+      readFile(path.join(root, "crates/updater/src/install.rs"), "utf8"),
+    ]);
+    expect(releaseBuilder).toContain("`codex-buddy-${prepared.version}-${target.id}`");
+    expect(workflow).toContain("const name = `codex-buddy-${version}-${target}.dmg`");
+    expect(workflow).not.toContain("const name = `codexhost-${version}-${target}.dmg`");
+    expect(workflow).toContain("name: codex-buddy-${{ steps.version.outputs.version }}");
+    // The packager writes CodexBuddy.app; the updater must mount the same name.
+    expect(workflow).toContain("CodexBuddy.app");
+    expect(updater).toContain('mount.join("CodexBuddy.app")');
+    expect(updater).not.toContain('mount.join("codex-buddy.app")');
+  });
+
   it("builds a standard Inno Setup installer for both Windows architectures", async () => {
     const [script, installer] = await Promise.all([
       readFile(path.join(root, "scripts/release/windows/package.ps1"), "utf8"),

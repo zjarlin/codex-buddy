@@ -25,6 +25,7 @@
     "@codexhost/shared-contracts": "0.0.0",
     "@codexhost/update-manager": "0.0.0",
     "ws": "8.21.3",
-    "@codexhost/buddy-engine": "0.0.0"
+    "@codexhost/buddy-engine": "0.0.0",
+    "@codexhost/jev": "0.0.0"
   }
 }

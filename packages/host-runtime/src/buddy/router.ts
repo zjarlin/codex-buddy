@@ -1,4 +1,4 @@
-import { readFile, mkdir, writeFile, rename } from "node:fs/promises";
+import { readFile, mkdir, writeFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -9,13 +9,16 @@ import {
   resolveDispatch,
   threadState,
   turnState,
+  type Assessment,
   type ThreadContext,
 } from "@codexhost/buddy-engine";
 import {
   buddyPrivateModelSchema,
   buddySettingsSchema,
   type BuddyDecision,
+  type BuddyAnswer,
   type BuddyModel,
+  type BuddyModelRefresh,
   type BuddySnapshot,
 } from "@codexhost/shared-contracts";
 import type { JsonObject, JsonRpcRequest, JsonValue } from "@codexhost/protocol-core";
@@ -27,6 +30,14 @@ import { parallelExecutionGuidance, singleExecutorPacket } from "./delegation.js
 import { AutomaticRecovery } from "./recovery.js";
 import { InterruptedConversations } from "./continuation.js";
 import { formatExecutionTopology } from "./plan-graph.js";
+import {
+  GitPushBypassScores,
+  gitPushGuidance,
+  gitPushSkills,
+  isGitPushRequest,
+} from "./git-push-bypass.js";
+import { createJevClient, judgeWithJev } from "./judgment.js";
+import type { TypeSafeClient } from "@codexhost/jev";
 import {
   executePlanWaves,
   summarizeSubagentResults,
@@ -40,6 +51,29 @@ const roleInstructions = {
   executor:
     "你是垃执行者。普通问答直接回答，简单任务直接处理，不要为回答编造 TODO。复杂任务依据目标、约束和简短 TODO 自主定位文件、作常规实现选择、编写代码并验证，不需要规划者预先提供每个文件的修改内容。有原生 update_plan 工具时用它维护结果导向的 TODO 和实际进度，每次最多一个 in_progress；简单任务可跳过计划。已有 TODO 直接沿用，不再重复做完整规划。禁止递归委派。只有重大架构决策、权限边界变化、任务范围变化或同一问题两次实施失败时，才携证据报告阻塞，不盲目重复具有副作用的操作。",
 };
+
+function recentTextForJev(recent: unknown[]): string {
+  return recent
+    .map((item) => {
+      const value = object(item);
+      const pieces = [value.text, value.summary, value.content];
+      return pieces
+        .flatMap((piece) => {
+          if (typeof piece === "string") return [piece];
+          if (Array.isArray(piece)) {
+            return piece.map((part) =>
+              typeof part === "string" ? part : String(object(part).text ?? ""),
+            );
+          }
+          return [];
+        })
+        .filter(Boolean)
+        .join("\n");
+    })
+    .filter(Boolean)
+    .slice(-6)
+    .join("\n\n");
+}
 
 export function specialist(text: string, intent: string): BuddyDecision["role"] {
   if (
@@ -71,6 +105,7 @@ export interface BuddyRouterOptions {
   forward(request: JsonRpcRequest): Promise<void>;
   diagnose(error: unknown): void;
   runSubagents?: SubagentRunner;
+  jev?: TypeSafeClient;
 }
 
 export class BuddyRouter {
@@ -86,13 +121,22 @@ export class BuddyRouter {
     { task: JsonValue[]; question: string; recent: unknown[] }
   >();
   readonly #dispatch: ReturnType<typeof dispatchLifecycle>;
+  readonly #bypassScores = new GitPushBypassScores();
+  #jev: TypeSafeClient | null;
+  #jevKey: string | null = null;
+  #jevBaseUrl: string | null = null;
   readonly #recovery: AutomaticRecovery;
   readonly #recoveryContext = new Map<string, JsonObject>();
   #settings = buddySettingsSchema.parse({});
   #models: BuddyModel[] = [];
+  #modelRefresh: BuddyModelRefresh | undefined;
 
   constructor(private readonly options: BuddyRouterOptions) {
     this.#home = homePath(options.environment.CODEX_HOME);
+    // JEV 仅由 Host 进程读取密钥；缺少密钥时保持 null，所有判断回退本地规则。
+    // 外部注入优先，便于测试；否则从环境变量读取密钥构造实例。
+    this.#jevKey = null;
+    this.#jev = options.jev ?? createJevClient(options.environment);
     this.#planner = new BuddyPlanner(options.request, options.respond, options.diagnose);
     const continuation = new InterruptedConversations(
       options.request,
@@ -191,12 +235,80 @@ export class BuddyRouter {
     }
   }
 
+  async #loadJevKey(): Promise<void> {
+    if (this.options.jev) {
+      // 外部注入的客户端优先，测试或高级用法不读取持久化密钥。
+      return;
+    }
+    try {
+      const raw = JSON.parse(await readFile(join(this.#home, "buddy-jev.json"), "utf8"));
+      const key = typeof raw?.apiKey === "string" ? raw.apiKey.trim() : "";
+      const baseURL = typeof raw?.baseURL === "string" ? raw.baseURL.trim() : "";
+      this.#jevKey = key || null;
+      this.#jevBaseUrl = baseURL || null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      this.#jevKey = null;
+      this.#jevBaseUrl = null;
+    }
+    this.#jev = createJevClient(this.options.environment, {
+      apiKey: this.#jevKey,
+      baseURL: this.#jevBaseUrl,
+    });
+  }
+
+  /**
+   * 持久化 JEV 连接配置。`apiKey` / `baseURL` 省略表示保持原值，null/空串表示清除该项；
+   * baseURL 可指向自建 Sub2API 网关。密钥不写入 settings，也不回传浏览器；baseURL 会回传。
+   */
+  async configureJevKey(input: {
+    apiKey?: string | null | undefined;
+    baseURL?: string | null | undefined;
+  }): Promise<BuddySnapshot> {
+    if (this.options.jev) {
+      throw new Error("JEV 客户端已由 Host 注入，不能在界面覆盖连接配置。");
+    }
+    await this.#loadJevKey();
+    const key = input.apiKey === undefined ? this.#jevKey : input.apiKey?.trim() || null;
+    const baseURL = input.baseURL === undefined ? this.#jevBaseUrl : input.baseURL?.trim() || null;
+    const file = join(this.#home, "buddy-jev.json");
+    await mkdir(this.#home, { recursive: true });
+    if (key || baseURL) {
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      await writeFile(
+        temporary,
+        JSON.stringify(
+          { ...(key ? { apiKey: key } : {}), ...(baseURL ? { baseURL } : {}) },
+          null,
+          2,
+        ) + "\n",
+        { mode: 0o600 },
+      );
+      await rename(temporary, file);
+    } else {
+      await rm(file, { force: true });
+    }
+    this.#jevKey = key;
+    this.#jevBaseUrl = baseURL;
+    this.#jev = createJevClient(this.options.environment, {
+      apiKey: this.#jevKey,
+      baseURL: this.#jevBaseUrl,
+    });
+    return this.snapshot();
+  }
+
   async snapshot(): Promise<BuddySnapshot> {
     await this.#loadSettings();
+    await this.#loadJevKey();
     return {
       settings: this.#settings,
       models: this.#models,
+      ...(this.#modelRefresh ? { modelRefresh: this.#modelRefresh } : {}),
       decisions: [...this.#decisions.values()],
+      jevKeyConfigured: this.#jev !== null,
+      jevBaseUrl: this.#jevBaseUrl,
     };
   }
 
@@ -213,6 +325,11 @@ export class BuddyRouter {
       signal: AbortSignal.timeout(10000),
     });
     this.#models = inventory.models;
+    this.#modelRefresh = {
+      returned: inventory.returned,
+      synchronized: inventory.models.length,
+      eligible: inventory.models.filter((model) => model.eligible).length,
+    };
     return this.snapshot();
   }
 
@@ -245,6 +362,10 @@ export class BuddyRouter {
       this.#update(threadId, { phase: "cancelled", reason: "已取消自动续接。" });
     }
     this.#jobs.get(threadId)?.abort();
+  }
+
+  async answer(input: BuddyAnswer): Promise<void> {
+    await this.#planner.answer(input);
   }
 
   async privateMode(): Promise<boolean> {
@@ -291,6 +412,15 @@ export class BuddyRouter {
     }
   }
 
+  #finishBypass(
+    threadId: string,
+    outcome: "completed" | "failed" | "cancelled",
+  ): Partial<BuddyDecision> {
+    const decision = this.#decisions.get(threadId);
+    const modelBypass = decision ? this.#bypassScores.finish(decision, outcome) : undefined;
+    return modelBypass ? { modelBypass } : {};
+  }
+
   observe(message: JsonValue): boolean {
     if (this.#planner.observe(message)) {
       return true;
@@ -331,6 +461,7 @@ export class BuddyRouter {
           this.#recoveryContext.delete(id);
           this.#update(id, {
             phase: "failed",
+            ...this.#finishBypass(id, "failed"),
             acceptedModel: null,
             reason: "执行模型启动失败；没有自动重放。",
           });
@@ -339,22 +470,48 @@ export class BuddyRouter {
           this.#threads.set(id, turnState(original, this.#threads.get(id)));
           this.#update(id, {
             acceptedModel: typeof original.model === "string" ? original.model : null,
+            ...(typeof object(response.turn).id === "string"
+              ? { turnId: object(response.turn).id as string }
+              : {}),
           });
         }
       }
     }
     if (value.method === "turn/started" && threadId) {
-      this.#active.add(threadId);
       const turn = object(params.turn);
+      const bypass = this.#decisions.get(threadId);
+      if (
+        bypass?.modelBypass &&
+        (bypass.modelBypass.outcome !== "pending" ||
+          (bypass.turnId !== null && bypass.turnId !== turn.id))
+      ) {
+        return false;
+      }
+      this.#active.add(threadId);
       if (typeof turn.id === "string") this.#recovery.started(threadId, turn.id);
       this.#update(threadId, { turnId: typeof turn.id === "string" ? turn.id : null });
     }
     if (value.method === "turn/completed" && threadId) {
+      const bypass = this.#decisions.get(threadId);
+      if (
+        bypass?.modelBypass &&
+        (bypass.modelBypass.outcome !== "pending" || bypass.turnId !== object(params.turn).id)
+      ) {
+        return false;
+      }
       this.#active.delete(threadId);
       const current = this.#decisions.get(threadId);
       if (current && current.command === null) {
         const status = object(params.turn).status;
         this.#update(threadId, {
+          ...this.#finishBypass(
+            threadId,
+            status === "completed"
+              ? "completed"
+              : status === "interrupted"
+                ? "cancelled"
+                : "failed",
+          ),
           phase:
             status === "completed"
               ? "completed"
@@ -430,6 +587,7 @@ export class BuddyRouter {
       this.#recoveryContext.delete(incomingThread);
     }
     await this.#loadSettings();
+    await this.#loadJevKey();
     if (this.#settings.privateMode) {
       await this.#routePrivate(request);
       return true;
@@ -465,6 +623,7 @@ export class BuddyRouter {
       const cancelled = controller.signal.aborted;
       this.#update(threadId, {
         phase: cancelled ? "cancelled" : "failed",
+        ...this.#finishBypass(threadId, cancelled ? "cancelled" : "failed"),
         reason: cancelled
           ? "已取消；未启动执行模型。"
           : error instanceof Error
@@ -600,18 +759,76 @@ export class BuddyRouter {
     const text = input
       .map(object)
       .filter((v) => v.type === "text")
-      .map((v) => v.text)
+      .map((v) => String(v.text ?? ""))
       .join("\n");
     const project = await inspectProject(cwd);
     const previousPlan = this.#decisions.get(threadId)?.plan;
     const recent = refersToPreviousTask(input)
       ? await recentMessages(this.options.request, threadId)
       : null;
-    const assessment = await assessWithContext(input, cwd, project, recent ?? [], previousPlan);
+    // 正则只做是否值得询问 JEV 的预筛；真正的推送意图、难度和风险都由 JEV 判断。
+    const pushCandidate = isGitPushRequest(input);
+    let assessment: Assessment;
+    let judgment: BuddyDecision["judgment"];
+    let jevPush: boolean | null = null;
+    let jevPushConfidence: number | null = null;
+    let jevRole: "git" | "io" | "executor" | null = null;
+    if (settings.jev && this.#jev) {
+      try {
+        const jev = await judgeWithJev(
+          this.#jev,
+          {
+            request: text,
+            ...(cwd ? { cwd } : {}),
+            project,
+            ...(recent?.length ? { recentText: recentTextForJev(recent) } : {}),
+            attachmentCount: input.filter((item) => object(item).type !== "text").length,
+            isPushLike: pushCandidate,
+            planMode: object(params.collaborationMode).mode === "plan",
+            ...(typeof params.approvalPolicy === "string"
+              ? { approvalPolicy: params.approvalPolicy }
+              : {}),
+          },
+          signal,
+        );
+        assessment = { tier: jev.tier, intent: jev.intent, reason: jev.reason };
+        judgment = {
+          source: "jev",
+          model: jev.model,
+          decisions: jev.decisions as NonNullable<BuddyDecision["judgment"]>["decisions"],
+        };
+        jevPush = jev.isPush;
+        jevPushConfidence = jev.pushConfidence;
+        jevRole = jev.role;
+      } catch (error) {
+        this.options.diagnose(error);
+        assessment = await assessWithContext(input, cwd, project, recent ?? [], previousPlan);
+      }
+    } else {
+      assessment = await assessWithContext(input, cwd, project, recent ?? [], previousPlan);
+    }
+    // 推送模型旁路：JEV 判定优先，缺少 JEV 时退回正则预筛。
+    const modelBypass = settings.bypass && (jevPush ?? pushCandidate);
+    if (modelBypass) {
+      assessment = {
+        tier: "standard",
+        intent: "git",
+        reason: jevPush
+          ? `JEV 确认推送意图（confidence=${(jevPushConfidence ?? 0).toFixed(2)}）；旁路至垃模型，跳过夯规划。`
+          : "命中推送请求；旁路至垃模型，跳过夯规划。",
+      };
+    }
     const conversational = assessment.intent === "conversation";
-    const pendingClarification = conversational ? undefined : this.#clarifications.get(threadId);
+    const pendingClarification =
+      conversational || modelBypass ? undefined : this.#clarifications.get(threadId);
     const needsPlanning = assessment.tier === "advanced" || pendingClarification !== undefined;
-    const role = settings.role === "auto" ? specialist(text, assessment.intent) : settings.role;
+    // JEV 判定优先；缺少 JEV 时退回本地 specialist 规则。用户显式指定角色仍最高优先。
+    const role =
+      settings.role !== "auto"
+        ? settings.role
+        : modelBypass
+          ? "git"
+          : (jevRole ?? specialist(text, assessment.intent));
     const decision: BuddyDecision = {
       threadId,
       turnId: null,
@@ -628,6 +845,8 @@ export class BuddyRouter {
       command: null,
       exitCode: null,
       updatedAt: new Date().toISOString(),
+      ...(judgment ? { judgment } : {}),
+      ...(modelBypass ? { modelBypass: this.#bypassScores.start(null, [], null) } : {}),
     };
     this.#decisions.set(threadId, decision);
     if (this.#decisions.size > 100) {
@@ -641,7 +860,12 @@ export class BuddyRouter {
       throw new Error("未确认工作目录，无法路由。");
     }
     signal.throwIfAborted();
-    if (!pendingClarification && settings.bypass && compatibleTurn(params, context)) {
+    if (
+      !modelBypass &&
+      !pendingClarification &&
+      settings.bypass &&
+      compatibleTurn(params, context)
+    ) {
       let direct = await resolveDispatch(text, cwd, { project });
       const commands: Record<string, string[]> = {
         当前目录: ["pwd"],
@@ -691,13 +915,17 @@ export class BuddyRouter {
     let validatedPlan: Awaited<ReturnType<BuddyPlanner["plan"]>> | null = null;
     let subagentResults: SubagentRunResult[] = [];
     const planOnly = object(params.collaborationMode).mode === "plan";
-    if ((!planOnly || conversational) && fixedExecutor && inventory.executor !== fixedExecutor) {
+    if (
+      (!planOnly || conversational || modelBypass) &&
+      fixedExecutor &&
+      inventory.executor !== fixedExecutor
+    ) {
       throw new Error(`指定的执行模型 ${fixedExecutor} 当前不可用，未切换模型或启动子代理。`);
     }
     this.#update(threadId, {
-      executorModel: planOnly && !conversational ? null : inventory.executor,
+      executorModel: planOnly && !conversational && !modelBypass ? null : inventory.executor,
     });
-    if ((!planOnly || conversational) && !inventory.executor) {
+    if ((!planOnly || conversational || modelBypass) && !inventory.executor) {
       throw new Error("实时候选中没有可执行的垃模型，请检查供应商模型同步；未自动改用夯执行。");
     }
     if (needsPlanning && !planOnly && inventory.planner) {
@@ -717,6 +945,12 @@ export class BuddyRouter {
           ]
         : input;
       const planned = await this.#planner.plan({
+        ownerThreadId: threadId,
+        inputChanged: (pendingInput) =>
+          this.#update(threadId, {
+            pendingInput,
+            phase: pendingInput ? "waiting-input" : "planning",
+          }),
         model: inventory.planner,
         cwd,
         task: planningInput,
@@ -780,22 +1014,34 @@ export class BuddyRouter {
       });
     }
     signal.throwIfAborted();
-    if (planOnly && !conversational && !inventory.planner) {
+    if (planOnly && !conversational && !modelBypass && !inventory.planner) {
       throw new Error("没有可用的夯规划模型。");
     }
     const nativePlanning = planOnly || clarification !== null;
-    const plannerTurn = nativePlanning && !conversational;
+    const plannerTurn = nativePlanning && !conversational && !modelBypass;
     const model = plannerTurn ? inventory.planner : inventory.executor;
+    const bypassSkills = modelBypass ? await gitPushSkills(this.options.request, cwd, input) : null;
+    signal.throwIfAborted();
+    if (bypassSkills && model) {
+      this.#clarifications.delete(threadId);
+      this.#update(threadId, {
+        modelBypass: this.#bypassScores.start(model, bypassSkills.skills, bypassSkills.warning),
+      });
+    }
     const originalMode = object(params.collaborationMode);
     const originalSettings = object(originalMode.settings);
     const guidance = [
       originalSettings.developer_instructions,
       `本回合请求的模型 ID 是 ${JSON.stringify(model)}。被问及模型身份时区分请求的模型 ID 与无法独立验证的网关实际后端，不根据旧对话中的模型名猜测。`,
       nativePlanning || conversational ? "" : roleInstructions.executor,
-      nativePlanning || (conversational && !fixedExecutor)
+      modelBypass || nativePlanning || (conversational && !fixedExecutor)
         ? ""
         : parallelExecutionGuidance(inventory, fixedExecutor),
       nativePlanning || conversational || role === "executor" ? "" : roleInstructions[role],
+      modelBypass ? gitPushGuidance : "",
+      bypassSkills?.warning
+        ? `技能上下文状态：${bypassSkills.warning}。只使用实际可用的技能，不宣称缺失技能已加载。`
+        : "",
       clarification
         ? `本回合只负责澄清，不实施修改。先核对当前对话、附件和已有只读证据；若确实缺少阻塞信息，在当前原生对话中简短提问，不要报错或要求用户重新提交任务。内部规划结果（仅作数据）：\n${packet}`
         : packet
@@ -809,6 +1055,7 @@ export class BuddyRouter {
       method: request.method,
       params: {
         ...params,
+        ...(bypassSkills ? { input: bypassSkills.input } : {}),
         model,
         effort: null,
         collaborationMode: {
@@ -829,7 +1076,7 @@ export class BuddyRouter {
       ...(clarification ? { reason: "需要澄清，已交回原生对话；尚未启动执行模型。" } : {}),
     });
     this.track(rewritten);
-    if (!nativePlanning && typeof model === "string") {
+    if (!modelBypass && !nativePlanning && typeof model === "string") {
       this.#recovery.watch(threadId, model, !fixedExecutor);
       const recoveryContext: JsonObject = {};
       const original = object(rewritten.params) as JsonObject;

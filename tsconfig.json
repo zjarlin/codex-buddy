@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/shared-contracts/tsconfig.json" },
+    { "path": "./packages/jev/tsconfig.json" },
     { "path": "./packages/harness-adapter/tsconfig.json" },
     { "path": "./packages/harness-broker/tsconfig.json" },
     { "path": "./packages/harness-discovery/tsconfig.json" },

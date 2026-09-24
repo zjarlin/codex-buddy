@@ -13,6 +13,7 @@ export interface ExecutorCandidate {
 
 export interface ModelInventory {
   models: BuddyModel[];
+  returned: number;
   provider: string;
   planner: string | null;
   executor: string | null;
@@ -61,6 +62,8 @@ async function catalogContextWindows(path: string | undefined): Promise<Map<stri
 }
 
 export function modelTier(id: string): "夯" | "垃" {
+  // 开源权重系列（gpt-oss）不是夯模型，不能用于规划，也不进入夯规划候选。
+  if (/(?:^|[/:])gpt-oss(?=[\d._-]|$)/iu.test(id)) return "垃";
   return /(?:^|[/:])(?:gpt|claude)(?=[\d._-]|$)/iu.test(id) ? "夯" : "垃";
 }
 
@@ -187,5 +190,5 @@ export async function discoverModels(input: {
     },
     { policy, tier: input.tier ?? "standard" },
   );
-  return { ...chosen, provider: connection.providerId };
+  return { ...chosen, returned: ids.length, provider: connection.providerId };
 }

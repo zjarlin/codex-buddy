@@ -1,6 +1,8 @@
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
+import { refreshNativeModels } from "./renderer-native-model-refresh.js";
+import type { ModelRefreshReport } from "./renderer-model-refresh-summary.js";
 import {
   decodeHarnessPluginRoute,
   harnessIdSchema,
@@ -546,6 +548,7 @@ interface MountedComposer {
   usageRequestGeneration: number;
   commandRequestGeneration: number;
   shortcutSelectionPending?: boolean;
+  shortcutRefreshReport?: ModelRefreshReport;
 }
 
 interface PendingComposerReplacement {
@@ -721,6 +724,17 @@ export function installRendererBindingProbe(
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getLoadedSessionsClient: () => modelClientForHost("local"),
+    getGitContext: () => {
+      for (const mounted of mountedByComposer.values()) {
+        if (!mounted.composer.isConnected) continue;
+        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        if (!threadId) continue;
+        const hostId = mounted.hostId ?? activeModelHostId();
+        const client = hostId ? modelClientForHost(hostId) : null;
+        if (client) return { threadId, client };
+      }
+      return { threadId: null, client: null };
+    },
     getSessionImportClient: () => {
       const client = modelClientForHost("local");
       const sources = client?.listSessionImportSources;
@@ -877,7 +891,10 @@ export function installRendererBindingProbe(
       settingsLifecycle.locale,
       currentCodexAccount ?? null,
       mounted.ownershipStatus === "error",
+      JSON.stringify([mounted.hostId ?? activeModelHostId(), mounted.modelTarget]),
+      mounted.shortcutRefreshReport,
     );
+    delete mounted.shortcutRefreshReport;
     if (mounted.control.usage) {
       mounted.control.usage.onOpen = () => {
         void refreshThreadUsage(
@@ -2406,13 +2423,92 @@ export function installRendererBindingProbe(
         const mounted = mountedByComposer.get(composer);
         if (mounted) selectCommand(mounted, command);
       },
-      () => {
+      async () => {
         const mounted = mountedByComposer.get(composer);
-        if (composer.isConnected && mounted) void loadExternalCatalog(mounted, true);
+        if (!composer.isConnected || !mounted) return undefined;
+        const before =
+          (controller.get(composer).agent === "codex"
+            ? nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view.models
+            : undefined) ??
+          (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({ id: ref.id }));
+        if (controller.get(composer).agent !== "codex") {
+          await loadExternalCatalog(mounted, true);
+          const after = (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({
+            id: ref.id,
+          }));
+          mounted.shortcutRefreshReport = { before, summary: { synchronized: after.length } };
+          renderMounted(mounted);
+          return undefined;
+        }
+        const hostId = mounted.hostId ?? activeModelHostId();
+        const client = hostId ? modelClientForHost(hostId) : null;
+        const target = JSON.stringify(mounted.modelTarget);
+        if (!hostId || !client?.buddyStatus)
+          throw new Error("Model refresh connection is unavailable");
+        const snapshot = await client.buddyStatus();
+        if (snapshot.settings.privateMode) throw new Error("隐私模式下不刷新在线模型目录。");
+        if (
+          !composer.isConnected ||
+          mountedByComposer.get(composer) !== mounted ||
+          controller.get(composer).agent !== "codex" ||
+          activeModelHostId() !== hostId ||
+          JSON.stringify(mounted.modelTarget) !== target
+        )
+          return undefined;
+        await refreshNativeModels(mounted.control.nativeModelControl?.element ?? null, hostId);
+        const after = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view
+          .models;
+        mounted.shortcutRefreshReport = {
+          before,
+          summary: after === undefined ? undefined : { synchronized: after.length },
+        };
+        if (composer.isConnected) renderMounted(mounted);
       },
       async (modelId) => {
         const mounted = mountedByComposer.get(composer);
         if (composer.isConnected && mounted) await selectShortcut(mounted, modelId);
+      },
+      async () => {
+        const mounted = mountedByComposer.get(composer);
+        if (!composer.isConnected || !mounted) return undefined;
+        const before =
+          (controller.get(composer).agent === "codex"
+            ? nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view.models
+            : undefined) ??
+          (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({ id: ref.id }));
+        if (controller.get(composer).agent !== "codex") {
+          await loadExternalCatalog(mounted, true);
+          const after = (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({
+            id: ref.id,
+          }));
+          mounted.shortcutRefreshReport = { before, summary: { synchronized: after.length } };
+          renderMounted(mounted);
+          return undefined;
+        }
+        const hostId = mounted.hostId ?? activeModelHostId();
+        const client = hostId ? modelClientForHost(hostId) : null;
+        const target = JSON.stringify(mounted.modelTarget);
+        if (!hostId || !client?.buddyStatus)
+          throw new Error("Model refresh connection is unavailable");
+        const snapshot = await client.buddyStatus();
+        if (snapshot.settings.privateMode) throw new Error("隐私模式下不刷新在线模型目录。");
+        if (
+          !composer.isConnected ||
+          mountedByComposer.get(composer) !== mounted ||
+          controller.get(composer).agent !== "codex" ||
+          activeModelHostId() !== hostId ||
+          JSON.stringify(mounted.modelTarget) !== target
+        )
+          return undefined;
+        await refreshNativeModels(mounted.control.nativeModelControl?.element ?? null, hostId);
+        const after = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view
+          .models;
+        mounted.shortcutRefreshReport = {
+          before,
+          summary: after === undefined ? undefined : { synchronized: after.length },
+        };
+        if (composer.isConnected) renderMounted(mounted);
+        return undefined;
       },
     );
     const mounted: MountedComposer = {

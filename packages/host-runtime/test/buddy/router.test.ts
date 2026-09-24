@@ -7,6 +7,7 @@ import type { JsonObject, JsonRpcRequest } from "@codexhost/protocol-core";
 import { BuddyRouter, specialist } from "../../src/buddy/router.js";
 import { chooseModels, modelTier } from "../../src/buddy/models.js";
 import type { SubagentRunner } from "../../src/buddy/subagent-scheduler.js";
+import { TypeSafeClient } from "@codexhost/jev";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -32,6 +33,9 @@ async function fixture(
     recovery?: boolean;
     plan?: JsonObject;
     runSubagents?: SubagentRunner;
+    skills?: JsonObject[];
+    skillsError?: boolean;
+    jev?: TypeSafeClient;
   } = {},
 ) {
   const home = await mkdtemp(join(tmpdir(), "buddy-router-test-"));
@@ -61,9 +65,14 @@ async function fixture(
   const router: BuddyRouter = new BuddyRouter({
     environment: { CODEX_HOME: home },
     ...(options.runSubagents ? { runSubagents: options.runSubagents } : {}),
+    ...(options.jev ? { jev: options.jev } : {}),
     request: async (method, params) => {
       requested.push({ method, params });
       switch (method) {
+        case "skills/list":
+          return options.skillsError
+            ? { error: { code: -1, message: "skills unavailable" } }
+            : { result: { data: [{ cwd: home, skills: options.skills ?? [], errors: [] }] } };
         case "model/list":
           return {
             result: { data: models, nextCursor: null },
@@ -272,6 +281,13 @@ describe("Buddy family policy", () => {
     expect(
       ["deepseek-pro", "gemini-ultra", "o3", "fake-gpt-6", "gpt-image-1"].map(modelTier),
     ).toEqual(["垃", "垃", "垃", "垃", "夯"]);
+  });
+  it("keeps open-weight gpt-oss models out of the 夯 planning tier", () => {
+    expect(["gpt-oss-20b", "openai/gpt-oss-120b", "vendor:gpt-oss-20b"].map(modelTier)).toEqual([
+      "垃",
+      "垃",
+      "垃",
+    ]);
   });
   it("requires live and native availability and never promotes a weak model", () => {
     const native = {
@@ -525,9 +541,9 @@ describe("Buddy native routing", () => {
   });
   it("keeps a strong-only catalog observable but refuses to use it for execution", async () => {
     const f = await fixture({ modelIds: ["gpt-planner"] });
-    expect((await f.router.refreshModels()).models).toEqual([
-      { id: "gpt-planner", tier: "夯", eligible: true },
-    ]);
+    const refreshed = await f.router.refreshModels();
+    expect(refreshed.models).toEqual([{ id: "gpt-planner", tier: "夯", eligible: true }]);
+    expect(refreshed.modelRefresh).toEqual({ returned: 1, synchronized: 1, eligible: 1 });
     await f.router.route(f.turn("更新README"));
     expect(f.forwarded).toEqual([]);
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
@@ -812,13 +828,68 @@ describe("Buddy native routing", () => {
     expect(f.requested.some((request) => request.method === "thread/items/list")).toBe(false);
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
   });
-  it("rejects hidden planner interaction and releases the native request without execution", async () => {
+  it("rejects malformed planner interaction and releases the native request without execution", async () => {
     const f = await fixture({ interactivePlan: true });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.forwarded).toEqual([]);
     expect(f.replies[0]).toMatchObject({ id: "question", error: { code: -32090 } });
     expect(f.requested.some((request) => request.method === "turn/interrupt")).toBe(true);
     expect((await f.router.snapshot()).decisions[0]?.phase).toBe("failed");
+  });
+  it("exposes planner questions on the owner thread and waits for confirmation before execution", async () => {
+    const f = await fixture({ holdPlan: true });
+    const routing = f.router.route(f.turn("设计数据库迁移"));
+    await vi.waitFor(() => expect(f.requested.some((r) => r.method === "turn/start")).toBe(true));
+    f.router.observe({
+      id: 78,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "planner",
+        questions: [{ id: "scope", header: "范围", question: "迁移哪个模块？", options: null }],
+      },
+    });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      threadId: "work",
+      phase: "waiting-input",
+      pendingInput: { requestId: 78 },
+    });
+    expect(f.forwarded).toEqual([]);
+    expect(f.replies).toEqual([]);
+    await f.router.answer({
+      threadId: "work",
+      requestId: 78,
+      answers: { scope: { answers: ["目标模块"] } },
+    });
+    expect(f.replies).toEqual([
+      { id: 78, result: { answers: { scope: { answers: ["目标模块"] } } } },
+    ]);
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      phase: "planning",
+      pendingInput: null,
+    });
+    f.router.observe({
+      method: "item/completed",
+      params: {
+        threadId: "planner",
+        item: {
+          type: "agentMessage",
+          text: JSON.stringify({
+            goal: "迁移",
+            steps: ["仅迁移目标模块"],
+            checks: ["验证"],
+            clarification: null,
+          }),
+        },
+      },
+    });
+    f.router.observe({
+      method: "turn/completed",
+      params: { threadId: "planner", turn: { status: "completed" } },
+    });
+    await routing;
+    expect(f.forwarded).toHaveLength(1);
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("executing");
   });
   it("planner rejection cannot silently start a strong executor or replay", async () => {
     const f = await fixture({ plannerFails: true });
@@ -979,5 +1050,282 @@ describe("Buddy native routing", () => {
     expect(
       f.requested.every((request) => ["thread/read", "model/list"].includes(request.method)),
     ).toBe(true);
+  });
+});
+
+describe("Git push model bypass", () => {
+  it("skips planning, attaches enabled native skills, and preserves the original input and permissions", async () => {
+    const skills = [
+      { name: "gitlab", path: "/skills/gitlab/SKILL.md", enabled: true },
+      { name: "gh", path: "/skills/gh/SKILL.md", enabled: true },
+      { name: "prskill", path: "/skills/prskill/SKILL.md", enabled: true },
+      { name: "github-disabled", path: "/skills/disabled/SKILL.md", enabled: false },
+      { name: "unrelated", path: "/skills/other/SKILL.md", enabled: true },
+    ];
+    const f = await fixture({ skills });
+    const input = [
+      { type: "text", text: "推送代码到 GitLab，先检查跨仓库的冲突和权限" },
+      { type: "skill", name: "prskill", path: "/skills/prskill/SKILL.md" },
+      { type: "localImage", path: "/tmp/context.png" },
+    ];
+    const sandboxPolicy = { type: "readOnly" };
+    await f.router.route(f.turn("", { input, approvalPolicy: "on-request", sandboxPolicy }));
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
+    expect(f.requested.some((request) => request.method === "turn/start")).toBe(false);
+    expect(f.requested.find((request) => request.method === "skills/list")?.params).toEqual({
+      cwds: [f.home],
+      forceReload: true,
+    });
+    expect(f.forwarded).toHaveLength(1);
+    expect(f.forwarded[0]).toMatchObject({
+      method: "turn/start",
+      params: {
+        model: "deepseek-flash",
+        approvalPolicy: "on-request",
+        sandboxPolicy,
+        input: [
+          ...input,
+          { type: "skill", name: "gitlab", path: "/skills/gitlab/SKILL.md" },
+          { type: "skill", name: "gh", path: "/skills/gh/SKILL.md" },
+        ],
+        collaborationMode: {
+          settings: {
+            model: "deepseek-flash",
+            developer_instructions: expect.stringContaining("不委派子代理或切换到高级模型"),
+          },
+        },
+      },
+    });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      role: "git",
+      plannerModel: null,
+      command: null,
+      executorModel: "deepseek-flash",
+      modelBypass: {
+        kind: "git-push",
+        skills: ["prskill", "gitlab", "gh"],
+        skillWarning: null,
+        successRate: null,
+        total: 0,
+      },
+    });
+  });
+
+  it("uses only the cheap model in Plan Mode without changing the mode", async () => {
+    const f = await fixture({ modelIds: ["deepseek-flash"] });
+    await f.router.route(f.turn("推送代码", { collaborationMode: { mode: "plan", settings: {} } }));
+    expect(f.forwarded[0]?.params).toMatchObject({
+      model: "deepseek-flash",
+      collaborationMode: {
+        mode: "plan",
+        settings: { developer_instructions: expect.stringContaining("不执行 Git 写操作") },
+      },
+    });
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
+  });
+
+  it("fails visibly without a cheap candidate instead of falling back to a planner", async () => {
+    const f = await fixture({ modelIds: ["gpt-planner"] });
+    await f.router.route(f.turn("推送代码"));
+    expect(f.forwarded).toEqual([]);
+    expect(f.sent[0]).toMatchObject({
+      error: { message: expect.stringContaining("没有可执行的垃模型") },
+    });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      phase: "failed",
+      plannerModel: null,
+      modelBypass: { outcome: "failed", total: 0 },
+    });
+  });
+
+  it("reports unavailable skills while keeping the cheap execution path", async () => {
+    const f = await fixture({ skillsError: true });
+    await f.router.route(f.turn("推送代码"));
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
+      skills: [],
+      skillWarning: expect.stringContaining("skills unavailable"),
+    });
+  });
+
+  it("counts each native terminal result once and excludes cancellations and stale turns", async () => {
+    const f = await fixture();
+    const complete = (id: string, status: string): void => {
+      f.router.observe({
+        method: "turn/completed",
+        params: { threadId: "work", turn: { id, status } },
+      });
+    };
+    const start = async (id: string): Promise<void> => {
+      await f.router.route(f.turn("推送代码"));
+      f.router.observe({ id: 2, result: { turn: { id } } });
+    };
+    await start("first");
+    complete("stale", "completed");
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass?.total).toBe(0);
+    complete("first", "completed");
+    complete("first", "completed");
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
+      successRate: 100,
+      succeeded: 1,
+      total: 1,
+    });
+    await start("second");
+    complete("first", "completed");
+    complete("second", "failed");
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      phase: "failed",
+      modelBypass: { successRate: 50, succeeded: 1, total: 2 },
+    });
+    expect(f.router.hasActiveWork).toBe(false);
+    await start("third");
+    complete("third", "interrupted");
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
+      outcome: "cancelled",
+      successRate: 50,
+      total: 2,
+    });
+    await f.router.route(f.turn("推送代码"));
+    f.router.observe({ id: 2, error: { code: -1, message: "model rejected" } });
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
+      outcome: "failed",
+      successRate: 33,
+      total: 3,
+    });
+    await f.router.route(f.turn("修改按钮文案"));
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
+  });
+
+  it("honors the bypass switch and leaves complex requests on the ordinary route", async () => {
+    const f = await fixture();
+    await f.router.configure({ bypass: false });
+    await f.router.route(f.turn("推送代码，检查跨仓库冲突"));
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({ plannerModel: "gpt-planner" });
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
+  });
+});
+
+describe("JEV judgment integration", () => {
+  const jevResponse = (route: string, complexity: number, push: number, role: string) => ({
+    model: "jev-latest",
+    answers: {
+      route: {
+        type: "choice",
+        choice: route,
+        probabilities:
+          route === "plan"
+            ? { code: 0.05, inspect: 0.05, plan: 0.9, other: 0 }
+            : route === "inspect"
+              ? { code: 0.05, inspect: 0.9, plan: 0.03, other: 0.02 }
+              : { code: 0.9, inspect: 0.05, plan: 0.03, other: 0.02 },
+        confidence: 0.92,
+      },
+      complexity: {
+        type: "score",
+        score: complexity,
+        legend: {
+          "0": "简单：单次读取或信息查询",
+          "1": "常规：范围明确的小改动或验证",
+          "2": "复杂：设计、重构、跨模块或多步骤",
+        },
+        probabilities: { "0": 0.1, "1": 0.7, "2": 0.2 },
+        confidence: 0.85,
+      },
+      destructive: { type: "noul", noul: 0.05 },
+      push: { type: "noul", noul: push },
+      role: {
+        type: "choice",
+        choice: role,
+        probabilities: {
+          git: role === "git" ? 0.9 : 0.05,
+          io: role === "io" ? 0.9 : 0.05,
+          executor: role === "executor" ? 0.9 : 0.05,
+        },
+        confidence: 0.9,
+      },
+    },
+    usage: { input_tokens: 100, output_tokens: 0 },
+  });
+  const jevClient = (body: unknown) =>
+    new TypeSafeClient({
+      apiKey: "test-only-key",
+      baseURL: "https://jev.invalid",
+      logLevel: "off",
+      retry: { maxRetries: 0 },
+      fetch: vi.fn(async () => Response.json(body, { status: 200 })),
+    });
+
+  it("adopts the JEV route, role and difficulty and records the judgment", async () => {
+    const f = await fixture({
+      jev: jevClient(jevResponse("plan", 2, 0.02, "executor")),
+      modelIds: ["gpt-planner", "deepseek-flash"],
+    });
+    await f.router.route(f.turn("实现一个跨模块的认证重构"));
+    const decision = (await f.router.snapshot()).decisions[0];
+    expect(decision).toMatchObject({
+      role: "executor",
+      difficulty: "advanced",
+      plannerModel: "gpt-planner",
+      judgment: { source: "jev", model: "jev-latest" },
+    });
+    expect(decision?.judgment?.decisions.route?.status).toBe("automatic");
+  });
+
+  it("routes a JEV-confirmed push to the cheap model without planning", async () => {
+    const f = await fixture({ jev: jevClient(jevResponse("code", 1.2, 0.97, "git")) });
+    await f.router.route(f.turn("把当前的改动同步到远端仓库"));
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      role: "git",
+      plannerModel: null,
+      modelBypass: { kind: "git-push" },
+    });
+  });
+
+  it("keeps a JEV-negative push mention on the ordinary route", async () => {
+    const f = await fixture({ jev: jevClient(jevResponse("code", 2, 0.05, "executor")) });
+    await f.router.route(f.turn("推送代码这个功能的旁路要怎么实现"));
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      plannerModel: "gpt-planner",
+    });
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
+  });
+
+  it("falls back to local rules when JEV fails", async () => {
+    const failing = new TypeSafeClient({
+      apiKey: "k",
+      baseURL: "https://jev.invalid",
+      logLevel: "off",
+      retry: { maxRetries: 0 },
+      fetch: vi.fn(async () => Response.json({ error: "down" }, { status: 503 })),
+    });
+    const f = await fixture({ jev: failing });
+    await f.router.route(f.turn("推送代码"));
+    const decision = (await f.router.snapshot()).decisions[0];
+    expect(decision?.modelBypass).toMatchObject({ kind: "git-push" });
+    expect(decision?.judgment).toBeUndefined();
+  });
+
+  it("does not call JEV when the switch is off or no client exists", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json(jevResponse("plan", 2, 0, "executor"), { status: 200 }),
+    );
+    const f = await fixture({
+      jev: new TypeSafeClient({
+        apiKey: "k",
+        baseURL: "https://jev.invalid",
+        logLevel: "off",
+        retry: { maxRetries: 0 },
+        fetch,
+      }),
+    });
+    await f.router.configure({ jev: false });
+    await f.router.route(f.turn("推送代码"));
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await f.router.snapshot()).decisions[0]?.judgment).toBeUndefined();
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
+      kind: "git-push",
+    });
   });
 });

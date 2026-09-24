@@ -1782,3 +1782,170 @@ describe("Renderer Session Import page", () => {
     expect(visibleText(content)).toBe(before);
   });
 });
+
+describe("Renderer Git page", () => {
+  it("renders structured diff, stages a file, and commits it with push", async () => {
+    const change = {
+      path: "src/app.ts",
+      indexStatus: " ",
+      workTreeStatus: "M",
+      staged: false,
+      unstaged: true,
+      untracked: false,
+      conflicted: false,
+    };
+    const stagedStatus = {
+      workspace: "/repo",
+      branch: "main",
+      detached: false,
+      head: "abc123",
+      upstream: "origin/main",
+      ahead: 0,
+      behind: 0,
+      changes: [{ ...change, indexStatus: "M", workTreeStatus: " ", staged: true, unstaged: false }],
+    };
+    const client = {
+      inspectGitStatus: vi
+        .fn()
+        .mockResolvedValueOnce({
+          workspace: "/repo",
+          branch: "main",
+          detached: false,
+          head: "abc123",
+          upstream: "origin/main",
+          ahead: 0,
+          behind: 0,
+          changes: [change],
+        })
+        .mockResolvedValue(stagedStatus),
+      inspectGitDiff: vi.fn(async () => ({
+        path: "src/app.ts",
+        diff: [
+          "diff --git a/src/app.ts b/src/app.ts",
+          "index 1111111..2222222 100644",
+          "--- a/src/app.ts",
+          "+++ b/src/app.ts",
+          "@@ -1,2 +1,3 @@",
+          " const value = 1;",
+          "-const oldValue = 2;",
+          "+const newValue = 2;",
+          "+const extra = 3;",
+        ].join("\n"),
+        truncated: false,
+      })),
+      stageGitPaths: vi.fn(async () => stagedStatus),
+      unstageGitPaths: vi.fn(async () => stagedStatus),
+      commitGit: vi.fn(async () => ({
+        commit: "def456",
+        pushed: true,
+        output: "",
+        status: stagedStatus,
+      })),
+      pushGit: vi.fn(async () => stagedStatus),
+      listGitMessageModels: vi.fn(async () => ({
+        models: [
+          { id: "gpt-strong", label: "gpt-strong", tier: "夯" as const, eligible: true },
+          { id: "deepseek-flash", label: "deepseek-flash", tier: "垃" as const, eligible: true },
+        ],
+        defaultModel: "deepseek-flash",
+      })),
+      generateGitMessage: vi.fn(async () => ({
+        message: "feat: update app",
+        model: "deepseek-flash",
+      })),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("en"),
+      () => null,
+      () => null,
+      () => null,
+      () => null,
+      undefined,
+      () => null,
+      () => ({ threadId: "thread-1", client }),
+    ).find(({ id }) => id === "git");
+    if (!page) throw new Error("Git page is not registered");
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    await vi.waitFor(() => expect(client.inspectGitStatus).toHaveBeenCalled());
+    await vi.waitFor(() => expect(client.listGitMessageModels).toHaveBeenCalled());
+    await vi.waitFor(() => expect(client.inspectGitDiff).toHaveBeenCalled());
+
+    const hunk = descendants(content).find(
+      ({ className }) => className === "settings-git-diff-hunk",
+    );
+    const added = descendants(content).filter(
+      ({ className }) => className === "settings-git-diff-line is-add",
+    );
+    const deleted = descendants(content).filter(
+      ({ className }) => className === "settings-git-diff-line is-del",
+    );
+    if (!hunk || added.length !== 2 || deleted.length !== 1) {
+      throw new Error("Structured diff was not rendered");
+    }
+    expect(visibleText(hunk)).toContain("@@ -1,2 +1,3 @@");
+    expect(visibleText(added[0] as FakeElement)).toContain("newValue");
+
+    const fileRow = elementWithClass(content, "settings-git-change");
+    expect(visibleNotesText(fileRow)).toContain("app.ts");
+    const stageButton = descendants(fileRow).find(
+      ({ className, title }) => className === "settings-git-change__action" && title === "Stage",
+    );
+    if (!stageButton) throw new Error("Stage action is missing");
+    stageButton.dispatch("click", { stopPropagation: () => undefined });
+    await vi.waitFor(() =>
+      expect(client.stageGitPaths).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        paths: ["src/app.ts"],
+      }),
+    );
+
+    const textarea = descendants(content).find(({ tagName }) => tagName === "textarea");
+    if (!textarea) throw new Error("Commit message input is missing");
+    await vi.waitFor(() => expect(textarea.disabled).toBe(false));
+    const modelSelect = descendants(content).find(({ tagName }) => tagName === "select");
+    if (!modelSelect) throw new Error("Commit message model selector is missing");
+    modelSelect.value = "deepseek-flash";
+    expect(
+      descendants(modelSelect)
+        .filter(({ tagName }) => tagName === "option")
+        .map(({ value }) => value),
+    ).toEqual(["gpt-strong", "deepseek-flash"]);
+    textarea.value = "feat: update app";
+    textarea.dispatch("input");
+
+    const buttons = descendants(content).filter(({ tagName }) => tagName === "button");
+    const generate = buttons.find((button) => visibleNotesText(button).includes("Generate"));
+    const commitPush = buttons.find((button) =>
+      visibleNotesText(button).includes("Commit and push"),
+    );
+    if (!generate || !commitPush) throw new Error("Git actions are missing");
+    await vi.waitFor(() => expect(generate.disabled).toBe(false));
+    generate.dispatch("click");
+    await vi.waitFor(() =>
+      expect(client.generateGitMessage).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        model: "deepseek-flash",
+        paths: ["src/app.ts"],
+      }),
+    );
+    await vi.waitFor(() => expect(commitPush.disabled).toBe(false));
+    textarea.value = "feat: update app";
+    commitPush.dispatch("click");
+    await vi.waitFor(() =>
+      expect(client.commitGit).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        message: "feat: update app",
+        paths: ["src/app.ts"],
+        push: true,
+      }),
+    );
+    scope.dispose();
+  });
+});

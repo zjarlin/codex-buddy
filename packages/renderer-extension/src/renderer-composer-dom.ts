@@ -46,6 +46,8 @@ import type { RendererSettingsLocale } from "./settings/localization.js";
 import { mountModelShortcuts } from "./renderer-model-shortcuts.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
 import type { RendererAdapterStatus } from "./versioned-renderer-adapter.js";
+import type { ModelRefreshReport } from "./renderer-model-refresh-summary.js";
+import type { ModelRefreshOutcome } from "./renderer-model-refresh-summary.js";
 import {
   mountRendererHarnessCommandControl,
   type RendererHarnessCommandControl,
@@ -612,8 +614,9 @@ export function mountComposerAgentControl(
   onSelectThinking: (thinkingOptionId: string) => void,
   onSelectPermissionMode: (permissionModeId: string) => void,
   onSelectCommand: (command: HarnessCommandDescriptor) => void,
-  onRefreshModels?: () => void,
+  onRefreshModels?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
   onSelectShortcut?: (modelId: string) => void | Promise<void>,
+  onRefreshShortcutModels?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
 ): ComposerAgentControl {
   const nativeModelControl = captureNativeControl(nativeModelControlForComposer(composer));
   const nativeContextUsageControl = captureNativeControl(
@@ -643,7 +646,10 @@ export function mountComposerAgentControl(
     onSelectPermissionMode,
   );
   const credits = mountRendererCreditsControl(composerId);
-  const modelShortcuts = mountModelShortcuts(onSelectShortcut ?? onSelectModel);
+  const modelShortcuts = mountModelShortcuts(
+    onSelectShortcut ?? onSelectModel,
+    onRefreshShortcutModels ?? onRefreshModels,
+  );
   composer.before(modelShortcuts.root);
 
   const toolbar = sendButton.parentElement;
@@ -698,6 +704,8 @@ export function renderComposerAgentControl(
   locale: RendererSettingsLocale = "en",
   currentCodexAccount: CodexAccountSummary | null = null,
   ownershipError = false,
+  modelContext = "",
+  modelRefreshReport?: ModelRefreshReport,
 ): void {
   if (control.usage === null) {
     control.usage = mountRendererUsageControl(control.composerId, locale);
@@ -757,11 +765,14 @@ export function renderComposerAgentControl(
             : (modelView.catalog?.models ?? []).map(({ ref, label }) => ({ id: ref.id, label })),
         selected: modelView.selected?.id,
         disabled: modelView.status === "loading" || modelView.status === "selecting",
+        refreshing: state.agent !== "codex" && modelView.status === "loading",
+        error: state.agent !== "codex" ? modelView.error : undefined,
       }),
       ...(switching || ownershipError ? { disabled: true } : {}),
     },
     state.agent,
     locale,
+    modelContext,
   );
   renderRendererModelPicker(
     control.modelPicker,
@@ -770,6 +781,8 @@ export function renderComposerAgentControl(
     state.agent,
     locale,
   );
+  if (modelRefreshReport !== undefined)
+    control.modelPicker.reportRefresh(modelRefreshReport, locale === "zh-CN");
   const permissionModeVisible =
     state.agent !== "codex" &&
     permissionModeView.status !== "idle" &&

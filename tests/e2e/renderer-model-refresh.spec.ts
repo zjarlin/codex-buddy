@@ -18,14 +18,25 @@ const { outputFiles } = await build({
         globalThis.refreshes++;
         view = { ...view, status: "loading" };
         render();
+        return new Promise((resolve) => { globalThis.resolveRefresh = resolve; });
       });
       globalThis.finishRefresh = (fail) => {
-        view = { ...view, status: fail ? "error" : "ready", error: fail ? "Refresh failed" : undefined,
+        if (fail) {
+          view = { ...view, status: "error", error: "Refresh failed" };
+          render();
+          globalThis.resolveRefresh?.();
+          return;
+        }
+        const before = view.catalog.models.map(({ ref }) => ({ id: ref.id }));
+        view = { ...view, status: "ready", error: undefined,
           catalog: { ...view.catalog, models: [
             { ref: { id: "a" }, label: "Alpha" }, { ref: { id: "b" }, label: "Beta" }
           ] }
         };
         render();
+        const outcome = { synchronized: 2 };
+        control.reportRefresh({ before, summary: outcome }, true);
+        globalThis.resolveRefresh?.();
       };
       document.body.append(control.root);
       render();
@@ -61,6 +72,8 @@ test("manual refresh preserves menu, search and selection, then supports retry",
   await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
   await expect(menu.locator("[data-model-id=b]")).toBeVisible();
   await expect(menu.locator("[data-model-id=a]")).toHaveAttribute("aria-checked", "true");
+  await expect(menu.getByRole("status")).toContainText("同步 2 个");
+  await expect(menu.getByRole("status")).toContainText("新增 1 个");
   await expect(refresh).toBeEnabled();
   await refresh.click();
   await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(true));

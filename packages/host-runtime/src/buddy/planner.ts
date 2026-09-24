@@ -1,5 +1,12 @@
 import type { JsonObject, JsonValue } from "@codexhost/protocol-core";
-import { buddyPlanOutputSchema, type BuddyPlan } from "@codexhost/shared-contracts";
+import {
+  buddyPlanOutputSchema,
+  buddyPlannerInputSchema,
+  buddyAnswerSchema,
+  type BuddyPlannerInput,
+  type BuddyAnswer,
+  type BuddyPlan,
+} from "@codexhost/shared-contracts";
 import { validatePlan, type ValidatedPlan } from "./plan-graph.js";
 
 export type NativeRequest = (method: string, params: JsonObject) => Promise<JsonObject>;
@@ -78,24 +85,12 @@ interface PendingPlan {
   text: string;
   turnId: string | null;
   finished: boolean;
-}
-
-const plannerMissingContextAnswer =
-  "未提供额外信息。请基于已有证据继续规划；无法确认的内容写入 clarification 和待验证假设，不要等待用户。";
-
-function plannerQuestionAnswer(params: Record<string, unknown>): JsonObject | null {
-  const questions = Array.isArray(params.questions) ? params.questions : [];
-  if (questions.length === 0) return null;
-  const answers: Record<string, { answers: string[] }> = {};
-  for (const rawQuestion of questions) {
-    const question = object(rawQuestion);
-    if (typeof question.id !== "string") return null;
-    if (question.options !== null && Array.isArray(question.options)) {
-      return null;
-    }
-    answers[question.id] = { answers: [plannerMissingContextAnswer] };
-  }
-  return { answers };
+  ownerThreadId: string;
+  signal: AbortSignal;
+  input: BuddyPlannerInput | null;
+  answering: boolean;
+  inputChanged(input: BuddyPlannerInput | null): void;
+  setWaiting(waiting: boolean): void;
 }
 
 export class BuddyPlanner {
@@ -117,17 +112,22 @@ export class BuddyPlanner {
       typeof message.method === "string" &&
       (typeof message.id === "string" || typeof message.id === "number")
     ) {
-      const answer =
-        message.method === "item/tool/requestUserInput" && pending
-          ? plannerQuestionAnswer(params)
-          : null;
-      if (answer) {
-        // 规划线程不能阻塞等待用户；缺少上下文时让模型继续并显式记录假设。
-        void this.respond({ id: message.id, result: answer }).catch(this.diagnose);
-        return true;
+      if (message.method === "item/tool/requestUserInput" && pending) {
+        const parsed = buddyPlannerInputSchema.safeParse({
+          requestId: message.id,
+          questions: params.questions,
+        });
+        if (parsed.success && (!pending.input || pending.answering)) {
+          pending.input = parsed.data;
+          pending.setWaiting(true);
+          pending.inputChanged(parsed.data);
+          return true;
+        }
       }
-      // 选择题、审批、权限请求和未知请求不能由规划器擅自决定。
-      const error = new Error("规划需要交互确认，未启动执行；请补充任务信息后重试。");
+      // 只读规划不升级权限；无效问题、审批和未知请求保留明确错误。
+      const error = new Error(
+        `规划收到不支持的交互请求（${String(message.method)}），未启动执行。`,
+      );
       void this.respond({ id: message.id, error: { code: -32090, message: error.message } }).catch(
         this.diagnose,
       );
@@ -182,7 +182,46 @@ export class BuddyPlanner {
     return true;
   }
 
+  async answer(value: BuddyAnswer): Promise<void> {
+    const answer = buddyAnswerSchema.parse(value);
+    const pending = [...this.#plans.values()].find(
+      (plan) => plan.ownerThreadId === answer.threadId,
+    );
+    const input = pending?.input;
+    if (
+      !pending ||
+      pending.finished ||
+      pending.signal.aborted ||
+      !input ||
+      input.requestId !== answer.requestId ||
+      pending.answering
+    ) {
+      throw new Error("确认请求已失效或正在提交，请刷新后重试。");
+    }
+    const ids = input.questions.map((question) => question.id);
+    if (
+      Object.keys(answer.answers).length !== ids.length ||
+      ids.some((id) => !answer.answers[id])
+    ) {
+      throw new Error("请回答所有问题后再继续。");
+    }
+    pending.answering = true;
+    try {
+      await this.respond({ id: input.requestId, result: { answers: answer.answers } });
+      // 回复期间规划可能已完成或取消，不再恢复过期状态。
+      if (pending.input === input) {
+        pending.input = null;
+        pending.inputChanged(null);
+        pending.setWaiting(false);
+      }
+    } finally {
+      pending.answering = false;
+    }
+  }
+
   async plan(input: {
+    ownerThreadId: string;
+    inputChanged(input: BuddyPlannerInput | null): void;
     model: string;
     cwd: string;
     task: JsonValue[];
@@ -211,9 +250,28 @@ export class BuddyPlanner {
       throw new Error("规划线程未创建。");
     }
     let rejectPlan: (error: Error) => void = () => undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const setWaiting = (waiting: boolean): void => {
+      clearTimeout(timer);
+      if (!waiting) {
+        timer = setTimeout(() => rejectPlan(new Error("规划超过三分钟，未开始执行。")), 180_000);
+      }
+    };
     const completed = new Promise<TaskPacket>((resolve, reject) => {
       rejectPlan = reject;
-      this.#plans.set(threadId, { resolve, reject, text: "", turnId: null, finished: false });
+      this.#plans.set(threadId, {
+        resolve,
+        reject,
+        text: "",
+        turnId: null,
+        finished: false,
+        ownerThreadId: input.ownerThreadId,
+        signal: input.signal,
+        input: null,
+        answering: false,
+        inputChanged: input.inputChanged,
+        setWaiting,
+      });
     });
     const abort = (): void => {
       rejectPlan(new Error("规划已取消，未开始执行。"));
@@ -223,7 +281,7 @@ export class BuddyPlanner {
       }
     };
     input.signal.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(() => rejectPlan(new Error("规划超过三分钟，未开始执行。")), 180_000);
+    setWaiting(false);
     try {
       input.signal.throwIfAborted();
       // 先安装完成监听，防止短回复先于 turn/start 确认到达。
@@ -256,6 +314,17 @@ export class BuddyPlanner {
       input.signal.removeEventListener("abort", abort);
       const pending = this.#plans.get(threadId);
       this.#plans.delete(threadId);
+      if (pending?.input) {
+        const requestId = pending.input.requestId;
+        pending.input = null;
+        pending.inputChanged(null);
+        if (!pending.answering) {
+          await this.respond({
+            id: requestId,
+            error: { code: -32800, message: "规划已结束，确认请求已取消。" },
+          }).catch(this.diagnose);
+        }
+      }
       this.#retired.add(threadId);
       if (this.#retired.size > 100) {
         const first = this.#retired.values().next().value;

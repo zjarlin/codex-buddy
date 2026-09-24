@@ -74,6 +74,8 @@ it("sends a complete strict output schema and accepts the resulting native plan"
     () => undefined,
   );
   const packet = await planner.plan({
+    ownerThreadId: "work",
+    inputChanged: () => undefined,
     model: "planner",
     cwd: "/tmp",
     task: [],

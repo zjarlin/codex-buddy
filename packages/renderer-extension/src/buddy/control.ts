@@ -1,5 +1,11 @@
-import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
+import type {
+  BuddyDecision,
+  BuddyModelRefresh,
+  BuddySettings,
+  BuddySnapshot,
+} from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { plannerInputControl } from "./planner-input.js";
 import { interruptedControl } from "./continuation.js";
 
 const messages = {
@@ -10,13 +16,36 @@ const messages = {
     enabled: "自动规划",
     privateMode: "隐私",
     privateActive: "隐私 · 自动选择离线模型",
-    bypass: "精确命令旁路",
+    bypass: "旁路优先",
     modeGroup: "运行模式",
     routeGroup: "路由策略",
     modelGroup: "模型偏好",
     enabledHint: "按任务难度自动选择规划与执行模型",
     privateHint: "只使用离线 q3 模型，优先于普通路由",
-    bypassHint: "精确命令直接执行，不请求模型",
+    bypassHint: "推送请求直达垃模型；精确只读命令可零模型执行",
+    jevHint: "用 JEV System One 判断路由、难度、推送意图和执行角色",
+    jevKey: "JEV API Key",
+    jevKeyHint: "保存在本机 Host，仅用于 JEV 判断；不会回传到界面",
+    jevKeyPlaceholder: "粘贴 TYPESAFE_API_KEY",
+    jevBaseUrl: "JEV 网关地址",
+    jevBaseUrlHint: "可填自建 Sub2API 网关；留空使用官方地址，网关需转发 /v1/systemone",
+    jevBaseUrlPlaceholder: "https://api.typesafe.ai 或自建网关",
+    jevBaseUrlDefault: "官方默认",
+    jevKeyConfigured: "已配置",
+    jevKeyMissing: "未配置",
+    jevKeySave: "保存密钥",
+    jevKeyClear: "清除",
+    jevKeySaved: "已保存",
+    jevKeyCleared: "已清除",
+    modelBypass: "旁路 · 垃",
+    skipPlanner: "跳过夯规划",
+    bypassScore: "旁路成功率",
+    bypassScoreHint:
+      "当前 Host 运行期间该模型原生旁路回合的完成率；取消不计入，重启清零。回合完成不等于 Git 推送业务成功。",
+    noSamples: "待统计",
+    skills: "附带技能",
+    skillWarning: "技能提示",
+    noSkills: "未发现可用技能",
     roleHint: "自动时按任务类型选择 Git、IO 或编码角色",
     plannerHint: "复杂任务只读规划",
     workerHint: "指定后由单个模型执行，不使用子代理或自动换模",
@@ -28,11 +57,14 @@ const messages = {
     worker: "垃 · 执行模型",
     choose: "动态选择",
     refresh: "刷新模型",
+    refreshSummary: (value: BuddyModelRefresh) =>
+      `远程返回 ${value.returned} 个，同步 ${value.synchronized} 个，可路由 ${value.eligible} 个` as string,
     cancel: "取消规划",
     cancelRecovery: "取消自动续接",
     retrying: "等待自动续接",
     roleLabel: "执行角色",
     reason: "路由依据",
+    jev: "JEV 判断",
     score: "规则难度分",
     simple: "简单",
     standard: "常规",
@@ -50,6 +82,7 @@ const messages = {
     noModel: "无模型 · 零推理请求",
     discovering: "读取实时候选",
     planning: "夯正在规划",
+    "waiting-input": "等待你的确认",
     executing: "垃正在执行",
     bypassPhase: "命令旁路",
     completed: "已结束",
@@ -63,13 +96,37 @@ const messages = {
     enabled: "Automatic planning",
     privateMode: "Private",
     privateActive: "Private · Automatic offline model",
-    bypass: "Exact command bypass",
+    bypass: "Prefer bypass",
     modeGroup: "Mode",
     routeGroup: "Routing",
     modelGroup: "Models",
     enabledHint: "Choose planning and execution models by task difficulty",
     privateHint: "Use offline q3 models and take priority over normal routing",
-    bypassHint: "Run exact commands without a model request",
+    bypassHint: "Route push requests to 垃; exact read-only commands can run without a model",
+    jevHint: "Use JEV System One to judge route, difficulty, push intent, and execution role",
+    jevKey: "JEV API key",
+    jevKeyHint: "Stored on this Host for JEV only; never returned to the UI",
+    jevKeyPlaceholder: "Paste TYPESAFE_API_KEY",
+    jevBaseUrl: "JEV gateway URL",
+    jevBaseUrlHint:
+      "Point at a self-hosted Sub2API gateway; blank uses the official URL. The gateway must forward /v1/systemone",
+    jevBaseUrlPlaceholder: "https://api.typesafe.ai or your gateway",
+    jevBaseUrlDefault: "Official default",
+    jevKeyConfigured: "Configured",
+    jevKeyMissing: "Not configured",
+    jevKeySave: "Save key",
+    jevKeyClear: "Clear",
+    jevKeySaved: "Saved",
+    jevKeyCleared: "Cleared",
+    modelBypass: "Bypass · 垃",
+    skipPlanner: "Skip 夯 planning",
+    bypassScore: "Bypass success rate",
+    bypassScoreHint:
+      "Native bypass turn completion rate for this model during this Host run; cancellations excluded, reset on restart. Turn completion does not prove a Git push succeeded.",
+    noSamples: "No samples yet",
+    skills: "Attached skills",
+    skillWarning: "Skill notice",
+    noSkills: "No available skills found",
     roleHint: "Automatically pick Git, IO, or code execution by task type",
     plannerHint: "Read-only planning for complex tasks",
     workerHint: "A fixed executor works alone, without subagents or automatic model switching",
@@ -81,11 +138,14 @@ const messages = {
     worker: "垃 · Executor",
     choose: "Dynamic selection",
     refresh: "Refresh models",
+    refreshSummary: (value: BuddyModelRefresh) =>
+      `${value.returned} returned, ${value.synchronized} synced, ${value.eligible} routable` as string,
     cancel: "Cancel planning",
     cancelRecovery: "Cancel recovery",
     retrying: "Waiting to continue",
     roleLabel: "Execution role",
     reason: "Routing reason",
+    jev: "JEV judgment",
     score: "Rule difficulty score",
     simple: "Simple",
     standard: "Standard",
@@ -103,6 +163,7 @@ const messages = {
     noModel: "No model · Zero inference requests",
     discovering: "Discovering models",
     planning: "夯 planning",
+    "waiting-input": "Waiting for your input",
     executing: "垃 executing",
     bypassPhase: "Command bypass",
     completed: "Finished",
@@ -116,6 +177,8 @@ const style = `
 [data-buddy-router] summary{cursor:pointer;display:flex;align-items:baseline;gap:8px;padding:4px 8px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;list-style:none;background:color-mix(in srgb,#4385ff 8%,transparent)}
 [data-buddy-router] summary:focus-visible,[data-buddy-router] button:focus-visible,[data-buddy-router] select:focus-visible,[data-buddy-router] .buddy-switch:focus-visible{outline:2px solid #4385ff;outline-offset:2px}
 [data-buddy-router] summary b{color:#508df2;white-space:nowrap}[data-buddy-router] summary span{min-width:0;overflow-wrap:anywhere;white-space:normal}
+[data-buddy-router][data-model-bypass] summary{border:2px solid #508df2;background:color-mix(in srgb,#4385ff 16%,transparent)}
+[data-buddy-router][data-model-bypass] summary b{background:#245ec4;color:#fff;border-radius:5px;padding:2px 6px}
 [data-buddy-router] .buddy-panel{padding:8px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;margin-top:5px;background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:inherit;max-height:300px;overflow:auto;color-scheme:inherit}
 [data-buddy-router] .buddy-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin-bottom:6px}
 [data-buddy-router] .buddy-section{display:contents}
@@ -131,6 +194,11 @@ const style = `
 [data-buddy-router] .buddy-select{width:100%;max-width:190px;min-width:0;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:3px 5px;font-size:11px;height:26px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
 [data-buddy-router] .buddy-section>button{justify-self:start;margin-top:2px}
 [data-buddy-router] .buddy-actions:not(:empty){display:flex;gap:6px;margin:0}
+[data-buddy-router] .buddy-key{display:flex;flex-direction:column;gap:6px;grid-column:1/-1;margin:6px 0}
+[data-buddy-router] .buddy-key input{width:100%;min-width:0;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:4px 6px;font-size:11px;height:28px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
+[data-buddy-router] .buddy-key-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+[data-buddy-router] .buddy-key-state{font-size:11px;opacity:.75}
+[data-buddy-router] .buddy-key-state[data-configured=true]{color:#3fa96a;opacity:1}
 [data-buddy-router] .buddy-footer{display:flex;align-items:center;justify-content:flex-end;gap:6px}
 [data-buddy-router] :is(dl,p):empty{display:none}
 [data-buddy-router] button{display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;padding:4px 10px}
@@ -138,6 +206,15 @@ const style = `
 [data-buddy-router] dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:3px 8px;margin:6px 0}
 [data-buddy-router] dd{margin:0;overflow-wrap:anywhere;white-space:pre-wrap}[data-buddy-router] dt{opacity:.65}
 [data-buddy-router] .buddy-note{opacity:.65;margin:6px 0 0}[data-buddy-router] [role=alert]{color:#d65f55;white-space:pre-wrap}
+[data-buddy-router][data-planner-input] .buddy-panel{max-height:min(65vh,620px)}
+[data-buddy-router] .buddy-planner-input{border:1px solid #6598ef;border-radius:10px;padding:12px;margin-bottom:12px;background:color-mix(in srgb,#6598ef 7%,transparent);overflow-wrap:anywhere}
+[data-buddy-router] .buddy-planner-input p{margin:5px 0 10px}
+[data-buddy-router] .buddy-planner-input fieldset{min-width:0;border:0;padding:0;margin:12px 0}
+[data-buddy-router] .buddy-planner-input legend{font-weight:600;padding:0}
+[data-buddy-router] .buddy-planner-input label{display:flex;gap:8px;padding:7px 0;align-items:flex-start;cursor:pointer}
+[data-buddy-router] .buddy-planner-input small{display:block;opacity:.7}
+[data-buddy-router] .buddy-planner-input textarea,[data-buddy-router] .buddy-planner-input input[type=password]{box-sizing:border-box;width:100%;min-height:60px;resize:vertical;color:inherit;background:transparent;border:1px solid color-mix(in srgb,currentColor 28%,transparent);border-radius:6px;padding:8px;font:inherit}
+[data-buddy-router] .buddy-planner-input button:disabled{opacity:.55;cursor:wait}
 @media(max-width:420px){[data-buddy-router] .buddy-setting{flex-direction:column;align-items:stretch;gap:3px}[data-buddy-router] .buddy-select{max-width:none}[data-buddy-router] .buddy-switch{align-self:flex-start}[data-buddy-router] dl{grid-template-columns:minmax(0,1fr);gap:2px}[data-buddy-router] dd{margin-bottom:8px}}
 `;
 
@@ -159,6 +236,7 @@ export function installBuddyControl(
   const title = document.createElement("b");
   title.textContent = "Auto Router";
   const status = document.createElement("span");
+  status.setAttribute("aria-live", "polite");
   summary.append(title, status);
   const panel = document.createElement("div");
   panel.className = "buddy-panel";
@@ -171,11 +249,17 @@ export function installBuddyControl(
   error.setAttribute("role", "alert");
   const note = document.createElement("p");
   note.className = "buddy-note";
+  const refreshStatus = document.createElement("p");
+  refreshStatus.setAttribute("role", "status");
+  refreshStatus.className = "buddy-note";
   const recovery = document.createElement("div");
   const footer = document.createElement("div");
   footer.className = "buddy-footer";
   footer.append(actions, recovery);
-  panel.append(controls, fields, error, note, footer);
+  const inputArea = document.createElement("div");
+  let inputKey = "";
+  let inputClient: RendererModelClient | null = null;
+  panel.append(inputArea, controls, fields, error, refreshStatus, note, footer);
   root.append(styles, summary, panel);
   let disposed = false;
   let busy = false;
@@ -219,7 +303,7 @@ export function installBuddyControl(
   const switchRow = (
     parent: HTMLElement,
     label: string,
-    key: "enabled" | "bypass" | "privateMode",
+    key: "enabled" | "bypass" | "privateMode" | "jev",
     hint: string,
   ): void => {
     const wrapper = document.createElement("label");
@@ -286,6 +370,69 @@ export function installBuddyControl(
     });
     parent.append(button);
   };
+  // JEV 连接配置：密钥只提交给 Host 且不回填，网关地址可回填显示。
+  const keyRow = (parent: HTMLElement): void => {
+    const client = context?.client;
+    if (!client?.buddyJevKey) {
+      return;
+    }
+    const wrapper = document.createElement("div");
+    wrapper.className = "buddy-key";
+    wrapper.title = t().jevKeyHint;
+    const keyInput = document.createElement("input");
+    keyInput.type = "password";
+    keyInput.autocomplete = "off";
+    keyInput.spellcheck = false;
+    keyInput.placeholder = t().jevKeyPlaceholder;
+    keyInput.setAttribute("aria-label", t().jevKey);
+    const urlInput = document.createElement("input");
+    urlInput.type = "url";
+    urlInput.autocomplete = "off";
+    urlInput.spellcheck = false;
+    urlInput.placeholder = t().jevBaseUrlPlaceholder;
+    urlInput.setAttribute("aria-label", t().jevBaseUrl);
+    urlInput.title = t().jevBaseUrlHint;
+    // 网关地址不是密钥，回填当前值；空值代表使用官方默认地址。
+    urlInput.value = snapshot?.jevBaseUrl ?? "";
+    const status = document.createElement("div");
+    status.className = "buddy-key-status";
+    const state = document.createElement("span");
+    state.className = "buddy-key-state";
+    const configured = Boolean(snapshot?.jevKeyConfigured);
+    state.dataset.configured = String(configured);
+    state.textContent = configured ? t().jevKeyConfigured : t().jevKeyMissing;
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = t().jevKeySave;
+    save.addEventListener("click", () => {
+      const typedKey = keyInput.value.trim();
+      // 未重新输入密钥时省略 apiKey，保留已存密钥；网关地址总是按输入框同步。
+      const patch: { apiKey?: string; baseURL: string | null } = {
+        baseURL: urlInput.value.trim() || null,
+      };
+      if (typedKey) {
+        patch.apiKey = typedKey;
+      }
+      void (async () => {
+        snapshot = (await client.buddyJevKey?.(patch)) ?? snapshot;
+        keyInput.value = "";
+        render();
+      })().catch(report);
+    });
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.textContent = t().jevKeyClear;
+    clear.addEventListener("click", () => {
+      void (async () => {
+        snapshot = (await client.buddyJevKey?.({ apiKey: null, baseURL: null })) ?? snapshot;
+        keyInput.value = "";
+        render();
+      })().catch(report);
+    });
+    status.append(state, save, clear);
+    wrapper.append(keyInput, urlInput, status);
+    parent.append(wrapper);
+  };
   const render = (): void => {
     const m = t();
     if (!snapshot) {
@@ -300,6 +447,41 @@ export function installBuddyControl(
       recovery.replaceChildren(interruptedControl(context.client, getLocale() === "zh-CN"));
     }
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
+    const pending =
+      snapshot.settings.enabled && !snapshot.settings.privateMode ? decision?.pendingInput : null;
+    root.toggleAttribute("data-planner-input", Boolean(pending));
+    const nextInputKey = pending ? JSON.stringify([decision?.threadId, pending, getLocale()]) : "";
+    if (nextInputKey !== inputKey || inputClient !== context?.client) {
+      inputKey = nextInputKey;
+      inputClient = context?.client ?? null;
+      inputArea.replaceChildren();
+      const target = context;
+      if (pending && decision && target) {
+        root.open = true;
+        panel.scrollTop = 0;
+        inputArea.append(
+          plannerInputControl(
+            pending,
+            getLocale(),
+            async (answers) => {
+              if (context?.client !== target.client || context.threadId !== target.threadId) return;
+              if (!target.client.buddyAnswer) throw new Error(t().disconnected);
+              await target.client.buddyAnswer({
+                threadId: decision.threadId,
+                requestId: pending.requestId,
+                answers,
+              });
+              await refresh();
+            },
+            async () => {
+              if (context?.client !== target.client || context.threadId !== target.threadId) return;
+              await target.client.buddyCancel?.(decision.threadId);
+              await refresh();
+            },
+          ),
+        );
+      }
+    }
     const involvedModels = decision
       ? [
           ...new Set(
@@ -313,6 +495,16 @@ export function installBuddyControl(
         ]
       : [];
     const phase = (d: BuddyDecision): string => (d.phase === "bypass" ? m.bypassPhase : m[d.phase]);
+    const bypass =
+      !snapshot.settings.privateMode && snapshot.settings.enabled
+        ? decision?.modelBypass
+        : undefined;
+    root.toggleAttribute("data-model-bypass", Boolean(bypass));
+    title.textContent = bypass ? m.modelBypass : "Auto Router";
+    const bypassScore =
+      bypass?.successRate == null
+        ? m.noSamples
+        : `${bypass.successRate}/100 (${bypass.succeeded}/${bypass.total})`;
     status.textContent = snapshot.settings.privateMode
       ? m.privateActive
       : !snapshot.settings.enabled
@@ -320,6 +512,9 @@ export function installBuddyControl(
         : decision
           ? `${phase(decision)} · ${decision.command ? m.noModel : involvedModels.join(" · ") || m.waiting}`
           : m.waiting;
+    if (bypass) {
+      status.textContent += ` · ${m.skipPlanner} · ${m.bypassScore} ${bypassScore}`;
+    }
     const signature = JSON.stringify([snapshot, context?.threadId, getLocale()]);
     if (signature === fingerprint) {
       return;
@@ -335,6 +530,10 @@ export function installBuddyControl(
     if (!snapshot.settings.privateMode && snapshot.settings.enabled) {
       const route = section(m.routeGroup);
       switchRow(route, m.bypass, "bypass", m.bypassHint);
+      switchRow(route, m.jev, "jev", m.jevHint);
+      if (snapshot.settings.jev) {
+        keyRow(route);
+      }
       select(
         route,
         m.roleLabel,
@@ -377,8 +576,23 @@ export function installBuddyControl(
       });
     }
     if (decision && snapshot.settings.enabled) {
+      if (bypass) {
+        row(m.bypassScore, bypassScore);
+        fields.lastElementChild?.setAttribute("title", m.bypassScoreHint);
+        row(m.skills, bypass.skills.join(" · ") || m.noSkills);
+        if (bypass.skillWarning) {
+          row(m.skillWarning, bypass.skillWarning);
+        }
+      }
       row(m.score, `${decision.score}/100 · ${m[decision.difficulty]}`);
       row(m.reason, decision.reason);
+      if (decision.judgment) {
+        const { model, decisions } = decision.judgment;
+        const detail = Object.entries(decisions)
+          .map(([id, value]) => `${id}:${value.status}`)
+          .join(" · ");
+        row(m.jev, `${model}${detail ? ` · ${detail}` : ""}`);
+      }
       row(m.planner, decision.plannerModel ?? "—");
       row(m.involvedModels, decision.command ? m.noModel : involvedModels.join("\n") || m.unknown);
       row(m.worker, decision.command ? m.noModel : (decision.executorModel ?? "—"));
@@ -414,7 +628,11 @@ export function installBuddyControl(
         });
       }
     }
-    note.textContent = "";
+    refreshStatus.textContent = snapshot.modelRefresh
+      ? m.refreshSummary(snapshot.modelRefresh)
+      : "";
+    refreshStatus.hidden = !refreshStatus.textContent;
+    note.textContent = bypass ? m.bypassScoreHint : "";
     summary.title = snapshot.settings.enabled
       ? m.note
       : getLocale() === "zh-CN"
@@ -423,6 +641,11 @@ export function installBuddyControl(
   };
   const refreshContext = (): void => {
     const next = disposed ? null : getContext();
+    if (context?.client !== next?.client || context?.threadId !== next?.threadId) {
+      inputArea.replaceChildren();
+      inputKey = "";
+      inputClient = null;
+    }
     context = next;
     if (!next) {
       root.remove();

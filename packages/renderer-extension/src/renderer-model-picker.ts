@@ -22,6 +22,12 @@ import { createModelFavoriteIcon, ensureModelOptionStyle } from "./renderer-mode
 import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import { rendererHarnessMessages } from "./renderer-harness-localization.js";
+import {
+  modelRefreshFallbackMessage,
+  modelRefreshMessage,
+  summarizeModelRefresh,
+  type ModelRefreshReport,
+} from "./renderer-model-refresh-summary.js";
 import type { RendererSettingsLocale } from "./settings/localization.js";
 
 const MENU_CLASSES =
@@ -70,6 +76,10 @@ interface ThinkingOptionControl {
   check: HTMLElement;
 }
 
+function viewCatalogModels(control: RendererModelPickerControl): { id: string }[] {
+  return [...control.options.keys()].map((id) => ({ id }));
+}
+
 export interface RendererModelPickerControl {
   root: HTMLElement;
   trigger: HTMLButtonElement;
@@ -83,12 +93,14 @@ export interface RendererModelPickerControl {
   searchEmpty: HTMLElement;
   refreshButton: HTMLButtonElement;
   refreshError: HTMLElement;
+  refreshStatus: HTMLElement;
   harnessId: string;
   favorites: Set<string>;
   options: Map<string, ModelOptionControl>;
   thinkingOptions: Map<string, ThinkingOptionControl>;
   close(): void;
   dispose(): void;
+  reportRefresh(result: ModelRefreshReport, chinese: boolean): void;
 }
 
 function popoverOpen(menu: HTMLElement): boolean {
@@ -415,7 +427,17 @@ export function mountRendererModelPicker(
   refreshButton.append(createElement(RefreshCw, { width: 16, height: 16, "aria-hidden": "true" }));
   const onRefreshClick = (): void => {
     if (refreshButton.disabled) return;
-    onRefresh?.();
+    if (!onRefresh) return;
+    refreshStatus.hidden = true;
+    refreshError.hidden = true;
+    refreshButton.disabled = true;
+    refreshButton.setAttribute("aria-busy", "true");
+    void Promise.resolve(onRefresh())
+      .catch(() => undefined)
+      .finally(() => {
+        refreshButton.disabled = false;
+        refreshButton.setAttribute("aria-busy", "false");
+      });
   };
   refreshButton.addEventListener("click", onRefreshClick);
   const refreshError = document.createElement("div");
@@ -423,6 +445,11 @@ export function mountRendererModelPicker(
   refreshError.className = HEADING_CLASSES;
   refreshError.style.overflowWrap = "anywhere";
   refreshError.hidden = true;
+  const refreshStatus = document.createElement("div");
+  refreshStatus.setAttribute("role", "status");
+  refreshStatus.className = HEADING_CLASSES;
+  refreshStatus.style.overflowWrap = "anywhere";
+  refreshStatus.hidden = true;
   const searchEmpty = document.createElement("div");
   searchEmpty.dataset.codexhostModelSearchEmpty = "true";
   searchEmpty.textContent = "No matching models";
@@ -619,6 +646,7 @@ export function mountRendererModelPicker(
     searchEmpty,
     refreshButton,
     refreshError,
+    refreshStatus,
     harnessId: "",
     favorites: new Set(),
     options,
@@ -646,6 +674,18 @@ export function mountRendererModelPicker(
       modelMenu.remove();
       root.remove();
     },
+    reportRefresh(result, chinese) {
+      const message = result.summary
+        ? modelRefreshMessage(
+            summarizeModelRefresh(result.before, viewCatalogModels(control), result.summary),
+            chinese,
+          )
+        : modelRefreshFallbackMessage(chinese);
+      refreshStatus.textContent = message;
+      refreshStatus.hidden = false;
+      if (!popoverOpen(control.modelMenu)) return;
+      control.searchInput.focus({ preventScroll: true });
+    },
   };
   syncRendererModelTriggerClass(control);
   return control;
@@ -660,6 +700,7 @@ function rebuildOptions(control: RendererModelPickerControl, view: RendererModel
     createHeading("Model"),
     control.searchHeader,
     control.refreshError,
+    control.refreshStatus,
     control.searchEmpty,
   );
 
@@ -805,6 +846,10 @@ export function renderRendererModelPicker(
     refreshing || view.status === "selecting" || view.status === "waitingForAdapter";
   syncRendererLabelText(control.refreshError, view.error ?? "");
   control.refreshError.hidden = !view.error;
+  if (view.status === "loading") {
+    syncRendererLabelText(control.refreshStatus, "");
+    control.refreshStatus.hidden = true;
+  }
   if (
     shouldCloseRendererModelPicker(view) &&
     !keepOpenMenu &&

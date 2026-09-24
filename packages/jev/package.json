@@ -1,0 +1,22 @@
+{
+  "name": "@codexhost/jev",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0",
+    "zod": "4.4.3"
+  }
+}

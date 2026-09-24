@@ -13,7 +13,11 @@ import Download from "lucide/dist/esm/icons/download.mjs";
 import ExternalLink from "lucide/dist/esm/icons/external-link.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import FolderInput from "lucide/dist/esm/icons/folder-input.mjs";
+import FileDiff from "lucide/dist/esm/icons/file-diff.mjs";
 import GripVertical from "lucide/dist/esm/icons/grip-vertical.mjs";
+import GitBranch from "lucide/dist/esm/icons/git-branch.mjs";
+import Sparkles from "lucide/dist/esm/icons/sparkles.mjs";
+import Upload from "lucide/dist/esm/icons/cloud-upload.mjs";
 import Info from "lucide/dist/esm/icons/info.mjs";
 import Languages from "lucide/dist/esm/icons/languages.mjs";
 import Network from "lucide/dist/esm/icons/network.mjs";
@@ -43,6 +47,8 @@ export const RENDERER_SETTINGS_ICON_NAMES = [
   "connections",
   "accounts",
   "session-import",
+  "git",
+  "file-diff",
   "add",
   "model-pool",
   "routes",
@@ -70,6 +76,8 @@ export const RENDERER_SETTINGS_ICON_NAMES = [
   "search",
   "help",
   "ellipsis",
+  "sparkles",
+  "upload",
 ] as const;
 
 export type RendererSettingsIconName = (typeof RENDERER_SETTINGS_ICON_NAMES)[number];
@@ -82,6 +90,8 @@ const iconNodes = {
   connections: PlugZap,
   accounts: Users,
   "session-import": FolderInput,
+  git: GitBranch,
+  "file-diff": FileDiff,
   add: Plus,
   "model-pool": Boxes,
   routes: Route,
@@ -109,6 +119,8 @@ const iconNodes = {
   search: Search,
   help: CircleHelp,
   ellipsis: Ellipsis,
+  sparkles: Sparkles,
+  upload: Upload,
 } satisfies Record<RendererSettingsIconName, IconNode>;
 
 export function isRendererSettingsIconName(value: string): value is RendererSettingsIconName {

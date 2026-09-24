@@ -15,6 +15,7 @@ const SETTINGS_HEADER_NATIVE_ACTION_GROUP_SELECTOR =
 export interface RendererSettingsTriggerControl {
   root: HTMLElement;
   button: HTMLButtonElement;
+  gitButton: HTMLButtonElement;
   updateButton: HTMLButtonElement;
   setUpdateAvailable(available: boolean): void;
   dispose(): void;
@@ -150,7 +151,7 @@ function findRendererSettingsHeaderInsertionPoint(
 export function mountRendererSettingsTrigger(
   triggerId: string,
   available: boolean,
-  onOpen: (opener: HTMLButtonElement, pageId?: "updates") => void,
+  onOpen: (opener: HTMLButtonElement, pageId?: "updates" | "git") => void,
   ownerDocument: Document = document,
   messages: RendererSettingsMessages = DEFAULT_RENDERER_SETTINGS_MESSAGES,
 ): RendererSettingsTriggerControl {
@@ -257,11 +258,47 @@ export function mountRendererSettingsTrigger(
   updateButton.addEventListener("pointerenter", onUpdatePointerEnter);
   updateButton.addEventListener("pointerleave", onUpdatePointerLeave);
   updateButton.addEventListener("click", onUpdateClick);
-  root.append(button, updateButton);
+  const gitButton = ownerDocument.createElement("button");
+  gitButton.type = "button";
+  gitButton.disabled = !available;
+  gitButton.setAttribute("aria-label", messages.pageLabels.git);
+  gitButton.setAttribute("aria-haspopup", "dialog");
+  gitButton.title = messages.pageLabels.git;
+  gitButton.style.display = "inline-flex";
+  gitButton.style.alignItems = "center";
+  gitButton.style.justifyContent = "center";
+  gitButton.style.width = "28px";
+  gitButton.style.height = "28px";
+  gitButton.style.padding = "0";
+  gitButton.style.border = "0";
+  gitButton.style.borderRadius = "7px";
+  gitButton.style.background = "transparent";
+  gitButton.style.color = "inherit";
+  gitButton.style.cursor = available ? "pointer" : "not-allowed";
+  gitButton.style.opacity = available ? "1" : "0.5";
+  gitButton.style.outlineOffset = "2px";
+  gitButton.style.setProperty("-webkit-app-region", "no-drag");
+  gitButton.append(createRendererSettingsIcon("git", 16));
+  root.append(button, gitButton, updateButton);
+
+  const onGitPointerEnter = (): void => {
+    if (!gitButton.disabled) gitButton.style.background = "rgba(127, 127, 127, 0.16)";
+  };
+  const onGitPointerLeave = (): void => {
+    gitButton.style.background = "transparent";
+  };
+  const onGitClick = (event: MouseEvent): void => {
+    event.stopPropagation();
+    if (!gitButton.disabled) onOpen(gitButton, "git");
+  };
+  gitButton.addEventListener("pointerenter", onGitPointerEnter);
+  gitButton.addEventListener("pointerleave", onGitPointerLeave);
+  gitButton.addEventListener("click", onGitClick);
 
   return {
     root,
     button,
+    gitButton,
     updateButton,
     setUpdateAvailable(updateAvailable) {
       root.toggleAttribute("data-update-available", updateAvailable);
@@ -274,6 +311,9 @@ export function mountRendererSettingsTrigger(
       updateButton.removeEventListener("pointerenter", onUpdatePointerEnter);
       updateButton.removeEventListener("pointerleave", onUpdatePointerLeave);
       updateButton.removeEventListener("click", onUpdateClick);
+      gitButton.removeEventListener("pointerenter", onGitPointerEnter);
+      gitButton.removeEventListener("pointerleave", onGitPointerLeave);
+      gitButton.removeEventListener("click", onGitClick);
       root.remove();
     },
   };
@@ -281,7 +321,7 @@ export function mountRendererSettingsTrigger(
 
 export function installRendererSettingsHeaderTrigger(options: {
   available: boolean;
-  onOpen(opener: HTMLButtonElement, pageId?: "updates"): void;
+  onOpen(opener: HTMLButtonElement, pageId?: "updates" | "git"): void;
   messages?: RendererSettingsMessages;
   ownerDocument?: Document;
 }): RendererSettingsHeaderTriggerControl {

@@ -1,4 +1,32 @@
 import {
+  GIT_STATUS_METHOD,
+  GIT_DIFF_METHOD,
+  GIT_STAGE_METHOD,
+  GIT_UNSTAGE_METHOD,
+  GIT_COMMIT_METHOD,
+  GIT_PUSH_METHOD,
+  GIT_MESSAGE_MODEL_METHOD,
+  GIT_MESSAGE_GENERATE_METHOD,
+  gitWorkspaceParamsSchema,
+  gitDiffParamsSchema,
+  gitStageParamsSchema,
+  gitCommitParamsSchema,
+  gitMessageGenerateParamsSchema,
+  gitWorkspaceStatusSchema,
+  gitDiffResultSchema,
+  gitCommitResultSchema,
+  gitMessageModelsSchema,
+  gitGeneratedMessageSchema,
+  type GitWorkspaceParams,
+  type GitDiffParams,
+  type GitStageParams,
+  type GitCommitParams,
+  type GitMessageGenerateParams,
+  type GitWorkspaceStatus,
+  type GitDiffResult,
+  type GitCommitResult,
+  type GitMessageModels,
+  type GitGeneratedMessage,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   buddyInterruptedSchema,
@@ -9,9 +37,13 @@ import {
   type BuddyPrivateRequest,
   type BuddyPrivateSnapshot,
   BUDDY_MODELS_METHOD,
+  BUDDY_JEV_KEY_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
+  BUDDY_ANSWER_METHOD,
+  buddyAnswerSchema,
+  type BuddyAnswer,
   buddySnapshotSchema,
   type BuddySnapshot,
   type BuddySettings,
@@ -174,13 +206,26 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 }
 
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
+  inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  inspectGitDiff(input: GitDiffParams): Promise<GitDiffResult>;
+  stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
+  unstageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
+  commitGit(input: GitCommitParams): Promise<GitCommitResult>;
+  pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  listGitMessageModels(input: GitWorkspaceParams): Promise<GitMessageModels>;
+  generateGitMessage(input: GitMessageGenerateParams): Promise<GitGeneratedMessage>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
   buddyConfigure?(settings: BuddySettings): Promise<BuddySnapshot>;
+  buddyJevKey?(config: {
+    apiKey?: string | null | undefined;
+    baseURL?: string | null | undefined;
+  }): Promise<BuddySnapshot>;
   buddyCancel?(threadId: string): Promise<BuddySnapshot>;
+  buddyAnswer?(input: BuddyAnswer): Promise<BuddySnapshot>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
   currentHostId?(): string | null;
@@ -334,6 +379,42 @@ export function createRendererModelClient(
   };
 
   return Object.freeze({
+    async inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_STATUS_METHOD, params));
+    },
+    async inspectGitDiff(input: GitDiffParams): Promise<GitDiffResult> {
+      const params = gitDiffParamsSchema.parse(input);
+      return gitDiffResultSchema.parse(await manager.sendRequest(GIT_DIFF_METHOD, params));
+    },
+    async stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus> {
+      const params = gitStageParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_STAGE_METHOD, params));
+    },
+    async unstageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus> {
+      const params = gitStageParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_UNSTAGE_METHOD, params));
+    },
+    async commitGit(input: GitCommitParams): Promise<GitCommitResult> {
+      const params = gitCommitParamsSchema.parse(input);
+    return gitCommitResultSchema.parse(await manager.sendRequest(GIT_COMMIT_METHOD, params));
+    },
+    async pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_PUSH_METHOD, params));
+    },
+    async listGitMessageModels(input: GitWorkspaceParams): Promise<GitMessageModels> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitMessageModelsSchema.parse(
+        await manager.sendRequest(GIT_MESSAGE_MODEL_METHOD, params),
+      );
+    },
+    async generateGitMessage(input: GitMessageGenerateParams): Promise<GitGeneratedMessage> {
+      const params = gitMessageGenerateParamsSchema.parse(input);
+      return gitGeneratedMessageSchema.parse(
+        await manager.sendRequest(GIT_MESSAGE_GENERATE_METHOD, params),
+      );
+    },
     buddyPrivate: async (input: BuddyPrivateRequest) => {
       const params = buddyPrivateRequestSchema.safeParse(input);
       if (!params.success) {
@@ -354,6 +435,14 @@ export function createRendererModelClient(
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_MODELS_METHOD, {})),
     buddyConfigure: async (settings: BuddySettings) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_SETTINGS_METHOD, settings)),
+    buddyJevKey: async (config: {
+      apiKey?: string | null | undefined;
+      baseURL?: string | null | undefined;
+    }) => buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_JEV_KEY_METHOD, config)),
+    buddyAnswer: async (input: BuddyAnswer) =>
+      buddySnapshotSchema.parse(
+        await manager.sendRequest(BUDDY_ANSWER_METHOD, buddyAnswerSchema.parse(input)),
+      ),
     buddyCancel: async (threadId: string) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_CANCEL_METHOD, { threadId })),
     async listLoadedSessions(): Promise<LoadedSession[]> {

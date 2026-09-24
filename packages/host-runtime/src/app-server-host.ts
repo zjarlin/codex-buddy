@@ -9,11 +9,28 @@ import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy
 import { BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
 import {
   BUDDY_MODELS_METHOD,
+  BUDDY_JEV_KEY_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
+  BUDDY_ANSWER_METHOD,
+  buddyAnswerSchema,
+  buddyJevKeySchema,
 } from "@codexhost/shared-contracts";
 import {
+  GIT_STATUS_METHOD,
+  GIT_DIFF_METHOD,
+  GIT_STAGE_METHOD,
+  GIT_UNSTAGE_METHOD,
+  GIT_COMMIT_METHOD,
+  GIT_PUSH_METHOD,
+  GIT_MESSAGE_MODEL_METHOD,
+  GIT_MESSAGE_GENERATE_METHOD,
+  gitWorkspaceParamsSchema,
+  gitDiffParamsSchema,
+  gitStageParamsSchema,
+  gitCommitParamsSchema,
+  gitMessageGenerateParamsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
@@ -162,6 +179,7 @@ import {
   OfficialRuntimeScope,
 } from "./codex-runtime/official-runtime-scope.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
+import { GitWorkspace, GitWorkspaceError } from "./git-workspace.js";
 
 const SUBAGENT_TERMINAL_REFRESH_DELAYS_MS = [0, 50, 100, 150] as const;
 const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
@@ -525,6 +543,7 @@ export class AppServerHost {
   #nextQuestionRequestId = HOST_QUESTION_REQUEST_ID_MAX;
   #delegationCoordinator: HarnessDelegationCoordinator;
   #sessionImportRequests: SessionImportRequests | undefined;
+  readonly #gitWorkspace = new GitWorkspace();
   #unregisterDelegationApi: (() => void) | undefined;
   #unsubscribeAccountState: (() => void) | undefined;
   #activeOfficialTurns = new Map<string, string>();
@@ -1056,7 +1075,9 @@ export class AppServerHost {
         BUDDY_STATUS_METHOD,
         BUDDY_SETTINGS_METHOD,
         BUDDY_CANCEL_METHOD,
+        BUDDY_ANSWER_METHOD,
         BUDDY_MODELS_METHOD,
+        BUDDY_JEV_KEY_METHOD,
       ].includes(request.method)
     ) {
       if (!this.#buddy) {
@@ -1066,6 +1087,12 @@ export class AppServerHost {
         return;
       }
       try {
+        if (request.method === BUDDY_ANSWER_METHOD) {
+          await this.#buddy.answer(buddyAnswerSchema.parse(request.params));
+        }
+        if (request.method === BUDDY_JEV_KEY_METHOD) {
+          await this.#buddy.configureJevKey(buddyJevKeySchema.parse(request.params));
+        }
         if (request.method === BUDDY_CANCEL_METHOD) {
           const params = requestObject(request);
           if (typeof params.threadId !== "string") {
@@ -1076,9 +1103,11 @@ export class AppServerHost {
         const snapshot =
           request.method === BUDDY_SETTINGS_METHOD
             ? await this.#buddy.configure(request.params)
-            : request.method === BUDDY_MODELS_METHOD
-              ? await this.#buddy.refreshModels()
-              : await this.#buddy.snapshot();
+            : request.method === BUDDY_JEV_KEY_METHOD
+              ? await this.#buddy.snapshot()
+              : request.method === BUDDY_MODELS_METHOD
+                ? await this.#buddy.refreshModels()
+                : await this.#buddy.snapshot();
         if (request.method === BUDDY_SETTINGS_METHOD && !snapshot.settings.privateMode) {
           this.#privateChat?.close();
         }
@@ -1132,6 +1161,19 @@ export class AppServerHost {
       request.method === "codexhost/update/status"
     ) {
       this.#dispatchDesktopRequest(() => this.#handleUpdateRequest(request));
+      return;
+    }
+    if (
+      request.method === GIT_STATUS_METHOD ||
+      request.method === GIT_DIFF_METHOD ||
+      request.method === GIT_STAGE_METHOD ||
+      request.method === GIT_UNSTAGE_METHOD ||
+      request.method === GIT_COMMIT_METHOD ||
+      request.method === GIT_PUSH_METHOD ||
+      request.method === GIT_MESSAGE_MODEL_METHOD ||
+      request.method === GIT_MESSAGE_GENERATE_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleGitRequest(request));
       return;
     }
     if (
@@ -2413,6 +2455,102 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32091, errorMessage(error).slice(0, 500)));
+    }
+  }
+
+  async #gitWorkspaceForThread(threadId: string): Promise<string> {
+    const loaded = this.#externalRuntime.get(threadId);
+    if (loaded) return loaded.cwd;
+    const record = await this.#repository.find(threadId);
+    if (record) return record.cwd;
+
+    const response = await this.#requestOfficial("thread/read", {
+      threadId,
+      includeTurns: false,
+    });
+    const result = isRecord(response.result) ? response.result : null;
+    const thread = result && isRecord(result.thread) ? result.thread : null;
+    const cwd = thread && typeof thread.cwd === "string" ? thread.cwd.trim() : "";
+    if (!cwd) throw new GitWorkspaceError("当前任务没有可用的工作区路径。");
+    return cwd;
+  }
+
+  async #handleGitRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      if (request.method === GIT_MESSAGE_MODEL_METHOD) {
+        const params = gitWorkspaceParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
+        await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.messageModels(this.#options.environment ?? process.env);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_STATUS_METHOD || request.method === GIT_PUSH_METHOD) {
+        const params = gitWorkspaceParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result =
+          request.method === GIT_STATUS_METHOD
+            ? await this.#gitWorkspace.status(cwd)
+            : await this.#gitWorkspace.push(cwd);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_DIFF_METHOD) {
+        const params = gitDiffParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git diff 参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.diff(cwd, params.data.path);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_STAGE_METHOD) {
+        const params = gitStageParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 暂存参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.stage(cwd, params.data.paths);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_UNSTAGE_METHOD) {
+        const params = gitStageParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 取消暂存参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.unstage(cwd, params.data.paths);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_COMMIT_METHOD) {
+        const params = gitCommitParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 提交参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.commit(
+          cwd,
+          params.data.message,
+          params.data.push,
+          params.data.paths,
+        );
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      const params = gitMessageGenerateParamsSchema.safeParse(request.params);
+      if (!params.success) throw new GitWorkspaceError("生成提交消息参数无效。");
+      const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+      const result = await this.#gitWorkspace.generateMessage({
+        cwd,
+        model: params.data.model,
+        paths: params.data.paths,
+        environment: this.#options.environment ?? process.env,
+      });
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32093, errorMessage(error).slice(0, 20_000)));
     }
   }
 

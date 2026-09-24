@@ -23,6 +23,8 @@ it("preserves the upstream validation error when planning fails", async () => {
   );
   await expect(
     planner.plan({
+      ownerThreadId: "work",
+      inputChanged: () => undefined,
       model: "planner",
       cwd: "/tmp",
       task: [],

@@ -1094,6 +1094,28 @@ export function installCurrentRendererAdapter(): {
     return client;
   };
   const modelControl: RendererModelClient = Object.freeze({
+    inspectGitStatus: (
+      input: Parameters<RendererModelClient["inspectGitStatus"]>[0],
+    ) => currentModelClient().inspectGitStatus(input),
+    inspectGitDiff: (
+      input: Parameters<RendererModelClient["inspectGitDiff"]>[0],
+    ) => currentModelClient().inspectGitDiff(input),
+    stageGitPaths: (
+      input: Parameters<RendererModelClient["stageGitPaths"]>[0],
+    ) => currentModelClient().stageGitPaths(input),
+    unstageGitPaths: (
+      input: Parameters<RendererModelClient["unstageGitPaths"]>[0],
+    ) => currentModelClient().unstageGitPaths(input),
+    commitGit: (input: Parameters<RendererModelClient["commitGit"]>[0]) =>
+      currentModelClient().commitGit(input),
+    pushGit: (input: Parameters<RendererModelClient["pushGit"]>[0]) =>
+      currentModelClient().pushGit(input),
+    listGitMessageModels: (
+      input: Parameters<RendererModelClient["listGitMessageModels"]>[0],
+    ) => currentModelClient().listGitMessageModels(input),
+    generateGitMessage: (
+      input: Parameters<RendererModelClient["generateGitMessage"]>[0],
+    ) => currentModelClient().generateGitMessage(input),
     buddyPrivate: (input: BuddyPrivateRequest) => {
       const client = currentModelClient();
       if (!client.buddyPrivate) {

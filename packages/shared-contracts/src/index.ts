@@ -1,13 +1,28 @@
 export {
   BUDDY_MODELS_METHOD,
+  BUDDY_JEV_KEY_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
+  BUDDY_ANSWER_METHOD,
+  buddyPlannerInputSchema,
+  buddyAnswerSchema,
+  type BuddyPlannerInput,
+  type BuddyAnswer,
   buddySettingsSchema,
   buddySnapshotSchema,
   buddyDecisionSchema,
+  buddyJevKeySchema,
+  buddyModelRefreshSchema,
 } from "./buddy-router.js";
-export type { BuddySettings, BuddySnapshot, BuddyDecision, BuddyModel } from "./buddy-router.js";
+export type {
+  BuddySettings,
+  BuddySnapshot,
+  BuddyDecision,
+  BuddyModel,
+  BuddyModelRefresh,
+  BuddyJevKey,
+} from "./buddy-router.js";
 export { buddyPlanSchema, buddyPlanTaskSchema, buddyPlanOutputSchema } from "./buddy-plan.js";
 export type { BuddyPlan, BuddyPlanTask } from "./buddy-plan.js";
 export {
@@ -319,6 +334,47 @@ export type {
   UpdateStatusResult,
 } from "./updates.js";
 export { WORKSPACE_CONTRACT_VERSION } from "./version.js";
+export {
+  GIT_STATUS_METHOD,
+  GIT_DIFF_METHOD,
+  GIT_STAGE_METHOD,
+  GIT_UNSTAGE_METHOD,
+  GIT_COMMIT_METHOD,
+  GIT_PUSH_METHOD,
+  GIT_MESSAGE_MODEL_METHOD,
+  GIT_MESSAGE_GENERATE_METHOD,
+  GIT_FILE_PATH_MAX_LENGTH,
+  GIT_COMMIT_MESSAGE_MAX_LENGTH,
+  GIT_DIFF_MAX_BYTES,
+  gitFilePathSchema,
+  gitCommitMessageSchema,
+  gitWorkspaceParamsSchema,
+  gitDiffParamsSchema,
+  gitStageParamsSchema,
+  gitCommitParamsSchema,
+  gitMessageGenerateParamsSchema,
+  gitChangeSchema,
+  gitWorkspaceStatusSchema,
+  gitDiffResultSchema,
+  gitCommitResultSchema,
+  gitMessageModelSchema,
+  gitMessageModelsSchema,
+  gitGeneratedMessageSchema,
+} from "./git-workspace.js";
+export type {
+  GitWorkspaceParams,
+  GitDiffParams,
+  GitStageParams,
+  GitCommitParams,
+  GitMessageGenerateParams,
+  GitChange,
+  GitWorkspaceStatus,
+  GitDiffResult,
+  GitCommitResult,
+  GitMessageModel,
+  GitMessageModels,
+  GitGeneratedMessage,
+} from "./git-workspace.js";
 
 export const workspaceContractVersionSchema = z.literal(WORKSPACE_CONTRACT_VERSION);
 

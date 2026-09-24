@@ -9,6 +9,7 @@ const { outputFiles } = await build({
     contents: `
       import { mountModelShortcuts } from "./packages/renderer-extension/src/renderer-model-shortcuts.ts";
       import { nativeModelBinding } from "./packages/renderer-extension/src/renderer-native-model-binding.ts";
+      import { refreshNativeModels } from "./packages/renderer-extension/src/renderer-native-model-refresh.ts";
       import { selectFixedModel } from "./packages/renderer-extension/src/renderer-fixed-model-selection.ts";
       import { installBuddyControl } from "./packages/renderer-extension/src/buddy/control.ts";
       const composer = document.querySelector("#composer");
@@ -31,6 +32,20 @@ const { outputFiles } = await build({
         },
       };
       trigger.__reactFiber$fixture = { memoizedProps: props };
+      globalThis.refreshes = [];
+      const queryClient = {
+        getQueryCache: () => ({ findAll: () => [{}] }),
+        refetchQueries: async (filters) => {
+          globalThis.refreshes.push(filters);
+          await new Promise((resolve, reject) => {
+            globalThis.finishRefresh = (fail) => fail ? reject(new Error("Refresh unavailable")) : resolve();
+          });
+          if (!props.modelOptions.some(({model}) => model.model === "gamma")) {
+            props.modelOptions.push({model:{model:"gamma",displayName:"GPT Gamma"}});
+          }
+        },
+      };
+      trigger.__reactFiber$fixture.return = { memoizedProps: { client: queryClient } };
       const snapshot = { settings: { enabled: true, privateMode: false, bypass: true, role: "auto", plannerModel: null, executorModel: null }, models: [], decisions: [] };
       const client = {
         buddyStatus: async () => structuredClone(snapshot),
@@ -45,6 +60,10 @@ const { outputFiles } = await build({
         await selectFixedModel(client, () => true, () => nativeModelBinding(trigger).select(id));
         render();
         await router.refresh();
+      }, async () => {
+        await refreshNativeModels(trigger, "local");
+        render();
+        return { synchronized: nativeModelBinding(trigger).view.models.length };
       });
       composer.before(shortcuts.root);
       const render = () => shortcuts.update(nativeModelBinding(trigger).view, harness, "zh-CN");
@@ -62,6 +81,51 @@ const { outputFiles } = await build({
 });
 const bundle = outputFiles[0]?.text;
 if (!bundle) throw new Error("Shortcuts fixture did not build");
+
+test("native manual refresh preserves favorites, search and selection and ignores stale errors", async ({
+  page,
+}) => {
+  await page.route("http://shortcuts.test/", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: '<!doctype html><body style="padding:320px 24px 24px;background:#191b20;color:#eee;color-scheme:dark"><div id="composer"><button id="native">gpt-a</button></div></body>',
+    }),
+  );
+  await page.goto("http://shortcuts.test/");
+  await page.addScriptTag({ content: bundle });
+  await page.getByRole("button", { name: "收藏模型", exact: true }).click();
+  const menu = page.getByRole("dialog", { name: "收藏模型", exact: true });
+  const search = menu.getByRole("searchbox");
+  await menu.getByRole("button", { name: "收藏 GPT Alpha", exact: true }).click();
+  await search.fill("GPT");
+  const refresh = menu.locator("[data-model-shortcuts-refresh]");
+  await refresh.click();
+  await expect(refresh).toBeDisabled();
+  await expect(refresh).toHaveAttribute("aria-busy", "true");
+  await refresh.evaluate((button: HTMLButtonElement) => button.click());
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
+  await expect(menu.getByRole("button", { name: "收藏 GPT Gamma", exact: true })).toBeVisible();
+  await expect(menu.getByRole("status")).toContainText("同步 4 个");
+  await expect(menu.getByRole("status")).toContainText("新增 1 个");
+  await expect(search).toHaveValue("GPT");
+  await expect(menu.getByRole("button", { name: "取消收藏 GPT Alpha", exact: true })).toBeVisible();
+  await expect(page.locator("#native")).toHaveText("gpt-a");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+  await refresh.click();
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(true));
+  await expect(menu.getByRole("status")).toHaveText("Refresh unavailable");
+  await expect(search).toHaveValue("GPT");
+  await expect(refresh).toBeEnabled();
+  expect(await menu.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+    "rgb(40, 40, 40)",
+  );
+  await page.screenshot({ path: "test-results/model-shortcuts-refresh.png" });
+  await refresh.click();
+  await page.evaluate(() => Reflect.get(globalThis, "changeHarness")("pi"));
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(true));
+  await expect(page.getByRole("status")).not.toBeVisible();
+});
 
 test("favorite chips persist and select the exact native model with planning disabled", async ({
   page,

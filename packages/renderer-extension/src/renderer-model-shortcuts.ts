@@ -1,8 +1,15 @@
+import { createElement, RefreshCw } from "lucide";
 import {
   MODEL_FAVORITES_CHANGED,
   readModelFavorites,
   writeModelFavorites,
 } from "./renderer-model-favorites.js";
+import {
+  modelRefreshFallbackMessage,
+  modelRefreshMessage,
+  summarizeModelRefresh,
+  type ModelRefreshOutcome,
+} from "./renderer-model-refresh-summary.js";
 import { createModelFavoriteIcon, ensureModelOptionStyle } from "./renderer-model-option-style.js";
 import {
   ensureRendererTriggerChipStyle,
@@ -13,18 +20,24 @@ export interface ModelShortcutView {
   models: { id: string; label: string; disabled?: boolean }[];
   selected?: string | undefined;
   disabled?: boolean;
+  refreshing?: boolean;
+  error?: string | undefined;
 }
 
-export function mountModelShortcuts(onSelect: (id: string) => void | Promise<void>) {
+export function mountModelShortcuts(
+  onSelect: (id: string) => void | Promise<void>,
+  onRefresh?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
+) {
   ensureRendererTriggerChipStyle(document);
   ensureModelOptionStyle(document);
   if (!document.querySelector("[data-codexhost-shortcuts-style]")) {
     const style = document.createElement("style");
     style.dataset.codexhostShortcutsStyle = "true";
     style.textContent = `
-      [data-codexhost-model-shortcuts] { display:flex; align-items:center; gap:6px; min-width:0; max-width:100%; padding:6px 0; color:var(--color-text-secondary, inherit); }
-      [data-model-shortcut-list] { display:flex; gap:6px; min-width:0; overflow-x:auto; scrollbar-width:thin; }
+      [data-codexhost-model-shortcuts] { display:flex; flex-wrap:wrap; align-items:center; gap:6px; box-sizing:border-box; width:100%; min-width:0; max-width:100%; align-self:stretch; padding:6px 0; color:var(--color-text-secondary, inherit); }
+      [data-model-shortcut-list] { display:contents; }
       [data-codexhost-model-shortcuts] button { flex:none; height:28px; padding:0 9px; font:400 12px/18px system-ui,sans-serif; border:1px solid var(--color-border,rgba(127,127,127,.22)); }
+      [data-codexhost-model-shortcuts] [data-model-shortcut] { min-width:0; max-width:100%; height:auto; min-height:28px; padding-block:4px; white-space:normal; overflow-wrap:anywhere; }
       [data-model-shortcut][aria-pressed=true] { background:var(--color-token-list-hover-background,rgba(127,127,127,.16)); color:var(--color-text-primary,inherit); border-color:var(--color-text-secondary,#85858f); }
       [data-codexhost-model-shortcuts] button:focus-visible { outline:2px solid var(--color-text-primary,#85858f); outline-offset:2px; }
       [data-model-favorites-menu] { box-sizing:border-box; margin:0; padding:10px; border:1px solid var(--color-border,rgba(127,127,127,.25)); border-radius:12px; background:var(--color-token-dropdown-background,var(--color-background-elevated,light-dark(#fff,#282828))); color:var(--color-text-primary,CanvasText); color-scheme:inherit; box-shadow:0 8px 24px #0003; font:13px system-ui,sans-serif; }
@@ -34,6 +47,16 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
       [data-model-favorites-options] button:hover { background:rgba(127,127,127,.12); }
       [data-model-favorites-options] button[aria-pressed=true] svg { color:#f59e0b; }
       [data-model-favorites-options] span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      [data-model-favorites-header] { display:flex; align-items:center; gap:6px; }
+      [data-model-favorites-header] input { flex:1; min-width:0; }
+      [data-model-shortcuts-refresh] { display:inline-flex; align-items:center; justify-content:center; flex:none; color:inherit; background:transparent; border:1px solid var(--color-border,rgba(127,127,127,.22)); border-radius:6px; width:28px; height:28px; cursor:pointer; }
+      [data-model-shortcuts-refresh]:disabled { opacity:.5; cursor:default; }
+      [data-model-shortcuts-refresh][hidden] { display:none; }
+      [data-codexhost-model-shortcuts] [data-model-shortcuts-refresh] { padding:0; }
+      [data-model-shortcuts-error] { color:var(--color-text-danger,#e47777); font:12px/18px system-ui,sans-serif; overflow-wrap:anywhere; }
+      [data-model-shortcuts-status] { color:var(--color-text-secondary,inherit); font:12px/18px system-ui,sans-serif; overflow-wrap:anywhere; }
+      [data-codexhost-model-shortcuts] [data-model-shortcuts-error] { min-width:0; }
+      [data-codexhost-model-shortcuts] [data-model-shortcuts-status] { min-width:0; }
     `;
     document.head.append(style);
   }
@@ -48,8 +71,24 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
   list.dataset.modelShortcutList = "true";
   const error = document.createElement("span");
   error.setAttribute("role", "status");
+  error.dataset.modelShortcutsError = "true";
   error.hidden = true;
-  root.append(manage, list, error);
+  const successStatus = document.createElement("span");
+  successStatus.setAttribute("role", "status");
+  successStatus.dataset.modelShortcutsStatus = "true";
+  successStatus.hidden = true;
+  const createRefreshButton = () => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.modelShortcutsRefresh = "true";
+    button.hidden = !onRefresh;
+    button.append(createElement(RefreshCw, { width: 14, height: 14, "aria-hidden": "true" }));
+    return button;
+  };
+  const refresh = createRefreshButton();
+  const menuRefresh = createRefreshButton();
+  const refreshButtons = [refresh, menuRefresh];
+  root.append(manage, refresh, list, error, successStatus);
   const menu = document.createElement("div");
   menu.dataset.modelFavoritesMenu = "true";
   menu.setAttribute("popover", "auto");
@@ -58,7 +97,12 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
   search.type = "search";
   const options = document.createElement("div");
   options.dataset.modelFavoritesOptions = "true";
-  menu.append(search, options);
+  const header = document.createElement("div");
+  header.dataset.modelFavoritesHeader = "true";
+  header.append(search, menuRefresh);
+  const menuError = error.cloneNode() as HTMLSpanElement;
+  const menuStatus = successStatus.cloneNode() as HTMLSpanElement;
+  menu.append(header, menuError, menuStatus, options);
   document.body.append(menu);
   let view: ModelShortcutView = { models: [] };
   let harness = "";
@@ -66,8 +110,35 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
   let signature = "";
   let menuSignature = "";
   let selecting = false;
+  let refreshing = false;
+  let failure: string | undefined;
+  let success: string | undefined;
+  let generation = 0;
+  let context = "";
 
   const render = (): void => {
+    const busy = refreshing || view.refreshing === true;
+    const refreshLabel = chinese
+      ? busy
+        ? "正在刷新模型…"
+        : "刷新模型"
+      : busy
+        ? "Refreshing models…"
+        : "Refresh models";
+    for (const button of refreshButtons) {
+      button.title = refreshLabel;
+      button.setAttribute("aria-label", refreshLabel);
+      button.setAttribute("aria-busy", String(busy));
+      button.disabled = busy || selecting || view.disabled === true;
+    }
+    for (const status of [error, menuError]) {
+      status.textContent = failure ?? view.error ?? "";
+      status.hidden = !status.textContent;
+    }
+    for (const statusElement of [successStatus, menuStatus]) {
+      statusElement.textContent = success ?? "";
+      statusElement.hidden = !statusElement.textContent;
+    }
     const favorites = readModelFavorites(harness);
     const visibleModels = [...favorites]
       .map((id) => view.models.find((model) => model.id === id))
@@ -78,6 +149,7 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
       view.disabled,
       chinese,
       selecting,
+      busy,
     ]);
     if (nextSignature !== signature) {
       signature = nextSignature;
@@ -90,7 +162,7 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
           button.textContent = model.label;
           button.title = model.id;
           button.setAttribute("aria-pressed", String(view.selected === model.id));
-          button.disabled = selecting || view.disabled === true || model.disabled === true;
+          button.disabled = selecting || busy || view.disabled === true || model.disabled === true;
           return button;
         }),
       );
@@ -172,28 +244,62 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
         ? event.target.closest<HTMLButtonElement>("button[data-model-shortcut]")
         : null;
     if (!button?.dataset.modelShortcut || button.disabled) return;
+    const request = generation;
     try {
       selecting = true;
+      failure = undefined;
       render();
-      error.hidden = true;
       await onSelect(button.dataset.modelShortcut);
     } catch (cause) {
-      error.textContent = cause instanceof Error ? cause.message : String(cause);
-      error.hidden = false;
+      if (request === generation) failure = cause instanceof Error ? cause.message : String(cause);
     } finally {
-      selecting = false;
-      render();
+      if (request === generation) {
+        selecting = false;
+        render();
+      }
     }
   });
+  for (const button of refreshButtons) {
+    button.addEventListener("click", async () => {
+      if (!onRefresh || button.disabled) return;
+      const request = generation;
+      refreshing = true;
+      failure = undefined;
+      success = undefined;
+      render();
+      try {
+        const before = view.models;
+        const outcome = await onRefresh();
+        if (request === generation) {
+          success = outcome
+            ? modelRefreshMessage(summarizeModelRefresh(before, view.models, outcome), chinese)
+            : modelRefreshFallbackMessage(chinese);
+        }
+      } catch (cause) {
+        if (request === generation)
+          failure = cause instanceof Error ? cause.message : String(cause);
+      } finally {
+        if (request === generation) {
+          refreshing = false;
+          render();
+        }
+      }
+    });
+  }
   window.addEventListener(MODEL_FAVORITES_CHANGED, render);
   window.addEventListener("storage", render);
   return {
     root,
-    update(next: ModelShortcutView, harnessId: string, locale: string) {
-      if (harness !== harnessId) {
+    update(next: ModelShortcutView, harnessId: string, locale: string, contextId = harnessId) {
+      if (harness !== harnessId || context !== contextId) {
+        generation++;
         menu.hidePopover();
-        error.hidden = true;
+        failure = undefined;
+        success = undefined;
+        selecting = false;
+        refreshing = false;
         harness = harnessId;
+        context = contextId;
         signature = "";
       }
       view = next;
@@ -207,6 +313,7 @@ export function mountModelShortcuts(onSelect: (id: string) => void | Promise<voi
       render();
     },
     dispose() {
+      generation++;
       window.removeEventListener(MODEL_FAVORITES_CHANGED, render);
       window.removeEventListener("storage", render);
       menu.remove();

@@ -297,16 +297,24 @@ describe("Renderer fixed Model request client", () => {
     const client = createRendererModelClient([{ addNotificationCallback, sendRequest }]);
     if (!client) throw new Error("Synthetic Model client was not created");
     expect(Object.keys(client).sort()).toEqual([
+      "buddyAnswer",
       "buddyCancel",
       "buddyConfigure",
+      "buddyContinue",
+      "buddyInterrupted",
+      "buddyJevKey",
       "buddyModels",
       "buddyPrivate",
       "buddyStatus",
       "checkUpdate",
+      "commitGit",
       "executeThreadCommand",
       "forkThread",
+      "generateGitMessage",
       "importHarnessSession",
       "inspectCodexAccountUsage",
+      "inspectGitDiff",
+      "inspectGitStatus",
       "inspectHarness",
       "inspectHarnessAccount",
       "inspectHarnessCommands",
@@ -314,6 +322,7 @@ describe("Renderer fixed Model request client", () => {
       "inspectThreadCommands",
       "inspectThreadUsage",
       "listCodexAccounts",
+      "listGitMessageModels",
       "listHarnessAccountSources",
       "listHarnessAccounts",
       "listHarnessPlugins",
@@ -322,15 +331,18 @@ describe("Renderer fixed Model request client", () => {
       "listSessionImportSources",
       "listThreadOwnership",
       "openHarnessWebUi",
+      "pushGit",
       "readUpdateStatus",
       "refreshCodexAccounts",
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
       "setIdleReleaseSettings",
+      "stageGitPaths",
       "startUpdate",
       "subscribeCodexAccounts",
       "subscribeThreadUsage",
+      "unstageGitPaths",
     ]);
 
     await expect(client.inspectHarness({ harnessId: piHarnessId, refresh: true })).resolves.toEqual(
@@ -793,5 +805,75 @@ describe("Renderer fixed Model request client", () => {
     if (!client) throw new Error("Synthetic Model client was not created");
 
     await expect(client.inspectHarness({ harnessId: piHarnessId })).rejects.toThrow();
+  });
+
+  it("validates and returns Git workspace operations", async () => {
+    const status = {
+      workspace: "/repo",
+      branch: "main",
+      detached: false,
+      head: "abc123",
+      upstream: "origin/main",
+      ahead: 0,
+      behind: 0,
+      changes: [],
+    };
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce({ path: "src/app.ts", diff: "+change", truncated: false })
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce({ commit: "def456", pushed: false, output: "", status })
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce({
+        models: [{ id: "deepseek-flash", label: "deepseek-flash", tier: "垃", eligible: true }],
+        defaultModel: "deepseek-flash",
+      })
+      .mockResolvedValueOnce({ message: "feat: update app", model: "deepseek-flash" });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic Model client was not created");
+    const threadId = hostThreadIdSchema.parse("thread-1");
+
+    await expect(client.inspectGitStatus({ threadId })).resolves.toEqual(status);
+    await expect(client.inspectGitDiff({ threadId, path: "src/app.ts" })).resolves.toEqual({
+      path: "src/app.ts",
+      diff: "+change",
+      truncated: false,
+    });
+    await expect(client.stageGitPaths({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(status);
+    await expect(client.unstageGitPaths({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(
+      status,
+    );
+    await expect(
+      client.commitGit({
+        threadId,
+        message: "feat: update app",
+        paths: ["src/app.ts"],
+        push: false,
+      }),
+    ).resolves.toEqual({ commit: "def456", pushed: false, output: "", status });
+    await expect(client.pushGit({ threadId })).resolves.toEqual(status);
+    await expect(client.listGitMessageModels({ threadId })).resolves.toEqual({
+      models: [{ id: "deepseek-flash", label: "deepseek-flash", tier: "垃", eligible: true }],
+      defaultModel: "deepseek-flash",
+    });
+    await expect(
+      client.generateGitMessage({
+        threadId,
+        model: "deepseek-flash",
+        paths: ["src/app.ts"],
+      }),
+    ).resolves.toEqual({ message: "feat: update app", model: "deepseek-flash" });
+    expect(sendRequest).toHaveBeenNthCalledWith(1, "codexhost/git/status", { threadId });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, "codexhost/git/diff", {
+      threadId,
+      path: "src/app.ts",
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(8, "codexhost/git/message/generate", {
+      threadId,
+      model: "deepseek-flash",
+      paths: ["src/app.ts"],
+    });
   });
 });

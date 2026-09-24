@@ -1095,27 +1095,57 @@ export function installCurrentRendererAdapter(): {
   };
   const modelControl: RendererModelClient = Object.freeze({
     inspectGitStatus: (
-      input: Parameters<RendererModelClient["inspectGitStatus"]>[0],
-    ) => currentModelClient().inspectGitStatus(input),
+      input: Parameters<NonNullable<RendererModelClient["inspectGitStatus"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.inspectGitStatus) throw new Error("Git workspace status is unavailable");
+      return client.inspectGitStatus(input);
+    },
     inspectGitDiff: (
-      input: Parameters<RendererModelClient["inspectGitDiff"]>[0],
-    ) => currentModelClient().inspectGitDiff(input),
+      input: Parameters<NonNullable<RendererModelClient["inspectGitDiff"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.inspectGitDiff) throw new Error("Git workspace diff is unavailable");
+      return client.inspectGitDiff(input);
+    },
     stageGitPaths: (
-      input: Parameters<RendererModelClient["stageGitPaths"]>[0],
-    ) => currentModelClient().stageGitPaths(input),
+      input: Parameters<NonNullable<RendererModelClient["stageGitPaths"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.stageGitPaths) throw new Error("Git workspace staging is unavailable");
+      return client.stageGitPaths(input);
+    },
     unstageGitPaths: (
-      input: Parameters<RendererModelClient["unstageGitPaths"]>[0],
-    ) => currentModelClient().unstageGitPaths(input),
-    commitGit: (input: Parameters<RendererModelClient["commitGit"]>[0]) =>
-      currentModelClient().commitGit(input),
-    pushGit: (input: Parameters<RendererModelClient["pushGit"]>[0]) =>
-      currentModelClient().pushGit(input),
+      input: Parameters<NonNullable<RendererModelClient["unstageGitPaths"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.unstageGitPaths) throw new Error("Git workspace unstaging is unavailable");
+      return client.unstageGitPaths(input);
+    },
+    commitGit: (input: Parameters<NonNullable<RendererModelClient["commitGit"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.commitGit) throw new Error("Git commit is unavailable");
+      return client.commitGit(input);
+    },
+    pushGit: (input: Parameters<NonNullable<RendererModelClient["pushGit"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.pushGit) throw new Error("Git push is unavailable");
+      return client.pushGit(input);
+    },
     listGitMessageModels: (
-      input: Parameters<RendererModelClient["listGitMessageModels"]>[0],
-    ) => currentModelClient().listGitMessageModels(input),
+      input: Parameters<NonNullable<RendererModelClient["listGitMessageModels"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.listGitMessageModels) throw new Error("Git message models are unavailable");
+      return client.listGitMessageModels(input);
+    },
     generateGitMessage: (
-      input: Parameters<RendererModelClient["generateGitMessage"]>[0],
-    ) => currentModelClient().generateGitMessage(input),
+      input: Parameters<NonNullable<RendererModelClient["generateGitMessage"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.generateGitMessage) throw new Error("Git message generation is unavailable");
+      return client.generateGitMessage(input);
+    },
     buddyPrivate: (input: BuddyPrivateRequest) => {
       const client = currentModelClient();
       if (!client.buddyPrivate) {

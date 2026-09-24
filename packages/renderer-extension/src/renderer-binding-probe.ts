@@ -731,7 +731,41 @@ export function installRendererBindingProbe(
         if (!threadId) continue;
         const hostId = mounted.hostId ?? activeModelHostId();
         const client = hostId ? modelClientForHost(hostId) : null;
-        if (client) return { threadId, client };
+        const {
+          inspectGitStatus,
+          inspectGitDiff,
+          stageGitPaths,
+          unstageGitPaths,
+          commitGit,
+          pushGit,
+          listGitMessageModels,
+          generateGitMessage,
+        } = client ?? {};
+        if (
+          !inspectGitStatus ||
+          !inspectGitDiff ||
+          !stageGitPaths ||
+          !unstageGitPaths ||
+          !commitGit ||
+          !pushGit ||
+          !listGitMessageModels ||
+          !generateGitMessage
+        ) {
+          continue;
+        }
+        return {
+          threadId,
+          client: {
+            inspectGitStatus,
+            inspectGitDiff,
+            stageGitPaths,
+            unstageGitPaths,
+            commitGit,
+            pushGit,
+            listGitMessageModels,
+            generateGitMessage,
+          },
+        };
       }
       return { threadId: null, client: null };
     },

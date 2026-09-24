@@ -1,8 +1,14 @@
 import type {
   GitChange,
   GitDiffResult,
+  GitCommitParams,
+  GitDiffParams,
+  GitMessageGenerateParams,
   GitMessageModel,
+  GitStageParams,
+  GitWorkspaceParams,
   GitWorkspaceStatus,
+  HostThreadId,
 } from "@codexhost/shared-contracts";
 
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
@@ -11,30 +17,25 @@ import type { RendererSettingsMessages } from "./localization.js";
 import { parseUnifiedDiff } from "./git-diff.js";
 
 export interface RendererGitClient {
-  inspectGitStatus(input: { threadId: string }): Promise<GitWorkspaceStatus>;
-  inspectGitDiff(input: { threadId: string; path: string }): Promise<GitDiffResult>;
-  stageGitPaths(input: { threadId: string; paths: string[] }): Promise<GitWorkspaceStatus>;
-  unstageGitPaths(input: { threadId: string; paths: string[] }): Promise<GitWorkspaceStatus>;
-  commitGit(input: {
-    threadId: string;
-    message: string;
-    paths: string[];
-    push: boolean;
-  }): Promise<{ commit: string | null; pushed: boolean; output: string; status: GitWorkspaceStatus }>;
-  pushGit(input: { threadId: string }): Promise<GitWorkspaceStatus>;
-  listGitMessageModels(input: { threadId: string }): Promise<{
+  inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  inspectGitDiff(input: GitDiffParams): Promise<GitDiffResult>;
+  stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
+  unstageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
+  commitGit(
+    input: GitCommitParams,
+  ): Promise<{ commit: string | null; pushed: boolean; output: string; status: GitWorkspaceStatus }>;
+  pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  listGitMessageModels(input: GitWorkspaceParams): Promise<{
     models: GitMessageModel[];
     defaultModel: string | null;
   }>;
-  generateGitMessage(input: {
-    threadId: string;
-    model: string;
-    paths: string[];
-  }): Promise<{ message: string; model: string }>;
+  generateGitMessage(
+    input: GitMessageGenerateParams,
+  ): Promise<{ message: string; model: string }>;
 }
 
 export interface RendererGitContext {
-  threadId: string | null;
+  threadId: HostThreadId | null;
   client: RendererGitClient | null;
 }
 
@@ -562,24 +563,21 @@ export function createGitSettingsPage(
 
       refresh.addEventListener("click", () => void load());
       stageAll.addEventListener("click", () => {
-        const request = getContext();
-        if (!request.threadId || !request.client || !current) return;
+        const { threadId, client } = getContext();
+        if (!threadId || !client || !current) return;
         const paths = current.changes.filter((change) => !change.conflicted).map((change) => change.path);
         void run(
-          () => {
-            if (!request.client || !request.threadId) return Promise.reject(new Error("Git unavailable"));
-            return request.client.stageGitPaths({ threadId: request.threadId, paths });
-          },
+          () => client.stageGitPaths({ threadId, paths }),
           messages.gitStagedSuccess,
         );
       });
       message.addEventListener("input", updateBusy);
       generate.addEventListener("click", () => {
-        const request = getContext();
-        if (!request.threadId || !request.client || !modelSelect.value) return;
+        const { threadId, client } = getContext();
+        if (!threadId || !client || !modelSelect.value) return;
         void run(async () => {
-          const result = await request.client?.generateGitMessage({
-            threadId: request.threadId as string,
+          const result = await client.generateGitMessage({
+            threadId,
             model: modelSelect.value,
             paths: stagedPaths(),
           });
@@ -587,12 +585,12 @@ export function createGitSettingsPage(
         }, messages.gitMessageGenerated);
       });
       commit.addEventListener("click", () => {
-        const request = getContext();
-        if (!request.threadId || !request.client) return;
+        const { threadId, client } = getContext();
+        if (!threadId || !client) return;
         void run(
           async () => {
-            await request.client?.commitGit({
-              threadId: request.threadId as string,
+            await client.commitGit({
+              threadId,
               message: message.value,
               paths: stagedPaths(),
               push: false,
@@ -603,12 +601,12 @@ export function createGitSettingsPage(
         );
       });
       commitPush.addEventListener("click", () => {
-        const request = getContext();
-        if (!request.threadId || !request.client) return;
+        const { threadId, client } = getContext();
+        if (!threadId || !client) return;
         void run(
           async () => {
-            await request.client?.commitGit({
-              threadId: request.threadId as string,
+            await client.commitGit({
+              threadId,
               message: message.value,
               paths: stagedPaths(),
               push: true,
@@ -619,17 +617,9 @@ export function createGitSettingsPage(
         );
       });
       push.addEventListener("click", () => {
-        const request = getContext();
-        if (!request.threadId || !request.client) return;
-        void run(
-          () => {
-            if (!request.client || !request.threadId) {
-              return Promise.reject(new Error("Git unavailable"));
-            }
-            return request.client.pushGit({ threadId: request.threadId });
-          },
-          messages.gitPushed,
-        );
+        const { threadId, client } = getContext();
+        if (!threadId || !client) return;
+        void run(() => client.pushGit({ threadId }), messages.gitPushed);
       });
 
       context.content.tabIndex = -1;

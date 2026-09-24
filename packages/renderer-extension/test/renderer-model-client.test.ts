@@ -835,31 +835,31 @@ describe("Renderer fixed Model request client", () => {
     if (!client) throw new Error("Synthetic Model client was not created");
     const threadId = hostThreadIdSchema.parse("thread-1");
 
-    await expect(client.inspectGitStatus({ threadId })).resolves.toEqual(status);
-    await expect(client.inspectGitDiff({ threadId, path: "src/app.ts" })).resolves.toEqual({
+    await expect(client.inspectGitStatus?.({ threadId })).resolves.toEqual(status);
+    await expect(client.inspectGitDiff?.({ threadId, path: "src/app.ts" })).resolves.toEqual({
       path: "src/app.ts",
       diff: "+change",
       truncated: false,
     });
-    await expect(client.stageGitPaths({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(status);
-    await expect(client.unstageGitPaths({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(
+    await expect(client.stageGitPaths?.({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(status);
+    await expect(client.unstageGitPaths?.({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(
       status,
     );
     await expect(
-      client.commitGit({
+      client.commitGit?.({
         threadId,
         message: "feat: update app",
         paths: ["src/app.ts"],
         push: false,
       }),
     ).resolves.toEqual({ commit: "def456", pushed: false, output: "", status });
-    await expect(client.pushGit({ threadId })).resolves.toEqual(status);
-    await expect(client.listGitMessageModels({ threadId })).resolves.toEqual({
+    await expect(client.pushGit?.({ threadId })).resolves.toEqual(status);
+    await expect(client.listGitMessageModels?.({ threadId })).resolves.toEqual({
       models: [{ id: "deepseek-flash", label: "deepseek-flash", tier: "垃", eligible: true }],
       defaultModel: "deepseek-flash",
     });
     await expect(
-      client.generateGitMessage({
+      client.generateGitMessage?.({
         threadId,
         model: "deepseek-flash",
         paths: ["src/app.ts"],

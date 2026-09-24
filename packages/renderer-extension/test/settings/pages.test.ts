@@ -1862,7 +1862,7 @@ describe("Renderer Git page", () => {
       () => null,
       undefined,
       () => null,
-      () => ({ threadId: "thread-1", client }),
+      () => ({ threadId: hostThreadIdSchema.parse("thread-1"), client }),
     ).find(({ id }) => id === "git");
     if (!page) throw new Error("Git page is not registered");
     const document = new FakeDocument();

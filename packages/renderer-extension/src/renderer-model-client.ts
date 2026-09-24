@@ -206,14 +206,14 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 }
 
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
-  inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
-  inspectGitDiff(input: GitDiffParams): Promise<GitDiffResult>;
-  stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
-  unstageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
-  commitGit(input: GitCommitParams): Promise<GitCommitResult>;
-  pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
-  listGitMessageModels(input: GitWorkspaceParams): Promise<GitMessageModels>;
-  generateGitMessage(input: GitMessageGenerateParams): Promise<GitGeneratedMessage>;
+  inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
+  stageGitPaths?(input: GitStageParams): Promise<GitWorkspaceStatus>;
+  unstageGitPaths?(input: GitStageParams): Promise<GitWorkspaceStatus>;
+  commitGit?(input: GitCommitParams): Promise<GitCommitResult>;
+  pushGit?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  listGitMessageModels?(input: GitWorkspaceParams): Promise<GitMessageModels>;
+  generateGitMessage?(input: GitMessageGenerateParams): Promise<GitGeneratedMessage>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;

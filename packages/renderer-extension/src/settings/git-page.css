@@ -159,7 +159,12 @@
   padding: 8px 10px;
   resize: vertical;
   color: var(--git-text);
-  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    12px/18px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
   background: var(--git-bg);
   border: 1px solid var(--git-border);
   border-radius: 6px;
@@ -430,7 +435,12 @@
 
 .settings-git-page .settings-git-diff-scroll {
   background: var(--git-bg);
-  font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    11px/1.55 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
 }
 
 .settings-git-page .settings-git-diff-table {

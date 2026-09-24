@@ -134,7 +134,14 @@ function parseBranch(header: string | undefined): BranchState {
   const upstream = tracking?.split(" ")[0] ?? null;
   const ahead = Number(/(?:^|\s)ahead (\d+)/u.exec(value)?.[1] ?? 0);
   const behind = Number(/(?:^|\s)behind (\d+)/u.exec(value)?.[1] ?? 0);
-  return { branch: branch || null, detached: false, head: null, upstream: upstream || null, ahead, behind };
+  return {
+    branch: branch || null,
+    detached: false,
+    head: null,
+    upstream: upstream || null,
+    ahead,
+    behind,
+  };
 }
 
 function absoluteWorkspace(cwd: string): string {
@@ -227,7 +234,9 @@ export class GitWorkspace {
 
   async messageModels(environment: NodeJS.ProcessEnv): Promise<GitMessageModels> {
     return this.#serial(async () => {
-      const home = path.resolve(environment.CODEX_HOME ?? path.join(process.env.HOME ?? "", ".codex"));
+      const home = path.resolve(
+        environment.CODEX_HOME ?? path.join(process.env.HOME ?? "", ".codex"),
+      );
       let connection;
       try {
         connection = await readConnection(home, environment);
@@ -286,11 +295,7 @@ export class GitWorkspace {
       const connection = await readConnection(home, input.environment);
       const paths = (input.paths ?? []).map((pathValue) => gitFilePathSchema.parse(pathValue));
       const pathArguments = paths.length > 0 ? ["--", ...paths] : [];
-      const status = await runGit(workspace, [
-        "status",
-        "--short",
-        ...pathArguments,
-      ]);
+      const status = await runGit(workspace, ["status", "--short", ...pathArguments]);
       const diffs = await Promise.all(
         paths.length > 0
           ? paths.map((pathValue) => this.#diffUnlocked(workspace, pathValue))
@@ -330,8 +335,12 @@ export class GitWorkspace {
       const body = (await response.json()) as { choices?: unknown };
       const choice = Array.isArray(body.choices) ? body.choices[0] : null;
       const message =
-        choice && typeof choice === "object" && "message" in choice && choice.message &&
-        typeof choice.message === "object" && "content" in choice.message &&
+        choice &&
+        typeof choice === "object" &&
+        "message" in choice &&
+        choice.message &&
+        typeof choice.message === "object" &&
+        "content" in choice.message &&
         typeof choice.message.content === "string"
           ? choice.message.content.trim()
           : "";
@@ -381,10 +390,20 @@ export class GitWorkspace {
       ]);
     } else {
       const [staged, unstaged] = await Promise.all([
-        runGit(cwd, ["diff", "--cached", "--no-ext-diff", "--no-color", "--unified=3", ...pathArguments]),
+        runGit(cwd, [
+          "diff",
+          "--cached",
+          "--no-ext-diff",
+          "--no-color",
+          "--unified=3",
+          ...pathArguments,
+        ]),
         runGit(cwd, ["diff", "--no-ext-diff", "--no-color", "--unified=3", ...pathArguments]),
       ]);
-      result = { stdout: `${staged.stdout}${unstaged.stdout}`, stderr: staged.stderr + unstaged.stderr };
+      result = {
+        stdout: `${staged.stdout}${unstaged.stdout}`,
+        stderr: staged.stderr + unstaged.stderr,
+      };
     }
     if (filePath && !result.stdout && (await this.#isUntracked(cwd, filePath))) {
       result = await this.#untrackedDiff(cwd, filePath);

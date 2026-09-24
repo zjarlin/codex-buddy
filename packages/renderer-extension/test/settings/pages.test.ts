@@ -1802,7 +1802,9 @@ describe("Renderer Git page", () => {
       upstream: "origin/main",
       ahead: 0,
       behind: 0,
-      changes: [{ ...change, indexStatus: "M", workTreeStatus: " ", staged: true, unstaged: false }],
+      changes: [
+        { ...change, indexStatus: "M", workTreeStatus: " ", staged: true, unstaged: false },
+      ],
     };
     const client = {
       inspectGitStatus: vi

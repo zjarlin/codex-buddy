@@ -841,7 +841,9 @@ describe("Renderer fixed Model request client", () => {
       diff: "+change",
       truncated: false,
     });
-    await expect(client.stageGitPaths?.({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(status);
+    await expect(client.stageGitPaths?.({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(
+      status,
+    );
     await expect(client.unstageGitPaths?.({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(
       status,
     );

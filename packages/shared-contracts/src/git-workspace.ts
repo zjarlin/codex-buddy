@@ -19,9 +19,7 @@ const nonBlankTextSchema = z.string().trim().min(1);
 export const gitFilePathSchema = nonBlankTextSchema.max(GIT_FILE_PATH_MAX_LENGTH);
 export const gitCommitMessageSchema = nonBlankTextSchema.max(GIT_COMMIT_MESSAGE_MAX_LENGTH);
 
-export const gitWorkspaceParamsSchema = z
-  .object({ threadId: hostThreadIdSchema })
-  .strict();
+export const gitWorkspaceParamsSchema = z.object({ threadId: hostThreadIdSchema }).strict();
 export type GitWorkspaceParams = z.infer<typeof gitWorkspaceParamsSchema>;
 
 export const gitDiffParamsSchema = gitWorkspaceParamsSchema

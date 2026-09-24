@@ -16,13 +16,7 @@ const forbiddenInputFragments = [
   "/tools/",
 ];
 const forbiddenBundleReferences = ["sourceMappingURL="];
-const allowedRuntimePackages = new Set([
-  "@typesafe-ai/sdk",
-  "diff",
-  "ws",
-  "zod",
-  "smol-toml",
-]);
+const allowedRuntimePackages = new Set(["@typesafe-ai/sdk", "diff", "ws", "zod", "smol-toml"]);
 
 function normalizedInputPath(value) {
   return `/${value.replaceAll("\\", "/").replace(/^\/+|\/+$/gu, "")}/`;

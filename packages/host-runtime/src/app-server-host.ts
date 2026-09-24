@@ -2481,7 +2481,9 @@ export class AppServerHost {
         const params = gitWorkspaceParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
         await this.#gitWorkspaceForThread(params.data.threadId);
-        const result = await this.#gitWorkspace.messageModels(this.#options.environment ?? process.env);
+        const result = await this.#gitWorkspace.messageModels(
+          this.#options.environment ?? process.env,
+        );
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
       }

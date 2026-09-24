@@ -21,17 +21,18 @@ export interface RendererGitClient {
   inspectGitDiff(input: GitDiffParams): Promise<GitDiffResult>;
   stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
   unstageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
-  commitGit(
-    input: GitCommitParams,
-  ): Promise<{ commit: string | null; pushed: boolean; output: string; status: GitWorkspaceStatus }>;
+  commitGit(input: GitCommitParams): Promise<{
+    commit: string | null;
+    pushed: boolean;
+    output: string;
+    status: GitWorkspaceStatus;
+  }>;
   pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   listGitMessageModels(input: GitWorkspaceParams): Promise<{
     models: GitMessageModel[];
     defaultModel: string | null;
   }>;
-  generateGitMessage(
-    input: GitMessageGenerateParams,
-  ): Promise<{ message: string; model: string }>;
+  generateGitMessage(input: GitMessageGenerateParams): Promise<{ message: string; model: string }>;
 }
 
 export interface RendererGitContext {
@@ -565,11 +566,10 @@ export function createGitSettingsPage(
       stageAll.addEventListener("click", () => {
         const { threadId, client } = getContext();
         if (!threadId || !client || !current) return;
-        const paths = current.changes.filter((change) => !change.conflicted).map((change) => change.path);
-        void run(
-          () => client.stageGitPaths({ threadId, paths }),
-          messages.gitStagedSuccess,
-        );
+        const paths = current.changes
+          .filter((change) => !change.conflicted)
+          .map((change) => change.path);
+        void run(() => client.stageGitPaths({ threadId, paths }), messages.gitStagedSuccess);
       });
       message.addEventListener("input", updateBusy);
       generate.addEventListener("click", () => {
@@ -587,34 +587,28 @@ export function createGitSettingsPage(
       commit.addEventListener("click", () => {
         const { threadId, client } = getContext();
         if (!threadId || !client) return;
-        void run(
-          async () => {
-            await client.commitGit({
-              threadId,
-              message: message.value,
-              paths: stagedPaths(),
-              push: false,
-            });
-            message.value = "";
-          },
-          messages.gitCommitted,
-        );
+        void run(async () => {
+          await client.commitGit({
+            threadId,
+            message: message.value,
+            paths: stagedPaths(),
+            push: false,
+          });
+          message.value = "";
+        }, messages.gitCommitted);
       });
       commitPush.addEventListener("click", () => {
         const { threadId, client } = getContext();
         if (!threadId || !client) return;
-        void run(
-          async () => {
-            await client.commitGit({
-              threadId,
-              message: message.value,
-              paths: stagedPaths(),
-              push: true,
-            });
-            message.value = "";
-          },
-          messages.gitCommittedAndPushed,
-        );
+        void run(async () => {
+          await client.commitGit({
+            threadId,
+            message: message.value,
+            paths: stagedPaths(),
+            push: true,
+          });
+          message.value = "";
+        }, messages.gitCommittedAndPushed);
       });
       push.addEventListener("click", () => {
         const { threadId, client } = getContext();

@@ -13,7 +13,9 @@ const execFileAsync = promisify(execFile);
 const cleanup: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 async function repository(): Promise<string> {
@@ -84,9 +86,7 @@ describe("GitWorkspace", () => {
     const workspace = new GitWorkspace();
     await workspace.stage(directory, ["tracked.txt", "new.txt"]);
 
-    const result = await workspace.commit(directory, "feat: add selected file", false, [
-      "new.txt",
-    ]);
+    const result = await workspace.commit(directory, "feat: add selected file", false, ["new.txt"]);
 
     expect(result.status.changes).toEqual([
       expect.objectContaining({ path: "tracked.txt", staged: true }),

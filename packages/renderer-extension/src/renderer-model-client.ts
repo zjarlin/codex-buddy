@@ -397,7 +397,7 @@ export function createRendererModelClient(
     },
     async commitGit(input: GitCommitParams): Promise<GitCommitResult> {
       const params = gitCommitParamsSchema.parse(input);
-    return gitCommitResultSchema.parse(await manager.sendRequest(GIT_COMMIT_METHOD, params));
+      return gitCommitResultSchema.parse(await manager.sendRequest(GIT_COMMIT_METHOD, params));
     },
     async pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
       const params = gitWorkspaceParamsSchema.parse(input);

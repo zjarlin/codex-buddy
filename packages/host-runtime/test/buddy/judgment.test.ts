@@ -128,7 +128,7 @@ describe("JEV API key persistence", () => {
       expect(snapshot.jevKeyConfigured).toBe(true);
       expect(JSON.stringify(snapshot)).not.toContain("sk-secret-value");
       const info = await stat(join(home, "buddy-jev.json"));
-      expect(info.mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") expect(info.mode & 0o777).toBe(0o600);
       const stored = JSON.parse(await readFile(join(home, "buddy-jev.json"), "utf8"));
       expect(stored).toEqual({ apiKey: "sk-secret-value" });
     } finally {

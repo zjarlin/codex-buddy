@@ -186,7 +186,7 @@ async function fixture(
     router.close();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(home, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   return {
     router,
@@ -1009,7 +1009,7 @@ describe("Buddy native routing", () => {
       router.close();
       selected.closeAllConnections();
       await new Promise<void>((resolve) => selected.close(() => resolve()));
-      await rm(home, { recursive: true, force: true });
+      await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
     await router.route({
       id: 2,

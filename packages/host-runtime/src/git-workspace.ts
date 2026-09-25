@@ -6,9 +6,16 @@ import {
   GIT_DIFF_MAX_BYTES,
   type GitChange,
   type GitCommitResult,
+  type GitCommitDetail,
+  type GitCommitFile,
   type GitDiffResult,
   type GitGeneratedMessage,
   type GitMessageModels,
+  type GitSubmodule,
+  type GitSubmoduleUpdateParams,
+  type GitLogResult,
+  type GitLogCommit,
+  type GitLogRef,
   type GitWorkspaceStatus,
   gitCommitMessageSchema,
   gitFilePathSchema,
@@ -19,6 +26,10 @@ const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
 const MESSAGE_TIMEOUT_MS = 120_000;
 const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const GIT_LOG_LIMIT = 200;
+const GIT_LOG_MAX_BYTES = 2_000_000;
+const LOG_SEPARATOR = "\u001e";
+const FIELD_SEPARATOR = "\u001f";
 
 export class GitWorkspaceError extends Error {
   constructor(
@@ -37,14 +48,18 @@ interface CommandResult {
   stderr: string;
 }
 
-async function runGit(cwd: string, arguments_: readonly string[]): Promise<CommandResult> {
+async function runGit(
+  cwd: string,
+  arguments_: readonly string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<CommandResult> {
   try {
     const result = await execFileAsync("git", ["-C", cwd, ...arguments_], {
       encoding: "utf8",
       timeout: COMMAND_TIMEOUT_MS,
       maxBuffer: MAX_BUFFER_BYTES,
       windowsHide: true,
-      env: { ...process.env, LC_ALL: "C" },
+      env: { ...environment, LC_ALL: "C" },
     });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
@@ -72,9 +87,9 @@ function isConflicted(indexStatus: string, workTreeStatus: string): boolean {
   );
 }
 
-function parsePorcelainStatus(output: string): GitChange[] {
+function parsePorcelainStatus(output: string): Array<Omit<GitChange, "submodule">> {
   const records = output.split("\0");
-  const changes: GitChange[] = [];
+  const changes: Array<Omit<GitChange, "submodule">> = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
     if (!record || record.startsWith("## ")) continue;
@@ -108,6 +123,60 @@ interface BranchState {
   upstream: string | null;
   ahead: number;
   behind: number;
+}
+
+interface SubmoduleState {
+  path: string;
+  status: GitSubmodule["status"];
+}
+
+function absoluteGitPath(cwd: string, filePath: string): string {
+  const workspace = absoluteWorkspace(cwd);
+  const absolute = path.resolve(workspace, filePath);
+  if (absolute !== workspace && !absolute.startsWith(`${workspace}${path.sep}`)) {
+    throw new GitWorkspaceError("Git 路径超出工作区范围。");
+  }
+  return absolute;
+}
+
+async function submodules(
+  cwd: string,
+  git: (cwd: string, arguments_: readonly string[]) => Promise<CommandResult> = runGit,
+): Promise<SubmoduleState[]> {
+  const [result, porcelain] = await Promise.all([
+    git(cwd, ["submodule", "status", "--recursive"]),
+    git(cwd, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]),
+  ]);
+  const dirty = new Set(
+    parsePorcelainStatus(porcelain.stdout)
+      .filter((change) => change.workTreeStatus === "M" || change.indexStatus === "M")
+      .map((change) => change.path),
+  );
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const marker = line[0] ?? " ";
+      const rest = line.slice(1);
+      const separator = rest.indexOf(" ");
+      if (separator < 0) return [];
+      const pathValue =
+        rest
+          .slice(separator + 1)
+          .split(" (")[0]
+          ?.trim() ?? "";
+      if (!pathValue) return [];
+      const status: GitSubmodule["status"] =
+        marker === "-"
+          ? "uninitialized"
+          : marker === "+" || dirty.has(pathValue)
+            ? "modified"
+            : marker === "U"
+              ? "conflicted"
+              : "current";
+      return [{ path: gitFilePathSchema.parse(pathValue), status }];
+    });
 }
 
 function parseBranch(header: string | undefined): BranchState {
@@ -148,8 +217,98 @@ function absoluteWorkspace(cwd: string): string {
   return path.resolve(cwd);
 }
 
+function parseRefs(output: string): GitLogRef[] {
+  return output
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [commit, name] = line.split(FIELD_SEPARATOR);
+      if (!commit || !name) return [];
+      const kind: GitLogRef["kind"] =
+        name === "HEAD"
+          ? "head"
+          : name.startsWith("refs/heads/")
+            ? "local"
+            : name.startsWith("refs/remotes/")
+              ? "remote"
+              : name.startsWith("refs/tags/")
+                ? "tag"
+                : "local";
+      return [{ name, kind, commit, current: name === "HEAD" }];
+    });
+}
+
+function parseLog(output: string): GitLogCommit[] {
+  return output
+    .split(LOG_SEPARATOR)
+    .map((record) => record.trim())
+    .filter(Boolean)
+    .flatMap((record) => {
+      const fields = record.split(FIELD_SEPARATOR);
+      const [commit, shortCommit, parents, refs, authorName, authorEmail, authoredAt, subject] =
+        fields;
+      if (!commit || !shortCommit || !authorName || !authorEmail || !authoredAt) return [];
+      return [
+        {
+          commit,
+          shortCommit,
+          subject: subject ?? "",
+          authorName,
+          authorEmail,
+          authoredAt,
+          parents: parents ? parents.split(" ").filter(Boolean) : [],
+          refs: refs
+            ? refs
+                .split(",")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : [],
+        },
+      ];
+    });
+}
+
+function parseCommitFiles(statusOutput: string, numberOutput: string): GitCommitFile[] {
+  const counts = new Map<string, { additions: number | null; deletions: number | null }>();
+  for (const line of numberOutput.split("\n")) {
+    const match = /^(\d+|-)\t(\d+|-)\t(.+)$/u.exec(line);
+    if (!match) continue;
+    const filePath = match[3];
+    if (!filePath) continue;
+    counts.set(filePath, {
+      additions: match[1] === "-" ? null : Number(match[1]),
+      deletions: match[2] === "-" ? null : Number(match[2]),
+    });
+  }
+  return statusOutput.split("\n").flatMap((line) => {
+    const parts = line.split("\t");
+    const status = parts[0]?.slice(0, 1);
+    const firstPath = parts[1];
+    const secondPath = parts[2];
+    const filePath = secondPath ?? firstPath;
+    if (!status || !filePath) return [];
+    const count = counts.get(filePath) ?? { additions: null, deletions: null };
+    return [
+      {
+        path: gitFilePathSchema.parse(filePath),
+        ...(secondPath ? { originalPath: gitFilePathSchema.parse(firstPath) } : {}),
+        status: status.toUpperCase(),
+        additions: count.additions,
+        deletions: count.deletions,
+      },
+    ];
+  });
+}
+
 export class GitWorkspace {
   #queue: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly environment: NodeJS.ProcessEnv = process.env) {}
+
+  #run(cwd: string, arguments_: readonly string[]): Promise<CommandResult> {
+    return runGit(cwd, arguments_, this.environment);
+  }
 
   async status(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#serial(() => this.#statusUnlocked(cwd));
@@ -174,7 +333,7 @@ export class GitWorkspace {
       const workspace = absoluteWorkspace(cwd);
       const validated = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       if (validated.length > 0) {
-        await runGit(workspace, ["add", "--", ...validated]);
+        await this.#run(workspace, ["add", "--", ...validated]);
       }
       return this.#statusUnlocked(workspace);
     });
@@ -185,7 +344,7 @@ export class GitWorkspace {
       const workspace = absoluteWorkspace(cwd);
       const validated = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       if (validated.length > 0) {
-        await runGit(workspace, ["restore", "--staged", "--", ...validated]);
+        await this.#run(workspace, ["restore", "--staged", "--", ...validated]);
       }
       return this.#statusUnlocked(workspace);
     });
@@ -201,7 +360,7 @@ export class GitWorkspace {
       const workspace = absoluteWorkspace(cwd);
       const parsedMessage = gitCommitMessageSchema.parse(message);
       const validatedPaths = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
-      await runGit(workspace, [
+      await this.#run(workspace, [
         "commit",
         "-m",
         parsedMessage,
@@ -210,11 +369,11 @@ export class GitWorkspace {
       let pushed = false;
       let output = "";
       if (push) {
-        const result = await runGit(workspace, ["push"]);
+        const result = await this.#run(workspace, ["push"]);
         pushed = true;
         output = result.stdout || result.stderr;
       }
-      const commit = (await runGit(workspace, ["rev-parse", "--short", "HEAD"])).stdout.trim();
+      const commit = (await this.#run(workspace, ["rev-parse", "--short", "HEAD"])).stdout.trim();
       return {
         commit: commit || null,
         pushed,
@@ -227,8 +386,135 @@ export class GitWorkspace {
   async push(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#serial(async () => {
       const workspace = absoluteWorkspace(cwd);
-      await runGit(workspace, ["push"]);
+      await this.#run(workspace, ["push"]);
       return this.#statusUnlocked(workspace);
+    });
+  }
+
+  async submodules(cwd: string): Promise<{ submodules: GitSubmodule[] }> {
+    return this.#serial(async () => ({
+      submodules: await submodules(absoluteWorkspace(cwd), (worktree, arguments_) =>
+        this.#run(worktree, arguments_),
+      ),
+    }));
+  }
+
+  async updateSubmodule(
+    cwd: string,
+    input: Pick<GitSubmoduleUpdateParams, "path" | "init">,
+  ): Promise<GitWorkspaceStatus> {
+    return this.#serial(async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const pathValue = gitFilePathSchema.parse(input.path);
+      absoluteGitPath(workspace, pathValue);
+      const known = await submodules(workspace, (worktree, arguments_) =>
+        this.#run(worktree, arguments_),
+      );
+      if (!known.some((entry) => entry.path === pathValue)) {
+        throw new GitWorkspaceError("所选路径不是已声明的 Git 子模块。");
+      }
+      await this.#run(workspace, [
+        "submodule",
+        "update",
+        ...(input.init ? ["--init"] : []),
+        "--",
+        pathValue,
+      ]);
+      return this.#statusUnlocked(workspace);
+    });
+  }
+
+  async log(cwd: string, limit = GIT_LOG_LIMIT): Promise<GitLogResult> {
+    return this.#serial(async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const safeLimit = Math.max(1, Math.min(Math.trunc(limit), GIT_LOG_LIMIT));
+      const [refs, commits, head, branch] = await Promise.all([
+        this.#run(workspace, [
+          "for-each-ref",
+          `--format=%(objectname)${FIELD_SEPARATOR}%(refname)`,
+          "refs/heads",
+          "refs/remotes",
+          "refs/tags",
+        ]),
+        this.#run(workspace, [
+          "log",
+          "--all",
+          `--max-count=${safeLimit}`,
+          `--pretty=format:%H${FIELD_SEPARATOR}%h${FIELD_SEPARATOR}%P${FIELD_SEPARATOR}%D${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ae${FIELD_SEPARATOR}%aI${FIELD_SEPARATOR}%s${LOG_SEPARATOR}`,
+        ]),
+        this.#run(workspace, ["rev-parse", "HEAD"]).catch(() => ({ stdout: "", stderr: "" })),
+        this.#run(workspace, ["symbolic-ref", "--short", "-q", "HEAD"]).catch(() => ({
+          stdout: "",
+          stderr: "",
+        })),
+      ]);
+      const headCommit = head.stdout.trim();
+      const currentBranch = branch.stdout.trim() || null;
+      const parsedRefs = parseRefs(refs.stdout);
+      if (headCommit) {
+        parsedRefs.unshift({ name: "HEAD", kind: "head", commit: headCommit, current: true });
+      }
+      if (Buffer.byteLength(commits.stdout, "utf8") > GIT_LOG_MAX_BYTES) {
+        throw new GitWorkspaceError("Git 日志过大，请缩小范围后重试。");
+      }
+      return {
+        workspace,
+        branch: currentBranch,
+        head: headCommit || null,
+        refs: parsedRefs,
+        commits: parseLog(commits.stdout),
+      };
+    });
+  }
+
+  async commitDetail(cwd: string, commit: string): Promise<GitCommitDetail> {
+    return this.#serial(async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const value = commit.trim();
+      if (!/^[0-9a-f]{7,64}$/iu.test(value)) throw new GitWorkspaceError("无效的提交哈希。");
+      const [metadata, body, status, numbers] = await Promise.all([
+        this.#run(workspace, [
+          "show",
+          "-s",
+          `--format=%H${FIELD_SEPARATOR}%h${FIELD_SEPARATOR}%P${FIELD_SEPARATOR}%D${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ae${FIELD_SEPARATOR}%aI${FIELD_SEPARATOR}%s`,
+          value,
+        ]),
+        this.#run(workspace, ["show", "-s", "--format=%B", value]),
+        this.#run(workspace, ["show", "--format=", "--name-status", "--no-renames", value]),
+        this.#run(workspace, ["show", "--format=", "--numstat", "--no-renames", value]),
+      ]);
+      const parsed = parseLog(metadata.stdout);
+      const commitValue = parsed[0];
+      if (!commitValue) throw new GitWorkspaceError("无法读取提交信息。");
+      return {
+        commit: commitValue,
+        body: body.stdout.trim(),
+        files: parseCommitFiles(status.stdout, numbers.stdout),
+      };
+    });
+  }
+
+  async commitDiff(cwd: string, commit: string, filePath: string): Promise<GitDiffResult> {
+    return this.#serial(async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const value = commit.trim();
+      if (!/^[0-9a-f]{7,64}$/iu.test(value)) throw new GitWorkspaceError("无效的提交哈希。");
+      const pathValue = gitFilePathSchema.parse(filePath);
+      const result = await this.#run(workspace, [
+        "show",
+        "--format=",
+        "--no-ext-diff",
+        "--no-color",
+        "--unified=3",
+        value,
+        "--",
+        pathValue,
+      ]);
+      return {
+        path: pathValue,
+        diff: result.stdout,
+        truncated: Buffer.byteLength(result.stdout, "utf8") > GIT_DIFF_MAX_BYTES,
+      };
     });
   }
 
@@ -295,7 +581,7 @@ export class GitWorkspace {
       const connection = await readConnection(home, input.environment);
       const paths = (input.paths ?? []).map((pathValue) => gitFilePathSchema.parse(pathValue));
       const pathArguments = paths.length > 0 ? ["--", ...paths] : [];
-      const status = await runGit(workspace, ["status", "--short", ...pathArguments]);
+      const status = await this.#run(workspace, ["status", "--short", ...pathArguments]);
       const diffs = await Promise.all(
         paths.length > 0
           ? paths.map((pathValue) => this.#diffUnlocked(workspace, pathValue))
@@ -356,7 +642,7 @@ export class GitWorkspace {
   }
 
   async #isUntracked(cwd: string, filePath: string): Promise<boolean> {
-    const status = await runGit(cwd, [
+    const status = await this.#run(cwd, [
       "status",
       "--porcelain=v1",
       "-z",
@@ -369,7 +655,7 @@ export class GitWorkspace {
 
   async #hasHead(cwd: string): Promise<boolean> {
     try {
-      await runGit(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+      await this.#run(cwd, ["rev-parse", "--verify", "--quiet", "HEAD"]);
       return true;
     } catch {
       return false;
@@ -380,7 +666,7 @@ export class GitWorkspace {
     const pathArguments = filePath ? ["--", filePath] : [];
     let result: CommandResult;
     if (await this.#hasHead(cwd)) {
-      result = await runGit(cwd, [
+      result = await this.#run(cwd, [
         "diff",
         "--no-ext-diff",
         "--no-color",
@@ -390,7 +676,7 @@ export class GitWorkspace {
       ]);
     } else {
       const [staged, unstaged] = await Promise.all([
-        runGit(cwd, [
+        this.#run(cwd, [
           "diff",
           "--cached",
           "--no-ext-diff",
@@ -398,7 +684,7 @@ export class GitWorkspace {
           "--unified=3",
           ...pathArguments,
         ]),
-        runGit(cwd, ["diff", "--no-ext-diff", "--no-color", "--unified=3", ...pathArguments]),
+        this.#run(cwd, ["diff", "--no-ext-diff", "--no-color", "--unified=3", ...pathArguments]),
       ]);
       result = {
         stdout: `${staged.stdout}${unstaged.stdout}`,
@@ -413,7 +699,7 @@ export class GitWorkspace {
 
   async #untrackedDiff(cwd: string, filePath: string): Promise<CommandResult> {
     try {
-      return await runGit(cwd, [
+      return await this.#run(cwd, [
         "diff",
         "--no-index",
         "--no-color",
@@ -431,9 +717,13 @@ export class GitWorkspace {
 
   async #statusUnlocked(cwd: string): Promise<GitWorkspaceStatus> {
     const workspace = absoluteWorkspace(cwd);
-    const [{ stdout }, head] = await Promise.all([
-      runGit(workspace, ["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"]),
-      runGit(workspace, ["rev-parse", "--short", "HEAD"]).catch(() => ({ stdout: "", stderr: "" })),
+    const [{ stdout }, head, submoduleStates] = await Promise.all([
+      this.#run(workspace, ["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"]),
+      this.#run(workspace, ["rev-parse", "--short", "HEAD"]).catch(() => ({
+        stdout: "",
+        stderr: "",
+      })),
+      submodules(workspace, (worktree, arguments_) => this.#run(worktree, arguments_)),
     ]);
     const records = stdout.split("\0");
     const header = records.find((record) => record.startsWith("## "));
@@ -442,7 +732,11 @@ export class GitWorkspace {
       workspace,
       ...branch,
       head: head.stdout.trim() || null,
-      changes: parsePorcelainStatus(stdout),
+      changes: parsePorcelainStatus(stdout).map((change) => ({
+        ...change,
+        submodule: submoduleStates.find((entry) => entry.path === change.path) ?? null,
+      })),
+      submodules: submoduleStates,
     };
   }
 }

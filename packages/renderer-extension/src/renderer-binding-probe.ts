@@ -82,6 +82,7 @@ import {
   writeNewThreadExternalConfigurationPreference,
 } from "./renderer-new-thread-preference.js";
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
+import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -92,6 +93,7 @@ import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
 } from "./settings/pages.js";
+import type { RendererGitClient } from "./settings/git-page.js";
 
 const externalHarnessIds = {
   pi: harnessIdSchema.parse("pi"),
@@ -718,8 +720,54 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocalAgent: localAgentForSidebarThread,
   });
+  const gitSidebar = installRendererGitSidebar({
+    getContext: () => {
+      for (const mounted of mountedByComposer.values()) {
+        if (!mounted.composer.isConnected) continue;
+        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        if (!threadId) continue;
+        const hostId = mounted.hostId ?? activeModelHostId();
+        const client = hostId ? modelClientForHost(hostId) : null;
+        if (!client?.inspectGitStatus || !client.inspectGitDiff) continue;
+        return { threadId, client: client as RendererGitClient };
+      }
+      return { threadId: null, client: null };
+    },
+  });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
+    getProjectSyncClient: () => {
+      const client = modelClientForHost("local");
+      return client?.inspectProjectSync &&
+        client.inviteProjectSync &&
+        client.pairProjectSync &&
+        client.acceptProjectSync &&
+        client.rejectProjectSync &&
+        client.configureProjectSyncGit &&
+        client.pullProjectSyncGit &&
+        client.pushProjectSyncGit &&
+        client.syncProjectSync &&
+        client.removeProjectSyncPeer &&
+        client.addProjectSync &&
+        client.bindProjectSync &&
+        client.cloneProjectSync
+        ? {
+            inspectProjectSync: client.inspectProjectSync,
+            inviteProjectSync: client.inviteProjectSync,
+            pairProjectSync: client.pairProjectSync,
+            acceptProjectSync: client.acceptProjectSync,
+            rejectProjectSync: client.rejectProjectSync,
+            configureProjectSyncGit: client.configureProjectSyncGit,
+            pullProjectSyncGit: client.pullProjectSyncGit,
+            pushProjectSyncGit: client.pushProjectSyncGit,
+            syncProjectSync: client.syncProjectSync,
+            removeProjectSyncPeer: client.removeProjectSyncPeer,
+            addProjectSync: client.addProjectSync,
+            bindProjectSync: client.bindProjectSync,
+            cloneProjectSync: client.cloneProjectSync,
+          }
+        : null;
+    },
     getUpdateClient: () => modelControl,
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
@@ -740,6 +788,9 @@ export function installRendererBindingProbe(
           pushGit,
           listGitMessageModels,
           generateGitMessage,
+          inspectGitLog,
+          inspectGitCommit,
+          inspectGitCommitDiff,
         } = client ?? {};
         if (
           !inspectGitStatus ||
@@ -750,6 +801,9 @@ export function installRendererBindingProbe(
           !pushGit ||
           !listGitMessageModels ||
           !generateGitMessage
+          || !inspectGitLog
+          || !inspectGitCommit
+          || !inspectGitCommitDiff
         ) {
           continue;
         }
@@ -764,6 +818,9 @@ export function installRendererBindingProbe(
             pushGit,
             listGitMessageModels,
             generateGitMessage,
+            inspectGitLog,
+            inspectGitCommit,
+            inspectGitCommitDiff,
           },
         };
       }
@@ -785,6 +842,7 @@ export function installRendererBindingProbe(
       openRendererThread(threadId, { hostId: "local", signal }),
     onLocaleChange() {
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
+      gitSidebar.refresh();
     },
   });
   let adapterStatus: RendererAdapterStatus = {
@@ -3045,6 +3103,7 @@ export function installRendererBindingProbe(
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
       sidebarAgentIcons.dispose();
+      gitSidebar.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
       document.removeEventListener("submit", onSubmit, true);

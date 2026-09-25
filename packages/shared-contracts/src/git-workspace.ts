@@ -10,6 +10,11 @@ export const GIT_COMMIT_METHOD = "codexhost/git/commit";
 export const GIT_PUSH_METHOD = "codexhost/git/push";
 export const GIT_MESSAGE_MODEL_METHOD = "codexhost/git/message-models";
 export const GIT_MESSAGE_GENERATE_METHOD = "codexhost/git/message/generate";
+export const GIT_SUBMODULES_METHOD = "codexhost/git/submodules";
+export const GIT_SUBMODULE_UPDATE_METHOD = "codexhost/git/submodule/update";
+export const GIT_LOG_METHOD = "codexhost/git/log";
+export const GIT_COMMIT_DETAIL_METHOD = "codexhost/git/commit-detail";
+export const GIT_COMMIT_DIFF_METHOD = "codexhost/git/commit-diff";
 
 export const GIT_FILE_PATH_MAX_LENGTH = 16_384;
 export const GIT_COMMIT_MESSAGE_MAX_LENGTH = 20_000;
@@ -49,6 +54,30 @@ export const gitMessageGenerateParamsSchema = gitWorkspaceParamsSchema
   .strict();
 export type GitMessageGenerateParams = z.infer<typeof gitMessageGenerateParamsSchema>;
 
+export const gitSubmoduleUpdateParamsSchema = gitWorkspaceParamsSchema
+  .extend({
+    path: gitFilePathSchema,
+    init: z.boolean().default(false),
+  })
+  .strict();
+export type GitSubmoduleUpdateParams = z.infer<typeof gitSubmoduleUpdateParamsSchema>;
+
+export const gitLogParamsSchema = gitWorkspaceParamsSchema
+  .extend({ limit: z.number().int().min(1).max(1000).default(200) })
+  .strict();
+export type GitLogParams = z.infer<typeof gitLogParamsSchema>;
+
+const gitObjectIdSchema = z.string().regex(/^[0-9a-f]{7,64}$/iu);
+export const gitCommitDetailParamsSchema = gitWorkspaceParamsSchema
+  .extend({ commit: gitObjectIdSchema })
+  .strict();
+export type GitCommitDetailParams = z.infer<typeof gitCommitDetailParamsSchema>;
+
+export const gitCommitDiffParamsSchema = gitCommitDetailParamsSchema
+  .extend({ path: gitFilePathSchema })
+  .strict();
+export type GitCommitDiffParams = z.infer<typeof gitCommitDiffParamsSchema>;
+
 export const gitChangeSchema = z
   .object({
     path: gitFilePathSchema,
@@ -59,9 +88,85 @@ export const gitChangeSchema = z
     unstaged: z.boolean(),
     untracked: z.boolean(),
     conflicted: z.boolean(),
+    submodule: z
+      .object({
+        path: gitFilePathSchema,
+        status: z.enum(["current", "modified", "uninitialized", "conflicted"]),
+      })
+      .strict()
+      .nullable()
+      .default(null),
   })
   .strict();
 export type GitChange = z.infer<typeof gitChangeSchema>;
+
+export const gitSubmoduleSchema = z
+  .object({
+    path: gitFilePathSchema,
+    status: z.enum(["current", "modified", "uninitialized", "conflicted"]),
+  })
+  .strict();
+export type GitSubmodule = z.infer<typeof gitSubmoduleSchema>;
+
+export const gitSubmoduleListSchema = z
+  .object({ submodules: z.array(gitSubmoduleSchema).max(10_000) })
+  .strict();
+export type GitSubmoduleList = z.infer<typeof gitSubmoduleListSchema>;
+
+export const gitLogRefSchema = z
+  .object({
+    name: z.string().min(1).max(1024),
+    kind: z.enum(["head", "local", "remote", "tag"]),
+    commit: gitObjectIdSchema,
+    current: z.boolean(),
+  })
+  .strict();
+export type GitLogRef = z.infer<typeof gitLogRefSchema>;
+
+export const gitLogCommitSchema = z
+  .object({
+    commit: gitObjectIdSchema,
+    shortCommit: z.string().min(4).max(64),
+    subject: z.string().max(20_000),
+    authorName: z.string().max(512),
+    authorEmail: z.string().max(1024),
+    authoredAt: z.string().min(1).max(128),
+    parents: z.array(gitObjectIdSchema).max(32),
+    refs: z.array(z.string().min(1).max(1024)).max(128),
+  })
+  .strict();
+export type GitLogCommit = z.infer<typeof gitLogCommitSchema>;
+
+export const gitLogResultSchema = z
+  .object({
+    workspace: z.string().min(1),
+    branch: z.string().nullable(),
+    head: gitObjectIdSchema.nullable(),
+    refs: z.array(gitLogRefSchema).max(5000),
+    commits: z.array(gitLogCommitSchema).max(1000),
+  })
+  .strict();
+export type GitLogResult = z.infer<typeof gitLogResultSchema>;
+
+export const gitCommitFileSchema = z
+  .object({
+    path: gitFilePathSchema,
+    originalPath: gitFilePathSchema.optional(),
+    status: z.string().length(1),
+    additions: z.number().int().nonnegative().nullable(),
+    deletions: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+export type GitCommitFile = z.infer<typeof gitCommitFileSchema>;
+
+export const gitCommitDetailSchema = z
+  .object({
+    commit: gitLogCommitSchema,
+    body: z.string().max(200_000),
+    files: z.array(gitCommitFileSchema).max(10_000),
+  })
+  .strict();
+export type GitCommitDetail = z.infer<typeof gitCommitDetailSchema>;
 
 export const gitWorkspaceStatusSchema = z
   .object({
@@ -73,6 +178,7 @@ export const gitWorkspaceStatusSchema = z
     ahead: z.number().int().nonnegative(),
     behind: z.number().int().nonnegative(),
     changes: z.array(gitChangeSchema),
+    submodules: z.array(gitSubmoduleSchema),
   })
   .strict();
 export type GitWorkspaceStatus = z.infer<typeof gitWorkspaceStatusSchema>;

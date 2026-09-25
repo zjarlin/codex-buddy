@@ -16,6 +16,7 @@ import FolderInput from "lucide/dist/esm/icons/folder-input.mjs";
 import FileDiff from "lucide/dist/esm/icons/file-diff.mjs";
 import GripVertical from "lucide/dist/esm/icons/grip-vertical.mjs";
 import GitBranch from "lucide/dist/esm/icons/git-branch.mjs";
+import FolderGit from "lucide/dist/esm/icons/folder-git-2.mjs";
 import Sparkles from "lucide/dist/esm/icons/sparkles.mjs";
 import Upload from "lucide/dist/esm/icons/cloud-upload.mjs";
 import Info from "lucide/dist/esm/icons/info.mjs";
@@ -48,6 +49,7 @@ export const RENDERER_SETTINGS_ICON_NAMES = [
   "accounts",
   "session-import",
   "git",
+  "project-sync",
   "file-diff",
   "add",
   "model-pool",
@@ -91,6 +93,7 @@ const iconNodes = {
   accounts: Users,
   "session-import": FolderInput,
   git: GitBranch,
+  "project-sync": FolderGit,
   "file-diff": FileDiff,
   add: Plus,
   "model-pool": Boxes,

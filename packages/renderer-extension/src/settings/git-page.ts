@@ -8,6 +8,12 @@ import type {
   GitStageParams,
   GitWorkspaceParams,
   GitWorkspaceStatus,
+  GitLogParams,
+  GitLogResult,
+  GitCommitDetail,
+  GitCommitDetailParams,
+  GitCommitDiffParams,
+  GitSubmoduleUpdateParams,
   HostThreadId,
 } from "@codexhost/shared-contracts";
 
@@ -33,6 +39,13 @@ export interface RendererGitClient {
     defaultModel: string | null;
   }>;
   generateGitMessage(input: GitMessageGenerateParams): Promise<{ message: string; model: string }>;
+  listGitSubmodules?(
+    input: GitWorkspaceParams,
+  ): Promise<{ submodules: { path: string; status: string }[] }>;
+  updateGitSubmodule?(input: GitSubmoduleUpdateParams): Promise<GitWorkspaceStatus>;
+  inspectGitLog?(input: GitLogParams): Promise<GitLogResult>;
+  inspectGitCommit?(input: GitCommitDetailParams): Promise<GitCommitDetail>;
+  inspectGitCommitDiff?(input: GitCommitDiffParams): Promise<GitDiffResult>;
 }
 
 export interface RendererGitContext {
@@ -133,6 +146,15 @@ export function createGitSettingsPage(
       changeList.className = "settings-git-change-list";
       changesPanel.append(changesHead, changeList);
 
+      const submodulePanel = document.createElement("section");
+      submodulePanel.className = "settings-git-submodules";
+      const submoduleHead = document.createElement("div");
+      submoduleHead.className = "settings-git-panel-title";
+      submoduleHead.textContent = messages.gitSubmodules;
+      const submoduleList = document.createElement("div");
+      submoduleList.className = "settings-git-submodule-list";
+      submodulePanel.append(submoduleHead, submoduleList);
+
       const diffPanel = document.createElement("section");
       diffPanel.className = "settings-git-diff";
       const diffHead = document.createElement("div");
@@ -205,7 +227,7 @@ export function createGitSettingsPage(
       branchRow.className = "settings-git-branch-row";
       const branchIcon = createRendererSettingsIcon("git", 14);
       branchRow.append(branchIcon, summary);
-      sidebar.append(sidebarHeader, composer, branchRow, changesPanel);
+      sidebar.append(sidebarHeader, composer, branchRow, changesPanel, submodulePanel);
       layout.append(sidebar, diffPanel);
 
       context.content.append(notice, layout);
@@ -431,6 +453,7 @@ export function createGitSettingsPage(
 
       const render = (): void => {
         changeList.replaceChildren();
+        submoduleList.replaceChildren();
         if (!current) {
           branchValue.textContent = messages.gitUnavailable;
           aheadValue.textContent = "";
@@ -510,6 +533,56 @@ export function createGitSettingsPage(
         if (!busy) updateBusy();
       };
 
+      const renderSubmodules = (): void => {
+        submoduleList.replaceChildren();
+        const entries = current?.submodules ?? [];
+        if (!entries.length) {
+          const empty = document.createElement("p");
+          empty.className = "settings-git-empty";
+          empty.textContent = messages.gitNoSubmodules;
+          submoduleList.append(empty);
+          return;
+        }
+        for (const submodule of entries) {
+          const row = document.createElement("div");
+          row.className = "settings-git-submodule";
+          const copy = document.createElement("span");
+          copy.className = "settings-git-submodule__copy";
+          const name = document.createElement("strong");
+          name.textContent = submodule.path;
+          const status = document.createElement("span");
+          status.textContent = submodule.status;
+          copy.append(name, status);
+          const update = createButton(
+            document,
+            submodule.status === "uninitialized"
+              ? messages.gitInitializeSubmodule
+              : messages.gitUpdateSubmodule,
+          );
+          const context = getContext();
+          update.disabled =
+            busy || submodule.status === "current" || !context.client?.updateGitSubmodule;
+          update.addEventListener("click", () => {
+            const request = getContext();
+            const client = request.client;
+            const threadId = request.threadId;
+            const updateSubmodule = client?.updateGitSubmodule;
+            if (!threadId || !updateSubmodule) return;
+            void run(
+              () =>
+                updateSubmodule({
+                  threadId,
+                  path: submodule.path,
+                  init: submodule.status === "uninitialized",
+                }),
+              messages.gitSubmoduleUpdated,
+            );
+          });
+          row.append(copy, update);
+          submoduleList.append(row);
+        }
+      };
+
       const load = async (): Promise<boolean> => {
         const request = getContext();
         if (!request.threadId || !request.client) {
@@ -524,6 +597,7 @@ export function createGitSettingsPage(
         try {
           current = await request.client.inspectGitStatus({ threadId: request.threadId });
           render();
+          renderSubmodules();
           const first = current.changes[0];
           if (first) await showDiffFor(first.path);
           return true;

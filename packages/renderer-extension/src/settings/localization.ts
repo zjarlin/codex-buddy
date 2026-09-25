@@ -261,9 +261,43 @@ export interface RendererSettingsMessages {
   readonly gitStagedSuccess: string;
   readonly gitUnstagedSuccess: string;
   readonly gitMessageGenerated: string;
+  readonly gitSubmodules: string;
+  readonly gitNoSubmodules: string;
+  readonly gitInitializeSubmodule: string;
+  readonly gitUpdateSubmodule: string;
+  readonly gitSubmoduleUpdated: string;
   readonly gitCommitted: string;
   readonly gitCommittedAndPushed: string;
   readonly gitDiffTruncated: string;
+  readonly projectSync: {
+    relay: string;
+    relayUnavailable: string;
+    pending: string;
+    accept: string;
+    reject: string;
+    gitRemote: string;
+    gitPlaceholder: string;
+    gitSave: string;
+    gitPull: string;
+    gitPush: string;
+    invite: string;
+    inviteCode: string;
+    code: string;
+    pair: string;
+    peers: string;
+    sync: string;
+    remove: string;
+    addPath: string;
+    add: string;
+    bind: string;
+    clone: string;
+    parent: string;
+    missing: string;
+    ready: string;
+    empty: string;
+    unavailable: string;
+    failure: string;
+  };
   readonly pageLabels: Readonly<Record<DefaultRendererSettingsPageId, string>>;
 }
 
@@ -542,14 +576,49 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   gitStagedSuccess: "Changes staged.",
   gitUnstagedSuccess: "Changes unstaged.",
   gitMessageGenerated: "Commit message generated.",
+  gitSubmodules: "Submodules",
+  gitNoSubmodules: "No Git submodules.",
+  gitInitializeSubmodule: "Initialize",
+  gitUpdateSubmodule: "Update",
+  gitSubmoduleUpdated: "Submodule updated.",
   gitCommitted: "Commit created.",
   gitCommittedAndPushed: "Commit created and pushed.",
   gitDiffTruncated: "Diff truncated for display.",
+  projectSync: Object.freeze({
+    relay: "Device pairing",
+    relayUnavailable: "Configure a WSS relay to pair devices.",
+    pending: "Pairing requests",
+    accept: "Allow",
+    reject: "Decline",
+    gitRemote: "Private Git catalog",
+    gitPlaceholder: "HTTPS or SSH repository URL",
+    gitSave: "Save repository",
+    gitPull: "Pull catalog",
+    gitPush: "Publish catalog",
+    invite: "Create pairing code",
+    inviteCode: "Pairing code (expires in 5 minutes)",
+    code: "Peer pairing code",
+    pair: "Pair device",
+    peers: "Paired devices",
+    sync: "Sync",
+    remove: "Remove",
+    addPath: "Repository root on this computer",
+    add: "Add project",
+    bind: "Bind local folder",
+    clone: "Clone",
+    parent: "Destination parent folder",
+    missing: "Not on this computer",
+    ready: "Local",
+    empty: "No projects yet.",
+    unavailable: "Local Host is unavailable.",
+    failure: "Project sync failed",
+  }),
   pageLabels: Object.freeze({
     connections: "Connections",
     appearance: "General",
     accounts: "Accounts",
     git: "Git",
+    "project-sync": "Projects",
     "session-import": "Session Import",
     updates: "Updates",
     about: "About",
@@ -823,14 +892,49 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   gitStagedSuccess: "已暂存变更。",
   gitUnstagedSuccess: "已取消暂存。",
   gitMessageGenerated: "已生成提交消息。",
+  gitSubmodules: "子模块",
+  gitNoSubmodules: "没有 Git 子模块。",
+  gitInitializeSubmodule: "初始化",
+  gitUpdateSubmodule: "更新",
+  gitSubmoduleUpdated: "已更新子模块。",
   gitCommitted: "已创建提交。",
   gitCommittedAndPushed: "已创建提交并推送。",
   gitDiffTruncated: "差异过大，已截断显示。",
+  projectSync: Object.freeze({
+    relay: "设备配对",
+    relayUnavailable: "需配置 WSS 中继后才能配对设备。",
+    pending: "待确认的配对",
+    accept: "同意",
+    reject: "拒绝",
+    gitRemote: "私有 Git 清单仓库",
+    gitPlaceholder: "HTTPS 或 SSH 仓库地址",
+    gitSave: "保存仓库",
+    gitPull: "拉取清单",
+    gitPush: "发布清单",
+    invite: "生成配对码",
+    inviteCode: "配对码（5 分钟有效）",
+    code: "对端配对码",
+    pair: "配对设备",
+    peers: "已配对设备",
+    sync: "同步",
+    remove: "移除",
+    addPath: "本机仓库根目录",
+    add: "添加项目",
+    bind: "绑定本机目录",
+    clone: "克隆",
+    parent: "目标父目录",
+    missing: "本机未检出",
+    ready: "本机可用",
+    empty: "暂无项目。",
+    unavailable: "本地 Host 不可用。",
+    failure: "项目同步失败",
+  }),
   pageLabels: Object.freeze({
     connections: "连接",
     appearance: "通用",
     accounts: "账号",
     git: "Git",
+    "project-sync": "项目",
     "session-import": "会话导入",
     updates: "更新",
     about: "关于",

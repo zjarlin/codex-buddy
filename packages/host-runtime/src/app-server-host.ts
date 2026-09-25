@@ -26,11 +26,20 @@ import {
   GIT_PUSH_METHOD,
   GIT_MESSAGE_MODEL_METHOD,
   GIT_MESSAGE_GENERATE_METHOD,
+  GIT_SUBMODULES_METHOD,
+  GIT_SUBMODULE_UPDATE_METHOD,
+  GIT_LOG_METHOD,
+  GIT_COMMIT_DETAIL_METHOD,
+  GIT_COMMIT_DIFF_METHOD,
   gitWorkspaceParamsSchema,
   gitDiffParamsSchema,
   gitStageParamsSchema,
   gitCommitParamsSchema,
   gitMessageGenerateParamsSchema,
+  gitSubmoduleUpdateParamsSchema,
+  gitLogParamsSchema,
+  gitCommitDetailParamsSchema,
+  gitCommitDiffParamsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
@@ -38,6 +47,30 @@ import {
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
+import { ProjectSyncPeer } from "./project-sync-peer.js";
+import {
+  PROJECT_SYNC_INSPECT_METHOD,
+  PROJECT_SYNC_INVITE_METHOD,
+  PROJECT_SYNC_PAIR_METHOD,
+  PROJECT_SYNC_ACCEPT_METHOD,
+  PROJECT_SYNC_REJECT_METHOD,
+  PROJECT_SYNC_GIT_CONFIGURE_METHOD,
+  PROJECT_SYNC_GIT_PULL_METHOD,
+  PROJECT_SYNC_GIT_PUSH_METHOD,
+  PROJECT_SYNC_SYNC_METHOD,
+  PROJECT_SYNC_REMOVE_PEER_METHOD,
+  PROJECT_SYNC_ADD_METHOD,
+  PROJECT_SYNC_BIND_METHOD,
+  PROJECT_SYNC_CLONE_METHOD,
+  projectSyncPairParamsSchema,
+  projectSyncRequestParamsSchema,
+  projectSyncGitConfigureParamsSchema,
+  projectSyncPeerParamsSchema,
+  projectSyncAddParamsSchema,
+  projectSyncBindParamsSchema,
+  projectSyncCloneParamsSchema,
+  projectSyncEmptyParamsSchema,
+} from "@codexhost/shared-contracts";
 import type { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import os from "node:os";
@@ -544,6 +577,7 @@ export class AppServerHost {
   #delegationCoordinator: HarnessDelegationCoordinator;
   #sessionImportRequests: SessionImportRequests | undefined;
   readonly #gitWorkspace = new GitWorkspace();
+  readonly #projectSync: ProjectSyncPeer;
   #unregisterDelegationApi: (() => void) | undefined;
   #unsubscribeAccountState: (() => void) | undefined;
   #activeOfficialTurns = new Map<string, string>();
@@ -576,6 +610,7 @@ export class AppServerHost {
     };
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
+    this.#projectSync = new ProjectSyncPeer(environment);
     const permanentHome = path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
     this.#ownsOfficialRuntimeScope = options.officialRuntimeScope === undefined;
     this.#officialRuntimeScope =
@@ -795,6 +830,7 @@ export class AppServerHost {
   }
 
   async #closeOfficialRuntime(): Promise<void> {
+    await this.#projectSync.close();
     this.#buddy?.close();
     this.#privateChat?.close();
     this.#nativeAccountObserver?.close();
@@ -1171,9 +1207,32 @@ export class AppServerHost {
       request.method === GIT_COMMIT_METHOD ||
       request.method === GIT_PUSH_METHOD ||
       request.method === GIT_MESSAGE_MODEL_METHOD ||
-      request.method === GIT_MESSAGE_GENERATE_METHOD
+      request.method === GIT_MESSAGE_GENERATE_METHOD ||
+      request.method === GIT_SUBMODULES_METHOD ||
+      request.method === GIT_SUBMODULE_UPDATE_METHOD ||
+      request.method === GIT_LOG_METHOD ||
+      request.method === GIT_COMMIT_DETAIL_METHOD ||
+      request.method === GIT_COMMIT_DIFF_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleGitRequest(request));
+      return;
+    }
+    if (
+      request.method === PROJECT_SYNC_INSPECT_METHOD ||
+      request.method === PROJECT_SYNC_INVITE_METHOD ||
+      request.method === PROJECT_SYNC_PAIR_METHOD ||
+      request.method === PROJECT_SYNC_ACCEPT_METHOD ||
+      request.method === PROJECT_SYNC_REJECT_METHOD ||
+      request.method === PROJECT_SYNC_GIT_CONFIGURE_METHOD ||
+      request.method === PROJECT_SYNC_GIT_PULL_METHOD ||
+      request.method === PROJECT_SYNC_GIT_PUSH_METHOD ||
+      request.method === PROJECT_SYNC_SYNC_METHOD ||
+      request.method === PROJECT_SYNC_REMOVE_PEER_METHOD ||
+      request.method === PROJECT_SYNC_ADD_METHOD ||
+      request.method === PROJECT_SYNC_BIND_METHOD ||
+      request.method === PROJECT_SYNC_CLONE_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleProjectSyncRequest(request));
       return;
     }
     if (
@@ -2475,6 +2534,78 @@ export class AppServerHost {
     return cwd;
   }
 
+  async #handleProjectSyncRequest(request: JsonRpcRequest): Promise<void> {
+    const method = request.method;
+    const schema =
+      method === PROJECT_SYNC_PAIR_METHOD
+        ? projectSyncPairParamsSchema
+        : method === PROJECT_SYNC_ACCEPT_METHOD || method === PROJECT_SYNC_REJECT_METHOD
+          ? projectSyncRequestParamsSchema
+          : method === PROJECT_SYNC_GIT_CONFIGURE_METHOD
+            ? projectSyncGitConfigureParamsSchema
+            : method === PROJECT_SYNC_SYNC_METHOD || method === PROJECT_SYNC_REMOVE_PEER_METHOD
+              ? projectSyncPeerParamsSchema
+              : method === PROJECT_SYNC_ADD_METHOD
+                ? projectSyncAddParamsSchema
+                : method === PROJECT_SYNC_BIND_METHOD
+                  ? projectSyncBindParamsSchema
+                  : method === PROJECT_SYNC_CLONE_METHOD
+                    ? projectSyncCloneParamsSchema
+                    : projectSyncEmptyParamsSchema;
+    const parsed = schema.safeParse(request.params);
+    if (!parsed.success) {
+      await this.#writer.json(rpcError(request, -32602, "Invalid project sync params"));
+      return;
+    }
+    try {
+      let result;
+      if (method === PROJECT_SYNC_INVITE_METHOD) {
+        result = await this.#projectSync.invite();
+      } else if (method === PROJECT_SYNC_PAIR_METHOD) {
+        result = await this.#projectSync.pair(
+          projectSyncPairParamsSchema.parse(request.params).code,
+        );
+      } else if (method === PROJECT_SYNC_ACCEPT_METHOD) {
+        result = await this.#projectSync.accept(
+          projectSyncRequestParamsSchema.parse(request.params).requestId,
+        );
+      } else if (method === PROJECT_SYNC_REJECT_METHOD) {
+        result = await this.#projectSync.reject(
+          projectSyncRequestParamsSchema.parse(request.params).requestId,
+        );
+      } else if (method === PROJECT_SYNC_GIT_CONFIGURE_METHOD) {
+        result = await this.#projectSync.configureGit(
+          projectSyncGitConfigureParamsSchema.parse(request.params).remote,
+        );
+      } else if (method === PROJECT_SYNC_GIT_PULL_METHOD) {
+        result = await this.#projectSync.pullGit();
+      } else if (method === PROJECT_SYNC_GIT_PUSH_METHOD) {
+        result = await this.#projectSync.pushGit();
+      } else if (method === PROJECT_SYNC_ADD_METHOD) {
+        result = await this.#projectSync.add(projectSyncAddParamsSchema.parse(request.params).path);
+      } else if (method === PROJECT_SYNC_BIND_METHOD) {
+        const { remote, path } = projectSyncBindParamsSchema.parse(request.params);
+        result = await this.#projectSync.bind(remote, path);
+      } else if (method === PROJECT_SYNC_CLONE_METHOD) {
+        const { remote, parent } = projectSyncCloneParamsSchema.parse(request.params);
+        result = await this.#projectSync.clone(remote, parent);
+      } else if (method === PROJECT_SYNC_SYNC_METHOD) {
+        result = await this.#projectSync.sync(
+          projectSyncPeerParamsSchema.parse(request.params).peerId,
+        );
+      } else if (method === PROJECT_SYNC_REMOVE_PEER_METHOD) {
+        result = await this.#projectSync.removePeer(
+          projectSyncPeerParamsSchema.parse(request.params).peerId,
+        );
+      } else {
+        result = await this.#projectSync.inspect();
+      }
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 2000)));
+    }
+  }
+
   async #handleGitRequest(request: JsonRpcRequest): Promise<void> {
     try {
       if (request.method === GIT_MESSAGE_MODEL_METHOD) {
@@ -2483,6 +2614,55 @@ export class AppServerHost {
         await this.#gitWorkspaceForThread(params.data.threadId);
         const result = await this.#gitWorkspace.messageModels(
           this.#options.environment ?? process.env,
+        );
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_SUBMODULES_METHOD) {
+        const params = gitWorkspaceParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.submodules(cwd);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_SUBMODULE_UPDATE_METHOD) {
+        const params = gitSubmoduleUpdateParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 子模块参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.updateSubmodule(cwd, params.data);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_LOG_METHOD) {
+        const params = gitLogParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 日志参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.log(cwd, params.data.limit);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_COMMIT_DETAIL_METHOD) {
+        const params = gitCommitDetailParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 提交详情参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.commitDetail(cwd, params.data.commit);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_COMMIT_DIFF_METHOD) {
+        const params = gitCommitDiffParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 提交 diff 参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.commitDiff(
+          cwd,
+          params.data.commit,
+          params.data.path,
         );
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;

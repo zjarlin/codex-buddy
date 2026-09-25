@@ -1793,6 +1793,7 @@ describe("Renderer Git page", () => {
       unstaged: true,
       untracked: false,
       conflicted: false,
+      submodule: null,
     };
     const stagedStatus = {
       workspace: "/repo",
@@ -1802,6 +1803,7 @@ describe("Renderer Git page", () => {
       upstream: "origin/main",
       ahead: 0,
       behind: 0,
+      submodules: [],
       changes: [
         { ...change, indexStatus: "M", workTreeStatus: " ", staged: true, unstaged: false },
       ],
@@ -1817,6 +1819,7 @@ describe("Renderer Git page", () => {
           upstream: "origin/main",
           ahead: 0,
           behind: 0,
+          submodules: [],
           changes: [change],
         })
         .mockResolvedValue(stagedStatus),
@@ -1878,6 +1881,7 @@ describe("Renderer Git page", () => {
     await vi.waitFor(() => expect(client.inspectGitStatus).toHaveBeenCalled());
     await vi.waitFor(() => expect(client.listGitMessageModels).toHaveBeenCalled());
     await vi.waitFor(() => expect(client.inspectGitDiff).toHaveBeenCalled());
+
 
     const hunk = descendants(content).find(
       ({ className }) => className === "settings-git-diff-hunk",

@@ -1,4 +1,35 @@
 import {
+  PROJECT_SYNC_INSPECT_METHOD,
+  PROJECT_SYNC_INVITE_METHOD,
+  PROJECT_SYNC_PAIR_METHOD,
+  PROJECT_SYNC_ACCEPT_METHOD,
+  PROJECT_SYNC_REJECT_METHOD,
+  PROJECT_SYNC_GIT_CONFIGURE_METHOD,
+  PROJECT_SYNC_GIT_PULL_METHOD,
+  PROJECT_SYNC_GIT_PUSH_METHOD,
+  PROJECT_SYNC_SYNC_METHOD,
+  PROJECT_SYNC_REMOVE_PEER_METHOD,
+  PROJECT_SYNC_ADD_METHOD,
+  PROJECT_SYNC_BIND_METHOD,
+  PROJECT_SYNC_CLONE_METHOD,
+  projectSyncSnapshotSchema,
+  projectSyncInviteSchema,
+  projectSyncPairParamsSchema,
+  projectSyncRequestParamsSchema,
+  projectSyncGitConfigureParamsSchema,
+  projectSyncPeerParamsSchema,
+  projectSyncAddParamsSchema,
+  projectSyncBindParamsSchema,
+  projectSyncCloneParamsSchema,
+  type ProjectSyncSnapshot,
+  type ProjectSyncInvite,
+  type ProjectSyncPairParams,
+  type ProjectSyncRequestParams,
+  type ProjectSyncGitConfigureParams,
+  type ProjectSyncPeerParams,
+  type ProjectSyncAddParams,
+  type ProjectSyncBindParams,
+  type ProjectSyncCloneParams,
   GIT_STATUS_METHOD,
   GIT_DIFF_METHOD,
   GIT_STAGE_METHOD,
@@ -7,16 +38,28 @@ import {
   GIT_PUSH_METHOD,
   GIT_MESSAGE_MODEL_METHOD,
   GIT_MESSAGE_GENERATE_METHOD,
+  GIT_SUBMODULES_METHOD,
+  GIT_SUBMODULE_UPDATE_METHOD,
+  GIT_LOG_METHOD,
+  GIT_COMMIT_DETAIL_METHOD,
+  GIT_COMMIT_DIFF_METHOD,
   gitWorkspaceParamsSchema,
   gitDiffParamsSchema,
   gitStageParamsSchema,
   gitCommitParamsSchema,
   gitMessageGenerateParamsSchema,
+  gitSubmoduleUpdateParamsSchema,
+  gitLogParamsSchema,
+  gitCommitDetailParamsSchema,
+  gitCommitDiffParamsSchema,
   gitWorkspaceStatusSchema,
   gitDiffResultSchema,
   gitCommitResultSchema,
   gitMessageModelsSchema,
   gitGeneratedMessageSchema,
+  gitSubmoduleListSchema,
+  gitLogResultSchema,
+  gitCommitDetailSchema,
   type GitWorkspaceParams,
   type GitDiffParams,
   type GitStageParams,
@@ -27,6 +70,13 @@ import {
   type GitCommitResult,
   type GitMessageModels,
   type GitGeneratedMessage,
+  type GitSubmoduleList,
+  type GitLogParams,
+  type GitLogResult,
+  type GitCommitDetail,
+  type GitCommitDetailParams,
+  type GitCommitDiffParams,
+  type GitSubmoduleUpdateParams,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   buddyInterruptedSchema,
@@ -206,6 +256,19 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 }
 
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
+  inspectProjectSync?(): Promise<ProjectSyncSnapshot>;
+  inviteProjectSync?(): Promise<ProjectSyncInvite>;
+  pairProjectSync?(input: ProjectSyncPairParams): Promise<ProjectSyncSnapshot>;
+  acceptProjectSync?(input: ProjectSyncRequestParams): Promise<ProjectSyncSnapshot>;
+  rejectProjectSync?(input: ProjectSyncRequestParams): Promise<ProjectSyncSnapshot>;
+  configureProjectSyncGit?(input: ProjectSyncGitConfigureParams): Promise<ProjectSyncSnapshot>;
+  pullProjectSyncGit?(): Promise<ProjectSyncSnapshot>;
+  pushProjectSyncGit?(): Promise<ProjectSyncSnapshot>;
+  syncProjectSync?(input: ProjectSyncPeerParams): Promise<ProjectSyncSnapshot>;
+  removeProjectSyncPeer?(input: ProjectSyncPeerParams): Promise<ProjectSyncSnapshot>;
+  addProjectSync?(input: ProjectSyncAddParams): Promise<ProjectSyncSnapshot>;
+  bindProjectSync?(input: ProjectSyncBindParams): Promise<ProjectSyncSnapshot>;
+  cloneProjectSync?(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot>;
   inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
   stageGitPaths?(input: GitStageParams): Promise<GitWorkspaceStatus>;
@@ -214,6 +277,11 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   pushGit?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   listGitMessageModels?(input: GitWorkspaceParams): Promise<GitMessageModels>;
   generateGitMessage?(input: GitMessageGenerateParams): Promise<GitGeneratedMessage>;
+  listGitSubmodules?(input: GitWorkspaceParams): Promise<GitSubmoduleList>;
+  updateGitSubmodule?(input: GitSubmoduleUpdateParams): Promise<GitWorkspaceStatus>;
+  inspectGitLog?(input: GitLogParams): Promise<GitLogResult>;
+  inspectGitCommit?(input: GitCommitDetailParams): Promise<GitCommitDetail>;
+  inspectGitCommitDiff?(input: GitCommitDiffParams): Promise<GitDiffResult>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -379,6 +447,97 @@ export function createRendererModelClient(
   };
 
   return Object.freeze({
+    async inspectProjectSync(): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(PROJECT_SYNC_INSPECT_METHOD, {}),
+      );
+    },
+    async inviteProjectSync(): Promise<ProjectSyncInvite> {
+      return projectSyncInviteSchema.parse(
+        await manager.sendRequest(PROJECT_SYNC_INVITE_METHOD, {}),
+      );
+    },
+    async pairProjectSync(input: ProjectSyncPairParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_PAIR_METHOD,
+          projectSyncPairParamsSchema.parse(input),
+        ),
+      );
+    },
+    async acceptProjectSync(input: ProjectSyncRequestParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_ACCEPT_METHOD,
+          projectSyncRequestParamsSchema.parse(input),
+        ),
+      );
+    },
+    async rejectProjectSync(input: ProjectSyncRequestParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_REJECT_METHOD,
+          projectSyncRequestParamsSchema.parse(input),
+        ),
+      );
+    },
+    async configureProjectSyncGit(
+      input: ProjectSyncGitConfigureParams,
+    ): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_GIT_CONFIGURE_METHOD,
+          projectSyncGitConfigureParamsSchema.parse(input),
+        ),
+      );
+    },
+    async pullProjectSyncGit(): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(PROJECT_SYNC_GIT_PULL_METHOD, {}),
+      );
+    },
+    async pushProjectSyncGit(): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(PROJECT_SYNC_GIT_PUSH_METHOD, {}),
+      );
+    },
+    async syncProjectSync(input: ProjectSyncPeerParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_SYNC_METHOD,
+          projectSyncPeerParamsSchema.parse(input),
+        ),
+      );
+    },
+    async removeProjectSyncPeer(input: ProjectSyncPeerParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_REMOVE_PEER_METHOD,
+          projectSyncPeerParamsSchema.parse(input),
+        ),
+      );
+    },
+    async addProjectSync(input: ProjectSyncAddParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(PROJECT_SYNC_ADD_METHOD, projectSyncAddParamsSchema.parse(input)),
+      );
+    },
+    async bindProjectSync(input: ProjectSyncBindParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_BIND_METHOD,
+          projectSyncBindParamsSchema.parse(input),
+        ),
+      );
+    },
+    async cloneProjectSync(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot> {
+      return projectSyncSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROJECT_SYNC_CLONE_METHOD,
+          projectSyncCloneParamsSchema.parse(input),
+        ),
+      );
+    },
     async inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
       const params = gitWorkspaceParamsSchema.parse(input);
       return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_STATUS_METHOD, params));
@@ -413,6 +572,32 @@ export function createRendererModelClient(
       const params = gitMessageGenerateParamsSchema.parse(input);
       return gitGeneratedMessageSchema.parse(
         await manager.sendRequest(GIT_MESSAGE_GENERATE_METHOD, params),
+      );
+    },
+    async listGitSubmodules(input: GitWorkspaceParams): Promise<GitSubmoduleList> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitSubmoduleListSchema.parse(await manager.sendRequest(GIT_SUBMODULES_METHOD, params));
+    },
+    async updateGitSubmodule(input: GitSubmoduleUpdateParams): Promise<GitWorkspaceStatus> {
+      const params = gitSubmoduleUpdateParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(
+        await manager.sendRequest(GIT_SUBMODULE_UPDATE_METHOD, params),
+      );
+    },
+    async inspectGitLog(input: GitLogParams): Promise<GitLogResult> {
+      const params = gitLogParamsSchema.parse(input);
+      return gitLogResultSchema.parse(await manager.sendRequest(GIT_LOG_METHOD, params));
+    },
+    async inspectGitCommit(input: GitCommitDetailParams): Promise<GitCommitDetail> {
+      const params = gitCommitDetailParamsSchema.parse(input);
+      return gitCommitDetailSchema.parse(
+        await manager.sendRequest(GIT_COMMIT_DETAIL_METHOD, params),
+      );
+    },
+    async inspectGitCommitDiff(input: GitCommitDiffParams): Promise<GitDiffResult> {
+      const params = gitCommitDiffParamsSchema.parse(input);
+      return gitDiffResultSchema.parse(
+        await manager.sendRequest(GIT_COMMIT_DIFF_METHOD, params),
       );
     },
     buddyPrivate: async (input: BuddyPrivateRequest) => {

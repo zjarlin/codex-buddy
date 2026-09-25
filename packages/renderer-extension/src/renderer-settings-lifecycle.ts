@@ -10,6 +10,7 @@ import {
   type RendererConnectionDiagnostics,
   type RendererCodexAccountClient,
   type RendererGitContext,
+  type ProjectSyncClient,
   type RendererUpdateClient,
 } from "./settings/pages.js";
 import type {
@@ -32,6 +33,7 @@ export interface RendererSettingsLifecycleOptions {
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getGitContext?(): RendererGitContext;
+  getProjectSyncClient?(): ProjectSyncClient | null;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
 }
@@ -80,6 +82,7 @@ export function installRendererSettingsLifecycle(
       },
       options.getLoadedSessionsClient ?? (() => null),
       options.getGitContext ?? (() => ({ threadId: null, client: null })),
+      options.getProjectSyncClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);
     const nextTrigger = installRendererSettingsHeaderTrigger({

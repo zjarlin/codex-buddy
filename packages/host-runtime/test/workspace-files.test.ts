@@ -1,10 +1,14 @@
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { listWorkspaceFiles, readWorkspaceFile } from "../src/workspace-files.js";
+import {
+  listWorkspaceFiles,
+  readWorkspaceFile,
+  writeWorkspaceFile,
+} from "../src/workspace-files.js";
 
 const cleanup: string[] = [];
 
@@ -86,5 +90,40 @@ describe("workspace files", () => {
     expect(result.truncated).toBe(true);
     expect(result.content).toHaveLength(1024 * 1024);
     expect(result.size).toBe(1024 * 1024 + 32);
+  });
+
+  it("writes text with revision validation and returns the new revision", async () => {
+    const directory = await workspace();
+    const before = await readWorkspaceFile(directory, "src/app.ts");
+
+    const saved = await writeWorkspaceFile(
+      directory,
+      "src/app.ts",
+      "export const app = false;\n",
+      before.revision,
+    );
+
+    expect(await readFile(path.join(directory, "src/app.ts"), "utf8")).toBe(
+      "export const app = false;\n",
+    );
+    await expect(readWorkspaceFile(directory, "src/app.ts")).resolves.toMatchObject({
+      content: "export const app = false;\n",
+      revision: saved.revision,
+      truncated: false,
+    });
+  });
+
+  it("rejects stale revisions and binary writes", async () => {
+    const directory = await workspace();
+    const before = await readWorkspaceFile(directory, "src/app.ts");
+    await writeFile(path.join(directory, "src/app.ts"), "external change\n");
+
+    await expect(
+      writeWorkspaceFile(directory, "src/app.ts", "editor change\n", before.revision),
+    ).rejects.toThrow("其他程序修改");
+    const binary = await readWorkspaceFile(directory, "src/nested/data.bin");
+    await expect(
+      writeWorkspaceFile(directory, "src/nested/data.bin", "text\n", binary.revision),
+    ).rejects.toThrow("二进制文件");
   });
 });

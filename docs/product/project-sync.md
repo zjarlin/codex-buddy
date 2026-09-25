@@ -4,11 +4,11 @@ CodexBuddy 的「设置 → 项目」维护独立项目清单，不修改 Codex 
 
 ## 设备配对
 
-配置 `CODEXHOST_PROJECT_SYNC_RELAY_URL=wss://your-relay.example` 后，两台客户端主动连接同一个中继，不需要公网 IP、入站端口、用户账号或 frpc。设备 A 点击「生成配对码」，设备 B 输入八位码，设备 A 在「待确认的配对」中核对名称与指纹并点击「同意」。邀请码五分钟有效；拒绝不会建立信任。配对完成后选择设备「同步」，交换项目名称和 Git origin URL。
+默认使用 `wss://aio.addzero.site/codexhost-relay/`，也可用 `CODEXHOST_PROJECT_SYNC_RELAY_URL` 覆盖。两台客户端主动连接同一个中继，不需要公网 IP、入站端口、用户账号或 frpc。设备 A 点击「生成配对码」，设备 B 输入八位码，设备 A 在「待确认的配对」中核对名称与指纹并点击「同意」。邀请码五分钟有效；拒绝不会建立信任。配对完成后选择设备「同步」，交换项目名称和 Git origin URL。
 
 中继只转发短码、设备公钥、审批信令与加密消息，不持久保存清单。设备身份使用本机 Ed25519 密钥，项目消息由 X25519 派生密钥后用 AES-256-GCM 加密。客户端仅允许 WSS；`ws://127.0.0.1` 和 `ws://localhost` 仅供本机测试。重启后配对关系保留，客户端在设置页可用时重新注册；撤销只清除本机信任，另一台设备仍需自行撤销。中继是传输服务，不是严格的 P2P 直连。
 
-自托管：在仓库根目录执行 `npm run build:typescript`，然后运行 `CODEXHOST_RELAY_HOST=127.0.0.1 CODEXHOST_RELAY_PORT=8642 node scripts/project-sync-relay.mjs`。生产环境需将该端口置于 HTTPS 反向代理之后，公开 WSS 地址，并配置访问限流及运行监控。不要把生产 frps 的共享 token 交给客户端。当前未部署默认公网中继，也没有在两台真实公网设备上验收。
+自托管：在仓库根目录执行 `npm run build:typescript`，然后运行 `CODEXHOST_RELAY_HOST=127.0.0.1 CODEXHOST_RELAY_PORT=8642 node scripts/project-sync-relay.mjs`。生产环境需将该端口置于 HTTPS 反向代理之后，公开 WSS 地址，并配置访问限流及运行监控。不要把生产 frps 的共享 token 交给客户端。
 
 ## Git 清单
 

@@ -56,6 +56,8 @@ export const buddySettingsSchema = z
     role: z.enum(["auto", "git", "io", "executor"]).default("auto"),
     bypass: z.boolean().default(true),
     jev: z.boolean().default(true),
+    // System One 模型名同时是网关平台选择器：`typesafe/jev` 或内网 `laya`。
+    systemOneModel: z.string().trim().min(1).max(200).default("typesafe/jev"),
     plannerModel: z.string().max(200).nullable().default(null),
     executorModel: z.string().max(200).nullable().default(null),
   })
@@ -110,7 +112,8 @@ export const buddyDecisionSchema = z.object({
   involvedModels: z.array(z.string()).default([]),
   judgment: z
     .object({
-      source: z.literal("jev"),
+      // System One 决策来源：JEV 或本地 Laya，同一 wire protocol、不同上游平台。
+      source: z.enum(["system-one"]),
       model: z.string(),
       decisions: z.record(
         z.string(),
@@ -148,6 +151,7 @@ export const buddySnapshotSchema = z.object({
   jevKeyConfigured: z.boolean().default(false),
   jevBaseUrl: z.string().nullable().default(null),
 });
+export const systemOneModelValues = ["typesafe/jev", "laya"] as const;
 export type BuddyModel = z.infer<typeof buddyModelSchema>;
 export type BuddyModelRefresh = z.infer<typeof buddyModelRefreshSchema>;
 export type BuddyDecision = z.infer<typeof buddyDecisionSchema>;

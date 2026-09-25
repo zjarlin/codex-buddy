@@ -99,6 +99,76 @@ describe("GitWorkspace", () => {
     expect(result.diff).toContain("+new");
   });
 
+  it("returns both sides of a changed and untracked file", async () => {
+    const directory = await repository();
+    await writeFile(path.join(directory, "tracked.txt"), "two\n");
+    await writeFile(path.join(directory, "new.txt"), "new\n");
+    const workspace = new GitWorkspace(testGitEnvironment);
+
+    const tracked = await workspace.content(directory, "tracked.txt");
+    expect(tracked).toMatchObject({
+      path: "tracked.txt",
+      baseLabel: "HEAD",
+      base: "one\n",
+      working: "two\n",
+      conflicted: false,
+      ours: null,
+      theirs: null,
+      binary: false,
+    });
+    expect(tracked.revision).toMatch(/^[a-f0-9]{64}$/u);
+
+    await expect(workspace.content(directory, "new.txt")).resolves.toMatchObject({
+      path: "new.txt",
+      baseLabel: "空文件",
+      base: "",
+      working: "new\n",
+      conflicted: false,
+    });
+  });
+
+  it("returns conflict stages for a conflicted file", async () => {
+    const directory = await repository();
+    await execFileAsync("git", ["-C", directory, "checkout", "-qb", "feature"]);
+    await writeFile(path.join(directory, "tracked.txt"), "feature\n");
+    await execFileAsync("git", ["-C", directory, "commit", "-qam", "feature"]);
+    await execFileAsync("git", ["-C", directory, "checkout", "-q", "-"]);
+    await writeFile(path.join(directory, "tracked.txt"), "main\n");
+    await execFileAsync("git", ["-C", directory, "commit", "-qam", "main"]);
+    await expect(execFileAsync("git", ["-C", directory, "merge", "feature"])).rejects.toMatchObject(
+      { code: 1 },
+    );
+    await writeFile(
+      path.join(directory, "tracked.txt"),
+      "main\n<<<<<<< HEAD\nmain\n=======\nfeature\n>>>>>>> feature\n",
+    );
+
+    const result = await new GitWorkspace(testGitEnvironment).content(directory, "tracked.txt");
+
+    expect(result).toMatchObject({
+      path: "tracked.txt",
+      baseLabel: "BASE",
+      base: "one\n",
+      conflicted: true,
+      ours: "main\n",
+      theirs: "feature\n",
+    });
+  });
+
+  it("marks a binary working tree file as not editable", async () => {
+    const directory = await repository();
+    await writeFile(path.join(directory, "tracked.bin"), Buffer.from([0, 1, 2, 3]));
+
+    const result = await new GitWorkspace(testGitEnvironment).content(directory, "tracked.bin");
+
+    expect(result).toMatchObject({
+      path: "tracked.bin",
+      working: "",
+      binary: true,
+      truncated: false,
+    });
+  });
+
   it("stages selected paths and creates a commit", async () => {
     const directory = await repository();
     await writeFile(path.join(directory, "tracked.txt"), "two\n");

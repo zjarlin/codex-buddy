@@ -15,7 +15,7 @@
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`architecture/harness-plugin-runtime.md`](architecture/harness-plugin-runtime.md) | 当前插件加载、预装发行、运行时契约与安全边界；修改插件系统时首先阅读。 |
-| [`architecture/jev-decisions.md`](architecture/jev-decisions.md) | Jev 批量类型化判断、响应校验与代码阈值策略；在 Agent 循环中调用决策模型时阅读。 |
+| [`architecture/jev-decisions.md`](architecture/jev-decisions.md) | System One（JEV / Laya）批量类型化判断、响应校验与代码阈值策略；在 Agent 循环中调用决策模型时阅读。 |
 | [`architecture/harness-plugin-architecture.md`](architecture/harness-plugin-architecture.md) | 插件化目标架构与未完成迁移方案；规划后续解耦时阅读，接口示例不代表当前 API。 |
 | [`architecture/harness-command-integration.md`](architecture/harness-command-integration.md) | Harness 原生命令的 Adapter、Host、Renderer 边界；新增命令能力时阅读。 |
 | [`architecture/harness-executable-discovery.md`](architecture/harness-executable-discovery.md) | Harness CLI 的跨平台发现和 DSH 特殊连接范围；修改发现或启动逻辑时阅读。 |
@@ -27,7 +27,8 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
-| [`product/workspace-files.md`](product/workspace-files.md) | 左侧工作区文件树、Host 文件读取契约、预览行为和路径安全限制；维护文件浏览器时阅读。 |
+| [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏操作与列表、聊天区域差异、关闭与布局行为；维护 Git 界面时阅读。 |
+| [`product/workspace-files.md`](product/workspace-files.md) | 左侧工作区文件树、CodeMirror 编辑与保存契约、revision 冲突保护和路径安全限制；维护文件浏览器时阅读。 |
 
 ## Harness 专项
 

@@ -262,8 +262,8 @@ for (const colorScheme of ["light", "dark"] as const) {
         total: 0,
       },
       judgment: {
-        source: "jev",
-        model: "jev-latest",
+        source: "system-one",
+        model: "typesafe/jev",
         decisions: {
           route: { status: "automatic", strength: 0.92, basis: "confidence-and-probability" },
           push: { status: "automatic", strength: 0.97, basis: "outcome-probability" },

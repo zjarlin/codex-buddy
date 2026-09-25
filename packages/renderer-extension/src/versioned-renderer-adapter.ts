@@ -1106,6 +1106,13 @@ export function installCurrentRendererAdapter(): {
       if (!client.inspectGitDiff) throw new Error("Git workspace diff is unavailable");
       return client.inspectGitDiff(input);
     },
+    inspectGitContent: (
+      input: Parameters<NonNullable<RendererModelClient["inspectGitContent"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.inspectGitContent) throw new Error("Git workspace content is unavailable");
+      return client.inspectGitContent(input);
+    },
     stageGitPaths: (input: Parameters<NonNullable<RendererModelClient["stageGitPaths"]>>[0]) => {
       const client = currentModelClient();
       if (!client.stageGitPaths) throw new Error("Git workspace staging is unavailable");

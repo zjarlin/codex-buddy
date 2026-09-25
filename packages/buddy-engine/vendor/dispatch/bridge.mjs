@@ -1,8 +1,4 @@
-import { join, resolve } from 'node:path';
-import { readJson } from '../runtime/index.mjs';
-import { normalizeDispatch } from './model.mjs';
-import { resolveDispatch } from './resolve.mjs';
-import { shellCommand } from './command.mjs';
+import { resolve } from 'node:path';
 
 // Only server-confirmed permissions count. turn/start overrides are not applied by shellCommand.
 export function compatibleTurn(params, thread, platform = process.platform) {
@@ -31,16 +27,6 @@ export function turnState(params, previous = {}) {
     approvalPolicy: params.approvalPolicy || previous.approvalPolicy, environments: params.environments || previous.environments,
     mode: params.collaborationMode?.mode || previous.mode };
 }
-export async function prepareDispatch(home, params, thread) {
-  if (!compatibleTurn(params, thread)) return null;
-  const policy = await readJson(join(home, 'model-router', 'policy.json'), {});
-  const settings = normalizeDispatch(policy.dispatch);
-  if (policy.enabled === false || !settings.enabled) return null;
-  const plan = await resolveDispatch(params.input[0].text, thread.cwd);
-  if (plan.route !== 'tool') return null;
-  return { ...plan, timeoutMs: settings.timeoutMs, command: shellCommand(plan.recipe, params.input[0].text, process.argv[1]) };
-}
-
 export function dispatchLifecycle({ send, warn, record, release }) {
   const requests = new Map(), threads = new Map();
   const state = (entry, extra = {}) => ({ at: new Date().toISOString(), threadId: entry.threadId, turnId: entry.turn?.id || null,

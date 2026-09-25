@@ -95,6 +95,7 @@ import type {
   RendererConnectionSnapshot,
 } from "./settings/pages.js";
 import type { RendererGitClient } from "./renderer-git-sidebar.js";
+import type { RendererProjectSyncClient } from "./renderer-project-sync-panel.js";
 
 const externalHarnessIds = {
   pi: harnessIdSchema.parse("pi"),
@@ -726,18 +727,26 @@ export function installRendererBindingProbe(
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
   const gitSidebar = installRendererGitSidebar({
+    getProjectSyncClient: () => projectSyncClientForLocalHost(),
     getContext: () => {
+      const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
       for (const mounted of mountedByComposer.values()) {
-        if (!mounted.composer.isConnected) continue;
-        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        if (
+          !mounted.composer.isConnected ||
+          mounted.composer.getClientRects().length === 0 ||
+          (mainSurface && !mainSurface.contains(mounted.composer))
+        )
+          continue;
+        const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
         if (!threadId) continue;
-        const hostId = mounted.hostId ?? activeModelHostId();
+        const hostId = activeModelHostId() ?? mounted.hostId;
         const client = hostId ? modelClientForHost(hostId) : null;
         if (
           !client?.inspectGitStatus ||
           !client.inspectGitDiff ||
           !client.listWorkspaceFiles ||
-          !client.readWorkspaceFile
+          !client.readWorkspaceFile ||
+          !client.writeWorkspaceFile
         )
           continue;
         return { threadId, client: client as RendererGitClient };
@@ -747,38 +756,7 @@ export function installRendererBindingProbe(
   });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
-    getProjectSyncClient: () => {
-      const client = modelClientForHost("local");
-      return client?.inspectProjectSync &&
-        client.inviteProjectSync &&
-        client.pairProjectSync &&
-        client.acceptProjectSync &&
-        client.rejectProjectSync &&
-        client.configureProjectSyncGit &&
-        client.pullProjectSyncGit &&
-        client.pushProjectSyncGit &&
-        client.syncProjectSync &&
-        client.removeProjectSyncPeer &&
-        client.addProjectSync &&
-        client.bindProjectSync &&
-        client.cloneProjectSync
-        ? {
-            inspectProjectSync: client.inspectProjectSync,
-            inviteProjectSync: client.inviteProjectSync,
-            pairProjectSync: client.pairProjectSync,
-            acceptProjectSync: client.acceptProjectSync,
-            rejectProjectSync: client.rejectProjectSync,
-            configureProjectSyncGit: client.configureProjectSyncGit,
-            pullProjectSyncGit: client.pullProjectSyncGit,
-            pushProjectSyncGit: client.pushProjectSyncGit,
-            syncProjectSync: client.syncProjectSync,
-            removeProjectSyncPeer: client.removeProjectSyncPeer,
-            addProjectSync: client.addProjectSync,
-            bindProjectSync: client.bindProjectSync,
-            cloneProjectSync: client.cloneProjectSync,
-          }
-        : null;
-    },
+    getProjectSyncClient: () => projectSyncClientForLocalHost(),
     getUpdateClient: () => modelControl,
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
@@ -2178,6 +2156,39 @@ export function installRendererBindingProbe(
     return modelClientForHostFrom(modelControl, hostId);
   }
 
+  function projectSyncClientForLocalHost(): RendererProjectSyncClient | null {
+    const client = modelClientForHost("local");
+    return client?.inspectProjectSync &&
+      client.inviteProjectSync &&
+      client.pairProjectSync &&
+      client.acceptProjectSync &&
+      client.rejectProjectSync &&
+      client.configureProjectSyncGit &&
+      client.pullProjectSyncGit &&
+      client.pushProjectSyncGit &&
+      client.syncProjectSync &&
+      client.removeProjectSyncPeer &&
+      client.addProjectSync &&
+      client.bindProjectSync &&
+      client.cloneProjectSync
+      ? {
+          inspectProjectSync: client.inspectProjectSync,
+          inviteProjectSync: client.inviteProjectSync,
+          pairProjectSync: client.pairProjectSync,
+          acceptProjectSync: client.acceptProjectSync,
+          rejectProjectSync: client.rejectProjectSync,
+          configureProjectSyncGit: client.configureProjectSyncGit,
+          pullProjectSyncGit: client.pullProjectSyncGit,
+          pushProjectSyncGit: client.pushProjectSyncGit,
+          syncProjectSync: client.syncProjectSync,
+          removeProjectSyncPeer: client.removeProjectSyncPeer,
+          addProjectSync: client.addProjectSync,
+          bindProjectSync: client.bindProjectSync,
+          cloneProjectSync: client.cloneProjectSync,
+        }
+      : null;
+  }
+
   function refreshHarnessAvailabilityForHost(
     hostId: string,
     refresh = false,
@@ -2707,6 +2718,7 @@ export function installRendererBindingProbe(
       void refreshHarnessAvailability();
     }
     pendingReplacements.clear();
+    gitSidebar.syncContext();
   };
 
   const scheduleScan = (refreshTargets = false): void => {
@@ -2881,6 +2893,7 @@ export function installRendererBindingProbe(
     sidebarContinuation.refresh();
     sidebarAgentIcons.refresh();
     reconcileHarnessAvailabilityHost();
+    gitSidebar.syncContext();
     void loadCodexAccounts();
     void refreshHarnessAvailability();
     for (const mounted of mountedByComposer.values()) {
@@ -2912,7 +2925,12 @@ export function installRendererBindingProbe(
   };
   mutationObserver.observe(document.documentElement, {
     attributes: true,
-    attributeFilter: ["hidden", "aria-hidden", "data-codex-composer-root"],
+    attributeFilter: [
+      "hidden",
+      "aria-hidden",
+      "data-codex-composer-root",
+      "data-above-composer-conversation-id",
+    ],
     characterData: true,
     childList: true,
     subtree: true,
@@ -2923,6 +2941,7 @@ export function installRendererBindingProbe(
   document.addEventListener("click", onClick, true);
   const onWindowFocus = (): void => {
     reconcileHarnessAvailabilityHost();
+    gitSidebar.syncContext();
     void loadCodexAccounts();
     for (const mounted of mountedByComposer.values()) {
       if (mounted.hostId === activeModelHostId() && mounted.ownershipStatus === "error") {

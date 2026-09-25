@@ -22,6 +22,7 @@ import {
 import {
   GIT_STATUS_METHOD,
   GIT_DIFF_METHOD,
+  GIT_CONTENT_METHOD,
   GIT_STAGE_METHOD,
   GIT_UNSTAGE_METHOD,
   GIT_COMMIT_METHOD,
@@ -35,6 +36,7 @@ import {
   GIT_COMMIT_DIFF_METHOD,
   gitWorkspaceParamsSchema,
   gitDiffParamsSchema,
+  gitContentParamsSchema,
   gitStageParamsSchema,
   gitCommitParamsSchema,
   gitMessageGenerateParamsSchema,
@@ -44,8 +46,10 @@ import {
   gitCommitDiffParamsSchema,
   WORKSPACE_FILES_LIST_METHOD,
   WORKSPACE_FILES_READ_METHOD,
+  WORKSPACE_FILES_WRITE_METHOD,
   workspaceFilesListParamsSchema,
   workspaceFileReadParamsSchema,
+  workspaceFileWriteParamsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
@@ -219,7 +223,12 @@ import {
 } from "./codex-runtime/official-runtime-scope.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
 import { GitWorkspace, GitWorkspaceError } from "./git-workspace.js";
-import { listWorkspaceFiles, readWorkspaceFile, WorkspaceFilesError } from "./workspace-files.js";
+import {
+  listWorkspaceFiles,
+  readWorkspaceFile,
+  WorkspaceFilesError,
+  writeWorkspaceFile,
+} from "./workspace-files.js";
 
 const SUBAGENT_TERMINAL_REFRESH_DELAYS_MS = [0, 50, 100, 150] as const;
 const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
@@ -1221,6 +1230,7 @@ export class AppServerHost {
     if (
       request.method === GIT_STATUS_METHOD ||
       request.method === GIT_DIFF_METHOD ||
+      request.method === GIT_CONTENT_METHOD ||
       request.method === GIT_STAGE_METHOD ||
       request.method === GIT_UNSTAGE_METHOD ||
       request.method === GIT_COMMIT_METHOD ||
@@ -1238,7 +1248,8 @@ export class AppServerHost {
     }
     if (
       request.method === WORKSPACE_FILES_LIST_METHOD ||
-      request.method === WORKSPACE_FILES_READ_METHOD
+      request.method === WORKSPACE_FILES_READ_METHOD ||
+      request.method === WORKSPACE_FILES_WRITE_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleWorkspaceFilesRequest(request));
       return;
@@ -2578,6 +2589,19 @@ export class AppServerHost {
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
       }
+      if (request.method === WORKSPACE_FILES_WRITE_METHOD) {
+        const params = workspaceFileWriteParamsSchema.safeParse(request.params);
+        if (!params.success) throw new WorkspaceFilesError("文件写入参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await writeWorkspaceFile(
+          cwd,
+          params.data.path,
+          params.data.content,
+          params.data.expectedRevision,
+        );
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
       throw new WorkspaceFilesError("不支持的文件请求。");
     } catch (error) {
       await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 20_000)));
@@ -2735,6 +2759,15 @@ export class AppServerHost {
         if (!params.success) throw new GitWorkspaceError("Git diff 参数无效。");
         const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
         const result = await this.#gitWorkspace.diff(cwd, params.data.path);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
+      if (request.method === GIT_CONTENT_METHOD) {
+        const params = gitContentParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 内容参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await this.#gitWorkspace.content(cwd, params.data.path);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
       }

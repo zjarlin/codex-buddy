@@ -297,6 +297,9 @@ describe("Renderer fixed Model request client", () => {
     const client = createRendererModelClient([{ addNotificationCallback, sendRequest }]);
     if (!client) throw new Error("Synthetic Model client was not created");
     expect(Object.keys(client).sort()).toEqual([
+      "acceptProjectSync",
+      "addProjectSync",
+      "bindProjectSync",
       "buddyAnswer",
       "buddyCancel",
       "buddyConfigure",
@@ -307,22 +310,31 @@ describe("Renderer fixed Model request client", () => {
       "buddyPrivate",
       "buddyStatus",
       "checkUpdate",
+      "cloneProjectSync",
       "commitGit",
+      "configureProjectSyncGit",
       "executeThreadCommand",
       "forkThread",
       "generateGitMessage",
       "importHarnessSession",
       "inspectCodexAccountUsage",
+      "inspectGitCommit",
+      "inspectGitCommitDiff",
+      "inspectGitContent",
       "inspectGitDiff",
+      "inspectGitLog",
       "inspectGitStatus",
       "inspectHarness",
       "inspectHarnessAccount",
       "inspectHarnessCommands",
+      "inspectProjectSync",
       "inspectThread",
       "inspectThreadCommands",
       "inspectThreadUsage",
+      "inviteProjectSync",
       "listCodexAccounts",
       "listGitMessageModels",
+      "listGitSubmodules",
       "listHarnessAccountSources",
       "listHarnessAccounts",
       "listHarnessPlugins",
@@ -330,10 +342,17 @@ describe("Renderer fixed Model request client", () => {
       "listLoadedSessions",
       "listSessionImportSources",
       "listThreadOwnership",
+      "listWorkspaceFiles",
       "openHarnessWebUi",
+      "pairProjectSync",
+      "pullProjectSyncGit",
       "pushGit",
+      "pushProjectSyncGit",
       "readUpdateStatus",
+      "readWorkspaceFile",
       "refreshCodexAccounts",
+      "rejectProjectSync",
+      "removeProjectSyncPeer",
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
@@ -342,7 +361,11 @@ describe("Renderer fixed Model request client", () => {
       "startUpdate",
       "subscribeCodexAccounts",
       "subscribeThreadUsage",
+      "syncCodexCatalog",
+      "syncProjectSync",
       "unstageGitPaths",
+      "updateGitSubmodule",
+      "writeWorkspaceFile",
     ]);
 
     await expect(client.inspectHarness({ harnessId: piHarnessId, refresh: true })).resolves.toEqual(
@@ -817,11 +840,24 @@ describe("Renderer fixed Model request client", () => {
       ahead: 0,
       behind: 0,
       changes: [],
+      submodules: [],
     };
     const sendRequest = vi
       .fn()
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce({ path: "src/app.ts", diff: "+change", truncated: false })
+      .mockResolvedValueOnce({
+        path: "src/app.ts",
+        baseLabel: "HEAD",
+        base: "old\n",
+        working: "new\n",
+        revision: "a".repeat(64),
+        conflicted: false,
+        ours: null,
+        theirs: null,
+        binary: false,
+        truncated: false,
+      })
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce({ commit: "def456", pushed: false, output: "", status })
@@ -841,6 +877,18 @@ describe("Renderer fixed Model request client", () => {
       diff: "+change",
       truncated: false,
     });
+    await expect(client.inspectGitContent?.({ threadId, path: "src/app.ts" })).resolves.toEqual({
+      path: "src/app.ts",
+      baseLabel: "HEAD",
+      base: "old\n",
+      working: "new\n",
+      revision: "a".repeat(64),
+      conflicted: false,
+      ours: null,
+      theirs: null,
+      binary: false,
+      truncated: false,
+    });
     await expect(client.stageGitPaths?.({ threadId, paths: ["src/app.ts"] })).resolves.toEqual(
       status,
     );
@@ -857,7 +905,15 @@ describe("Renderer fixed Model request client", () => {
     ).resolves.toEqual({ commit: "def456", pushed: false, output: "", status });
     await expect(client.pushGit?.({ threadId })).resolves.toEqual(status);
     await expect(client.listGitMessageModels?.({ threadId })).resolves.toEqual({
-      models: [{ id: "deepseek-flash", label: "deepseek-flash", tier: "垃", eligible: true }],
+      models: [
+        {
+          id: "deepseek-flash",
+          label: "deepseek-flash",
+          tier: "垃",
+          eligible: true,
+          recommended: false,
+        },
+      ],
       defaultModel: "deepseek-flash",
     });
     await expect(
@@ -872,7 +928,7 @@ describe("Renderer fixed Model request client", () => {
       threadId,
       path: "src/app.ts",
     });
-    expect(sendRequest).toHaveBeenNthCalledWith(8, "codexhost/git/message/generate", {
+    expect(sendRequest).toHaveBeenNthCalledWith(9, "codexhost/git/message/generate", {
       threadId,
       model: "deepseek-flash",
       paths: ["src/app.ts"],

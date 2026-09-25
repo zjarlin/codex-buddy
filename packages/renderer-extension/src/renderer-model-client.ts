@@ -32,6 +32,7 @@ import {
   type ProjectSyncCloneParams,
   GIT_STATUS_METHOD,
   GIT_DIFF_METHOD,
+  GIT_CONTENT_METHOD,
   GIT_STAGE_METHOD,
   GIT_UNSTAGE_METHOD,
   GIT_COMMIT_METHOD,
@@ -45,6 +46,7 @@ import {
   GIT_COMMIT_DIFF_METHOD,
   gitWorkspaceParamsSchema,
   gitDiffParamsSchema,
+  gitContentParamsSchema,
   gitStageParamsSchema,
   gitCommitParamsSchema,
   gitMessageGenerateParamsSchema,
@@ -54,6 +56,7 @@ import {
   gitCommitDiffParamsSchema,
   gitWorkspaceStatusSchema,
   gitDiffResultSchema,
+  gitContentResultSchema,
   gitCommitResultSchema,
   gitMessageModelsSchema,
   gitGeneratedMessageSchema,
@@ -62,11 +65,13 @@ import {
   gitCommitDetailSchema,
   type GitWorkspaceParams,
   type GitDiffParams,
+  type GitContentParams,
   type GitStageParams,
   type GitCommitParams,
   type GitMessageGenerateParams,
   type GitWorkspaceStatus,
   type GitDiffResult,
+  type GitContentResult,
   type GitCommitResult,
   type GitMessageModels,
   type GitGeneratedMessage,
@@ -79,14 +84,19 @@ import {
   type GitSubmoduleUpdateParams,
   WORKSPACE_FILES_LIST_METHOD,
   WORKSPACE_FILES_READ_METHOD,
+  WORKSPACE_FILES_WRITE_METHOD,
   workspaceFilesListParamsSchema,
   workspaceFilesListResultSchema,
   workspaceFileReadParamsSchema,
   workspaceFileReadResultSchema,
+  workspaceFileWriteParamsSchema,
+  workspaceFileWriteResultSchema,
   type WorkspaceFilesListParams,
   type WorkspaceFilesListResult,
   type WorkspaceFileReadParams,
   type WorkspaceFileReadResult,
+  type WorkspaceFileWriteParams,
+  type WorkspaceFileWriteResult,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   buddyInterruptedSchema,
@@ -284,6 +294,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   cloneProjectSync?(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot>;
   inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
+  inspectGitContent?(input: GitContentParams): Promise<GitContentResult>;
   stageGitPaths?(input: GitStageParams): Promise<GitWorkspaceStatus>;
   unstageGitPaths?(input: GitStageParams): Promise<GitWorkspaceStatus>;
   commitGit?(input: GitCommitParams): Promise<GitCommitResult>;
@@ -297,6 +308,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   inspectGitCommitDiff?(input: GitCommitDiffParams): Promise<GitDiffResult>;
   listWorkspaceFiles?(input: WorkspaceFilesListParams): Promise<WorkspaceFilesListResult>;
   readWorkspaceFile?(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult>;
+  writeWorkspaceFile?(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -562,6 +574,10 @@ export function createRendererModelClient(
       const params = gitDiffParamsSchema.parse(input);
       return gitDiffResultSchema.parse(await manager.sendRequest(GIT_DIFF_METHOD, params));
     },
+    async inspectGitContent(input: GitContentParams): Promise<GitContentResult> {
+      const params = gitContentParamsSchema.parse(input);
+      return gitContentResultSchema.parse(await manager.sendRequest(GIT_CONTENT_METHOD, params));
+    },
     async stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus> {
       const params = gitStageParamsSchema.parse(input);
       return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_STAGE_METHOD, params));
@@ -624,6 +640,12 @@ export function createRendererModelClient(
       const params = workspaceFileReadParamsSchema.parse(input);
       return workspaceFileReadResultSchema.parse(
         await manager.sendRequest(WORKSPACE_FILES_READ_METHOD, params),
+      );
+    },
+    async writeWorkspaceFile(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult> {
+      const params = workspaceFileWriteParamsSchema.parse(input);
+      return workspaceFileWriteResultSchema.parse(
+        await manager.sendRequest(WORKSPACE_FILES_WRITE_METHOD, params),
       );
     },
     buddyPrivate: async (input: BuddyPrivateRequest) => {

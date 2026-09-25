@@ -1,30 +1,37 @@
-# Jev 决策层
+# System One 决策层（JEV / Laya）
 
-`packages/jev`（`@codexhost/jev`）提供 Node.js 侧可调用的 System One 决策能力。Jev 接收 state 和类型化问题，回答原子判断；LLM 继续负责推理和生成，调用者负责规则、授权、兜底和副作用。
+`packages/jev`（`@codexhost/jev`）提供 Node.js 侧可调用的 System One 决策能力。JEV 与本地 Laya 共用同一 wire protocol 和问题类型，只是上游平台不同。它接收 state 和类型化问题，回答原子判断；LLM 继续负责推理和生成，调用者负责规则、授权、兜底和副作用。
 
 当前实现是独立 Workspace 包，已纳入 TypeScript 构建，并已接入 Buddy Auto Router 的回合判断。需要使用它的 Node.js 包应声明 `@codexhost/jev` 依赖和 TypeScript project reference，通过公共导出调用。它不是拥有 Agent Loop 的 Harness，不注册到 Harness 插件列表或生成模型选择器；Renderer 和 shared-contracts 不应依赖此包。
 
 ## Host 接入
 
-Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 JEV 接入点。`createJevClient(environment, storedApiKey?)` 在密钥非空时构造 `TypeSafeClient`，并显式传入 `TYPESAFE_BASE_URL` / `TYPESAFE_DEFAULT_MODEL`，避免 SDK 读取进程级环境变量；缺密钥时返回 `null`，所有判断退回本地规则。密钥来源优先级为界面持久化配置 > `TYPESAFE_API_KEY` 环境变量。
+Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 System One 接入点，也是 Buddy 意图识别、工具路由与执行角色判断的唯一来源。`createJevClient(environment, storedApiKey?)` 在密钥非空时构造 `TypeSafeClient`，并显式传入 `TYPESAFE_BASE_URL`，避免 SDK 读取进程级环境变量；缺密钥时返回 `null`，本回合退回本地兜底规则。密钥来源优先级为界面持久化配置 > `TYPESAFE_API_KEY` 环境变量。
+
+模型名同时充当网关的平台选择器：`settings.systemOneModel` 默认 `typesafe/jev` 走上游 JEV，可切换为 `laya` 走内网 Laya 服务。两者返回相同的答案结构，Host 侧逻辑与阈值完全一致。
 
 界面可在 Auto Router 面板的“JEV 判断”下方输入并保存 API Key 与网关地址，通过 `codexhost/buddy/jev-key` 方法提交给 Host。Host 把连接配置写入 `CODEX_HOME` 下的 `buddy-jev.json`（文件权限 `0600`，独立于 `buddy-router.json`），并在每次回合前重新加载以重建客户端。快照只回传布尔 `jevKeyConfigured` 与 `jevBaseUrl`，绝不回传密钥；密钥输入框为密码类型且保存后立即清空，网关地址可回填显示，`settings` 中不含密钥。`apiKey` / `baseURL` 省略表示保持原值，null/空串表示清除该项；两项都为空时删除配置文件。外部通过 `BuddyRouter` 注入 JEV 客户端时（测试或高级用法），界面不允许覆盖连接配置。
 
 `baseURL` 可指向自建 Sub2API 网关，只要该网关把 `/v1/systemone` 转发到上游。Sub2API 侧复用内容审计的 TypeSafe 档案（`base_url`、Key 池、代理），新增 `POST /v1/systemone` 中继：客户端携带 Sub2API Key 鉴权，网关注入档案中的上游 Key 再转发，只做透传、不解析或改写 System One 语义。这样 JEV 的功能、模型与行为仍由上游决定，只是把出口换成了自有网关。
 
-`judgeWithJev(client, input, signal)` 对每个普通回合发起一次批量 System One 请求，一次性判断五件事：路由入口（code / inspect / plan / other）、复杂度档位、是否具破坏性、当前请求是否要求推送，以及应由哪类执行角色处理。返回的 `tier`、`intent`、`role`、`isPush` 由 `BuddyRouter` 采用；逐题 `decisions` 以 `judgment` 字段写入 `BuddyDecision`，面板可展示模型与依据。
+`judgeWithJev(client, input, options?)` 对每个普通回合发起一次批量 System One 请求，一次性判断：路由入口（code / inspect / plan / other）、复杂度档位、是否具破坏性、当前请求是否要求推送、执行角色、是否为无需工具的普通问答、是否承接上文，以及是否正好命中某个已发现的 CLI 入口及命中哪一个。返回的 `tier`、`intent`、`role`、`isPush`、`conversational`、`refersToPrevious`、`commandIndex` 由 `BuddyRouter` 采用；逐题 `decisions` 以 `judgment` 字段写入 `BuddyDecision`，面板可展示模型与依据。
+
+候选 CLI 入口来自项目清单（`inspectProject` 的 `commands` 加上 `pwd` / `ls -la` 等内建只读入口），由 Host 作为 `commands` 发给 System One。命中后 Host 只执行清单里已有的调用字符串，不把用户原文拼进命令。为避免过长选项列表拖累本地小模型，候选上限为 12 个。
+
+承接上文的判断分两阶段：首轮只发当前请求；只有 System One 判定为承接上文时才读取有界历史并复评一次，避免每个普通回合都付出历史读取成本。
 
 接线语义：
 
-- 用户显式指定的执行角色（`settings.role != "auto"`）优先于 JEV；未指定时 JEV 判定优先，缺少 JEV 时回退本地 `specialist` 规则。
-- 推送模型旁路以 JEV 的 `isPush` 为准；缺少 JEV 时退回正则预筛 `isGitPushRequest`。正则只作为“是否值得询问 JEV”的预筛，不再单独决定旁路。
-- JEV 超时（默认 4 秒）、认证、限流、网络或协议错误全部由 `BuddyRouter` 捕获并 `diagnose`，随后使用 `assessWithContext` 的本地规则完成该回合，不阻断原生请求。
-- `buddySettingsSchema.jev`（默认开启）关闭时完全不调用 JEV，退回本地规则。
-- 隐私模式不经过普通 `#route`，因此不会调用 JEV；JEV 只服务在线普通路由。
+- 用户显式指定的执行角色（`settings.role != "auto"`）优先于 System One；未指定时以 System One 判定为准，缺少服务时回退本地 `specialist` 规则。
+- 推送模型旁路以 System One 的 `isPush` 为准；缺少服务时退回正则预筛 `isGitPushRequest`。正则是纯离线兜底，不再是进入旁路的第一判断层。
+- 精确 CLI 入口以 System One 选中的 `commandIndex` 为准；缺少服务时不执行零模型旁路。
+- System One 超时（默认 4 秒）、认证、限流、网络或协议错误全部由 `BuddyRouter` 捕获并 `diagnose`，随后使用本地兜底完成该回合，不阻断原生请求。
+- `buddySettingsSchema.jev`（默认开启）关闭时完全不调用 System One，退回本地兜底。
+- 隐私模式不经过普通 `#route`，因此不会调用 System One；System One 只服务在线普通路由。
 
 ## API 与配置
 
-复用官方 `@typesafe-ai/sdk@0.6.0`，使用 `POST https://api.typesafe.ai/v1/systemone`，默认模型 `jev-latest`。`TypeSafeClient` 和问题构造函数直接导出自 SDK，保留原生类型推导和错误。SDK 支持 `TYPESAFE_API_KEY`、`TYPESAFE_BASE_URL`、`TYPESAFE_DEFAULT_MODEL`；显式构造参数优先。API Key 仅在 Node.js 侧读取。
+复用官方 `@typesafe-ai/sdk@0.6.0`，使用 `POST /v1/systemone`，默认模型 `typesafe/jev`。`TypeSafeClient` 和问题构造函数直接导出自 SDK，保留原生类型推导和错误。SDK 支持 `TYPESAFE_API_KEY`、`TYPESAFE_BASE_URL`、`TYPESAFE_DEFAULT_MODEL`；显式构造参数优先。API Key 仅在 Node.js 侧读取。
 
 `evaluateDecisions(client, request, policies, options?)` 一次提交全部问题，返回 `answers`、`model`、`usage` 和逐问题 `decisions`。策略只在本地执行，不发送给 Provider。SDK 负责 HTTP、重试、超时与取消；本包校验答案后应用策略，不执行工具或调用 LLM。
 

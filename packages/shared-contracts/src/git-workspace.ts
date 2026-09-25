@@ -4,6 +4,7 @@ import { hostThreadIdSchema } from "./ids.js";
 
 export const GIT_STATUS_METHOD = "codexhost/git/status";
 export const GIT_DIFF_METHOD = "codexhost/git/diff";
+export const GIT_CONTENT_METHOD = "codexhost/git/content";
 export const GIT_STAGE_METHOD = "codexhost/git/stage";
 export const GIT_UNSTAGE_METHOD = "codexhost/git/unstage";
 export const GIT_COMMIT_METHOD = "codexhost/git/commit";
@@ -19,6 +20,7 @@ export const GIT_COMMIT_DIFF_METHOD = "codexhost/git/commit-diff";
 export const GIT_FILE_PATH_MAX_LENGTH = 16_384;
 export const GIT_COMMIT_MESSAGE_MAX_LENGTH = 20_000;
 export const GIT_DIFF_MAX_BYTES = 2_000_000;
+export const GIT_CONTENT_MAX_BYTES = 1024 * 1024;
 
 const nonBlankTextSchema = z.string().trim().min(1);
 export const gitFilePathSchema = nonBlankTextSchema.max(GIT_FILE_PATH_MAX_LENGTH);
@@ -31,6 +33,9 @@ export const gitDiffParamsSchema = gitWorkspaceParamsSchema
   .extend({ path: gitFilePathSchema })
   .strict();
 export type GitDiffParams = z.infer<typeof gitDiffParamsSchema>;
+
+export const gitContentParamsSchema = gitDiffParamsSchema;
+export type GitContentParams = z.infer<typeof gitContentParamsSchema>;
 
 export const gitStageParamsSchema = gitWorkspaceParamsSchema
   .extend({ paths: z.array(gitFilePathSchema).max(10_000) })
@@ -191,6 +196,22 @@ export const gitDiffResultSchema = z
   })
   .strict();
 export type GitDiffResult = z.infer<typeof gitDiffResultSchema>;
+
+export const gitContentResultSchema = z
+  .object({
+    path: gitFilePathSchema,
+    baseLabel: z.string(),
+    base: z.string(),
+    working: z.string(),
+    revision: z.string().regex(/^[a-f0-9]{64}$/u),
+    conflicted: z.boolean(),
+    ours: z.string().nullable(),
+    theirs: z.string().nullable(),
+    binary: z.boolean(),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type GitContentResult = z.infer<typeof gitContentResultSchema>;
 
 export const gitCommitResultSchema = z
   .object({

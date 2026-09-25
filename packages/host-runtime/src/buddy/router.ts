@@ -6,10 +6,9 @@ import {
   dispatchLifecycle,
   homePath,
   inspectProject,
-  resolveDispatch,
   threadState,
   turnState,
-  type Assessment,
+  type Project,
   type ThreadContext,
 } from "@codexhost/buddy-engine";
 import {
@@ -25,7 +24,14 @@ import type { JsonObject, JsonRpcRequest, JsonValue } from "@codexhost/protocol-
 import { BuddyPlanner, object, result, type NativeRequest } from "./planner.js";
 import { discoverModels, type NativeModelCatalog } from "./models.js";
 import { recentMessages } from "./history.js";
-import { assessWithContext, refersToPreviousTask } from "./assessment-context.js";
+import {
+  classifyWithFallback,
+  classifyWithSystemOne,
+  dispatchCandidates,
+  invocation,
+  type ClassifiedRoute,
+  type ClassificationEnvironment,
+} from "./classification.js";
 import { parallelExecutionGuidance, singleExecutorPacket } from "./delegation.js";
 import { AutomaticRecovery } from "./recovery.js";
 import { InterruptedConversations } from "./continuation.js";
@@ -34,9 +40,8 @@ import {
   GitPushBypassScores,
   gitPushGuidance,
   gitPushSkills,
-  isGitPushRequest,
 } from "./git-push-bypass.js";
-import { createJevClient, judgeWithJev } from "./judgment.js";
+import { createJevClient, type SystemOneCommand } from "./judgment.js";
 import type { TypeSafeClient } from "@codexhost/jev";
 import {
   executePlanWaves,
@@ -52,49 +57,10 @@ const roleInstructions = {
     "你是垃执行者。普通问答直接回答，简单任务直接处理，不要为回答编造 TODO。复杂任务依据目标、约束和简短 TODO 自主定位文件、作常规实现选择、编写代码并验证，不需要规划者预先提供每个文件的修改内容。有原生 update_plan 工具时用它维护结果导向的 TODO 和实际进度，每次最多一个 in_progress；简单任务可跳过计划。已有 TODO 直接沿用，不再重复做完整规划。禁止递归委派。只有重大架构决策、权限边界变化、任务范围变化或同一问题两次实施失败时，才携证据报告阻塞，不盲目重复具有副作用的操作。",
 };
 
-function recentTextForJev(recent: unknown[]): string {
-  return recent
-    .map((item) => {
-      const value = object(item);
-      const pieces = [value.text, value.summary, value.content];
-      return pieces
-        .flatMap((piece) => {
-          if (typeof piece === "string") return [piece];
-          if (Array.isArray(piece)) {
-            return piece.map((part) =>
-              typeof part === "string" ? part : String(object(part).text ?? ""),
-            );
-          }
-          return [];
-        })
-        .filter(Boolean)
-        .join("\n");
-    })
-    .filter(Boolean)
-    .slice(-6)
-    .join("\n\n");
-}
-
-export function specialist(text: string, intent: string): BuddyDecision["role"] {
-  if (
-    /(?:开发|实现|设计|新增|添加|编写).*(?:功能|智能体|路由|插件|模块)|implement|design a/iu.test(
-      text,
-    )
-  ) {
-    return "executor";
-  }
-  if (intent === "git") {
-    return "git";
-  }
-  return intent === "project" ||
-    /文件|目录|日志|复制|移动|重命名|查找|搜索|跑起来|构建|测试|\b(?:ls|cp|mv|find|rg|npm|pnpm|cargo|gradle|pytest)\b/iu.test(
-      text,
-    )
-    ? "io"
-    : "executor";
-}
-
 const quote = (text: string): string => `'${text.replaceAll("'", "'\"'\"'")}'`;
+// 离线兜底的执行角色推测保留在此导出，供测试与高级用法使用；
+// 正常路由由 classification.ts 中的 System One 判定负责。
+export { specialist } from "./classification.js";
 export const BUDDY_PRIVATE_TURN_MARKER = "codexhostBuddyPrivateTurn";
 export interface BuddyRouterOptions {
   activeWorkChanged?(): void;
@@ -385,6 +351,18 @@ export class BuddyRouter {
       const params = object(request.params);
       if (typeof params.threadId === "string") {
         this.#threads.delete(params.threadId);
+      }
+    }
+  }
+
+  /** 写入本轮决策并保持最多 100 条内存记录；写满时同时丢弃对应澄清状态。 */
+  #setDecision(threadId: string, decision: BuddyDecision): void {
+    this.#decisions.set(threadId, decision);
+    if (this.#decisions.size > 100) {
+      const first = this.#decisions.keys().next().value;
+      if (first) {
+        this.#decisions.delete(first);
+        this.#clarifications.delete(first);
       }
     }
   }
@@ -729,6 +707,20 @@ export class BuddyRouter {
     }
   }
 
+  /** 分类层需要的 Host 上下文：原生请求、路由设置、System One 客户端与上一版计划。 */
+  #classificationEnvironment(): ClassificationEnvironment {
+    return {
+      request: this.options.request,
+      settings: {
+        bypass: this.#settings.bypass,
+        role: this.#settings.role,
+        systemOneModel: this.#settings.systemOneModel,
+      },
+      systemOne: this.#jev,
+      previousPlan: (threadId) => this.#decisions.get(threadId)?.plan ?? null,
+    };
+  }
+
   async #route(
     request: JsonRpcRequest,
     params: JsonObject,
@@ -736,7 +728,6 @@ export class BuddyRouter {
     signal: AbortSignal,
   ): Promise<void> {
     const settings = this.#settings;
-    const fixedExecutor = settings.executorModel;
     const context = this.#threads.get(threadId);
     let cwd = typeof params.cwd === "string" ? params.cwd : context?.cwd;
     if (!cwd) {
@@ -762,81 +753,47 @@ export class BuddyRouter {
       .map((v) => String(v.text ?? ""))
       .join("\n");
     const project = await inspectProject(cwd);
-    const previousPlan = this.#decisions.get(threadId)?.plan;
-    const recent = refersToPreviousTask(input)
-      ? await recentMessages(this.options.request, threadId)
-      : null;
-    // 正则只做是否值得询问 JEV 的预筛；真正的推送意图、难度和风险都由 JEV 判断。
-    const pushCandidate = isGitPushRequest(input);
-    let assessment: Assessment;
-    let judgment: BuddyDecision["judgment"];
-    let jevPush: boolean | null = null;
-    let jevPushConfidence: number | null = null;
-    let jevRole: "git" | "io" | "executor" | null = null;
+    signal.throwIfAborted();
+    // 意图识别、工具路由、执行角色、推送旁路与 CLI 入口选择全部委托 System One；
+    // 本地规则只在该服务不可用时兜底，不再是路由的第一判断层。
+    const commands = dispatchCandidates(project, cwd);
+    const classification = this.#classificationEnvironment();
+    let selected: ClassifiedRoute | null = null;
     if (settings.jev && this.#jev) {
       try {
-        const jev = await judgeWithJev(
-          this.#jev,
-          {
-            request: text,
-            ...(cwd ? { cwd } : {}),
-            project,
-            ...(recent?.length ? { recentText: recentTextForJev(recent) } : {}),
-            attachmentCount: input.filter((item) => object(item).type !== "text").length,
-            isPushLike: pushCandidate,
-            planMode: object(params.collaborationMode).mode === "plan",
-            ...(typeof params.approvalPolicy === "string"
-              ? { approvalPolicy: params.approvalPolicy }
-              : {}),
-          },
+        selected = await classifyWithSystemOne(classification, {
+          input,
+          text,
+          cwd,
+          project,
+          commands,
+          params,
+          threadId,
           signal,
-        );
-        assessment = { tier: jev.tier, intent: jev.intent, reason: jev.reason };
-        judgment = {
-          source: "jev",
-          model: jev.model,
-          decisions: jev.decisions as NonNullable<BuddyDecision["judgment"]>["decisions"],
-        };
-        jevPush = jev.isPush;
-        jevPushConfidence = jev.pushConfidence;
-        jevRole = jev.role;
+        });
       } catch (error) {
         this.options.diagnose(error);
-        assessment = await assessWithContext(input, cwd, project, recent ?? [], previousPlan);
       }
-    } else {
-      assessment = await assessWithContext(input, cwd, project, recent ?? [], previousPlan);
     }
-    // 推送模型旁路：JEV 判定优先，缺少 JEV 时退回正则预筛。
-    const modelBypass = settings.bypass && (jevPush ?? pushCandidate);
-    if (modelBypass) {
-      assessment = {
-        tier: "standard",
-        intent: "git",
-        reason: jevPush
-          ? `JEV 确认推送意图（confidence=${(jevPushConfidence ?? 0).toFixed(2)}）；旁路至垃模型，跳过夯规划。`
-          : "命中推送请求；旁路至垃模型，跳过夯规划。",
-      };
+    selected ??= await classifyWithFallback(classification, {
+      text,
+      input,
+      cwd,
+      project,
+      threadId,
+    });
+    if (!cwd) {
+      throw new Error("未确认工作目录，无法路由。");
     }
-    const conversational = assessment.intent === "conversation";
-    const pendingClarification =
-      conversational || modelBypass ? undefined : this.#clarifications.get(threadId);
-    const needsPlanning = assessment.tier === "advanced" || pendingClarification !== undefined;
-    // JEV 判定优先；缺少 JEV 时退回本地 specialist 规则。用户显式指定角色仍最高优先。
-    const role =
-      settings.role !== "auto"
-        ? settings.role
-        : modelBypass
-          ? "git"
-          : (jevRole ?? specialist(text, assessment.intent));
-    const decision: BuddyDecision = {
+    signal.throwIfAborted();
+    this.#setDecision(threadId, {
       threadId,
       turnId: null,
       phase: "discovering",
-      role,
-      difficulty: assessment.tier,
-      score: { simple: 15, standard: 45, advanced: 85 }[assessment.tier],
-      reason: assessment.reason,
+      role: selected.role,
+      difficulty: selected.assessment.tier,
+      score: { simple: 15, standard: 45, advanced: 85 }[selected.assessment.tier],
+      reason: selected.assessment.reason,
       plannerModel: null,
       executorModel: null,
       acceptedModel: null,
@@ -845,62 +802,86 @@ export class BuddyRouter {
       command: null,
       exitCode: null,
       updatedAt: new Date().toISOString(),
-      ...(judgment ? { judgment } : {}),
-      ...(modelBypass ? { modelBypass: this.#bypassScores.start(null, [], null) } : {}),
-    };
-    this.#decisions.set(threadId, decision);
-    if (this.#decisions.size > 100) {
-      const first = this.#decisions.keys().next().value;
-      if (first) {
-        this.#decisions.delete(first);
-        this.#clarifications.delete(first);
-      }
-    }
-    if (!cwd) {
-      throw new Error("未确认工作目录，无法路由。");
-    }
-    signal.throwIfAborted();
+      ...(selected.judgment ? { judgment: selected.judgment } : {}),
+      ...(selected.modelBypass ? { modelBypass: this.#bypassScores.start(null, [], null) } : {}),
+    });
+    const exact = selected.commandIndex === null ? null : commands[selected.commandIndex];
     if (
-      !modelBypass &&
-      !pendingClarification &&
+      exact &&
+      !selected.modelBypass &&
+      !selected.conversational &&
       settings.bypass &&
       compatibleTurn(params, context)
     ) {
-      let direct = await resolveDispatch(text, cwd, { project });
-      const commands: Record<string, string[]> = {
-        当前目录: ["pwd"],
-        pwd: ["pwd"],
-        查看当前目录文件: ["ls", "-la"],
-        ls: ["ls", "-la"],
-      };
-      const argv = commands[text.trim()];
-      if (argv) {
-        direct = {
-          route: "tool",
-          recipe: { id: "io.inspect", argv, cwd, source: "builtin", action: "inspect" },
-        };
-      }
-      if (direct.route === "tool" && direct.recipe) {
-        const command = `cd ${quote(direct.recipe.cwd)} && exec ${direct.recipe.argv.map(quote).join(" ")}`;
-        this.#update(threadId, {
-          phase: "bypass",
-          difficulty: "simple",
-          score: 0,
-          command,
-          reason: "精确规则命中；未请求模型目录或推理。",
-        });
-        this.#active.add(threadId);
-        const native = this.#dispatch.submit(request.id, threadId, {
-          ...direct,
-          command,
-          timeoutMs: 3_600_000,
-        });
-        await this.options.forward(native as JsonRpcRequest);
-        return;
-      }
+      return this.#runExactCommand(
+        request,
+        threadId,
+        exact,
+        `System One ${selected.judgment?.model ?? ""} 命中已发现入口 ${exact.command}`.trim(),
+      );
     }
+    // 只有确实要走模型回合时才读取原生模型目录，零模型旁路不产生额外请求。
     const nativeModels = await this.#nativeModels(threadId);
     signal.throwIfAborted();
+    return this.#executeRoute(request, params, threadId, signal, selected, nativeModels, project);
+  }
+
+  /** 运行 System One 选定的精确 CLI 入口。参数只来自项目清单，不插值用户原文。 */
+  async #runExactCommand(
+    request: JsonRpcRequest,
+    threadId: string,
+    command: SystemOneCommand,
+    reason: string,
+  ): Promise<void> {
+    const argv = invocation(command.command);
+    const line = `cd ${quote(command.cwd)} && exec ${argv.map(quote).join(" ")}`;
+    this.#update(threadId, {
+      phase: "bypass",
+      difficulty: "simple",
+      score: 0,
+      command: line,
+      reason: `${reason}；未请求模型目录或推理。`,
+    });
+    this.#active.add(threadId);
+    const native = this.#dispatch.submit(request.id, threadId, {
+      route: "tool",
+      recipe: {
+        id: `project.${command.action}`,
+        argv,
+        cwd: command.cwd,
+        source: command.source,
+        action: command.action,
+      },
+      command: line,
+      timeoutMs: 3_600_000,
+    });
+    await this.options.forward(native as JsonRpcRequest);
+  }
+
+  /** 分类完成后执行规划、模型发现与原生请求改写；System One 与兜底共用。 */
+  async #executeRoute(
+    request: JsonRpcRequest,
+    params: JsonObject,
+    threadId: string,
+    signal: AbortSignal,
+    selected: ClassifiedRoute,
+    nativeModels: NativeModelCatalog,
+    project: Project,
+  ): Promise<void> {
+    const settings = this.#settings;
+    const fixedExecutor = settings.executorModel;
+    const cwd = typeof params.cwd === "string" ? params.cwd : this.#threads.get(threadId)?.cwd;
+    if (!cwd) {
+      throw new Error("未确认工作目录，无法路由。");
+    }
+    const input = params.input as JsonValue[];
+    const assessment = selected.assessment;
+    const conversational = selected.conversational;
+    const modelBypass = selected.modelBypass;
+    const role = selected.role;
+    const pendingClarification =
+      conversational || modelBypass ? undefined : this.#clarifications.get(threadId);
+    const needsPlanning = assessment.tier === "advanced" || pendingClarification !== undefined;
     const inventory = await discoverModels({
       home: this.#home,
       environment: this.options.environment,
@@ -930,10 +911,12 @@ export class BuddyRouter {
     }
     if (needsPlanning && !planOnly && inventory.planner) {
       this.#update(threadId, { phase: "planning", plannerModel: inventory.planner });
+      // 规划确实需要历史：分类阶段容忍的读取失败在这里重新以严格语义读取。
       const planningRecent =
         pendingClarification?.recent ??
-        recent ??
-        (await recentMessages(this.options.request, threadId));
+        (selected.recent.length
+          ? selected.recent
+          : await recentMessages(this.options.request, threadId));
       const planningInput: JsonValue[] = pendingClarification
         ? [
             ...pendingClarification.task,
@@ -956,7 +939,7 @@ export class BuddyRouter {
         task: planningInput,
         context: JSON.stringify({
           project,
-          previousPlan: recent ? previousPlan : undefined,
+          previousPlan: selected.recent ? selected.previousPlan : undefined,
           recent: planningRecent,
         }).slice(0, 32000),
         fixedExecutor,

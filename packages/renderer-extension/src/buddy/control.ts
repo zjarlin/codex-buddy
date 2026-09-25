@@ -30,6 +30,10 @@ const messages = {
     jevBaseUrlHint: "可填自建 Sub2API 网关；留空使用官方地址，网关需转发 /v1/systemone",
     jevBaseUrlPlaceholder: "https://api.typesafe.ai 或自建网关",
     jevBaseUrlDefault: "官方默认",
+    systemOneModel: "System One 模型",
+    systemOneModelHint: "网关按模型选择平台：typesafe/jev 走 JEV，laya 走本地 Laya",
+    systemOneModelJev: "JEV",
+    systemOneModelLaya: "Laya",
     jevKeyConfigured: "已配置",
     jevKeyMissing: "未配置",
     jevKeySave: "保存密钥",
@@ -111,6 +115,11 @@ const messages = {
       "Point at a self-hosted Sub2API gateway; blank uses the official URL. The gateway must forward /v1/systemone",
     jevBaseUrlPlaceholder: "https://api.typesafe.ai or your gateway",
     jevBaseUrlDefault: "Official default",
+    systemOneModel: "System One model",
+    systemOneModelHint:
+      "The gateway selects the platform by model: typesafe/jev for JEV, laya for local Laya",
+    systemOneModelJev: "JEV",
+    systemOneModelLaya: "Laya",
     jevKeyConfigured: "Configured",
     jevKeyMissing: "Not configured",
     jevKeySave: "Save key",
@@ -522,6 +531,19 @@ export function installBuddyControl(
       switchRow(route, m.bypass, "bypass", m.bypassHint);
       switchRow(route, m.jev, "jev", m.jevHint);
       if (snapshot.settings.jev) {
+        select(
+          route,
+          m.systemOneModel,
+          m.systemOneModelHint,
+          [
+            ["typesafe/jev", m.systemOneModelJev],
+            ["laya", m.systemOneModelLaya],
+          ],
+          snapshot.settings.systemOneModel,
+          (model) => {
+            void setting({ systemOneModel: model });
+          },
+        );
         keyRow(route);
       }
       select(

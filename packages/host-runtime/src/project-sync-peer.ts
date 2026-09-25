@@ -26,6 +26,7 @@ import { ProjectSyncGit } from "./project-sync-git.js";
 
 const TIMEOUT = 15_000;
 const DEVICE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const DEFAULT_RELAY = "wss://aio.addzero.site/codexhost-relay/";
 
 type Peer = { id: string; name: string; publicKey: string; exchangePublicKey: string };
 type Pending = Peer & { requestId: string; code: string; expiresAt: number };
@@ -68,7 +69,7 @@ export class ProjectSyncPeer {
         : path.join(os.homedir(), ".codexhost"),
       "project-sync",
     );
-    const relay = environment.CODEXHOST_PROJECT_SYNC_RELAY_URL;
+    const relay = environment.CODEXHOST_PROJECT_SYNC_RELAY_URL ?? DEFAULT_RELAY;
     if (relay) {
       const url = new URL(relay);
       if (

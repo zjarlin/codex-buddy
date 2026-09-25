@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonObject, JsonRpcRequest } from "@codexhost/protocol-core";
-import { BuddyRouter, specialist } from "../../src/buddy/router.js";
+import { BuddyRouter } from "../../src/buddy/router.js";
 import { chooseModels, modelTier } from "../../src/buddy/models.js";
 import type { SubagentRunner } from "../../src/buddy/subagent-scheduler.js";
 import { TypeSafeClient } from "@codexhost/jev";
@@ -13,6 +13,93 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((clean) => clean()));
 });
+
+/**
+ * 让路由用例用 System One 表达分类意图，而不是依赖已删除的本地正则。
+ * `conversational` 表示普通问答，`advanced` 表示需要夯规划，`push` 表示推送旁路；
+ * `forText` 可按请求文本给出不同结论。
+ */
+interface SystemOneProfile {
+  forText?: (text: string) => SystemOneProfile;
+  advanced?: boolean;
+  conversational?: boolean;
+  push?: boolean;
+  role?: "git" | "io" | "executor";
+  destructive?: boolean;
+}
+
+function profileClient(profile: SystemOneProfile): TypeSafeClient {
+  const fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
+    const request = JSON.parse(String(init?.body ?? "{}")) as {
+      state?: { request?: string };
+      questions?: { commandIndex?: { criteria?: Record<string, unknown> } };
+    };
+    const resolved =
+      typeof profile.forText === "function"
+        ? profile.forText(request.state?.request ?? "")
+        : profile;
+    const criteria = Object.keys(request.questions?.commandIndex?.criteria ?? { none: "" });
+    const role = resolved.role ?? "executor";
+    const route = resolved.advanced ? "plan" : resolved.conversational ? "inspect" : "code";
+    return Response.json(
+      {
+        model: "typesafe/jev",
+        answers: {
+          route: {
+            type: "choice",
+            choice: route,
+            probabilities:
+              route === "plan"
+                ? { code: 0.03, inspect: 0.02, plan: 0.93, other: 0.02 }
+                : route === "inspect"
+                  ? { code: 0.05, inspect: 0.9, plan: 0.03, other: 0.02 }
+                  : { code: 0.9, inspect: 0.05, plan: 0.03, other: 0.02 },
+            confidence: 0.92,
+          },
+          complexity: {
+            type: "score",
+            score: resolved.advanced ? 2 : resolved.conversational ? 0 : 1,
+            legend: {
+              "0": "简单：单次读取、信息查询或简短交流",
+              "1": "常规：范围明确的小改动或验证",
+              "2": "复杂：设计、重构、跨模块或多步骤",
+            },
+            probabilities: { "0": 0.1, "1": 0.2, "2": 0.7 },
+            confidence: 0.92,
+          },
+          destructive: { type: "noul", noul: resolved.destructive ? 0.98 : 0.03 },
+          push: { type: "noul", noul: resolved.push ? 0.98 : 0.02 },
+          role: {
+            type: "choice",
+            choice: role,
+            probabilities: Object.fromEntries(
+              ["git", "io", "executor"].map((id) => [id, id === role ? 0.94 : 0.03]),
+            ),
+            confidence: 0.92,
+          },
+          conversational: { type: "noul", noul: resolved.conversational ? 0.98 : 0.03 },
+          followUp: { type: "noul", noul: 0.03 },
+          exactCommand: { type: "noul", noul: 0.02 },
+          commandIndex: {
+            type: "choice",
+            choice: "none",
+            probabilities: Object.fromEntries(criteria.map((id) => [id, id === "none" ? 1 : 0])),
+            confidence: 0.9,
+          },
+        },
+        usage: { input_tokens: 10, output_tokens: 0 },
+      },
+      { status: 200 },
+    );
+  });
+  return new TypeSafeClient({
+    apiKey: "test-only-key",
+    baseURL: "https://jev.invalid",
+    logLevel: "off",
+    retry: { maxRetries: 0 },
+    fetch,
+  });
+}
 
 async function fixture(
   options: {
@@ -36,6 +123,7 @@ async function fixture(
     skills?: JsonObject[];
     skillsError?: boolean;
     jev?: TypeSafeClient;
+    classify?: SystemOneProfile;
   } = {},
 ) {
   const home = await mkdtemp(join(tmpdir(), "buddy-router-test-"));
@@ -65,7 +153,11 @@ async function fixture(
   const router: BuddyRouter = new BuddyRouter({
     environment: { CODEX_HOME: home },
     ...(options.runSubagents ? { runSubagents: options.runSubagents } : {}),
-    ...(options.jev ? { jev: options.jev } : {}),
+    ...(options.jev
+      ? { jev: options.jev }
+      : options.classify
+        ? { jev: profileClient(options.classify) }
+        : {}),
     request: async (method, params) => {
       requested.push({ method, params });
       switch (method) {
@@ -200,6 +292,94 @@ async function fixture(
   };
 }
 
+  // System One 一次批量返回全部原子判断；测试夹具覆盖 Host 实际问的十个问题。
+  const jevResponse = (
+    route: string,
+    complexity: number,
+    push: number,
+    role: string,
+    extras: {
+      conversational?: number;
+      followUp?: number;
+      exactCommand?: number;
+      command?: string;
+      destructive?: number;
+    } = {},
+  ) => ({
+    model: "typesafe/jev",
+    answers: {
+      route: {
+        type: "choice",
+        choice: route,
+        probabilities:
+          route === "plan"
+            ? { code: 0.05, inspect: 0.05, plan: 0.9, other: 0 }
+            : route === "inspect"
+              ? { code: 0.05, inspect: 0.9, plan: 0.03, other: 0.02 }
+              : { code: 0.9, inspect: 0.05, plan: 0.03, other: 0.02 },
+        confidence: 0.92,
+      },
+      complexity: {
+        type: "score",
+        score: complexity,
+        legend: {
+          "0": "简单：单次读取、信息查询或简短交流",
+          "1": "常规：范围明确的小改动或验证",
+          "2": "复杂：设计、重构、跨模块或多步骤",
+        },
+        probabilities: { "0": 0.1, "1": 0.7, "2": 0.2 },
+        confidence: 0.85,
+      },
+      destructive: { type: "noul", noul: extras.destructive ?? 0.05 },
+      push: { type: "noul", noul: push },
+      role: {
+        type: "choice",
+        choice: role,
+        probabilities: {
+          git: role === "git" ? 0.9 : 0.05,
+          io: role === "io" ? 0.9 : 0.05,
+          executor: role === "executor" ? 0.9 : 0.05,
+        },
+        confidence: 0.9,
+      },
+      conversational: { type: "noul", noul: extras.conversational ?? 0.05 },
+      followUp: { type: "noul", noul: extras.followUp ?? 0.05 },
+      exactCommand: { type: "noul", noul: extras.exactCommand ?? 0.02 },
+      commandIndex: {
+        type: "choice",
+        choice: extras.command ?? "none",
+        // 真实分布由 jevClient 按请求 criteria 重写；此处只保留选择结果。
+        probabilities: { none: 1 },
+        confidence: extras.command ? 0.95 : 0.9,
+      },
+    },
+    usage: { input_tokens: 100, output_tokens: 0 },
+  });
+  // System One 只接受与请求 criteria 完全一致的分布，因此按请求动态补齐选项。
+  const jevClient = (body: unknown) =>
+    new TypeSafeClient({
+      apiKey: "test-only-key",
+      baseURL: "https://jev.invalid",
+      logLevel: "off",
+      retry: { maxRetries: 0 },
+      fetch: vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
+        const request = JSON.parse(String(init?.body ?? "{}")) as {
+          questions?: { commandIndex?: { criteria?: Record<string, unknown> } };
+        };
+        const criteria = Object.keys(request.questions?.commandIndex?.criteria ?? { none: "" });
+        const answers = { ...(body as { answers: Record<string, { type: string; choice?: string }> }).answers };
+        const choice = answers.commandIndex?.choice ?? "none";
+        const selected = criteria.includes(choice) ? choice : "none";
+        answers.commandIndex = {
+          type: "choice",
+          choice: selected,
+          probabilities: Object.fromEntries(criteria.map((id) => [id, id === selected ? 1 : 0])),
+          confidence: 0.95,
+        };
+        return Response.json({ ...(body as object), answers }, { status: 200 });
+      }),
+    });
+
 describe("Buddy family policy", () => {
   it("preserves explicit structured output requests without planning or model selection", async () => {
     const f = await fixture();
@@ -227,6 +407,7 @@ describe("Buddy family policy", () => {
       recovery: true,
       historyTurns,
       modelIds: ["gpt-planner", "cheap-a-flash", "cheap-b-flash"],
+      classify: { conversational: true, role: "executor" },
     });
     await f.router.route(
       f.turn("hi", {
@@ -304,15 +485,10 @@ describe("Buddy family policy", () => {
       executor: null,
     });
   });
-  it("does not mistake development of Git features for a Git operation", () => {
-    expect(specialist("实现 Git 智能体功能", "git")).toBe("executor");
-    expect(specialist("推送代码", "git")).toBe("git");
-    expect(specialist("跑起来看看", "project")).toBe("io");
-  });
 });
 
 describe("Buddy native routing", () => {
-  async function parallelFixture() {
+  async function parallelFixture(profile: SystemOneProfile = { advanced: true }) {
     const runSubagents = vi.fn<SubagentRunner>(async (input) => ({
       taskId: input.requestId.split(":").at(-1) ?? "task",
       model: input.model,
@@ -322,6 +498,7 @@ describe("Buddy native routing", () => {
     const f = await fixture({
       modelIds: ["gpt-planner", "deepseek-flash", "other-mini"],
       runSubagents,
+      classify: profile,
       plan: {
         version: 1,
         goal: "检查两个独立模块",
@@ -396,7 +573,10 @@ describe("Buddy native routing", () => {
   });
 
   it("allows automatic delegation and retains all selected and reported models", async () => {
-    const f = await parallelFixture();
+    const f = await parallelFixture({
+      forText: (text) =>
+        text.includes("你好") ? { conversational: true, role: "executor" } : { advanced: true },
+    });
     await f.router.route(
       f.turn("重构跨模块实现", { approvalPolicy: "never", sandbox: "danger-full-access" }),
     );
@@ -452,6 +632,7 @@ describe("Buddy native routing", () => {
       params: { threadId: "work", turn: { id: "recovery", status: "completed" } },
     });
     await f.router.route(f.turn("你好"));
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({ role: "executor", score: 15 });
     expect((await f.router.snapshot()).decisions[0]?.involvedModels).toEqual(["other-mini"]);
   });
 
@@ -497,7 +678,10 @@ describe("Buddy native routing", () => {
     expect(guidance).toContain("不继承整段对话");
   });
   it("uses a lightweight model for greetings without changing explicit Plan Mode", async () => {
-    const f = await fixture({ modelIds: ["deepseek-flash"] });
+    const f = await fixture({
+      modelIds: ["deepseek-flash"],
+      classify: { conversational: true, role: "executor" },
+    });
     await f.router.route(f.turn("hi", { collaborationMode: { mode: "plan", settings: {} } }));
     expect(f.forwarded[0]?.params).toMatchObject({
       model: "deepseek-flash",
@@ -521,7 +705,10 @@ describe("Buddy native routing", () => {
     "认证是什么意思？",
     "Explain database migrations",
   ])("skips planning for %s even without a planner model", async (text) => {
-    const f = await fixture({ modelIds: ["deepseek-flash"] });
+    const f = await fixture({
+      modelIds: ["deepseek-flash"],
+      classify: { conversational: true, role: "executor" },
+    });
     await f.router.route(f.turn(text));
     expect(f.forwarded).toHaveLength(1);
     expect(f.forwarded[0]).toMatchObject({
@@ -566,7 +753,10 @@ describe("Buddy native routing", () => {
   it.runIf(process.platform !== "win32")(
     "bypasses both discovery and inference and keeps a failing real exit code",
     async () => {
-      const f = await fixture();
+      // System One 选中项目清单里的 ls -la 候选，Host 直接走零模型旁路。
+      const f = await fixture({
+        jev: jevClient(jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" })),
+      });
       await f.router.route(f.turn("查看当前目录文件"));
       expect(f.providerRequests()).toBe(0);
       expect(f.requested).toEqual([]);
@@ -608,7 +798,7 @@ describe("Buddy native routing", () => {
     },
   );
   it("uses the weak model for bounded work and synchronizes nested model settings", async () => {
-    const f = await fixture();
+    const f = await fixture({ classify: { role: "executor" } });
     await f.router.route(
       f.turn("更新README", {
         approvalPolicy: "on-request",
@@ -676,12 +866,13 @@ describe("Buddy native routing", () => {
     expect((await f.router.snapshot()).decisions[0]?.phase).toBe("executing");
   });
   it("does not classify an unmatched ordinary question as complex", async () => {
-    const f = await fixture({ modelIds: ["deepseek-flash"] });
+    const f = await fixture({ modelIds: ["deepseek-flash"], classify: { role: "executor" } });
     await f.router.route(f.turn("一句话概括这个项目"));
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({ phase: "executing" });
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
     expect(
-      f.requested.every((request) => ["thread/read", "model/list"].includes(request.method)),
-    ).toBe(true);
+      f.requested.map((request) => request.method),
+    ).toEqual(["thread/read", "model/list"]);
     expect((await f.router.snapshot()).decisions[0]?.score).toBe(45);
   });
   it("cancellation stops planning without executing or replaying the original task", async () => {
@@ -700,7 +891,16 @@ describe("Buddy native routing", () => {
   });
   it("returns clarification to native planning and replans after a short reply", async () => {
     const options = { clarification: "请提供完整页面地址。" };
-    const f = await fixture(options);
+    const f = await fixture({
+      ...options,
+      // 只有最初的设计请求需要夯规划；后续 hi / URL 是普通回合。
+      classify: {
+        forText: (text) =>
+          text.includes("设计并修复") || text.startsWith("https://")
+            ? { advanced: true }
+            : { conversational: true, role: "executor" },
+      },
+    });
     const original = f.turn("设计并修复截图中的跨模块问题");
     await f.router.route(original);
     expect(f.sent).toEqual([]);
@@ -739,11 +939,12 @@ describe("Buddy native routing", () => {
       params: { threadId: "work", turn: { status: "completed" } },
     });
     await f.router.route(f.turn("https://example.test/page"));
-    expect(f.forwarded).toHaveLength(3);
-    expect(f.forwarded[2]?.params).toMatchObject({
-      model: "deepseek-flash",
-      collaborationMode: { mode: "default" },
-    });
+    // 承接待澄清状态的新请求重新进入夯规划，而不是直接执行。
+    expect(f.forwarded.map((r) => (r.params as { model?: string }).model)).toEqual([
+      "gpt-planner",
+      "deepseek-flash",
+      "gpt-planner",
+    ]);
     const plans = f.requested.filter((request) => request.method === "turn/start");
     expect(plans).toHaveLength(2);
     expect(JSON.stringify(plans[1]?.params.input)).toContain("设计并修复截图中的跨模块问题");
@@ -761,6 +962,7 @@ describe("Buddy native routing", () => {
         { items: [{ type: "userMessage", content: [{ type: "text", text: "原需求" }] }] },
         { items: [{ type: "agentMessage", text: "已确认目标目录" }] },
       ],
+      classify: { advanced: true },
     });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.forwarded).toHaveLength(1);
@@ -788,7 +990,10 @@ describe("Buddy native routing", () => {
       { type: "agentMessage", text: "RECENT_AGENT" },
       { type: "userMessage", content: [{ type: "text", text: "RECENT_USER" }] },
     ];
-    const f = await fixture({ historyItems: [...recent, ...oldHistory.slice(-14).reverse()] });
+    const f = await fixture({
+      historyItems: [...recent, ...oldHistory.slice(-14).reverse()],
+      classify: { advanced: true },
+    });
     await f.router.route(f.turn("设计数据库迁移"));
     const planningInput = JSON.stringify(
       f.requested.find((request) => request.method === "turn/start")?.params.input,
@@ -798,7 +1003,10 @@ describe("Buddy native routing", () => {
     expect(planningInput.match(/OLD_HISTORY_\d+/gu)?.length ?? 0).toBeLessThanOrEqual(16);
   });
   it("does not hide unrelated history failures", async () => {
-    const f = await fixture({ historyError: { code: -32000, message: "permission denied" } });
+    const f = await fixture({
+      historyError: { code: -32000, message: "permission denied" },
+      classify: { advanced: true },
+    });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.forwarded).toEqual([]);
     expect(f.requested.some((request) => request.params.includeTurns === true)).toBe(false);
@@ -815,6 +1023,7 @@ describe("Buddy native routing", () => {
     const f = await fixture({
       historyError: { code: -32600, message: "thread/items/list is not supported yet" },
       legacyHistoryError: { code: -32600, message },
+      classify: { advanced: true },
     });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.forwarded).toHaveLength(forwarded);
@@ -1206,55 +1415,6 @@ describe("Git push model bypass", () => {
 });
 
 describe("JEV judgment integration", () => {
-  const jevResponse = (route: string, complexity: number, push: number, role: string) => ({
-    model: "jev-latest",
-    answers: {
-      route: {
-        type: "choice",
-        choice: route,
-        probabilities:
-          route === "plan"
-            ? { code: 0.05, inspect: 0.05, plan: 0.9, other: 0 }
-            : route === "inspect"
-              ? { code: 0.05, inspect: 0.9, plan: 0.03, other: 0.02 }
-              : { code: 0.9, inspect: 0.05, plan: 0.03, other: 0.02 },
-        confidence: 0.92,
-      },
-      complexity: {
-        type: "score",
-        score: complexity,
-        legend: {
-          "0": "简单：单次读取或信息查询",
-          "1": "常规：范围明确的小改动或验证",
-          "2": "复杂：设计、重构、跨模块或多步骤",
-        },
-        probabilities: { "0": 0.1, "1": 0.7, "2": 0.2 },
-        confidence: 0.85,
-      },
-      destructive: { type: "noul", noul: 0.05 },
-      push: { type: "noul", noul: push },
-      role: {
-        type: "choice",
-        choice: role,
-        probabilities: {
-          git: role === "git" ? 0.9 : 0.05,
-          io: role === "io" ? 0.9 : 0.05,
-          executor: role === "executor" ? 0.9 : 0.05,
-        },
-        confidence: 0.9,
-      },
-    },
-    usage: { input_tokens: 100, output_tokens: 0 },
-  });
-  const jevClient = (body: unknown) =>
-    new TypeSafeClient({
-      apiKey: "test-only-key",
-      baseURL: "https://jev.invalid",
-      logLevel: "off",
-      retry: { maxRetries: 0 },
-      fetch: vi.fn(async () => Response.json(body, { status: 200 })),
-    });
-
   it("adopts the JEV route, role and difficulty and records the judgment", async () => {
     const f = await fixture({
       jev: jevClient(jevResponse("plan", 2, 0.02, "executor")),
@@ -1266,7 +1426,7 @@ describe("JEV judgment integration", () => {
       role: "executor",
       difficulty: "advanced",
       plannerModel: "gpt-planner",
-      judgment: { source: "jev", model: "jev-latest" },
+      judgment: { source: "system-one", model: "typesafe/jev" },
     });
     expect(decision?.judgment?.decisions.route?.status).toBe("automatic");
   });
@@ -1290,6 +1450,55 @@ describe("JEV judgment integration", () => {
       plannerModel: "gpt-planner",
     });
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
+  });
+
+  it("executes the CLI entry selected by System One without calling a model", async () => {
+    const f = await fixture({
+      modelIds: ["gpt-planner", "deepseek-flash"],
+      jev: jevClient(
+        jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" }),
+      ),
+    });
+    await f.router.route(f.turn("看看当前目录"));
+    expect(f.providerRequests()).toBe(0);
+    expect(f.forwarded[0]?.method).toBe("thread/shellCommand");
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      phase: "bypass",
+      role: "io",
+      command: expect.stringContaining("'ls' '-la'"),
+    });
+  });
+
+  it("keeps a System One 'none' command answer on the ordinary model route", async () => {
+    const f = await fixture({ jev: jevClient(jevResponse("code", 1, 0.02, "executor")) });
+    await f.router.route(f.turn("看看当前目录"));
+    expect(f.forwarded[0]?.method).toBe("turn/start");
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+  });
+
+  it("reads history only when System One reports a follow-up", async () => {
+    const plain = await fixture({ jev: jevClient(jevResponse("code", 1, 0.02, "executor")) });
+    await plain.router.route(plain.turn("修改按钮文案"));
+    expect(plain.requested.some((entry) => entry.method === "thread/items/list")).toBe(false);
+
+    const followUp = await fixture({
+      jev: jevClient(jevResponse("plan", 2, 0.02, "executor", { followUp: 0.97 })),
+      historyItems: [{ type: "agentMessage", text: "已确认跨服务统一鉴权方案" }],
+    });
+    await followUp.router.route(followUp.turn("按你说的修"));
+    expect(followUp.requested.some((entry) => entry.method === "thread/items/list")).toBe(true);
+    expect((await followUp.router.snapshot()).decisions[0]).toMatchObject({
+      difficulty: "advanced",
+      plannerModel: "gpt-planner",
+    });
+  });
+
+  it("honors the System One model selector for the gateway platform", async () => {
+    const f = await fixture({ classify: { role: "executor" } });
+    await f.router.configure({ systemOneModel: "laya" });
+    await f.router.route(f.turn("修改按钮文案"));
+    // 配置通过 settings 持久化，快照可回读；真实平台选择由网关按模型名完成。
+    expect((await f.router.snapshot()).settings.systemOneModel).toBe("laya");
   });
 
   it("falls back to local rules when JEV fails", async () => {

@@ -18,19 +18,6 @@ export interface Project {
   keywords: string[];
   commands: { command: string; cwd: string; source: string; action: string }[];
 }
-export interface Recipe {
-  id: string;
-  argv: string[];
-  cwd: string;
-  source: string;
-  action: string;
-}
-export interface Dispatch {
-  route: "tool" | "clarify" | "llm";
-  reason?: string;
-  recipe?: Recipe;
-  choices?: unknown[];
-}
 export function homePath(value?: string): string;
 export function readConnection(
   home: string,
@@ -45,11 +32,6 @@ export function readConnection(
 }>;
 export function assess(input: unknown, cwd?: string, project?: Project): Promise<Assessment>;
 export function inspectProject(cwd?: string): Promise<Project>;
-export function resolveDispatch(
-  text: string,
-  cwd: string,
-  options?: { project: Project },
-): Promise<Dispatch>;
 export function compatibleTurn(
   params: Record<string, unknown>,
   thread?: ThreadContext,

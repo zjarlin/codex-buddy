@@ -4,6 +4,10 @@ import { object, result, type NativeRequest } from "./planner.js";
 
 type ModelBypass = NonNullable<BuddyDecision["modelBypass"]>;
 
+/**
+ * 离线兜底的推送预筛，只在 System One 不可用时决定是否进入 Git 旁路。
+ * 正常路由的推送意图由 System One 的 push 判断负责，这里不再是第一判断层。
+ */
 export function isGitPushRequest(input: JsonValue[]): boolean {
   const text = input
     .map(object)

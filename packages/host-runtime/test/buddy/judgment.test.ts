@@ -11,16 +11,17 @@ function client(body: unknown) {
   return new TypeSafeClient({
     apiKey: "test-only-key",
     baseURL: "https://jev.invalid",
-    defaultModel: "jev-latest",
+    defaultModel: "typesafe/jev",
     logLevel: "off",
     retry: { maxRetries: 0 },
     fetch,
   });
 }
 
+// System One 一次批量返回全部原子判断；夹具与 judgment.ts 的问题集保持一致。
 function response(overrides: Record<string, unknown> = {}) {
   return {
-    model: "jev-latest",
+    model: "typesafe/jev",
     answers: {
       route: {
         type: "choice",
@@ -32,7 +33,7 @@ function response(overrides: Record<string, unknown> = {}) {
         type: "score",
         score: 1.2,
         legend: {
-          "0": "简单：单次读取或信息查询",
+          "0": "简单：单次读取、信息查询或简短交流",
           "1": "常规：范围明确的小改动或验证",
           "2": "复杂：设计、重构、跨模块或多步骤",
         },
@@ -45,6 +46,16 @@ function response(overrides: Record<string, unknown> = {}) {
         type: "choice",
         choice: "io",
         probabilities: { git: 0.05, io: 0.9, executor: 0.05 },
+        confidence: 0.9,
+      },
+      conversational: { type: "noul", noul: 0.05 },
+      followUp: { type: "noul", noul: 0.02 },
+      exactCommand: { type: "noul", noul: 0.02 },
+      commandIndex: {
+        type: "choice",
+        choice: "none",
+        // 该夹具不提供候选入口，因此 criteria 只有 none。
+        probabilities: { none: 1 },
         confidence: 0.9,
       },
       ...overrides,
@@ -62,13 +73,13 @@ describe("JEV judgment", () => {
 
   it("sends one batch request and maps route/complexity/push/role into Host fields", async () => {
     const c = client(response());
-    const judgment = await judgeWithJev(c, { request: "推送代码", project: undefined as never });
+    const judgment = await judgeWithJev(c, { request: "推送代码", commands: [] });
     expect(judgment.tier).toBe("standard");
     expect(judgment.intent).toBe("project");
     expect(judgment.role).toBe("io");
     expect(judgment.isPush).toBe(true);
     expect(judgment.pushConfidence).toBeCloseTo(0.98);
-    expect(judgment.model).toBe("jev-latest");
+    expect(judgment.model).toBe("typesafe/jev");
     expect(judgment.decisions.route?.status).toBe("automatic");
   });
 
@@ -84,12 +95,12 @@ describe("JEV judgment", () => {
           },
         }),
       ),
-      { request: "重构跨模块认证" },
+      { request: "重构跨模块认证", commands: [] },
     );
     expect(plan.tier).toBe("advanced");
     const risky = await judgeWithJev(
       client(response({ destructive: { type: "noul", noul: 0.99 } })),
-      { request: "删除历史" },
+      { request: "删除历史", commands: [] },
     );
     expect(risky.tier).toBe("advanced");
   });
@@ -103,7 +114,7 @@ describe("JEV judgment", () => {
       retry: { maxRetries: 0 },
       fetch,
     });
-    await expect(judgeWithJev(c, { request: "任务" })).rejects.toBeTruthy();
+    await expect(judgeWithJev(c, { request: "任务", commands: [] })).rejects.toBeTruthy();
   });
 });
 

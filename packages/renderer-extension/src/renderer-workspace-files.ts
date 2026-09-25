@@ -3,13 +3,40 @@ import type {
   WorkspaceFileEntry,
   WorkspaceFileReadParams,
   WorkspaceFileReadResult,
+  WorkspaceFileWriteParams,
+  WorkspaceFileWriteResult,
   WorkspaceFilesListParams,
   WorkspaceFilesListResult,
 } from "@codexhost/shared-contracts";
+import { indentWithTab } from "@codemirror/commands";
+import { cpp } from "@codemirror/lang-cpp";
+import { css } from "@codemirror/lang-css";
+import { go } from "@codemirror/lang-go";
+import { html } from "@codemirror/lang-html";
+import { java } from "@codemirror/lang-java";
+import { javascript } from "@codemirror/lang-javascript";
+import { json } from "@codemirror/lang-json";
+import { markdown } from "@codemirror/lang-markdown";
+import { python } from "@codemirror/lang-python";
+import { rust } from "@codemirror/lang-rust";
+import { yaml } from "@codemirror/lang-yaml";
+import { StreamLanguage, syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { kotlin } from "@codemirror/legacy-modes/mode/clike";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { sql } from "@codemirror/legacy-modes/mode/sql";
+import { swift } from "@codemirror/legacy-modes/mode/swift";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { tags } from "@lezer/highlight";
+import { basicSetup } from "codemirror";
 
 export interface RendererWorkspaceFilesClient {
   listWorkspaceFiles?(input: WorkspaceFilesListParams): Promise<WorkspaceFilesListResult>;
   readWorkspaceFile?(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult>;
+  writeWorkspaceFile?(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult>;
 }
 
 export interface RendererWorkspaceFilesContext {
@@ -30,9 +57,64 @@ export const WORKSPACE_FILE_ENTRY_ATTRIBUTE = "data-codexhost-workspace-file-ent
 export const WORKSPACE_FILE_REFRESH_ATTRIBUTE = "data-codexhost-workspace-file-refresh";
 export const WORKSPACE_FILE_PREVIEW_ATTRIBUTE = "data-codexhost-workspace-file-preview";
 export const WORKSPACE_FILE_PREVIEW_CLOSE_ATTRIBUTE = "data-codexhost-workspace-file-preview-close";
+export const WORKSPACE_FILE_EDITOR_ATTRIBUTE = "data-codexhost-workspace-file-editor";
+export const WORKSPACE_FILE_SAVE_ATTRIBUTE = "data-codexhost-workspace-file-save";
+export const WORKSPACE_FILE_DIRTY_ATTRIBUTE = "data-codexhost-workspace-file-dirty";
 
 const MAIN_SURFACE_SELECTOR = '[data-app-shell-main-surface="default"]';
 const APP_HEADER_SELECTOR = 'header[data-pip-obstacle="app-shell-header"]';
+
+const codexHighlightStyle = HighlightStyle.define([
+  { tag: [tags.keyword, tags.operatorKeyword], color: "var(--text-link,#5a8dee)" },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--green,#3fa66a)" },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--amber,#c58b2f)" },
+  {
+    tag: [tags.comment, tags.lineComment, tags.blockComment],
+    color: "var(--color-text-secondary,#85858f)",
+    fontStyle: "italic",
+  },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: "var(--accent,#9c79dd)" },
+  {
+    tag: [tags.function(tags.variableName), tags.definition(tags.function(tags.variableName))],
+    color: "var(--text-link,#5a8dee)",
+  },
+  { tag: [tags.propertyName, tags.attributeName], color: "var(--text-link,#5a8dee)" },
+  { tag: [tags.heading, tags.strong], fontWeight: "600" },
+  { tag: tags.link, color: "var(--text-link,#5a8dee)", textDecoration: "underline" },
+  { tag: tags.invalid, color: "var(--color-text-danger,#ef4444)" },
+]);
+
+function languageForPath(pathValue: string): Extension {
+  const name = pathValue.split("/").at(-1)?.toLowerCase() ?? "";
+  const extension = name.includes(".") ? (name.split(".").at(-1) ?? "") : "";
+  if (["js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts"].includes(extension)) {
+    return javascript({
+      jsx: extension.includes("x"),
+      typescript: extension.startsWith("t"),
+    });
+  }
+  if (extension === "json" || extension === "jsonc") return json();
+  if (["html", "htm", "vue", "svelte"].includes(extension)) return html();
+  if (["css", "scss", "less"].includes(extension)) return css();
+  if (["md", "mdx"].includes(extension)) return markdown();
+  if (extension === "yaml" || extension === "yml") return yaml();
+  if (extension === "toml") return StreamLanguage.define(toml);
+  if (extension === "rs") return rust();
+  if (extension === "go") return go();
+  if (extension === "py") return python();
+  if (extension === "java") return java();
+  if (extension === "kt" || extension === "kts") return StreamLanguage.define(kotlin);
+  if (["c", "h", "cc", "cpp", "cxx", "hpp", "hxx"].includes(extension)) return cpp();
+  if (extension === "swift") return StreamLanguage.define(swift);
+  if (["sh", "bash", "zsh", "fish"].includes(extension) || name === "dockerfile") {
+    return StreamLanguage.define(extension === "" ? dockerFile : shell);
+  }
+  if (extension === "sql") return StreamLanguage.define(sql({}));
+  if (["properties", "ini", "conf", "cfg"].includes(extension)) {
+    return StreamLanguage.define(properties);
+  }
+  return [];
+}
 
 interface DirectoryState {
   expanded: boolean;
@@ -110,10 +192,23 @@ export function createRendererWorkspaceFilesView(options: {
     .codexhost-preview-title { min-width:0; flex:1; }
     .codexhost-preview-title strong { display:block; overflow:hidden; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
     .codexhost-preview-meta { display:flex; gap:8px; color:inherit; font-size:10px; opacity:.58; }
-    .codexhost-preview-head button { display:grid; width:28px; height:28px; place-items:center; padding:0; color:inherit; background:transparent; border:0; border-radius:6px; cursor:pointer; }
+    .codexhost-preview-head button { display:grid; width:28px; height:28px; place-items:center; padding:0; color:inherit; background:transparent; border:1px solid transparent; border-radius:6px; cursor:pointer; }
     .codexhost-preview-head button:hover { background:color-mix(in srgb,currentColor 10%,transparent); }
+    .codexhost-preview-head button:focus-visible { outline:2px solid var(--text-link,#339cff); outline-offset:1px; }
+    .codexhost-preview-head button:disabled { opacity:.38; cursor:default; }
+    .codexhost-preview-dirty { width:7px; height:7px; flex:none; border-radius:50%; background:var(--text-link,#339cff); }
+    .codexhost-preview-dirty[hidden] { display:none; }
     .codexhost-preview-note { padding:8px 12px; color:var(--text-link,inherit); font-size:11px; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 10%,transparent)); }
-    .codexhost-preview-body { min-height:0; flex:1; margin:0; overflow:auto; padding:14px 16px 28px; color:inherit; background:var(--surface-primary,#fff); font:12px/1.58 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; tab-size:2; white-space:pre; }
+    .codexhost-preview-note[data-tone="error"] { color:var(--color-text-danger,#ef4444); }
+    .codexhost-preview-body { min-height:0; flex:1; overflow:hidden; color:inherit; background:var(--surface-primary,#fff); }
+    .codexhost-preview-body[hidden] { display:none; }
+    .codexhost-preview-editor { width:100%; height:100%; min-height:0; color:inherit; }
+    .codexhost-preview-editor .cm-editor { height:100%; color:var(--text-primary,#111); background:var(--surface-primary,#fff); }
+    .codexhost-preview-editor .cm-scroller { font:12px/1.58 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; tab-size:2; }
+    .codexhost-preview-editor .cm-editor .cm-gutters { color:inherit; background:var(--surface-secondary,color-mix(in srgb,currentColor 4%,transparent)); border-right:1px solid var(--border-default,color-mix(in srgb,currentColor 10%,transparent)); }
+    .codexhost-preview-editor .cm-editor .cm-activeLine, .codexhost-preview-editor .cm-editor .cm-activeLineGutter { background:color-mix(in srgb,currentColor 6%,transparent); }
+    .codexhost-preview-editor .cm-selectionBackground { background:color-mix(in srgb,var(--text-link,#339cff) 28%,transparent) !important; }
+    .codexhost-preview-placeholder { margin:0; padding:14px 16px 28px; overflow:auto; color:inherit; font:12px/1.58 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace; white-space:pre-wrap; }
   `;
   const previewHead = document.createElement("div");
   previewHead.className = "codexhost-preview-head";
@@ -125,12 +220,31 @@ export function createRendererWorkspaceFilesView(options: {
   previewTitle.append(previewPath, previewMeta);
   const close = iconButton(document, "关闭文件预览", "M6 6l12 12M18 6L6 18");
   close.setAttribute(WORKSPACE_FILE_PREVIEW_CLOSE_ATTRIBUTE, "v1");
-  previewHead.append(previewTitle, close);
+  const dirty = document.createElement("span");
+  dirty.className = "codexhost-preview-dirty";
+  dirty.title = "有未保存的修改";
+  dirty.setAttribute(WORKSPACE_FILE_DIRTY_ATTRIBUTE, "v1");
+  dirty.hidden = true;
+  const save = iconButton(
+    document,
+    "保存文件（⌘S）",
+    "M5 4h12v16H7a2 2 0 0 1-2-2V4Zm3 0v6h8V4M8 16h8",
+  );
+  save.setAttribute(WORKSPACE_FILE_SAVE_ATTRIBUTE, "v1");
+  save.disabled = true;
+  previewHead.append(previewTitle, dirty, save, close);
   const previewNote = document.createElement("div");
   previewNote.className = "codexhost-preview-note";
   previewNote.hidden = true;
-  const previewBody = document.createElement("pre");
+  const previewBody = document.createElement("div");
   previewBody.className = "codexhost-preview-body";
+  previewBody.hidden = true;
+  const previewPlaceholder = document.createElement("pre");
+  previewPlaceholder.className = "codexhost-preview-placeholder";
+  const previewEditorHost = document.createElement("div");
+  previewEditorHost.className = "codexhost-preview-editor";
+  previewEditorHost.setAttribute(WORKSPACE_FILE_EDITOR_ATTRIBUTE, "v1");
+  previewBody.append(previewPlaceholder, previewEditorHost);
   previewShadow.append(previewStyle, previewHead, previewNote, previewBody);
 
   let active = false;
@@ -141,6 +255,55 @@ export function createRendererWorkspaceFilesView(options: {
   let mainSurface: HTMLElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let frame = 0;
+  let editorView: EditorView | null = null;
+  const editorLanguage = new Compartment();
+  const editorTheme = new Compartment();
+  let previewValue: WorkspaceFileReadResult | null = null;
+  let dirtyValue = false;
+  let saving = false;
+
+  const editorExtensions = (): Extension[] => [
+    basicSetup,
+    syntaxHighlighting(codexHighlightStyle),
+    keymap.of([
+      {
+        key: "Mod-s",
+        run: () => {
+          void savePreview();
+          return true;
+        },
+      },
+      indentWithTab,
+    ]),
+    EditorView.lineWrapping,
+    EditorView.theme({
+      "&": { height: "100%" },
+      ".cm-content": { padding: "14px 0 28px" },
+      ".cm-line": { padding: "0 16px" },
+      ".cm-gutters": { paddingBlock: "14px" },
+    }),
+    editorTheme.of([]),
+    editorLanguage.of([]),
+    EditorView.updateListener.of((update) => {
+      if (!update.docChanged || saving) return;
+      setDirty(update.state.doc.toString() !== previewValue?.content);
+    }),
+  ];
+
+  const editor = (): EditorView => {
+    if (editorView) return editorView;
+    editorView = new EditorView({
+      root: previewShadow,
+      parent: previewEditorHost,
+      state: EditorState.create({ doc: "", extensions: editorExtensions() }),
+    });
+    return editorView;
+  };
+
+  function destroyEditor(): void {
+    editorView?.destroy();
+    editorView = null;
+  }
 
   const context = (): RendererWorkspaceFilesContext => options.getContext();
 
@@ -195,36 +358,118 @@ export function createRendererWorkspaceFilesView(options: {
     schedulePreviewPosition();
   };
 
+  function setDirty(value: boolean): void {
+    dirtyValue = value;
+    dirty.hidden = !value;
+    save.disabled =
+      !value || saving || !previewValue || previewValue.binary || previewValue.truncated;
+  }
+
+  function setPreviewBody(mode: "editor" | "placeholder"): void {
+    previewBody.hidden = false;
+    previewEditorHost.hidden = mode !== "editor";
+    previewPlaceholder.hidden = mode === "editor";
+  }
+
+  function resetEditor(value: WorkspaceFileReadResult, readOnly: boolean): void {
+    const view = editor();
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: value.content },
+      effects: [
+        editorLanguage.reconfigure(languageForPath(value.path)),
+        editorTheme.reconfigure([
+          ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
+        ]),
+      ],
+    });
+    view.scrollDOM.scrollTop = 0;
+    view.scrollDOM.scrollLeft = 0;
+  }
+
   const closePreview = (): void => {
+    if (dirtyValue) {
+      const confirmed = ownerWindow.confirm("当前文件有未保存的修改，确定关闭吗？");
+      if (!confirmed) return;
+    }
     previewGeneration += 1;
     previewOpen = false;
+    previewValue = null;
+    setDirty(false);
+    destroyEditor();
     preview.removeAttribute("data-open");
     preview.remove();
     close.title = "关闭文件预览";
   };
 
-  const renderPreview = (value: WorkspaceFileReadResult): void => {
-    previewPath.textContent = value.path;
+  async function savePreview(): Promise<void> {
+    const value = previewValue;
+    const view = editorView;
+    const request = context();
+    const write = request.client?.writeWorkspaceFile;
+    if (!value || !view || !request.threadId || !write || saving) return;
+    if (value.binary || value.truncated) return;
+    saving = true;
+    save.disabled = true;
+    previewNote.hidden = false;
+    previewNote.dataset.tone = "";
+    previewNote.textContent = "正在保存…";
+    try {
+      const content = view.state.doc.toString();
+      const result = await write({
+        threadId: request.threadId,
+        path: value.path,
+        content,
+        expectedRevision: value.revision,
+      });
+      if (disposed || !previewOpen || previewValue !== value) return;
+      previewValue = { ...value, content, size: result.size, revision: result.revision };
+      setDirty(false);
+      renderPreviewMeta(previewValue);
+      previewNote.hidden = true;
+      previewNote.textContent = "";
+    } catch (error) {
+      if (disposed || !previewOpen) return;
+      previewNote.dataset.tone = "error";
+      previewNote.hidden = false;
+      previewNote.textContent = error instanceof Error ? error.message : String(error);
+    } finally {
+      saving = false;
+      if (!disposed && previewOpen && previewValue) setDirty(dirtyValue);
+    }
+  }
+
+  const renderPreviewMeta = (value: WorkspaceFileReadResult): void => {
     previewMeta.replaceChildren();
     const size = document.createElement("span");
     size.textContent = formatBytes(value.size);
-    const readOnly = document.createElement("span");
-    readOnly.textContent = "只读";
-    previewMeta.append(size, readOnly);
+    const mode = document.createElement("span");
+    mode.textContent = value.binary || value.truncated ? "只读" : "可编辑";
+    previewMeta.append(size, mode);
+  };
+
+  const renderPreview = (value: WorkspaceFileReadResult): void => {
+    previewPath.textContent = value.path;
+    renderPreviewMeta(value);
+    previewValue = value;
+    setDirty(false);
     if (value.binary) {
       previewNote.hidden = false;
       previewNote.textContent = "二进制文件不显示内容。";
-      previewBody.textContent = "";
+      setPreviewBody("placeholder");
+      previewPlaceholder.textContent = "";
       return;
     }
     if (value.truncated) {
       previewNote.hidden = false;
-      previewNote.textContent = "文件较大，仅显示前 1 MiB 内容。";
+      previewNote.textContent = "文件较大，仅显示前 1 MiB 内容，当前为只读。";
     } else {
       previewNote.hidden = true;
       previewNote.textContent = "";
     }
-    previewBody.textContent = value.content || "文件为空";
+    const readOnly = value.binary || value.truncated;
+    resetEditor(value, readOnly);
+    setPreviewBody(readOnly && value.content.length === 0 ? "placeholder" : "editor");
+    if (readOnly && value.content.length === 0) previewPlaceholder.textContent = "";
   };
 
   const openPreview = async (entry: WorkspaceFileEntry): Promise<void> => {
@@ -241,8 +486,12 @@ export function createRendererWorkspaceFilesView(options: {
     previewPath.textContent = entry.path;
     previewMeta.replaceChildren();
     previewNote.hidden = false;
+    previewNote.dataset.tone = "";
     previewNote.textContent = "";
-    previewBody.textContent = "正在读取文件…";
+    previewValue = null;
+    setDirty(false);
+    setPreviewBody("placeholder");
+    previewPlaceholder.textContent = "正在读取文件…";
     observeMainSurface();
     positionPreview();
     try {
@@ -252,8 +501,10 @@ export function createRendererWorkspaceFilesView(options: {
     } catch (error) {
       if (disposed || generation !== previewGeneration || !previewOpen) return;
       previewNote.hidden = false;
+      previewNote.dataset.tone = "error";
       previewNote.textContent = error instanceof Error ? error.message : String(error);
-      previewBody.textContent = "";
+      setPreviewBody("placeholder");
+      previewPlaceholder.textContent = "";
     }
   };
 
@@ -407,6 +658,11 @@ export function createRendererWorkspaceFilesView(options: {
     closePreview,
     options.signal ? { signal: options.signal } : undefined,
   );
+  save.addEventListener(
+    "click",
+    () => void savePreview(),
+    options.signal ? { signal: options.signal } : undefined,
+  );
   refresh.addEventListener(
     "click",
     refreshTree,
@@ -418,11 +674,20 @@ export function createRendererWorkspaceFilesView(options: {
     panel,
     activate() {
       if (disposed) return;
+      if (active) return;
+      if (dirtyValue) {
+        const confirmed = ownerWindow.confirm("当前文件有未保存的修改，确定离开文件浏览器吗？");
+        if (!confirmed) return;
+      }
       active = true;
       panel.hidden = false;
       if (!directories.has("")) void loadDirectory("");
     },
     deactivate() {
+      if (dirtyValue) {
+        const confirmed = ownerWindow.confirm("当前文件有未保存的修改，确定关闭吗？");
+        if (!confirmed) return;
+      }
       active = false;
       panel.hidden = true;
       closePreview();
@@ -436,6 +701,7 @@ export function createRendererWorkspaceFilesView(options: {
       active = false;
       treeGeneration += 1;
       closePreview();
+      destroyEditor();
       resizeObserver?.disconnect();
       resizeObserver = null;
       if (frame) ownerWindow.cancelAnimationFrame(frame);

@@ -6,7 +6,6 @@ import type {
 } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { plannerInputControl } from "./planner-input.js";
-import { interruptedControl } from "./continuation.js";
 
 const messages = {
   "zh-CN": {
@@ -252,10 +251,9 @@ export function installBuddyControl(
   const refreshStatus = document.createElement("p");
   refreshStatus.setAttribute("role", "status");
   refreshStatus.className = "buddy-note";
-  const recovery = document.createElement("div");
   const footer = document.createElement("div");
   footer.className = "buddy-footer";
-  footer.append(actions, recovery);
+  footer.append(actions);
   const inputArea = document.createElement("div");
   let inputKey = "";
   let inputClient: RendererModelClient | null = null;
@@ -266,7 +264,6 @@ export function installBuddyControl(
   let snapshot: BuddySnapshot | null = null;
   let context: BuddyControlContext | null = null;
   let fingerprint = "";
-  let recoveryClient: RendererModelClient | null = null;
   const t = () => messages[getLocale()];
   const report = (failure: unknown): void => {
     error.textContent = failure instanceof Error ? failure.message : String(failure);
@@ -438,13 +435,6 @@ export function installBuddyControl(
     if (!snapshot) {
       status.textContent = m.disconnected;
       return;
-    }
-    if (snapshot.settings.privateMode || !snapshot.settings.enabled) {
-      recovery.replaceChildren();
-      recoveryClient = null;
-    } else if (context && recoveryClient !== context.client) {
-      recoveryClient = context.client;
-      recovery.replaceChildren(interruptedControl(context.client, getLocale() === "zh-CN"));
     }
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
     const pending =

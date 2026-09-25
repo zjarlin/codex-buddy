@@ -1,3 +1,4 @@
+import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
@@ -93,7 +94,7 @@ import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
 } from "./settings/pages.js";
-import type { RendererGitClient } from "./settings/git-page.js";
+import type { RendererGitClient } from "./renderer-git-sidebar.js";
 
 const externalHarnessIds = {
   pi: harnessIdSchema.parse("pi"),
@@ -720,6 +721,10 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocalAgent: localAgentForSidebarThread,
   });
+  const sidebarContinuation = installSidebarContinuation({
+    getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
   const gitSidebar = installRendererGitSidebar({
     getContext: () => {
       for (const mounted of mountedByComposer.values()) {
@@ -772,60 +777,6 @@ export function installRendererBindingProbe(
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getLoadedSessionsClient: () => modelClientForHost("local"),
-    getGitContext: () => {
-      for (const mounted of mountedByComposer.values()) {
-        if (!mounted.composer.isConnected) continue;
-        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
-        if (!threadId) continue;
-        const hostId = mounted.hostId ?? activeModelHostId();
-        const client = hostId ? modelClientForHost(hostId) : null;
-        const {
-          inspectGitStatus,
-          inspectGitDiff,
-          stageGitPaths,
-          unstageGitPaths,
-          commitGit,
-          pushGit,
-          listGitMessageModels,
-          generateGitMessage,
-          inspectGitLog,
-          inspectGitCommit,
-          inspectGitCommitDiff,
-        } = client ?? {};
-        if (
-          !inspectGitStatus ||
-          !inspectGitDiff ||
-          !stageGitPaths ||
-          !unstageGitPaths ||
-          !commitGit ||
-          !pushGit ||
-          !listGitMessageModels ||
-          !generateGitMessage
-          || !inspectGitLog
-          || !inspectGitCommit
-          || !inspectGitCommitDiff
-        ) {
-          continue;
-        }
-        return {
-          threadId,
-          client: {
-            inspectGitStatus,
-            inspectGitDiff,
-            stageGitPaths,
-            unstageGitPaths,
-            commitGit,
-            pushGit,
-            listGitMessageModels,
-            generateGitMessage,
-            inspectGitLog,
-            inspectGitCommit,
-            inspectGitCommitDiff,
-          },
-        };
-      }
-      return { threadId: null, client: null };
-    },
     getSessionImportClient: () => {
       const client = modelClientForHost("local");
       const sources = client?.listSessionImportSources;
@@ -2547,12 +2498,27 @@ export function installRendererBindingProbe(
           JSON.stringify(mounted.modelTarget) !== target
         )
           return undefined;
+        if (!client.syncCodexCatalog) throw new Error("供应商模型同步不可用。");
+        const synced = await client.syncCodexCatalog();
+        if (
+          !composer.isConnected ||
+          mountedByComposer.get(composer) !== mounted ||
+          controller.get(composer).agent !== "codex" ||
+          activeModelHostId() !== hostId ||
+          JSON.stringify(mounted.modelTarget) !== target
+        )
+          return undefined;
         await refreshNativeModels(mounted.control.nativeModelControl?.element ?? null, hostId);
         const after = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view
           .models;
+        if (!after || synced.ids.some((id) => !after.some((model) => model.id === id))) {
+          throw new Error(
+            `供应商返回 ${synced.returned} 个模型，但原生目录尚未载入全部模型；请重启 CodexBuddy 后重试。`,
+          );
+        }
         mounted.shortcutRefreshReport = {
           before,
-          summary: after === undefined ? undefined : { synchronized: after.length },
+          summary: { returned: synced.returned, synchronized: after.length },
         };
         if (composer.isConnected) renderMounted(mounted);
       },
@@ -2592,15 +2558,26 @@ export function installRendererBindingProbe(
           JSON.stringify(mounted.modelTarget) !== target
         )
           return undefined;
+        if (!client.syncCodexCatalog) throw new Error("供应商模型同步不可用。");
+        const synced = await client.syncCodexCatalog();
+        if (
+          !composer.isConnected ||
+          mountedByComposer.get(composer) !== mounted ||
+          controller.get(composer).agent !== "codex" ||
+          activeModelHostId() !== hostId ||
+          JSON.stringify(mounted.modelTarget) !== target
+        )
+          return undefined;
         await refreshNativeModels(mounted.control.nativeModelControl?.element ?? null, hostId);
         const after = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view
           .models;
-        mounted.shortcutRefreshReport = {
-          before,
-          summary: after === undefined ? undefined : { synchronized: after.length },
-        };
+        if (!after || synced.ids.some((id) => !after.some((model) => model.id === id))) {
+          throw new Error(
+            `供应商返回 ${synced.returned} 个模型，但原生目录尚未载入全部模型；请重启 CodexBuddy 后重试。`,
+          );
+        }
         if (composer.isConnected) renderMounted(mounted);
-        return undefined;
+        return { returned: synced.returned, synchronized: after.length };
       },
     );
     const mounted: MountedComposer = {
@@ -2895,6 +2872,7 @@ export function installRendererBindingProbe(
     scheduleScan(mutations.some(mutationMayChangeComposerTarget));
   });
   const onHostRouteChange = (): void => {
+    sidebarContinuation.refresh();
     sidebarAgentIcons.refresh();
     reconcileHarnessAvailabilityHost();
     void loadCodexAccounts();
@@ -3102,6 +3080,7 @@ export function installRendererBindingProbe(
       mutationObserver.disconnect();
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
+      sidebarContinuation.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();
       settingsLifecycle.dispose();

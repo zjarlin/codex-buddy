@@ -1166,6 +1166,11 @@ export function installCurrentRendererAdapter(): {
       if (!client.buddyContinue) throw new Error("Continuation unavailable");
       return client.buddyContinue(threadId, turnId);
     },
+    syncCodexCatalog: () => {
+      const client = currentModelClient();
+      if (!client.syncCodexCatalog) throw new Error("Codex catalog synchronization unavailable");
+      return client.syncCodexCatalog();
+    },
     buddyModels: () => {
       const client = currentModelClient();
       if (!client.buddyModels) {

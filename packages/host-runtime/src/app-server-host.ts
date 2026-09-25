@@ -1,4 +1,5 @@
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
+import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { InterruptedConversations } from "./buddy/continuation.js";
 import {
   BUDDY_INTERRUPTED_METHOD,
@@ -9,6 +10,7 @@ import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy
 import { BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
 import {
   BUDDY_MODELS_METHOD,
+  BUDDY_CATALOG_SYNC_METHOD,
   BUDDY_JEV_KEY_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
@@ -1103,6 +1105,18 @@ export class AppServerHost {
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
+      }
+      return;
+    }
+    if (request.method === BUDDY_CATALOG_SYNC_METHOD) {
+      try {
+        if (!this.#buddy || (await this.#buddy.privateMode())) {
+          throw new Error("隐私模式或未启用 Buddy 时不刷新在线模型目录。");
+        }
+        const result = await syncCodexCatalog(this.#options.environment ?? process.env);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
       }
       return;
     }

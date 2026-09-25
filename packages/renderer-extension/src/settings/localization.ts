@@ -222,53 +222,6 @@ export interface RendererSettingsMessages {
   readonly aboutOpenSource: string;
   readonly aboutStarCallout: string;
   readonly aboutRepository: string;
-  readonly gitRefresh: string;
-  readonly gitSourceControl: string;
-  readonly gitShowDiff: string;
-  readonly gitStageFile: string;
-  readonly gitUnstage: string;
-  readonly gitChanges: string;
-  readonly gitStagedChanges: string;
-  readonly gitUnstagedChanges: string;
-  readonly gitConflicts: string;
-  readonly gitDiff: string;
-  readonly gitSelectFile: string;
-  readonly gitLoading: string;
-  readonly gitNoDiff: string;
-  readonly gitUnavailable: string;
-  readonly gitDetached: string;
-  readonly gitUnknownBranch: string;
-  readonly gitNoUpstream: string;
-  readonly gitAheadBehind: (ahead: number, behind: number) => string;
-  readonly gitChangeCount: (count: number) => string;
-  readonly gitNoChanges: string;
-  readonly gitNoThread: string;
-  readonly gitConflicted: string;
-  readonly gitUntracked: string;
-  readonly gitStaged: string;
-  readonly gitModified: string;
-  readonly gitStagedAndModified: string;
-  readonly gitCommitMessage: string;
-  readonly gitCommitMessagePlaceholder: string;
-  readonly gitMessageModel: string;
-  readonly gitGenerateMessage: string;
-  readonly gitStageAll: string;
-  readonly gitCommit: string;
-  readonly gitCommitAndPush: string;
-  readonly gitPush: string;
-  readonly gitPushed: string;
-  readonly gitNoMessageModel: string;
-  readonly gitStagedSuccess: string;
-  readonly gitUnstagedSuccess: string;
-  readonly gitMessageGenerated: string;
-  readonly gitSubmodules: string;
-  readonly gitNoSubmodules: string;
-  readonly gitInitializeSubmodule: string;
-  readonly gitUpdateSubmodule: string;
-  readonly gitSubmoduleUpdated: string;
-  readonly gitCommitted: string;
-  readonly gitCommittedAndPushed: string;
-  readonly gitDiffTruncated: string;
   readonly projectSync: {
     relay: string;
     relayUnavailable: string;
@@ -537,53 +490,6 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   aboutOpenSource: "codexhost is an open-source project. The source code is available at:",
   aboutStarCallout: "⭐ If this project helps you, please give us a Star! ⭐",
   aboutRepository: "Open-source repository",
-  gitRefresh: "Refresh",
-  gitSourceControl: "Source Control",
-  gitShowDiff: "Show Diff",
-  gitStageFile: "Stage",
-  gitUnstage: "Unstage",
-  gitChanges: "Changes",
-  gitStagedChanges: "Staged Changes",
-  gitUnstagedChanges: "Changes",
-  gitConflicts: "Conflicts",
-  gitDiff: "Diff",
-  gitSelectFile: "Select a changed file to inspect its diff.",
-  gitLoading: "Loading…",
-  gitNoDiff: "No diff is available for this file.",
-  gitUnavailable: "Git is unavailable for the current task.",
-  gitDetached: "Detached HEAD",
-  gitUnknownBranch: "Unknown branch",
-  gitNoUpstream: "No upstream",
-  gitAheadBehind: (ahead: number, behind: number) => `${ahead} ahead · ${behind} behind`,
-  gitChangeCount: (count: number) => `${count} changed`,
-  gitNoChanges: "No changes in this workspace.",
-  gitNoThread: "Open a Thread in a Git workspace, then refresh.",
-  gitConflicted: "Conflicted",
-  gitUntracked: "Untracked",
-  gitStaged: "Staged",
-  gitModified: "Modified",
-  gitStagedAndModified: "Staged + modified",
-  gitCommitMessage: "Commit message",
-  gitCommitMessagePlaceholder: "Describe the change. The AI-generated message is editable.",
-  gitMessageModel: "Message model",
-  gitGenerateMessage: "Generate",
-  gitStageAll: "Stage all",
-  gitCommit: "Commit",
-  gitCommitAndPush: "Commit and push",
-  gitPush: "Push",
-  gitPushed: "Changes pushed.",
-  gitNoMessageModel: "No eligible message model is available.",
-  gitStagedSuccess: "Changes staged.",
-  gitUnstagedSuccess: "Changes unstaged.",
-  gitMessageGenerated: "Commit message generated.",
-  gitSubmodules: "Submodules",
-  gitNoSubmodules: "No Git submodules.",
-  gitInitializeSubmodule: "Initialize",
-  gitUpdateSubmodule: "Update",
-  gitSubmoduleUpdated: "Submodule updated.",
-  gitCommitted: "Commit created.",
-  gitCommittedAndPushed: "Commit created and pushed.",
-  gitDiffTruncated: "Diff truncated for display.",
   projectSync: Object.freeze({
     relay: "Device pairing",
     relayUnavailable: "Configure a WSS relay to pair devices.",
@@ -617,7 +523,6 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     connections: "Connections",
     appearance: "General",
     accounts: "Accounts",
-    git: "Git",
     "project-sync": "Projects",
     "session-import": "Session Import",
     updates: "Updates",
@@ -853,53 +758,6 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   aboutOpenSource: "codexhost 是一个开源项目，开源地址：",
   aboutStarCallout: "⭐ 如果这个项目对你有帮助，请给我们一个 Star！⭐",
   aboutRepository: "开源仓库",
-  gitRefresh: "刷新",
-  gitSourceControl: "源代码管理",
-  gitShowDiff: "查看差异",
-  gitStageFile: "暂存",
-  gitUnstage: "取消暂存",
-  gitChanges: "变更",
-  gitStagedChanges: "已暂存",
-  gitUnstagedChanges: "未暂存",
-  gitConflicts: "冲突",
-  gitDiff: "差异",
-  gitSelectFile: "选择一个变更文件查看差异。",
-  gitLoading: "读取中…",
-  gitNoDiff: "该文件没有可显示的差异。",
-  gitUnavailable: "当前任务无法使用 Git。",
-  gitDetached: "游离 HEAD",
-  gitUnknownBranch: "未知分支",
-  gitNoUpstream: "未设置上游",
-  gitAheadBehind: (ahead: number, behind: number) => `领先 ${ahead} · 落后 ${behind}`,
-  gitChangeCount: (count: number) => `${count} 个变更`,
-  gitNoChanges: "工作区没有变更。",
-  gitNoThread: "请先打开 Git 工作区中的任务，然后刷新。",
-  gitConflicted: "冲突",
-  gitUntracked: "未跟踪",
-  gitStaged: "已暂存",
-  gitModified: "已修改",
-  gitStagedAndModified: "已暂存并修改",
-  gitCommitMessage: "提交消息",
-  gitCommitMessagePlaceholder: "填写提交消息；AI 生成后仍可编辑。",
-  gitMessageModel: "生成消息模型",
-  gitGenerateMessage: "AI 生成",
-  gitStageAll: "全部暂存",
-  gitCommit: "提交",
-  gitCommitAndPush: "提交并推送",
-  gitPush: "推送",
-  gitPushed: "已推送变更。",
-  gitNoMessageModel: "没有可用的提交消息模型。",
-  gitStagedSuccess: "已暂存变更。",
-  gitUnstagedSuccess: "已取消暂存。",
-  gitMessageGenerated: "已生成提交消息。",
-  gitSubmodules: "子模块",
-  gitNoSubmodules: "没有 Git 子模块。",
-  gitInitializeSubmodule: "初始化",
-  gitUpdateSubmodule: "更新",
-  gitSubmoduleUpdated: "已更新子模块。",
-  gitCommitted: "已创建提交。",
-  gitCommittedAndPushed: "已创建提交并推送。",
-  gitDiffTruncated: "差异过大，已截断显示。",
   projectSync: Object.freeze({
     relay: "设备配对",
     relayUnavailable: "需配置 WSS 中继后才能配对设备。",
@@ -933,7 +791,6 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     connections: "连接",
     appearance: "通用",
     accounts: "账号",
-    git: "Git",
     "project-sync": "项目",
     "session-import": "会话导入",
     updates: "更新",

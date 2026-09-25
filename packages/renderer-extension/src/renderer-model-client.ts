@@ -87,6 +87,9 @@ import {
   type BuddyPrivateRequest,
   type BuddyPrivateSnapshot,
   BUDDY_MODELS_METHOD,
+  BUDDY_CATALOG_SYNC_METHOD,
+  buddyCatalogSyncSchema,
+  type BuddyCatalogSync,
   BUDDY_JEV_KEY_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
@@ -287,6 +290,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
+  syncCodexCatalog?(): Promise<BuddyCatalogSync>;
   buddyConfigure?(settings: BuddySettings): Promise<BuddySnapshot>;
   buddyJevKey?(config: {
     apiKey?: string | null | undefined;
@@ -618,6 +622,8 @@ export function createRendererModelClient(
     },
     buddyModels: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_MODELS_METHOD, {})),
+    syncCodexCatalog: async () =>
+      buddyCatalogSyncSchema.parse(await manager.sendRequest(BUDDY_CATALOG_SYNC_METHOD, {})),
     buddyConfigure: async (settings: BuddySettings) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_SETTINGS_METHOD, settings)),
     buddyJevKey: async (config: {

@@ -248,8 +248,6 @@ describe("Renderer settings header trigger", () => {
     );
 
     expect(control.updateButton.style.display).toBe("none");
-    (control.gitButton as unknown as FakeElement).dispatch("click");
-    expect(opened).toHaveBeenCalledWith(control.gitButton, "git");
     control.setUpdateAvailable(true);
     expect(control.updateButton.style.display).toBe("inline-flex");
     expect(control.updateButton.style.background).toBe("#2563eb");

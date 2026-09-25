@@ -23,7 +23,6 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ label }) => label)).toEqual([
       "Connections",
       "Accounts",
-      "Git",
       "Projects",
       "Session Import",
       "General",
@@ -33,7 +32,6 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ icon }) => icon)).toEqual([
       "connections",
       "accounts",
-      "git",
       "project-sync",
       "session-import",
       "settings",
@@ -69,7 +67,6 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ id }) => id)).toEqual([
       "connections",
       "accounts",
-      "git",
       "project-sync",
       "session-import",
       "appearance",

@@ -9,7 +9,6 @@ import {
   createDefaultRendererSettingsPages,
   type RendererConnectionDiagnostics,
   type RendererCodexAccountClient,
-  type RendererGitContext,
   type ProjectSyncClient,
   type RendererUpdateClient,
 } from "./settings/pages.js";
@@ -32,7 +31,6 @@ export interface RendererSettingsLifecycleOptions {
   getAccountClient?(): RendererCodexAccountClient | null;
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
-  getGitContext?(): RendererGitContext;
   getProjectSyncClient?(): ProjectSyncClient | null;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
@@ -81,7 +79,6 @@ export function installRendererSettingsLifecycle(
         if (!disposed && !signal.aborted) shell?.close();
       },
       options.getLoadedSessionsClient ?? (() => null),
-      options.getGitContext ?? (() => ({ threadId: null, client: null })),
       options.getProjectSyncClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);

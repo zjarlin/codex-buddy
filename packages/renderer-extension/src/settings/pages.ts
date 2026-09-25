@@ -30,7 +30,6 @@ import { createAppearanceSettingsPage } from "./appearance-page.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
-import { createGitSettingsPage, type RendererGitContext } from "./git-page.js";
 import { createProjectSyncPage, type ProjectSyncClient } from "./project-sync-page.js";
 
 export type {
@@ -76,7 +75,6 @@ function windowsInstallerDownloadUrl(window: Window | null | undefined, version:
 export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "connections",
   "accounts",
-  "git",
   "project-sync",
   "session-import",
   "appearance",
@@ -92,7 +90,6 @@ export interface RendererUpdateClient {
   readUpdateStatus(): Promise<UpdateStatusResult>;
 }
 
-export type { RendererGitClient, RendererGitContext } from "./git-page.js";
 export type { ProjectSyncClient } from "./project-sync-page.js";
 
 function panelIconName(view: string): RendererSettingsIconName {
@@ -593,13 +590,11 @@ export function createDefaultRendererSettingsPages(
   openImportedThread: RendererImportedThreadOpener = () =>
     Promise.reject(new Error("Imported Thread navigation is unavailable")),
   getLoadedSessionsClient: () => LoadedSessionsClient | null = () => null,
-  getGitContext: () => RendererGitContext = () => ({ threadId: null, client: null }),
   getProjectSyncClient: () => ProjectSyncClient | null = () => null,
 ): readonly RendererSettingsPageDefinition[] {
   return Object.freeze([
     createConnectionsSettingsPage(messages, getDiagnostics),
     createAccountsSettingsPage(messages, getAccountClient),
-    createGitSettingsPage(messages, getGitContext),
     createProjectSyncPage(messages, getProjectSyncClient),
     createSessionImportSettingsPage(messages, getSessionImportClient, openImportedThread),
     createAppearanceSettingsPage(messages, getLoadedSessionsClient),

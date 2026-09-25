@@ -8154,6 +8154,62 @@ describe("AppServerHost HarnessAdapter projection", () => {
   });
 });
 
+describe("Buddy catalog synchronization boundary", () => {
+  it("returns the synchronized provider catalog through the Host request", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "buddy-catalog-host-"));
+    const directory = path.join(home, "model-sync");
+    mkdirSync(directory);
+    writeFileSync(
+      path.join(directory, "runtime.mjs"),
+      `
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const home = process.argv[process.argv.indexOf("--home") + 1];
+      const catalogPath = join(home, "model-sync", "catalog.json");
+      writeFileSync(catalogPath, JSON.stringify({models:[{slug:"gpt-a"},{slug:"deepseek-b"}]}));
+      console.log(JSON.stringify({ok:true,provider:"fixture",visibleCount:2,catalogPath}));
+    `,
+    );
+    const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
+    await fixture.ready;
+    try {
+      writeRequest(fixture.desktopInput, {
+        id: 7000,
+        method: "codexhost/buddy/catalog-sync",
+        params: {},
+      });
+      await expect(
+        fixture.collector.waitFor((message) => message.id === 7000),
+      ).resolves.toMatchObject({
+        result: { provider: "fixture", returned: 2, ids: ["gpt-a", "deepseek-b"] },
+      });
+    } finally {
+      await stopFixture(fixture);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a refresh in private mode before invoking the synchronizer", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "buddy-catalog-private-"));
+    writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
+    const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
+    await fixture.ready;
+    try {
+      writeRequest(fixture.desktopInput, {
+        id: 7001,
+        method: "codexhost/buddy/catalog-sync",
+        params: {},
+      });
+      const reply = await fixture.collector.waitFor((message) => message.id === 7001);
+      expect(reply).toMatchObject({ error: { code: -32602 } });
+      expect(JSON.stringify(reply)).toContain("隐私模式");
+    } finally {
+      await stopFixture(fixture);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Buddy privacy send boundary", () => {
   async function startModelCatalog(ids: string[]) {
     const server = createServer((req, res) => {

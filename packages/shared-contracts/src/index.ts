@@ -1,5 +1,8 @@
 export {
   BUDDY_MODELS_METHOD,
+  BUDDY_CATALOG_SYNC_METHOD,
+  buddyCatalogSyncSchema,
+  type BuddyCatalogSync,
   BUDDY_JEV_KEY_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,

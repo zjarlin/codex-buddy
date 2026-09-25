@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const BUDDY_MODELS_METHOD = "codexhost/buddy/models";
+export const BUDDY_CATALOG_SYNC_METHOD = "codexhost/buddy/catalog-sync";
 export const BUDDY_JEV_KEY_METHOD = "codexhost/buddy/jev-key";
 export const BUDDY_STATUS_METHOD = "codexhost/buddy/status";
 export const BUDDY_SETTINGS_METHOD = "codexhost/buddy/settings";
@@ -69,6 +70,12 @@ export const buddyJevKeySchema = z
   })
   .strict();
 export type BuddyJevKey = z.infer<typeof buddyJevKeySchema>;
+export const buddyCatalogSyncSchema = z.object({
+  provider: z.string(),
+  returned: z.number().int().nonnegative(),
+  ids: z.array(z.string()),
+});
+export type BuddyCatalogSync = z.infer<typeof buddyCatalogSyncSchema>;
 export const buddyModelSchema = z.object({
   id: z.string(),
   tier: z.enum(["夯", "垃"]),

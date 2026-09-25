@@ -14,7 +14,12 @@ import type {
   GitWorkspaceParams,
   GitWorkspaceStatus,
   HostThreadId,
+  WorkspaceFileReadParams,
+  WorkspaceFileReadResult,
+  WorkspaceFilesListParams,
+  WorkspaceFilesListResult,
 } from "@codexhost/shared-contracts";
+import { createRendererWorkspaceFilesView } from "./renderer-workspace-files.js";
 
 export interface RendererGitClient {
   inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
@@ -40,6 +45,8 @@ export interface RendererGitClient {
   inspectGitLog?(input: GitLogParams): Promise<GitLogResult>;
   inspectGitCommit?(input: GitCommitDetailParams): Promise<GitCommitDetail>;
   inspectGitCommitDiff?(input: GitCommitDiffParams): Promise<GitDiffResult>;
+  listWorkspaceFiles?(input: WorkspaceFilesListParams): Promise<WorkspaceFilesListResult>;
+  readWorkspaceFile?(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult>;
 }
 
 export interface RendererGitContext {
@@ -52,9 +59,12 @@ export const GIT_SIDEBAR_RAIL_ATTRIBUTE = "data-codexhost-git-sidebar-rail";
 export const GIT_SIDEBAR_PANEL_ATTRIBUTE = "data-codexhost-git-sidebar-panel";
 export const GIT_SIDEBAR_PROJECTS_ATTRIBUTE = "data-codexhost-git-sidebar-projects";
 export const GIT_SIDEBAR_COMMITS_ATTRIBUTE = "data-codexhost-git-sidebar-commits";
+export const GIT_SIDEBAR_CHANGES_TAB_ATTRIBUTE = "data-codexhost-git-sidebar-changes-tab";
+export const GIT_SIDEBAR_STAGED_TAB_ATTRIBUTE = "data-codexhost-git-sidebar-staged-tab";
 export const GIT_SIDEBAR_FILES_ATTRIBUTE = "data-codexhost-git-sidebar-files";
 export const GIT_SIDEBAR_LOG_ATTRIBUTE = "data-codexhost-git-sidebar-log";
 export const GIT_SIDEBAR_TERMINAL_ATTRIBUTE = "data-codexhost-git-sidebar-terminal";
+export const GIT_SIDEBAR_TREE_ATTRIBUTE = "data-codexhost-git-sidebar-tree";
 export const GIT_SIDEBAR_STAGE_ATTRIBUTE = "data-codexhost-git-sidebar-stage";
 export const GIT_SIDEBAR_UNSTAGE_ATTRIBUTE = "data-codexhost-git-sidebar-unstage";
 export const GIT_SIDEBAR_STAGE_ALL_ATTRIBUTE = "data-codexhost-git-sidebar-stage-all";
@@ -82,6 +92,40 @@ interface SidebarAnchor {
   content: HTMLElement;
   containerStyle: { position: string };
   contentStyle: { height: string; minHeight: string; paddingLeft: string };
+}
+
+type GitChange = GitWorkspaceStatus["changes"][number];
+
+interface GitDirectory {
+  name: string;
+  path: string;
+  directories: Map<string, GitDirectory>;
+  changes: GitChange[];
+}
+
+function buildGitTree(changes: readonly GitChange[]): GitDirectory {
+  const root: GitDirectory = { name: "", path: "", directories: new Map(), changes: [] };
+  for (const change of changes) {
+    const parts = change.path.split("/").filter(Boolean);
+    const name = parts.pop();
+    if (!name) continue;
+    let directory = root;
+    for (const part of parts) {
+      let child = directory.directories.get(part);
+      if (!child) {
+        child = {
+          name: part,
+          path: directory.path ? `${directory.path}/${part}` : part,
+          directories: new Map(),
+          changes: [],
+        };
+        directory.directories.set(part, child);
+      }
+      directory = child;
+    }
+    directory.changes.push(change);
+  }
+  return root;
 }
 
 function isVisible(element: HTMLElement): boolean {
@@ -199,7 +243,7 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-rail button { display:grid; place-items:center; width:28px; height:28px; padding:0; color:inherit; background:transparent; border:0; border-radius:6px; cursor:pointer; opacity:.68; }
     .codexhost-git-rail button:hover, .codexhost-git-rail button[aria-current="page"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
     .codexhost-git-panel { position:absolute; inset:0 0 0 38px; display:flex; min-width:0; flex-direction:column; overflow:hidden; background:var(--surface-primary,inherit); pointer-events:auto; }
-    .codexhost-git-panel[hidden], .codexhost-git-projects[hidden], .codexhost-git-workspace[hidden], .codexhost-git-commit-box[hidden], .codexhost-git-log[hidden] { display:none; }
+    .codexhost-git-panel[hidden], .codexhost-git-head[hidden], .codexhost-git-branch[hidden], .codexhost-git-projects[hidden], .codexhost-git-workspace[hidden], .codexhost-git-commit-box[hidden], .codexhost-git-log[hidden], .codexhost-git-modules[hidden] { display:none; }
     .codexhost-git-head { display:flex; align-items:center; min-height:38px; gap:4px; padding:5px 8px; font-size:12px; font-weight:600; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 12%,transparent)); }
     .codexhost-git-head strong { flex:1; padding-left:4px; }
     .codexhost-git-head button { min-height:28px; padding:3px 8px; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; }
@@ -207,10 +251,18 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-head button:disabled { cursor:default; opacity:.4; }
     .codexhost-git-branch { display:flex; gap:8px; padding:7px 10px; color:inherit; font-size:11px; opacity:.7; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
     .codexhost-git-workspace { display:flex; min-height:0; flex:1; flex-direction:column; }
-    .codexhost-git-section-title { display:flex; align-items:center; min-height:30px; gap:6px; padding:4px 8px; font-size:11px; font-weight:600; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 8%,transparent)); }
-    .codexhost-git-section-title span:last-child { margin-left:auto; opacity:.55; }
-    .codexhost-git-list { display:flex; min-height:0; max-height:34%; overflow:auto; flex-direction:column; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
-    .codexhost-git-list--staged { max-height:22%; }
+    .codexhost-git-status-tabs { display:flex; align-items:center; min-height:32px; padding:2px 5px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
+    .codexhost-git-status-tab { display:flex; align-items:center; min-height:26px; gap:4px; padding:3px 7px; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; font-size:11px; opacity:.65; }
+    .codexhost-git-status-tab:hover, .codexhost-git-status-tab[aria-selected="true"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
+    .codexhost-git-status-tab[aria-selected="true"] { font-weight:600; }
+    .codexhost-git-status-tab span { min-width:14px; color:inherit; font-size:10px; text-align:right; opacity:.58; }
+    .codexhost-git-tree-toggle { display:grid; place-items:center; width:26px; height:26px; margin-left:auto; padding:0; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; opacity:.62; }
+    .codexhost-git-tree-toggle:hover, .codexhost-git-tree-toggle[aria-pressed="true"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
+    .codexhost-git-list { display:flex; min-height:0; flex:1; overflow:auto; flex-direction:column; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
+    .codexhost-git-directory { display:grid; grid-template-columns:16px minmax(0,1fr) auto; align-items:center; min-height:28px; gap:4px; width:100%; padding:3px 8px; color:inherit; text-align:left; background:transparent; border:0; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 6%,transparent)); cursor:pointer; font-size:11px; }
+    .codexhost-git-directory:hover { background:color-mix(in srgb,currentColor 8%,transparent); }
+    .codexhost-git-directory-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+    .codexhost-git-directory-count { color:inherit; font-size:10px; opacity:.5; }
     .codexhost-git-change { display:grid; grid-template-columns:minmax(0,1fr) auto 22px; align-items:center; gap:5px; min-height:30px; padding:4px 6px 4px 10px; color:inherit; text-align:left; background:transparent; border:0; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 7%,transparent)); cursor:pointer; }
     .codexhost-git-change:hover, .codexhost-git-change[aria-selected="true"] { background:color-mix(in srgb,currentColor 9%,transparent); }
     .codexhost-git-change span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -219,7 +271,9 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-change-action:hover:not(:disabled) { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
     .codexhost-git-change-action:disabled { opacity:.25; }
     .codexhost-git-empty { margin:0; padding:14px 10px; font-size:11px; opacity:.58; }
-    .codexhost-git-submodule { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; padding:6px 8px 6px 10px; border-top:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); font-size:11px; }
+    .codexhost-git-modules { flex:none; max-height:32%; overflow:auto; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
+    .codexhost-git-modules-title { padding:6px 9px; color:inherit; font-size:10px; font-weight:600; opacity:.58; }
+    .codexhost-git-submodule { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; padding:6px 8px 6px 18px; border-top:1px solid var(--border-default, color-mix(in srgb,currentColor 7%,transparent)); font-size:11px; }
     .codexhost-git-submodule button { padding:2px 6px; color:inherit; background:transparent; border:1px solid currentColor; border-radius:4px; cursor:pointer; }
     .codexhost-git-diff { min-height:80px; max-height:28%; overflow:auto; margin:0; padding:8px 10px; white-space:pre; font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; border-top:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
     .codexhost-git-commit-box { display:grid; flex:none; gap:6px; padding:8px 9px; border-top:1px solid var(--border-default, color-mix(in srgb,currentColor 12%,transparent)); }
@@ -244,6 +298,23 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-log-body { white-space:pre-wrap; font-size:11px; line-height:1.55; }
     .codexhost-git-log-file { display:block; width:100%; padding:4px 0; color:inherit; text-align:left; background:transparent; border:0; cursor:pointer; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
     .codexhost-git-log-file:hover { color:var(--text-link,inherit); text-decoration:underline; }
+    .codexhost-files-panel { position:absolute; inset:0 0 0 38px; display:flex; min-width:0; flex-direction:column; overflow:hidden; background:var(--surface-primary,inherit); pointer-events:auto; }
+    .codexhost-files-panel[hidden] { display:none; }
+    .codexhost-files-head { display:flex; min-height:38px; align-items:center; gap:6px; padding:5px 7px 5px 11px; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 12%,transparent)); }
+    .codexhost-files-head strong { flex:0 0 auto; font-size:12px; }
+    .codexhost-files-workspace { min-width:0; flex:1; overflow:hidden; color:inherit; font-size:10px; opacity:.5; text-overflow:ellipsis; white-space:nowrap; }
+    .codexhost-files-head button { display:grid; width:28px; height:28px; place-items:center; padding:0; color:inherit; background:transparent; border:0; border-radius:6px; cursor:pointer; }
+    .codexhost-files-head button:hover { background:color-mix(in srgb,currentColor 10%,transparent); }
+    .codexhost-files-status { padding:6px 10px; color:var(--text-link,inherit); font-size:10px; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 8%,transparent)); }
+    .codexhost-files-status[hidden] { display:none; }
+    .codexhost-files-tree { min-height:0; flex:1; overflow:auto; }
+    .codexhost-files-entry { display:grid; grid-template-columns:14px minmax(0,1fr) auto; width:100%; min-height:27px; align-items:center; gap:5px; padding:3px 8px; color:inherit; text-align:left; background:transparent; border:0; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 6%,transparent)); cursor:pointer; font-size:11px; }
+    .codexhost-files-entry:hover { background:color-mix(in srgb,currentColor 8%,transparent); }
+    .codexhost-files-entry-marker { color:inherit; font-size:10px; opacity:.55; text-align:center; }
+    .codexhost-files-entry-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .codexhost-files-entry[data-codexhost-workspace-file-entry="directory"] .codexhost-files-entry-name { font-weight:600; }
+    .codexhost-files-entry-meta { color:inherit; font-size:9px; opacity:.45; }
+    .codexhost-files-message { padding:9px 10px; color:inherit; font-size:10px; opacity:.65; }
     @media (min-width: 720px) { .codexhost-git-log { grid-template-columns:minmax(130px,.2fr) minmax(260px,.8fr) minmax(320px,1.2fr); } .codexhost-git-log-detail { grid-column:auto; max-height:none; border-top:0; border-left:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); } }
   `;
   const shell = document.createElement("div");
@@ -281,24 +352,39 @@ export function installRendererGitSidebar(options: {
   branch.className = "codexhost-git-branch";
   const workspace = document.createElement("div");
   workspace.className = "codexhost-git-workspace";
-  const changesTitle = document.createElement("div");
-  changesTitle.className = "codexhost-git-section-title";
+  const statusTabs = document.createElement("div");
+  statusTabs.className = "codexhost-git-status-tabs";
+  const changesTab = document.createElement("button");
+  changesTab.type = "button";
+  changesTab.className = "codexhost-git-status-tab";
+  changesTab.setAttribute(GIT_SIDEBAR_CHANGES_TAB_ATTRIBUTE, "v1");
   const changesLabel = document.createElement("span");
-  changesLabel.textContent = "变更";
   const changesCount = document.createElement("span");
-  changesTitle.append(changesLabel, changesCount);
+  changesTab.append(changesLabel, changesCount);
+  const stagedTab = document.createElement("button");
+  stagedTab.type = "button";
+  stagedTab.className = "codexhost-git-status-tab";
+  stagedTab.setAttribute(GIT_SIDEBAR_STAGED_TAB_ATTRIBUTE, "v1");
+  const stagedLabel = document.createElement("span");
+  const stagedCount = document.createElement("span");
+  stagedTab.append(stagedLabel, stagedCount);
+  const treeToggle = iconButton(
+    document,
+    "切换目录树",
+    "M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6ZM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z",
+  );
+  treeToggle.className = "codexhost-git-tree-toggle";
+  treeToggle.setAttribute(GIT_SIDEBAR_TREE_ATTRIBUTE, "v1");
+  treeToggle.setAttribute("aria-pressed", "false");
+  statusTabs.append(changesTab, stagedTab, treeToggle);
   const list = document.createElement("div");
   list.className = "codexhost-git-list";
-  const stagedTitle = document.createElement("div");
-  stagedTitle.className = "codexhost-git-section-title";
-  const stagedLabel = document.createElement("span");
-  stagedLabel.textContent = "已暂存";
-  const stagedCount = document.createElement("span");
-  stagedTitle.append(stagedLabel, stagedCount);
-  const stagedList = document.createElement("div");
-  stagedList.className = "codexhost-git-list codexhost-git-list--staged";
   const submoduleList = document.createElement("div");
-  submoduleList.className = "codexhost-git-submodules";
+  submoduleList.className = "codexhost-git-modules";
+  const submoduleTitle = document.createElement("div");
+  submoduleTitle.className = "codexhost-git-modules-title";
+  submoduleTitle.textContent = "模块";
+  submoduleList.append(submoduleTitle);
   const diff = document.createElement("pre");
   diff.className = "codexhost-git-diff";
   diff.textContent = "选择文件查看差异";
@@ -344,7 +430,7 @@ export function installRendererGitSidebar(options: {
   notice.className = "codexhost-git-notice";
   notice.hidden = true;
   commitBox.append(message, modelRow, commitActions, notice);
-  workspace.append(changesTitle, list, stagedTitle, stagedList, submoduleList, diff);
+  workspace.append(statusTabs, list, submoduleList, diff);
   const logLayout = document.createElement("div");
   logLayout.className = "codexhost-git-log";
   const refs = document.createElement("div");
@@ -354,17 +440,26 @@ export function installRendererGitSidebar(options: {
   const detail = document.createElement("div");
   detail.className = "codexhost-git-log-detail";
   logLayout.append(refs, commitList, detail);
+  const filesView = createRendererWorkspaceFilesView({
+    ownerDocument: document,
+    container: shadow,
+    getContext: () => options.getContext(),
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
   panel.append(head, branch, logLayout, workspace, commitBox);
   shell.append(rail, panel);
   shadow.append(style, shell);
 
   let anchor: SidebarAnchor | null = null;
-  let view: "projects" | "commits" | "log" = "projects";
+  let view: "projects" | "commits" | "files" | "log" = "projects";
   let current: GitWorkspaceStatus | null = null;
   let log: GitLogResult | null = null;
   let commitDetail: GitCommitDetail | null = null;
   let selectedChange: string | null = null;
   let selectedCommit: string | null = null;
+  let changeTab: "changes" | "staged" = "changes";
+  let treeView = false;
+  const collapsedDirectories = new Set<string>();
   let busy = false;
   let modelsLoaded = false;
   let generation = 0;
@@ -373,10 +468,7 @@ export function installRendererGitSidebar(options: {
   const context = (): RendererGitContext => options.getContext();
 
   const syncOfficialPanelState = (): void => {
-    for (const [panel, button] of [
-      ["files", files],
-      ["terminal", terminal],
-    ] as const) {
+    for (const [panel, button] of [["terminal", terminal]] as const) {
       const target = officialPanelButton(document, panel);
       button.setAttribute("aria-pressed", String(target?.getAttribute("aria-pressed") === "true"));
       button.title = target
@@ -391,6 +483,9 @@ export function installRendererGitSidebar(options: {
     panel.hidden = view === "projects";
     if (view === "projects") projects.setAttribute("aria-current", "page");
     else projects.removeAttribute("aria-current");
+    if (view === "files") files.setAttribute("aria-current", "page");
+    else files.removeAttribute("aria-current");
+    files.setAttribute("aria-pressed", String(view === "files"));
     if (view === "commits") commits.setAttribute("aria-current", "page");
     else commits.removeAttribute("aria-current");
     if (view === "log") logs.setAttribute("aria-current", "page");
@@ -400,7 +495,24 @@ export function installRendererGitSidebar(options: {
       updateBusy();
       return;
     }
+    const showFiles = view === "files";
     const showLog = view === "log";
+    if (showFiles) {
+      anchor.content.hidden = true;
+      panel.hidden = true;
+      head.hidden = true;
+      branch.hidden = true;
+      logLayout.hidden = true;
+      workspace.hidden = true;
+      commitBox.hidden = true;
+      filesView.activate();
+      syncOfficialPanelState();
+      return;
+    }
+    filesView.deactivate();
+    head.hidden = false;
+    branch.hidden = false;
+    files.setAttribute("aria-pressed", "false");
     headText.textContent = showLog ? "日志" : "提交";
     logLayout.hidden = !showLog;
     workspace.hidden = showLog;
@@ -417,39 +529,35 @@ export function installRendererGitSidebar(options: {
       return;
     }
     list.replaceChildren();
-    stagedList.replaceChildren();
-    submoduleList.replaceChildren();
+    submoduleList.replaceChildren(submoduleTitle);
     const entries = current?.changes ?? [];
     const unstaged = entries.filter((change) => !change.staged || change.unstaged);
     const staged = entries.filter((change) => change.staged);
+    const activeChanges = changeTab === "staged" ? staged : unstaged;
+    changesLabel.textContent = "变更";
+    stagedLabel.textContent = "已暂存";
     changesCount.textContent = String(unstaged.length);
     stagedCount.textContent = String(staged.length);
-    if (!unstaged.length) {
-      const empty = document.createElement("p");
-      empty.className = "codexhost-git-empty";
-      empty.textContent = "没有待提交的变更";
-      list.append(empty);
-    }
+    changesTab.setAttribute("aria-selected", String(changeTab === "changes"));
+    stagedTab.setAttribute("aria-selected", String(changeTab === "staged"));
+    treeToggle.setAttribute("aria-pressed", String(treeView));
+    submoduleList.hidden = !treeView;
     const renderChange = (
-      change: GitWorkspaceStatus["changes"][number],
+      change: GitChange,
       container: HTMLElement,
       action: "stage" | "unstage",
+      displayPath = change.path,
     ): void => {
       const row = document.createElement("div");
       row.className = "codexhost-git-change";
       row.setAttribute("aria-selected", String(selectedChange === change.path));
       row.title = change.originalPath ? `${change.originalPath} → ${change.path}` : change.path;
       const name = document.createElement("span");
-      name.textContent = change.submodule ? `${change.path} · 子模块` : change.path;
+      name.textContent = change.submodule ? `${displayPath} · 子模块` : displayPath;
       const status = document.createElement("span");
       status.className = "codexhost-git-status";
-      status.textContent = change.conflicted
-        ? "!"
-        : change.untracked
-          ? "U"
-          : change.staged
-            ? "S"
-            : "M";
+      status.textContent =
+        action === "unstage" ? "S" : change.conflicted ? "!" : change.untracked ? "U" : "M";
       const actionButton = iconButton(
         document,
         action === "stage" ? "暂存" : "取消暂存",
@@ -469,17 +577,69 @@ export function installRendererGitSidebar(options: {
       row.addEventListener("click", () => void openDiff(change.path), listenerOptions);
       container.append(row);
     };
-    for (const change of unstaged) {
-      renderChange(change, list, change.staged ? "unstage" : "stage");
-    }
-    if (!staged.length) {
+    const renderDirectory = (
+      directory: GitDirectory,
+      container: HTMLElement,
+      depth: number,
+    ): void => {
+      const children = [...directory.directories.values()].sort((left, right) =>
+        left.name.localeCompare(right.name, "zh-CN", { numeric: true }),
+      );
+      for (const child of children) {
+        const count = (value: GitDirectory): number =>
+          value.changes.length +
+          [...value.directories.values()].reduce((total, nested) => total + count(nested), 0);
+        const collapsed = collapsedDirectories.has(child.path);
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "codexhost-git-directory";
+        row.style.paddingLeft = `${8 + depth * 12}px`;
+        row.setAttribute("aria-expanded", String(!collapsed));
+        const icon = document.createElement("span");
+        icon.textContent = collapsed ? "▸" : "▾";
+        const name = document.createElement("span");
+        name.className = "codexhost-git-directory-name";
+        name.textContent = child.name;
+        const badge = document.createElement("span");
+        badge.className = "codexhost-git-directory-count";
+        badge.textContent = String(count(child));
+        row.append(icon, name, badge);
+        row.addEventListener(
+          "click",
+          () => {
+            if (collapsed) collapsedDirectories.delete(child.path);
+            else collapsedDirectories.add(child.path);
+            render();
+          },
+          listenerOptions,
+        );
+        container.append(row);
+        if (!collapsed) renderDirectory(child, container, depth + 1);
+      }
+      const changes = [...directory.changes].sort((left, right) =>
+        (left.originalPath ?? left.path).localeCompare(right.originalPath ?? right.path, "zh-CN", {
+          numeric: true,
+        }),
+      );
+      for (const change of changes) {
+        const action = changeTab === "staged" ? "unstage" : "stage";
+        const displayPath = directory.path
+          ? change.path.slice(directory.path.length + 1)
+          : change.path;
+        renderChange(change, container, action, displayPath);
+      }
+    };
+    if (!activeChanges.length) {
       const empty = document.createElement("p");
       empty.className = "codexhost-git-empty";
-      empty.textContent = "没有已暂存文件";
-      stagedList.append(empty);
-    }
-    for (const change of staged) {
-      renderChange(change, stagedList, "unstage");
+      empty.textContent = changeTab === "staged" ? "没有已暂存文件" : "没有待提交的变更";
+      list.append(empty);
+    } else if (treeView) {
+      renderDirectory(buildGitTree(activeChanges), list, 0);
+    } else {
+      for (const change of activeChanges) {
+        renderChange(change, list, changeTab === "staged" ? "unstage" : "stage");
+      }
     }
     for (const submodule of current?.submodules ?? []) {
       const row = document.createElement("div");
@@ -660,7 +820,7 @@ export function installRendererGitSidebar(options: {
       for (const item of result.models.filter((candidate) => candidate.eligible)) {
         const option = document.createElement("option");
         option.value = item.id;
-        option.textContent = `${item.label} · ${item.tier}`;
+        option.textContent = `${item.label} · ${item.tier}${item.recommended ? " · 推荐" : ""}`;
         model.append(option);
       }
       if (result.defaultModel) model.value = result.defaultModel;
@@ -833,7 +993,32 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       view = "projects";
+      filesView.deactivate();
       generation += 1;
+      render();
+    },
+    listenerOptions,
+  );
+  changesTab.addEventListener(
+    "click",
+    () => {
+      changeTab = "changes";
+      render();
+    },
+    listenerOptions,
+  );
+  stagedTab.addEventListener(
+    "click",
+    () => {
+      changeTab = "staged";
+      render();
+    },
+    listenerOptions,
+  );
+  treeToggle.addEventListener(
+    "click",
+    () => {
+      treeView = !treeView;
       render();
     },
     listenerOptions,
@@ -842,6 +1027,7 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       view = "commits";
+      filesView.deactivate();
       render();
       void load();
     },
@@ -851,6 +1037,7 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       view = "log";
+      filesView.deactivate();
       render();
       void load();
     },
@@ -859,7 +1046,9 @@ export function installRendererGitSidebar(options: {
   files.addEventListener(
     "click",
     () => {
-      officialPanelButton(document, "files")?.click();
+      view = "files";
+      generation += 1;
+      render();
       syncOfficialPanelState();
     },
     listenerOptions,
@@ -1000,11 +1189,13 @@ export function installRendererGitSidebar(options: {
   mount();
   return {
     refresh() {
+      if (view === "files") filesView.refresh();
       if (view !== "projects") void load();
     },
     dispose() {
       disposed = true;
       observer.disconnect();
+      filesView.dispose();
       if (anchor) restoreSidebarAnchor(anchor);
       root.remove();
       anchor = null;

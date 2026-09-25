@@ -177,7 +177,7 @@ describe("GitWorkspace", () => {
     ).rejects.toThrow("不是已声明");
   }, 20_000);
 
-  it("prefers an eligible 垃 model for commit messages", async () => {
+  it("recommends a fast eligible 垃 model for commit messages", async () => {
     const home = await mkdtemp(path.join(tmpdir(), "codexhost-git-home-"));
     cleanup.push(home);
     const server = await new Promise<Server>((resolve) => {
@@ -188,6 +188,7 @@ describe("GitWorkspace", () => {
             JSON.stringify({
               data: [
                 { id: "gpt-strong" },
+                { id: "deepseek-chat" },
                 { id: "deepseek-flash" },
                 { id: "text-embedding-3-small" },
               ],
@@ -207,6 +208,12 @@ describe("GitWorkspace", () => {
     try {
       const result = await new GitWorkspace().messageModels({ CODEX_HOME: home });
       expect(result.defaultModel).toBe("deepseek-flash");
+      expect(result.models).toContainEqual(
+        expect.objectContaining({ id: "deepseek-flash", recommended: true }),
+      );
+      expect(result.models).toContainEqual(
+        expect.objectContaining({ id: "deepseek-chat", recommended: false }),
+      );
       expect(result.models).toContainEqual(
         expect.objectContaining({ id: "text-embedding-3-small", eligible: false }),
       );

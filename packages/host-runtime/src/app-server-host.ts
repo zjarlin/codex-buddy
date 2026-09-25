@@ -42,6 +42,10 @@ import {
   gitLogParamsSchema,
   gitCommitDetailParamsSchema,
   gitCommitDiffParamsSchema,
+  WORKSPACE_FILES_LIST_METHOD,
+  WORKSPACE_FILES_READ_METHOD,
+  workspaceFilesListParamsSchema,
+  workspaceFileReadParamsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
@@ -215,6 +219,7 @@ import {
 } from "./codex-runtime/official-runtime-scope.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
 import { GitWorkspace, GitWorkspaceError } from "./git-workspace.js";
+import { listWorkspaceFiles, readWorkspaceFile, WorkspaceFilesError } from "./workspace-files.js";
 
 const SUBAGENT_TERMINAL_REFRESH_DELAYS_MS = [0, 50, 100, 150] as const;
 const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
@@ -1229,6 +1234,13 @@ export class AppServerHost {
       request.method === GIT_COMMIT_DIFF_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleGitRequest(request));
+      return;
+    }
+    if (
+      request.method === WORKSPACE_FILES_LIST_METHOD ||
+      request.method === WORKSPACE_FILES_READ_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleWorkspaceFilesRequest(request));
       return;
     }
     if (
@@ -2546,6 +2558,30 @@ export class AppServerHost {
     const cwd = thread && typeof thread.cwd === "string" ? thread.cwd.trim() : "";
     if (!cwd) throw new GitWorkspaceError("当前任务没有可用的工作区路径。");
     return cwd;
+  }
+
+  async #handleWorkspaceFilesRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      if (request.method === WORKSPACE_FILES_LIST_METHOD) {
+        const params = workspaceFilesListParamsSchema.safeParse(request.params);
+        if (!params.success) throw new WorkspaceFilesError("文件列表参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await listWorkspaceFiles(cwd, params.data.path);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+      if (request.method === WORKSPACE_FILES_READ_METHOD) {
+        const params = workspaceFileReadParamsSchema.safeParse(request.params);
+        if (!params.success) throw new WorkspaceFilesError("文件读取参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result = await readWorkspaceFile(cwd, params.data.path);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+      throw new WorkspaceFilesError("不支持的文件请求。");
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 20_000)));
+    }
   }
 
   async #handleProjectSyncRequest(request: JsonRpcRequest): Promise<void> {

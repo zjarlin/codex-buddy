@@ -208,6 +208,7 @@ export const gitMessageModelSchema = z
     label: z.string().min(1).max(512),
     tier: z.enum(["夯", "垃"]),
     eligible: z.boolean(),
+    recommended: z.boolean().default(false),
   })
   .strict();
 export type GitMessageModel = z.infer<typeof gitMessageModelSchema>;

@@ -25,11 +25,14 @@ import { readConnection } from "@codexhost/buddy-engine";
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
 const MESSAGE_TIMEOUT_MS = 120_000;
+const MESSAGE_INPUT_MAX_CHARS = 48_000;
+const MESSAGE_OUTPUT_MAX_TOKENS = 256;
 const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const GIT_LOG_LIMIT = 200;
 const GIT_LOG_MAX_BYTES = 2_000_000;
 const LOG_SEPARATOR = "\u001e";
 const FIELD_SEPARATOR = "\u001f";
+const FAST_MESSAGE_MODEL = /(?:flash|fast|turbo|mini|nano|haiku|lite|small)/iu;
 
 export class GitWorkspaceError extends Error {
   constructor(
@@ -546,18 +549,36 @@ export class GitWorkspace {
           : [];
         const unavailable =
           /(?:embedding|rerank|moderation|whisper|tts|image|audio|vision-only|safety)/iu;
-        const models = [...new Set(ids)].map((id) => ({
+        const models = [...new Set(ids)].map((id, catalogIndex) => ({
           id,
           label: id,
+          catalogIndex,
           tier: /(?:^|[/:])(?:gpt|claude)(?=[\d._-]|$)/iu.test(id)
             ? ("夯" as const)
             : ("垃" as const),
           eligible: !unavailable.test(id),
+          recommended: false,
         }));
-        const weak = models.find((model) => model.eligible && model.tier === "垃");
+        const ranked = [...models].sort((left, right) => {
+          const leftWeak = left.tier === "垃" ? 1 : 0;
+          const rightWeak = right.tier === "垃" ? 1 : 0;
+          return (
+            Number(right.eligible) - Number(left.eligible) ||
+            rightWeak - leftWeak ||
+            Number(FAST_MESSAGE_MODEL.test(right.id)) - Number(FAST_MESSAGE_MODEL.test(left.id)) ||
+            left.catalogIndex - right.catalogIndex
+          );
+        });
+        const defaultModel = ranked.find((model) => model.eligible)?.id ?? null;
         return {
-          models,
-          defaultModel: weak?.id ?? models.find((model) => model.eligible)?.id ?? null,
+          models: models.map((model) => ({
+            id: model.id,
+            label: model.label,
+            tier: model.tier,
+            eligible: model.eligible,
+            recommended: model.id === defaultModel,
+          })),
+          defaultModel,
         };
       } catch {
         return { models: [], defaultModel: null };
@@ -588,7 +609,7 @@ export class GitWorkspace {
           : [this.#diffUnlocked(workspace)],
       );
       const diff = { stdout: diffs.map((result) => result.stdout).join("") };
-      const payload = `${status.stdout}\n\n${diff.stdout}`.slice(0, 120_000);
+      const payload = `${status.stdout}\n\n${diff.stdout}`.slice(0, MESSAGE_INPUT_MAX_CHARS);
       if (!payload.trim()) throw new GitWorkspaceError("当前没有可生成消息的变更。");
       const completionUrl = new URL(connection.url);
       completionUrl.pathname = completionUrl.pathname.replace(/\/models$/u, "/chat/completions");
@@ -610,7 +631,7 @@ export class GitWorkspace {
           ],
           stream: false,
           store: false,
-          max_tokens: 512,
+          max_tokens: MESSAGE_OUTPUT_MAX_TOKENS,
         }),
         redirect: "error",
         signal: AbortSignal.timeout(MESSAGE_TIMEOUT_MS),

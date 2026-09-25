@@ -407,6 +407,26 @@ export type {
 } from "./git-workspace.js";
 
 export {
+  WORKSPACE_FILES_LIST_METHOD,
+  WORKSPACE_FILES_READ_METHOD,
+  WORKSPACE_FILE_READ_MAX_BYTES,
+  WORKSPACE_FILE_PATH_MAX_LENGTH,
+  WORKSPACE_DIRECTORY_ENTRY_LIMIT,
+  workspaceFilesListParamsSchema,
+  workspaceFileKindSchema,
+  workspaceFileEntrySchema,
+  workspaceFilesListResultSchema,
+  workspaceFileReadParamsSchema,
+  workspaceFileReadResultSchema,
+  type WorkspaceFilesListParams,
+  type WorkspaceFileKind,
+  type WorkspaceFileEntry,
+  type WorkspaceFilesListResult,
+  type WorkspaceFileReadParams,
+  type WorkspaceFileReadResult,
+} from "./workspace-files.js";
+
+export {
   PROJECT_SYNC_INSPECT_METHOD,
   PROJECT_SYNC_INVITE_METHOD,
   PROJECT_SYNC_PAIR_METHOD,

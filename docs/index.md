@@ -23,6 +23,12 @@
 | [`architecture/external-thread-steering.md`](architecture/external-thread-steering.md) | 外部 Thread 取消旧 Turn 后启动新 Turn 的“调整方向”语义；修改 steering 时阅读。 |
 | [`architecture/acp-layer-follow-up.md`](architecture/acp-layer-follow-up.md) | 共享 ACP 层的抽取条件与边界；出现第二个适合共享实现的生产 ACP Harness 时阅读。 |
 
+## 产品功能
+
+| 文档 | 内容与阅读时机 |
+| --- | --- |
+| [`product/workspace-files.md`](product/workspace-files.md) | 左侧工作区文件树、Host 文件读取契约、预览行为和路径安全限制；维护文件浏览器时阅读。 |
+
 ## Harness 专项
 
 ### Antigravity

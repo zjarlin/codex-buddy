@@ -733,7 +733,13 @@ export function installRendererBindingProbe(
         if (!threadId) continue;
         const hostId = mounted.hostId ?? activeModelHostId();
         const client = hostId ? modelClientForHost(hostId) : null;
-        if (!client?.inspectGitStatus || !client.inspectGitDiff) continue;
+        if (
+          !client?.inspectGitStatus ||
+          !client.inspectGitDiff ||
+          !client.listWorkspaceFiles ||
+          !client.readWorkspaceFile
+        )
+          continue;
         return { threadId, client: client as RendererGitClient };
       }
       return { threadId: null, client: null };

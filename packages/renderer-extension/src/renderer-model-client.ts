@@ -77,6 +77,16 @@ import {
   type GitCommitDetailParams,
   type GitCommitDiffParams,
   type GitSubmoduleUpdateParams,
+  WORKSPACE_FILES_LIST_METHOD,
+  WORKSPACE_FILES_READ_METHOD,
+  workspaceFilesListParamsSchema,
+  workspaceFilesListResultSchema,
+  workspaceFileReadParamsSchema,
+  workspaceFileReadResultSchema,
+  type WorkspaceFilesListParams,
+  type WorkspaceFilesListResult,
+  type WorkspaceFileReadParams,
+  type WorkspaceFileReadResult,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   buddyInterruptedSchema,
@@ -285,6 +295,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   inspectGitLog?(input: GitLogParams): Promise<GitLogResult>;
   inspectGitCommit?(input: GitCommitDetailParams): Promise<GitCommitDetail>;
   inspectGitCommitDiff?(input: GitCommitDiffParams): Promise<GitDiffResult>;
+  listWorkspaceFiles?(input: WorkspaceFilesListParams): Promise<WorkspaceFilesListResult>;
+  readWorkspaceFile?(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -600,8 +612,18 @@ export function createRendererModelClient(
     },
     async inspectGitCommitDiff(input: GitCommitDiffParams): Promise<GitDiffResult> {
       const params = gitCommitDiffParamsSchema.parse(input);
-      return gitDiffResultSchema.parse(
-        await manager.sendRequest(GIT_COMMIT_DIFF_METHOD, params),
+      return gitDiffResultSchema.parse(await manager.sendRequest(GIT_COMMIT_DIFF_METHOD, params));
+    },
+    async listWorkspaceFiles(input: WorkspaceFilesListParams): Promise<WorkspaceFilesListResult> {
+      const params = workspaceFilesListParamsSchema.parse(input);
+      return workspaceFilesListResultSchema.parse(
+        await manager.sendRequest(WORKSPACE_FILES_LIST_METHOD, params),
+      );
+    },
+    async readWorkspaceFile(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult> {
+      const params = workspaceFileReadParamsSchema.parse(input);
+      return workspaceFileReadResultSchema.parse(
+        await manager.sendRequest(WORKSPACE_FILES_READ_METHOD, params),
       );
     },
     buddyPrivate: async (input: BuddyPrivateRequest) => {

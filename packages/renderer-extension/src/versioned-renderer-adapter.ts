@@ -1135,6 +1135,23 @@ export function installCurrentRendererAdapter(): {
       if (!client.pushGit) throw new Error("Git push is unavailable");
       return client.pushGit(input);
     },
+    syncGit: (input: Parameters<NonNullable<RendererModelClient["syncGit"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.syncGit) throw new Error("Git sync is unavailable");
+      return client.syncGit(input);
+    },
+    continueGitMerge: (
+      input: Parameters<NonNullable<RendererModelClient["continueGitMerge"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.continueGitMerge) throw new Error("Git merge continue is unavailable");
+      return client.continueGitMerge(input);
+    },
+    abortGitMerge: (input: Parameters<NonNullable<RendererModelClient["abortGitMerge"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.abortGitMerge) throw new Error("Git merge abort is unavailable");
+      return client.abortGitMerge(input);
+    },
     listGitMessageModels: (
       input: Parameters<NonNullable<RendererModelClient["listGitMessageModels"]>>[0],
     ) => {

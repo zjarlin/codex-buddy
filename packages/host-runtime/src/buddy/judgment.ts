@@ -42,6 +42,20 @@ export function isSystemOneModel(value: string): value is SystemOneModel {
   return (SYSTEM_ONE_MODELS as readonly string[]).includes(value);
 }
 
+/**
+ * System One 判定的 Git 工作流动作。旁路回合据此决定是只提交、提交并推送，
+ * 还是先拉取同步/继续合并；`none` 表示本轮不是 Git 操作请求。
+ */
+export const GIT_ACTIONS = [
+  "none",
+  "commit",
+  "commit-push",
+  "push",
+  "sync",
+  "merge-continue",
+] as const;
+export type GitAction = (typeof GIT_ACTIONS)[number];
+
 export interface JevJudgment {
   tier: Assessment["tier"];
   intent: Assessment["intent"];
@@ -49,6 +63,9 @@ export interface JevJudgment {
   refersToPrevious: boolean;
   isPush: boolean;
   pushConfidence: number;
+  // 具体的 Git 工作流动作；none 表示这不是 Git 请求。
+  gitAction: GitAction;
+  needsCommitMessage: boolean;
   destructive: boolean;
   role: "git" | "io" | "executor";
   commandIndex: number | null;
@@ -76,6 +93,8 @@ const policies = {
   complexity: { automatic: 0.9, review: 0.7 },
   destructive: { automatic: 0.95, review: 0.75 },
   push: { automatic: 0.9, review: 0.7 },
+  gitAction: { automatic: 0.85, review: 0.65 },
+  commitMessage: { automatic: 0.85, review: 0.65 },
   role: { automatic: 0.85, review: 0.6 },
   conversational: { automatic: 0.9, review: 0.7 },
   followUp: { automatic: 0.85, review: 0.6 },
@@ -119,6 +138,16 @@ export async function judgeWithJev(
     ]),
     destructive: noul("这轮请求会改动或删除已有数据、历史或远端状态吗？"),
     push: noul("这条请求是在要求把已有代码提交或推送到远端仓库吗？"),
+    // Git 工作流的具体动作：决定旁路回合是只提交、提交并推送，还是同步/继续合并。
+    gitAction: choice("如果这是 Git 请求，用户具体想要哪一种操作？", {
+      none: "不是 Git 请求",
+      commit: "只提交本地改动，不推送",
+      "commit-push": "提交改动并推送到远端",
+      push: "只推送已有提交，不新建提交",
+      sync: "拉取远端并同步/合并到本地",
+      "merge-continue": "继续完成进行中的合并或解决冲突",
+    }),
+    commitMessage: noul("这次提交是否需要由你根据改动自动生成提交消息？"),
     role: choice("应由哪类执行角色处理？", {
       git: "Git 操作：提交、推送、合并、冲突处理",
       io: "文件、目录、日志、构建、测试、启动等 IO 操作",
@@ -160,6 +189,15 @@ export async function judgeWithJev(
   const complexity = result.answers.complexity.score;
   const destructive = result.answers.destructive.noul;
   const push = result.answers.push.noul;
+  const gitActionAnswer = result.answers.gitAction.choice;
+  const gitAction: GitAction =
+    (GIT_ACTIONS as readonly string[]).includes(gitActionAnswer) &&
+    result.decisions.gitAction.status !== "defer"
+      ? (gitActionAnswer as GitAction)
+      : "none";
+  const needsCommitMessage =
+    result.answers.commitMessage.noul > 0.5 &&
+    result.decisions.commitMessage.status === "automatic";
   const roleAnswer = result.answers.role.choice;
   const conversational = result.answers.conversational.noul;
   const followUp = result.answers.followUp.noul;
@@ -213,12 +251,15 @@ export async function judgeWithJev(
     refersToPrevious: followUpAnswer,
     isPush: push > 0.5,
     pushConfidence: Math.max(push, 1 - push),
+    gitAction,
+    needsCommitMessage,
     destructive: risky,
     role: roleAnswer === "git" || roleAnswer === "io" ? roleAnswer : "executor",
     commandIndex: exact ? commandIndex : null,
     reason:
       `System One ${result.model} 判定 route=${route}、complexity=${complexity}、` +
       `destructive=${destructive.toFixed(2)}、conversation=${conversationalAnswer}、` +
+      `gitAction=${gitAction}、` +
       `exactCommand=${commandIndex === null ? "none" : commands[commandIndex]?.command}`,
     model: result.model,
     decisions,

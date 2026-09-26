@@ -1,5 +1,6 @@
 import type { JsonValue } from "@codexhost/protocol-core";
 import type { BuddyDecision } from "@codexhost/shared-contracts";
+import type { GitAction } from "./judgment.js";
 import { object, result, type NativeRequest } from "./planner.js";
 
 type ModelBypass = NonNullable<BuddyDecision["modelBypass"]>;
@@ -42,6 +43,37 @@ export const gitPushGuidance = [
   "保留原生权限、审批及 Plan Mode 约束；规划模式只检查和说明，不执行 Git 写操作。",
   "以真实命令退出码及远端分支或 PR/MR 状态验证结果；最终明确说明完成、失败或待确认，不能把模型正常结束当成推送成功。",
 ].join("\n");
+
+const gitWorkflowSteps: Record<GitAction, string> = {
+  none: "",
+  commit: "本轮只提交本地改动：按改动生成 Conventional Commit 消息后提交，不推送。",
+  "commit-push":
+    "本轮提交并推送：根据暂存或工作区改动生成 Conventional Commit 消息，提交后推送当前分支。",
+  push: "本轮只推送已有提交，不新建提交。",
+  sync: "本轮拉取并同步远端：执行 fetch 后以 merge 合入上游，保留双方历史，不擅自变基。",
+  "merge-continue":
+    "本轮继续进行中的合并：读取冲突标记解决冲突，暂存后完成合并；无法判断业务语义时暂停并报告。",
+};
+
+/**
+ * 按 System One 判定的 Git 动作生成旁路指导。除通用 Git 约束外，逐条说明本轮具体步骤，
+ * 并统一覆盖"推送被拒 → 拉取并同步 → 冲突交给本模型解决 → 再次推送"的恢复路径。
+ */
+export function gitWorkflowGuidance(action: GitAction, needsCommitMessage: boolean): string {
+  const specific = gitWorkflowSteps[action];
+  return [
+    gitPushGuidance,
+    specific,
+    needsCommitMessage
+      ? "提交消息由你根据真实改动生成，使用 Conventional Commit 格式；不要询问用户填写。"
+      : "用户已给出或不需要新提交消息时，沿用用户提供的消息，不擅自改写。",
+    "推送被远端拒绝（non-fast-forward）时，先拉取并同步再重试：以 merge 合入远端，不强制推送、不变基。",
+    "同步产生冲突时直接由你解决：读取冲突标记，保留双方意图并编辑文件，git add 后完成合并或提交，再重试推送。",
+    "解决冲突以真实构建或测试为准；无法在不猜测业务语义的前提下解决时，保留冲突现场并报告证据。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 export async function gitPushSkills(
   request: NativeRequest,

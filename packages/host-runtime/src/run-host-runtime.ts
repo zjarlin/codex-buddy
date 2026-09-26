@@ -1,3 +1,4 @@
+import { ProjectGitWorkflowGroup } from "./project-git-workflow.js";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { homedir } from "node:os";
@@ -156,6 +157,7 @@ export async function runHostRuntime(input: {
           diagnosticOutput: process.stderr,
         });
         const shared = {
+          gitWorkflowGroup: new ProjectGitWorkflowGroup(),
           officialRuntimeScope: official.officialRuntimeScope,
           accountControl: official.accountControl,
         };
@@ -261,6 +263,7 @@ export async function runHostRuntime(input: {
         accounts: [{ accountId: "remote-native", label: "Remote native Codex Account" }],
       }));
       const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
+      const gitWorkflowGroup = new ProjectGitWorkflowGroup();
       await mappingStore.initialize();
       const listener = createRemoteAppServerWebSocketListener({
         socketPath,
@@ -279,6 +282,7 @@ export async function runHostRuntime(input: {
             mappingStore,
             closeMappingStoreOnExit: false,
             officialRuntimeScope,
+            gitWorkflowGroup,
             accountControl,
             onDelegationApi: (api) => registry.register(api),
             ...(updateCoordinator ? { updateCoordinator } : {}),

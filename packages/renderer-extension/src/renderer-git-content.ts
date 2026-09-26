@@ -1,6 +1,7 @@
 import { diffArrays } from "diff";
 
 import type { GitContentResult, GitDiffResult } from "@codexhost/shared-contracts";
+import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
 
 const MAIN_SURFACE_SELECTOR = '[data-app-shell-main-surface="default"]';
 const APP_HEADER_SELECTOR = 'header[data-pip-obstacle="app-shell-header"]';
@@ -30,7 +31,18 @@ function lines(value: string): string[] {
 function buildRows(base: string, working: string): DiffRow[] {
   const left = lines(base);
   const right = lines(working);
-  const parts = diffArrays(left, right);
+  const parts = diffArrays(left, right, { timeout: 40, maxEditLength: 2000 });
+  // 极端改写限制同步对齐计算时间，仍允许逐行查看两侧正文。
+  if (!parts) {
+    return Array.from({ length: Math.max(left.length, right.length) }, (_, index) => ({
+      kind: left[index] === right[index] ? "context" : "change",
+      leftNumber: index < left.length ? index + 1 : null,
+      rightNumber: index < right.length ? index + 1 : null,
+      left: left[index] ?? "",
+      right: right[index] ?? "",
+      adoptable: left[index] !== right[index],
+    }));
+  }
   const rows: DiffRow[] = [];
   let leftNumber = 1;
   let rightNumber = 1;
@@ -97,6 +109,7 @@ export function createRendererGitContent(options: {
   const shadow = root.attachShadow({ mode: "open" });
   const style = document.createElement("style");
   style.textContent = `
+    ${gitButtonLoadingStyles}
     :host { box-sizing:border-box; position:fixed; z-index:50; display:flex; flex-direction:column; overflow:hidden; color:var(--text-primary,#111); background:var(--surface-primary,#fff); font-family:var(--font-sans,ui-sans-serif,system-ui,sans-serif); }
     .head { display:flex; flex:none; min-height:44px; align-items:center; gap:8px; padding:6px 10px 6px 12px; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 12%,transparent)); }
     .title { min-width:0; flex:1; }
@@ -122,13 +135,13 @@ export function createRendererGitContent(options: {
     .split-head { position:sticky; z-index:3; top:0; display:grid; grid-template-columns:1fr 34px 1fr; color:inherit; background:var(--surface-secondary,#f5f5f7); border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 13%,transparent)); font-family:var(--font-sans,ui-sans-serif,system-ui,sans-serif); font-size:11px; font-weight:600; }
     .split-head span { overflow:hidden; padding:7px 10px; text-overflow:ellipsis; white-space:nowrap; }
     .split-head span:nth-child(2) { padding:0; border-inline:1px solid var(--border-default,color-mix(in srgb,currentColor 10%,transparent)); }
-    .split-row { display:grid; grid-template-columns:1fr 34px 1fr; min-height:22px; border-bottom:1px solid color-mix(in srgb,currentColor 4%,transparent); }
+    .split-row { box-sizing:border-box; display:grid; grid-template-columns:1fr 34px 1fr; height:24px; border-bottom:1px solid color-mix(in srgb,currentColor 4%,transparent); }
     .split-row[data-kind="change"] { background:color-mix(in srgb,var(--text-link,#339cff) 5%,transparent); }
     .side { display:grid; min-width:0; grid-template-columns:48px minmax(0,1fr); }
     .left { border-right:1px solid var(--border-default,color-mix(in srgb,currentColor 9%,transparent)); }
     .right { border-left:1px solid var(--border-default,color-mix(in srgb,currentColor 9%,transparent)); }
     .number { padding:2px 8px; color:inherit; text-align:right; opacity:.42; user-select:none; }
-    .line { min-width:0; padding:2px 10px; overflow-wrap:anywhere; white-space:pre-wrap; }
+    .line { min-width:0; padding:2px 10px; overflow:hidden; text-overflow:ellipsis; white-space:pre; }
     .split-row[data-state="removed"] .left .line { background:color-mix(in srgb,var(--color-text-danger,#ef4444) 13%,transparent); }
     .split-row[data-state="added"] .right .line { background:color-mix(in srgb,var(--green,#3fa66a) 14%,transparent); }
     .gutter { display:grid; place-items:center; padding:0; color:inherit; background:transparent; border:0; border-inline:1px solid var(--border-default,color-mix(in srgb,currentColor 8%,transparent)); cursor:pointer; opacity:.45; }
@@ -219,10 +232,16 @@ export function createRendererGitContent(options: {
   let mainSurface: HTMLElement | null = null;
   let header: HTMLElement | null = null;
   let mode: ContentMode = "unified";
+  let splitRows: DiffRow[] | null = null;
+  let splitValue: string | null = null;
+  let splitStart = -1;
+  let splitFrame = 0;
   let content: GitContentResult | null = null;
   let original = "";
   let dirty = false;
-  let saving = false;
+  let saving: GitContentResult | null = null;
+  let staging: GitContentResult | null = null;
+  let busy = false;
   let stageHandler: (() => void | Promise<void>) | null = null;
   const resizeObserver = new ResizeObserver(() => schedulePosition());
   const mutationObserver = new MutationObserver(() => schedulePosition());
@@ -270,14 +289,30 @@ export function createRendererGitContent(options: {
     frame = 0;
     root.remove();
     content = null;
+    splitRows = null;
+    splitValue = null;
+    splitStart = -1;
+    unified.textContent = "";
+    editor.value = "";
+    splitWrap.replaceChildren();
+    if (splitFrame) ownerWindow.cancelAnimationFrame(splitFrame);
+    splitFrame = 0;
     dirty = false;
     stageHandler = null;
     options.onClose();
   };
 
   const renderSplit = (): void => {
-    splitWrap.replaceChildren();
     if (!content) return;
+    if (splitValue !== editor.value || splitRows === null) {
+      splitRows = buildRows(content.base, editor.value);
+      splitValue = editor.value;
+      splitStart = -1;
+    }
+    const start = Math.max(0, Math.floor(body.scrollTop / 24) - 10);
+    if (start === splitStart) return;
+    splitStart = start;
+    splitWrap.replaceChildren();
     const split = document.createElement("section");
     split.className = "split";
     const splitHead = document.createElement("div");
@@ -289,8 +324,11 @@ export function createRendererGitContent(options: {
     rightHead.textContent = "工作区";
     splitHead.append(leftHead, centerHead, rightHead);
     split.append(splitHead);
-    const rows = buildRows(content.base, editor.value);
-    for (const row of rows) {
+    const top = document.createElement("div");
+    top.style.height = `${start * 24}px`;
+    split.append(top);
+    const end = Math.min(splitRows.length, start + 100);
+    for (const row of splitRows.slice(start, end)) {
       const rowElement = document.createElement("div");
       rowElement.className = "split-row";
       rowElement.dataset.kind = row.kind;
@@ -306,6 +344,7 @@ export function createRendererGitContent(options: {
       const leftLine = document.createElement("span");
       leftLine.className = "line";
       leftLine.textContent = row.left;
+      leftLine.title = row.left;
       left.append(leftNumber, leftLine);
       const gutter = document.createElement("button");
       gutter.type = "button";
@@ -322,18 +361,37 @@ export function createRendererGitContent(options: {
       const rightLine = document.createElement("span");
       rightLine.className = "line";
       rightLine.textContent = row.right;
+      rightLine.title = row.right;
       right.append(rightNumber, rightLine);
       split.append(rowElement);
       rowElement.append(left, gutter, right);
     }
+    const bottom = document.createElement("div");
+    bottom.style.height = `${Math.max(0, splitRows.length - end) * 24}px`;
+    split.append(bottom);
     splitWrap.append(split);
   };
 
   const setDirty = (value: boolean): void => {
     dirty = value;
-    saveButton.disabled = saving || !dirty || !content || content.binary || content.truncated;
+    saveButton.disabled =
+      busy ||
+      Boolean(saving || staging) ||
+      !dirty ||
+      !content ||
+      content.binary ||
+      content.truncated;
     stageButton.disabled =
-      saving || !content || content.binary || content.conflicted || content.truncated || dirty;
+      busy ||
+      Boolean(saving || staging) ||
+      !stageHandler ||
+      !content ||
+      content.binary ||
+      content.conflicted ||
+      content.truncated ||
+      dirty;
+    saveButton.setAttribute("aria-busy", String(saving !== null && saving === content));
+    stageButton.setAttribute("aria-busy", String(staging !== null && staging === content));
   };
 
   const render = (): void => {
@@ -371,25 +429,58 @@ export function createRendererGitContent(options: {
     }
   };
   const save = async (): Promise<void> => {
-    if (!content || !options.actions || saving || !dirty) return;
-    saving = true;
+    if (!content || !options.actions || saveButton.disabled) return;
+    const savedContent = content;
+    const savedValue = editor.value;
+    saving = savedContent;
     setNotice("正在保存合并结果…");
     setDirty(true);
     try {
-      const result = await options.actions.save(editor.value, content.revision);
-      if (disposed || content === null) return;
-      content = { ...content, working: editor.value, revision: result.revision, conflicted: false };
-      original = editor.value;
-      setDirty(false);
+      const result = await options.actions.save(savedValue, savedContent.revision);
+      if (disposed || content !== savedContent) return;
+      content = {
+        ...savedContent,
+        working: savedValue,
+        revision: result.revision,
+        conflicted: false,
+      };
+      original = savedValue;
+      setDirty(editor.value !== original);
       setNotice("已保存到工作区。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error), true);
+      if (!disposed && content === savedContent) {
+        setNotice(error instanceof Error ? error.message : String(error), true);
+      }
     } finally {
-      saving = false;
+      saving = null;
       setDirty(dirty);
     }
   };
 
+  const stage = async (): Promise<void> => {
+    if (!content || !stageHandler || stageButton.disabled) return;
+    const stagedContent = content;
+    staging = stagedContent;
+    setDirty(dirty);
+    try {
+      await stageHandler();
+    } catch (error) {
+      if (!disposed && content === stagedContent) {
+        setNotice(error instanceof Error ? error.message : String(error), true);
+      }
+    } finally {
+      staging = null;
+      setDirty(dirty);
+    }
+  };
+
+  body.addEventListener("scroll", () => {
+    if (mode !== "split" || splitFrame) return;
+    splitFrame = ownerWindow.requestAnimationFrame(() => {
+      splitFrame = 0;
+      if (opened && mode === "split") renderSplit();
+    });
+  });
   closeButton.addEventListener("click", close);
   unifiedButton.addEventListener("click", () => {
     mode = "unified";
@@ -397,6 +488,8 @@ export function createRendererGitContent(options: {
   });
   splitButton.addEventListener("click", () => {
     mode = "split";
+    splitStart = -1;
+    body.scrollTop = 0;
     render();
   });
   resultButton.addEventListener("click", () => {
@@ -405,7 +498,7 @@ export function createRendererGitContent(options: {
   });
   editor.addEventListener("input", onInput);
   saveButton.addEventListener("click", () => void save());
-  stageButton.addEventListener("click", () => void stageHandler?.());
+  stageButton.addEventListener("click", () => void stage());
   oursButton.addEventListener("click", () => {
     if (!content?.ours) return;
     editor.value = content.ours;
@@ -427,13 +520,18 @@ export function createRendererGitContent(options: {
     showDiff(label: string, result: GitDiffResult, work?: GitContentResult) {
       if (disposed) return;
       content = work ?? null;
+      stageHandler = null;
       title.textContent = label;
       baseMeta.textContent = work ? `基准：${work.baseLabel}` : "统一差异";
       resultMeta.textContent = work?.conflicted ? "冲突：需要合并" : "工作区";
       unified.textContent = result.diff ? unifiedText(result) : "正在加载差异…";
       setup.hidden = true;
       meta.hidden = false;
-      mode = work ? "split" : "unified";
+      mode = "unified";
+      splitRows = null;
+      splitValue = null;
+      splitStart = -1;
+      body.scrollTop = 0;
       if (work) {
         original = work.working;
         editor.value = work.working;
@@ -468,6 +566,11 @@ export function createRendererGitContent(options: {
     },
     setStageHandler(handler: (() => void | Promise<void>) | null) {
       stageHandler = handler;
+      setDirty(dirty);
+    },
+    setBusy(value: boolean) {
+      busy = value;
+      setDirty(dirty);
     },
     close,
     dispose() {

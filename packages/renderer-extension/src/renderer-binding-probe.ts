@@ -1,3 +1,4 @@
+import { installRendererGitWorkflowControl } from "./renderer-git-workflow-control.js";
 import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
@@ -726,33 +727,49 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const activeGitContext = () => {
+    const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
+    for (const mounted of mountedByComposer.values()) {
+      if (
+        !mounted.composer.isConnected ||
+        mounted.composer.getClientRects().length === 0 ||
+        (mainSurface && !mainSurface.contains(mounted.composer))
+      )
+        continue;
+      const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
+      if (!threadId) continue;
+      const hostId = activeModelHostId() ?? mounted.hostId;
+      const client = hostId ? modelClientForHost(hostId) : null;
+      if (
+        !client?.inspectGitStatus ||
+        !client.inspectGitDiff ||
+        !client.listWorkspaceFiles ||
+        !client.readWorkspaceFile ||
+        !client.writeWorkspaceFile
+      )
+        continue;
+      return { anchor: mounted.composer, threadId, client };
+    }
+    return null;
+  };
   const gitSidebar = installRendererGitSidebar({
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
     getContext: () => {
-      const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
-      for (const mounted of mountedByComposer.values()) {
-        if (
-          !mounted.composer.isConnected ||
-          mounted.composer.getClientRects().length === 0 ||
-          (mainSurface && !mainSurface.contains(mounted.composer))
-        )
-          continue;
-        const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
-        if (!threadId) continue;
-        const hostId = activeModelHostId() ?? mounted.hostId;
-        const client = hostId ? modelClientForHost(hostId) : null;
-        if (
-          !client?.inspectGitStatus ||
-          !client.inspectGitDiff ||
-          !client.listWorkspaceFiles ||
-          !client.readWorkspaceFile ||
-          !client.writeWorkspaceFile
-        )
-          continue;
-        return { threadId, client: client as RendererGitClient };
-      }
-      return { threadId: null, client: null };
+      const current = activeGitContext();
+      return current
+        ? { threadId: current.threadId, client: current.client as RendererGitClient }
+        : { threadId: null, client: null };
     },
+  });
+  const gitWorkflowControl = installRendererGitWorkflowControl(() => {
+    const current = activeGitContext();
+    if (!current?.client.inspectGitWorkflow || !current.client.runGitWorkflow) return null;
+    return {
+      ...current,
+      client: current.client as Required<
+        Pick<RendererModelClient, "inspectGitWorkflow" | "runGitWorkflow">
+      >,
+    };
   });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
@@ -2719,6 +2736,7 @@ export function installRendererBindingProbe(
     }
     pendingReplacements.clear();
     gitSidebar.syncContext();
+    gitWorkflowControl.refreshContext();
   };
 
   const scheduleScan = (refreshTargets = false): void => {
@@ -2894,6 +2912,7 @@ export function installRendererBindingProbe(
     sidebarAgentIcons.refresh();
     reconcileHarnessAvailabilityHost();
     gitSidebar.syncContext();
+    gitWorkflowControl.refreshContext();
     void loadCodexAccounts();
     void refreshHarnessAvailability();
     for (const mounted of mountedByComposer.values()) {
@@ -2942,6 +2961,7 @@ export function installRendererBindingProbe(
   const onWindowFocus = (): void => {
     reconcileHarnessAvailabilityHost();
     gitSidebar.syncContext();
+    gitWorkflowControl.refreshContext();
     void loadCodexAccounts();
     for (const mounted of mountedByComposer.values()) {
       if (mounted.hostId === activeModelHostId() && mounted.ownershipStatus === "error") {
@@ -3108,6 +3128,7 @@ export function installRendererBindingProbe(
       sidebarContinuation.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();
+      gitWorkflowControl.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
       document.removeEventListener("submit", onSubmit, true);

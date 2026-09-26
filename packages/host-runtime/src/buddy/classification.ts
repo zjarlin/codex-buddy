@@ -10,6 +10,7 @@ import {
   judgeWithJev,
   type JudgmentInput,
   type SystemOneCommand,
+  type GitAction,
 } from "./judgment.js";
 
 /** System One 或本地兜底给出的完整分类结果，供路由执行阶段直接采用。 */
@@ -18,6 +19,9 @@ export interface ClassifiedRoute {
   role: BuddyDecision["role"];
   conversational: boolean;
   modelBypass: boolean;
+  // Git 工作流动作；none 表示不是 Git 请求。旁路指导据此选择提交/推送/同步步骤。
+  gitAction: GitAction;
+  needsCommitMessage: boolean;
   judgment: BuddyDecision["judgment"] | undefined;
   commandIndex: number | null;
   reason: string;
@@ -169,17 +173,22 @@ export async function classifyWithSystemOne(
     model: jev.model,
     decisions: jev.decisions as NonNullable<BuddyDecision["judgment"]>["decisions"],
   };
-  const modelBypass = environment.settings.bypass && jev.isPush;
+  // 只要 System One 判定为 Git 动作（提交/提交并推送/推送/同步/继续合并）就进入
+  // Git 旁路，交由 git 角色回合按 action 逐步执行；冲突消解仍在该模型回合内完成。
+  const gitBypass = jev.gitAction !== "none";
+  const modelBypass = environment.settings.bypass && (gitBypass || jev.isPush);
   if (modelBypass) {
     assessment.tier = "standard";
     assessment.intent = "git";
-    assessment.reason = `System One 确认推送意图（${jev.model}，confidence=${jev.pushConfidence.toFixed(2)}）；旁路至垃模型，跳过夯规划。`;
+    assessment.reason = `System One 确认 Git 动作 ${jev.gitAction}（${jev.model}，confidence=${jev.pushConfidence.toFixed(2)}）；旁路至垃模型，跳过夯规划。`;
   }
   return {
     assessment,
     role: resolveRole(environment.settings, jev.role, context.text, assessment, modelBypass),
     conversational: jev.conversational,
     modelBypass,
+    gitAction: modelBypass ? jev.gitAction : "none",
+    needsCommitMessage: modelBypass && jev.needsCommitMessage,
     judgment,
     commandIndex: modelBypass ? null : jev.commandIndex,
     reason: jev.reason,
@@ -215,6 +224,8 @@ export async function classifyWithFallback(
     role: resolveRole(environment.settings, null, path.text, assessment, modelBypass),
     conversational: assessment.intent === "conversation",
     modelBypass,
+    gitAction: modelBypass ? "commit-push" : "none",
+    needsCommitMessage: modelBypass,
     judgment: undefined,
     commandIndex: null,
     reason: assessment.reason,

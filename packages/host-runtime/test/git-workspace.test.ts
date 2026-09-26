@@ -69,6 +69,45 @@ async function submoduleRepository(): Promise<{ parent: string; child: string }>
 }
 
 describe("GitWorkspace", () => {
+  // 建立一个带真实 file:// 远端的克隆，供同步/推送分叉用例使用。
+  async function cloneWithRemote(): Promise<{
+    clone: string;
+    remote: string;
+    advanceRemote: (content?: string) => Promise<void>;
+  }> {
+    const root = await mkdtemp(path.join(tmpdir(), "codexhost-git-remote-"));
+    cleanup.push(root);
+    const remote = path.join(root, "remote.git");
+    const source = path.join(root, "source");
+    const clone = path.join(root, "clone");
+    await execFileAsync("git", ["init", "-q", "--bare", remote]);
+    // 让裸远端默认指向 main，克隆后才有跟踪分支可同步。
+    await execFileAsync("git", ["-C", remote, "symbolic-ref", "HEAD", "refs/heads/main"]);
+    await execFileAsync("git", ["init", "-q", source]);
+    await execFileAsync("git", ["-C", source, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", source, "config", "user.name", "Test"]);
+    await writeFile(path.join(source, "tracked.txt"), "base\n");
+    await execFileAsync("git", ["-C", source, "add", "tracked.txt"]);
+    await execFileAsync("git", ["-C", source, "commit", "-qm", "init"]);
+    await execFileAsync("git", ["-C", source, "remote", "add", "origin", remote]);
+    await execFileAsync("git", ["-C", source, "push", "-q", "origin", "HEAD:main"]);
+    await execFileAsync("git", ["clone", "-q", remote, clone]);
+    await execFileAsync("git", ["-C", clone, "config", "user.email", "test@example.com"]);
+    await execFileAsync("git", ["-C", clone, "config", "user.name", "Test"]);
+    const advanceRemote = async (content = "remote\n"): Promise<void> => {
+      await writeFile(path.join(source, "tracked.txt"), content);
+      await execFileAsync("git", ["-C", source, "commit", "-qam", "remote"]);
+      await execFileAsync("git", ["-C", source, "push", "-q", "origin", "HEAD:main"]);
+    };
+    return { clone, remote, advanceRemote };
+  }
+
+  // 远端与克隆共用一个 push 目标，用于验证 non-fast-forward 拒绝。
+  async function divergedClone(): Promise<{ clone: string; advanceRemote: () => Promise<void> }> {
+    const { clone, advanceRemote } = await cloneWithRemote();
+    return { clone, advanceRemote: () => advanceRemote("remote divergence\n") };
+  }
+
   it("reports staged, modified, untracked and renamed files", async () => {
     const directory = await repository();
     await writeFile(path.join(directory, "tracked.txt"), "two\n");
@@ -87,6 +126,16 @@ describe("GitWorkspace", () => {
         expect.objectContaining({ path: "new.txt", untracked: true }),
       ]),
     );
+  });
+
+  it("localizes a missing repository error instead of exposing raw git output", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codexhost-not-git-"));
+    cleanup.push(directory);
+
+    await expect(new GitWorkspace(testGitEnvironment).status(directory)).rejects.toMatchObject({
+      name: "GitWorkspaceError",
+      message: "当前目录不是 Git 仓库。",
+    });
   });
 
   it("shows an untracked file diff", async () => {
@@ -322,5 +371,154 @@ describe("GitWorkspace", () => {
     );
     const diff = await workspace.commitDiff(directory, detail.commit.commit, "tracked.txt");
     expect(diff.diff).toContain("+two");
+  });
+
+  it("reports an in-progress merge with its conflict list", async () => {
+    const directory = await repository();
+    await execFileAsync("git", ["-C", directory, "checkout", "-qb", "feature"]);
+    await writeFile(path.join(directory, "tracked.txt"), "feature\n");
+    await execFileAsync("git", ["-C", directory, "commit", "-qam", "feature"]);
+    await execFileAsync("git", ["-C", directory, "checkout", "-q", "-"]);
+    await writeFile(path.join(directory, "tracked.txt"), "main\n");
+    await execFileAsync("git", ["-C", directory, "commit", "-qam", "main"]);
+    await expect(execFileAsync("git", ["-C", directory, "merge", "feature"])).rejects.toBeTruthy();
+
+    const status = await new GitWorkspace(testGitEnvironment).status(directory);
+
+    expect(status.operation).toBe("merge");
+    expect(status.conflicts).toEqual(["tracked.txt"]);
+  });
+
+  it("syncs an up-to-date branch and fast-forwards behind commits from the remote", async () => {
+    const { clone, advanceRemote } = await cloneWithRemote();
+    const workspace = new GitWorkspace(testGitEnvironment);
+    // 远端没有新提交时同步报告 up-to-date。
+    await expect(workspace.sync(clone)).resolves.toMatchObject({
+      strategy: "up-to-date",
+      behind: 0,
+      conflicts: [],
+    });
+    // 远端前进一个提交后，本地落后且无本地提交，应快进。
+    await advanceRemote();
+    const mid = await new GitWorkspace(testGitEnvironment).fetch(clone);
+    // fetch 之后本地应落后 1 个提交；这同时回归 behind 的解析。
+    expect(mid.behind).toBe(1);
+    const synced = await workspace.sync(clone);
+    expect(synced.strategy).toBe("fast-forward");
+    expect(synced.behind).toBe(1);
+    expect(synced.status.behind).toBe(0);
+  });
+
+  it("merges diverged remote history and surfaces conflicts without auto-resolving", async () => {
+    const { clone, remote, advanceRemote } = await cloneWithRemote();
+    const workspace = new GitWorkspace(testGitEnvironment);
+    await advanceRemote("remote change\n");
+    // 本地提交同样修改 tracked.txt，制造合并冲突。
+    await writeFile(path.join(clone, "tracked.txt"), "local change\n");
+    await execFileAsync("git", ["-C", clone, "commit", "-qam", "local"]);
+
+    const result = await workspace.sync(clone);
+
+    expect(result.strategy).toBe("conflict");
+    expect(result.conflicts).toEqual(["tracked.txt"]);
+    expect(result.status.operation).toBe("merge");
+    // 冲突保留在原工作区，未自动合并；解决并暂存后可继续。
+    await writeFile(path.join(clone, "tracked.txt"), "resolved\n");
+    await execFileAsync("git", ["-C", clone, "add", "tracked.txt"]);
+    const continued = await workspace.mergeContinue(clone);
+    expect(continued.operation).toBeNull();
+    expect(continued.conflicts).toEqual([]);
+    expect(remote).toBeTruthy();
+  });
+
+  it("treats a non-fast-forward push as a structured rejection with the behind count", async () => {
+    const { clone, advanceRemote } = await divergedClone();
+    // 远端前进后本地也提交，推送必然被拒。
+    await advanceRemote();
+    await writeFile(path.join(clone, "tracked.txt"), "local\n");
+    await execFileAsync("git", ["-C", clone, "commit", "-qam", "local"]);
+
+    await expect(new GitWorkspace(testGitEnvironment).push(clone)).rejects.toMatchObject({
+      name: "GitPushRejectedError",
+      behind: 1,
+    });
+  });
+
+  it("aborts an in-progress merge", async () => {
+    const directory = await repository();
+    await execFileAsync("git", ["-C", directory, "checkout", "-qb", "feature"]);
+    await writeFile(path.join(directory, "tracked.txt"), "feature\n");
+    await execFileAsync("git", ["-C", directory, "commit", "-qam", "feature"]);
+    await execFileAsync("git", ["-C", directory, "checkout", "-q", "-"]);
+    await writeFile(path.join(directory, "tracked.txt"), "main\n");
+    await execFileAsync("git", ["-C", directory, "commit", "-qam", "main"]);
+    await expect(execFileAsync("git", ["-C", directory, "merge", "feature"])).rejects.toBeTruthy();
+
+    const status = await new GitWorkspace(testGitEnvironment).mergeAbort(directory);
+
+    expect(status.operation).toBeNull();
+    expect(status.conflicts).toEqual([]);
+  });
+});
+
+// 用真实仓库验证操作副作用与返回状态，避免把成功的提交误报成失败。
+describe("GitWorkspace pending mutations and submodule warnings", () => {
+  it("keeps healthy submodules and returns stage, commit and push results with an orphan gitlink", async () => {
+    const { parent } = await submoduleRepository();
+    const git = (...args: string[]) => execFileAsync("git", ["-C", parent, ...args]);
+    const head = (await git("rev-parse", "HEAD")).stdout.trim();
+    const orphan = "aio-plugin-documentation-agent";
+    await git("update-index", "--add", "--cacheinfo", `160000,${head},${orphan}`);
+    await git("commit", "-qm", "add orphan gitlink");
+    const remote = await mkdtemp(path.join(tmpdir(), "codexhost-warning-remote-"));
+    cleanup.push(remote);
+    await execFileAsync("git", ["init", "-q", "--bare", remote]);
+    await git("remote", "add", "origin", remote);
+    await git("push", "-qu", "origin", "HEAD");
+    const workspace = new GitWorkspace(testGitEnvironment);
+    const status = await workspace.status(parent);
+    expect(status.submodules).toContainEqual({ path: "vendor/child", status: "current" });
+    expect(status.warnings).toEqual([expect.stringContaining(orphan)]);
+    await expect(workspace.submodules(parent)).resolves.toMatchObject({
+      warnings: status.warnings,
+    });
+    await writeFile(path.join(parent, "parent.txt"), "updated\n");
+    const staged = await workspace.stage(parent, ["parent.txt"]);
+    expect(staged.changes).toContainEqual(
+      expect.objectContaining({ path: "parent.txt", staged: true }),
+    );
+    expect(staged.warnings).toEqual(status.warnings);
+    const committed = await workspace.commit(parent, "fix: healthy change", false);
+    expect(committed.commit).toBeTruthy();
+    expect(committed.status.warnings).toEqual(status.warnings);
+    const pushed = await workspace.push(parent);
+    expect(pushed.ahead).toBe(0);
+    expect(pushed.warnings).toEqual(status.warnings);
+    const remoteHead = (
+      await execFileAsync("git", ["-C", remote, "rev-parse", `refs/heads/${pushed.branch}`])
+    ).stdout.trim();
+    expect(remoteHead).toBe((await git("rev-parse", "HEAD")).stdout.trim());
+    expect((await git("show", "HEAD:.gitmodules")).stdout).not.toContain(orphan);
+  });
+
+  it("coalesces concurrent identical commits and clears failed requests for retry", async () => {
+    const directory = await repository();
+    const workspace = new GitWorkspace(testGitEnvironment);
+    const message = "fix: one commit";
+    const failed = await Promise.allSettled([
+      workspace.commit(directory, message, false),
+      workspace.commit(directory, message, false),
+    ]);
+    expect(failed.map((result) => result.status)).toEqual(["rejected", "rejected"]);
+    await writeFile(path.join(directory, "tracked.txt"), "updated\n");
+    await workspace.stage(directory, ["tracked.txt"]);
+    const [first, duplicate] = await Promise.all([
+      workspace.commit(directory, message, false),
+      workspace.commit(directory, message, false),
+    ]);
+    expect(duplicate).toEqual(first);
+    expect(first.commit).toBeTruthy();
+    const count = await execFileAsync("git", ["-C", directory, "rev-list", "--count", "HEAD"]);
+    expect(count.stdout.trim()).toBe("2");
   });
 });

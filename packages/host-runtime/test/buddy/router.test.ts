@@ -32,7 +32,10 @@ function profileClient(profile: SystemOneProfile): TypeSafeClient {
   const fetch = vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
     const request = JSON.parse(String(init?.body ?? "{}")) as {
       state?: { request?: string };
-      questions?: { commandIndex?: { criteria?: Record<string, unknown> } };
+      questions?: {
+        commandIndex?: { criteria?: Record<string, unknown> };
+        gitAction?: { criteria?: Record<string, unknown> };
+      };
     };
     const resolved =
       typeof profile.forText === "function"
@@ -40,6 +43,9 @@ function profileClient(profile: SystemOneProfile): TypeSafeClient {
         : profile;
     const criteria = Object.keys(request.questions?.commandIndex?.criteria ?? { none: "" });
     const role = resolved.role ?? "executor";
+    const actionCriteria = Object.keys(request.questions?.gitAction?.criteria ?? { none: "" });
+    const actionChoice = resolved.push ? "commit-push" : "none";
+    const actionSelected = actionCriteria.includes(actionChoice) ? actionChoice : "none";
     const route = resolved.advanced ? "plan" : resolved.conversational ? "inspect" : "code";
     return Response.json(
       {
@@ -69,6 +75,15 @@ function profileClient(profile: SystemOneProfile): TypeSafeClient {
           },
           destructive: { type: "noul", noul: resolved.destructive ? 0.98 : 0.03 },
           push: { type: "noul", noul: resolved.push ? 0.98 : 0.02 },
+          gitAction: {
+            type: "choice",
+            choice: actionSelected,
+            probabilities: Object.fromEntries(
+              actionCriteria.map((id) => [id, id === actionSelected ? 1 : 0]),
+            ),
+            confidence: 0.92,
+          },
+          commitMessage: { type: "noul", noul: resolved.push ? 0.95 : 0.05 },
           role: {
             type: "choice",
             choice: role,
@@ -292,93 +307,131 @@ async function fixture(
   };
 }
 
-  // System One 一次批量返回全部原子判断；测试夹具覆盖 Host 实际问的十个问题。
-  const jevResponse = (
-    route: string,
-    complexity: number,
-    push: number,
-    role: string,
-    extras: {
-      conversational?: number;
-      followUp?: number;
-      exactCommand?: number;
-      command?: string;
-      destructive?: number;
-    } = {},
-  ) => ({
-    model: "typesafe/jev",
-    answers: {
-      route: {
-        type: "choice",
-        choice: route,
-        probabilities:
-          route === "plan"
-            ? { code: 0.05, inspect: 0.05, plan: 0.9, other: 0 }
-            : route === "inspect"
-              ? { code: 0.05, inspect: 0.9, plan: 0.03, other: 0.02 }
-              : { code: 0.9, inspect: 0.05, plan: 0.03, other: 0.02 },
-        confidence: 0.92,
-      },
-      complexity: {
-        type: "score",
-        score: complexity,
-        legend: {
-          "0": "简单：单次读取、信息查询或简短交流",
-          "1": "常规：范围明确的小改动或验证",
-          "2": "复杂：设计、重构、跨模块或多步骤",
-        },
-        probabilities: { "0": 0.1, "1": 0.7, "2": 0.2 },
-        confidence: 0.85,
-      },
-      destructive: { type: "noul", noul: extras.destructive ?? 0.05 },
-      push: { type: "noul", noul: push },
-      role: {
-        type: "choice",
-        choice: role,
-        probabilities: {
-          git: role === "git" ? 0.9 : 0.05,
-          io: role === "io" ? 0.9 : 0.05,
-          executor: role === "executor" ? 0.9 : 0.05,
-        },
-        confidence: 0.9,
-      },
-      conversational: { type: "noul", noul: extras.conversational ?? 0.05 },
-      followUp: { type: "noul", noul: extras.followUp ?? 0.05 },
-      exactCommand: { type: "noul", noul: extras.exactCommand ?? 0.02 },
-      commandIndex: {
-        type: "choice",
-        choice: extras.command ?? "none",
-        // 真实分布由 jevClient 按请求 criteria 重写；此处只保留选择结果。
-        probabilities: { none: 1 },
-        confidence: extras.command ? 0.95 : 0.9,
-      },
+// System One 一次批量返回全部原子判断；测试夹具覆盖 Host 实际问的十个问题。
+const jevResponse = (
+  route: string,
+  complexity: number,
+  push: number,
+  role: string,
+  extras: {
+    conversational?: number;
+    followUp?: number;
+    exactCommand?: number;
+    command?: string;
+    destructive?: number;
+    gitAction?: string;
+    commitMessage?: number;
+  } = {},
+) => ({
+  model: "typesafe/jev",
+  answers: {
+    route: {
+      type: "choice",
+      choice: route,
+      probabilities:
+        route === "plan"
+          ? { code: 0.05, inspect: 0.05, plan: 0.9, other: 0 }
+          : route === "inspect"
+            ? { code: 0.05, inspect: 0.9, plan: 0.03, other: 0.02 }
+            : { code: 0.9, inspect: 0.05, plan: 0.03, other: 0.02 },
+      confidence: 0.92,
     },
-    usage: { input_tokens: 100, output_tokens: 0 },
+    complexity: {
+      type: "score",
+      score: complexity,
+      legend: {
+        "0": "简单：单次读取、信息查询或简短交流",
+        "1": "常规：范围明确的小改动或验证",
+        "2": "复杂：设计、重构、跨模块或多步骤",
+      },
+      probabilities: { "0": 0.1, "1": 0.7, "2": 0.2 },
+      confidence: 0.85,
+    },
+    destructive: { type: "noul", noul: extras.destructive ?? 0.05 },
+    push: { type: "noul", noul: push },
+    gitAction: {
+      type: "choice",
+      choice: extras.gitAction ?? (push > 0.5 ? "commit-push" : "none"),
+      probabilities: { none: push > 0.5 ? 0 : 1 },
+      confidence: 0.92,
+    },
+    commitMessage: { type: "noul", noul: extras.commitMessage ?? (push > 0.5 ? 0.95 : 0.05) },
+    role: {
+      type: "choice",
+      choice: role,
+      probabilities: {
+        git: role === "git" ? 0.9 : 0.05,
+        io: role === "io" ? 0.9 : 0.05,
+        executor: role === "executor" ? 0.9 : 0.05,
+      },
+      confidence: 0.9,
+    },
+    conversational: { type: "noul", noul: extras.conversational ?? 0.05 },
+    followUp: { type: "noul", noul: extras.followUp ?? 0.05 },
+    exactCommand: { type: "noul", noul: extras.exactCommand ?? 0.02 },
+    commandIndex: {
+      type: "choice",
+      choice: extras.command ?? "none",
+      // 真实分布由 jevClient 按请求 criteria 重写；此处只保留选择结果。
+      probabilities: { none: 1 },
+      confidence: extras.command ? 0.95 : 0.9,
+    },
+  },
+  usage: { input_tokens: 100, output_tokens: 0 },
+});
+// System One 只接受与请求 criteria 完全一致的分布，因此按请求动态补齐选项。
+const jevClient = (body: unknown) =>
+  new TypeSafeClient({
+    apiKey: "test-only-key",
+    baseURL: "https://jev.invalid",
+    logLevel: "off",
+    retry: { maxRetries: 0 },
+    fetch: vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
+      const request = JSON.parse(String(init?.body ?? "{}")) as {
+        questions?: {
+          commandIndex?: { criteria?: Record<string, unknown> };
+          gitAction?: { criteria?: Record<string, unknown> };
+        };
+      };
+      const criteria = Object.keys(request.questions?.commandIndex?.criteria ?? { none: "" });
+      const answers = {
+        ...(
+          body as {
+            answers: Record<
+              string,
+              {
+                type: string;
+                choice?: string;
+                probabilities?: Record<string, number>;
+                confidence?: number;
+              }
+            >;
+          }
+        ).answers,
+      };
+      const choice = answers.commandIndex?.choice ?? "none";
+      const selected = criteria.includes(choice) ? choice : "none";
+      answers.commandIndex = {
+        type: "choice",
+        choice: selected,
+        probabilities: Object.fromEntries(criteria.map((id) => [id, id === selected ? 1 : 0])),
+        confidence: 0.95,
+      };
+      // gitAction 的选项集同样由请求定义；按选择结果重建分布以通过校验。
+      const actionCriteria = Object.keys(request.questions?.gitAction?.criteria ?? { none: "" });
+      const actionChoice = answers.gitAction?.choice ?? "none";
+      const actionSelected = actionCriteria.includes(actionChoice) ? actionChoice : "none";
+      answers.gitAction = {
+        type: "choice",
+        choice: actionSelected,
+        probabilities: Object.fromEntries(
+          actionCriteria.map((id) => [id, id === actionSelected ? 1 : 0]),
+        ),
+        confidence: 0.95,
+      };
+      return Response.json({ ...(body as object), answers }, { status: 200 });
+    }),
   });
-  // System One 只接受与请求 criteria 完全一致的分布，因此按请求动态补齐选项。
-  const jevClient = (body: unknown) =>
-    new TypeSafeClient({
-      apiKey: "test-only-key",
-      baseURL: "https://jev.invalid",
-      logLevel: "off",
-      retry: { maxRetries: 0 },
-      fetch: vi.fn(async (_url: unknown, init?: { body?: unknown }) => {
-        const request = JSON.parse(String(init?.body ?? "{}")) as {
-          questions?: { commandIndex?: { criteria?: Record<string, unknown> } };
-        };
-        const criteria = Object.keys(request.questions?.commandIndex?.criteria ?? { none: "" });
-        const answers = { ...(body as { answers: Record<string, { type: string; choice?: string }> }).answers };
-        const choice = answers.commandIndex?.choice ?? "none";
-        const selected = criteria.includes(choice) ? choice : "none";
-        answers.commandIndex = {
-          type: "choice",
-          choice: selected,
-          probabilities: Object.fromEntries(criteria.map((id) => [id, id === selected ? 1 : 0])),
-          confidence: 0.95,
-        };
-        return Response.json({ ...(body as object), answers }, { status: 200 });
-      }),
-    });
 
 describe("Buddy family policy", () => {
   it("preserves explicit structured output requests without planning or model selection", async () => {
@@ -755,7 +808,9 @@ describe("Buddy native routing", () => {
     async () => {
       // System One 选中项目清单里的 ls -la 候选，Host 直接走零模型旁路。
       const f = await fixture({
-        jev: jevClient(jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" })),
+        jev: jevClient(
+          jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" }),
+        ),
       });
       await f.router.route(f.turn("查看当前目录文件"));
       expect(f.providerRequests()).toBe(0);
@@ -870,9 +925,7 @@ describe("Buddy native routing", () => {
     await f.router.route(f.turn("一句话概括这个项目"));
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({ phase: "executing" });
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect(
-      f.requested.map((request) => request.method),
-    ).toEqual(["thread/read", "model/list"]);
+    expect(f.requested.map((request) => request.method)).toEqual(["thread/read", "model/list"]);
     expect((await f.router.snapshot()).decisions[0]?.score).toBe(45);
   });
   it("cancellation stops planning without executing or replaying the original task", async () => {
@@ -1452,12 +1505,55 @@ describe("JEV judgment integration", () => {
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
   });
 
+  it("routes each System One Git action to the cheap model with matching guidance", async () => {
+    for (const [action, expected] of [
+      ["commit", "只提交本地改动"],
+      ["commit-push", "提交并推送"],
+      ["push", "只推送已有提交"],
+      ["sync", "拉取并同步远端"],
+      ["merge-continue", "继续进行中的合并"],
+    ] as const) {
+      const f = await fixture({
+        jev: jevClient(jevResponse("code", 1, 0.3, "git", { gitAction: action })),
+      });
+      await f.router.route(f.turn("处理一下当前的 Git 状态"));
+      const decision = (await f.router.snapshot()).decisions[0];
+      expect(decision?.modelBypass).toMatchObject({ kind: "git-push" });
+      const instructions = String(
+        (
+          f.forwarded[0]?.params as {
+            collaborationMode?: { settings?: { developer_instructions?: string } };
+          }
+        )?.collaborationMode?.settings?.developer_instructions ?? "",
+      );
+      expect(instructions).toContain(expected);
+      // 推送被拒与冲突消解路径对每个 Git 动作都要交代。
+      expect(instructions).toContain("non-fast-forward");
+      expect(instructions).toContain("解决冲突");
+    }
+  });
+
+  it("asks the model to author the commit message only when System One requests it", async () => {
+    const authored = await fixture({
+      jev: jevClient(
+        jevResponse("code", 1, 0.3, "git", { gitAction: "commit", commitMessage: 0.95 }),
+      ),
+    });
+    await authored.router.route(authored.turn("提交当前改动"));
+    const instructions = String(
+      (
+        authored.forwarded[0]?.params as {
+          collaborationMode?: { settings?: { developer_instructions?: string } };
+        }
+      )?.collaborationMode?.settings?.developer_instructions ?? "",
+    );
+    expect(instructions).toContain("提交消息由你根据真实改动生成");
+  });
+
   it("executes the CLI entry selected by System One without calling a model", async () => {
     const f = await fixture({
       modelIds: ["gpt-planner", "deepseek-flash"],
-      jev: jevClient(
-        jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" }),
-      ),
+      jev: jevClient(jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" })),
     });
     await f.router.route(f.turn("看看当前目录"));
     expect(f.providerRequests()).toBe(0);
@@ -1536,5 +1632,45 @@ describe("JEV judgment integration", () => {
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
       kind: "git-push",
     });
+  });
+});
+
+describe("Project Git workflow execution", () => {
+  it("uses the Git executor without classification or planning and keeps native permissions", async () => {
+    const f = await fixture({
+      recovery: true,
+      skills: [{ name: "gitlab", path: "/skills/gitlab/SKILL.md", enabled: true }],
+    });
+    const beforeStart = vi.fn(async () => undefined);
+    const turnId = await f.router.startGitWorkflow("work", f.home, "项目推送工作流", beforeStart);
+    expect(turnId).toMatch(/^continued-/u);
+    expect(beforeStart).toHaveBeenCalledOnce();
+    const turn = f.requested.find((entry) => entry.method === "turn/start");
+    expect(turn?.params).toMatchObject({ threadId: "work", cwd: f.home, model: "deepseek-flash" });
+    expect(turn?.params).not.toHaveProperty("approvalPolicy");
+    expect(turn?.params).not.toHaveProperty("sandboxPolicy");
+    expect(turn?.params.input).toContainEqual({
+      type: "skill",
+      name: "gitlab",
+      path: "/skills/gitlab/SKILL.md",
+    });
+    expect(f.requested.some((entry) => entry.method === "thread/start")).toBe(false);
+    expect(f.router.activeThreadIds).toContain("work");
+    f.router.observe({
+      method: "turn/completed",
+      params: { threadId: "work", turn: { id: turnId, status: "completed" } },
+    });
+    expect(f.router.activeThreadIds).not.toContain("work");
+  });
+
+  it("rechecks project activity before starting a model turn", async () => {
+    const f = await fixture();
+    await expect(
+      f.router.startGitWorkflow("work", f.home, "推送", async () => {
+        throw new Error("project busy");
+      }),
+    ).rejects.toThrow("project busy");
+    expect(f.requested.some((entry) => entry.method === "turn/start")).toBe(false);
+    expect(f.router.activeThreadIds).toEqual([]);
   });
 });

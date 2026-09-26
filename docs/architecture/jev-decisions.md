@@ -14,7 +14,7 @@ Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 System 
 
 `baseURL` 可指向自建 Sub2API 网关，只要该网关把 `/v1/systemone` 转发到上游。Sub2API 侧复用内容审计的 TypeSafe 档案（`base_url`、Key 池、代理），新增 `POST /v1/systemone` 中继：客户端携带 Sub2API Key 鉴权，网关注入档案中的上游 Key 再转发，只做透传、不解析或改写 System One 语义。这样 JEV 的功能、模型与行为仍由上游决定，只是把出口换成了自有网关。
 
-`judgeWithJev(client, input, options?)` 对每个普通回合发起一次批量 System One 请求，一次性判断：路由入口（code / inspect / plan / other）、复杂度档位、是否具破坏性、当前请求是否要求推送、执行角色、是否为无需工具的普通问答、是否承接上文，以及是否正好命中某个已发现的 CLI 入口及命中哪一个。返回的 `tier`、`intent`、`role`、`isPush`、`conversational`、`refersToPrevious`、`commandIndex` 由 `BuddyRouter` 采用；逐题 `decisions` 以 `judgment` 字段写入 `BuddyDecision`，面板可展示模型与依据。
+`judgeWithJev(client, input, options?)` 对每个普通回合发起一次批量 System One 请求，一次性判断：路由入口（code / inspect / plan / other）、复杂度档位、是否具破坏性、Git 动作（none / commit / commit-push / push / sync / merge-continue）、是否需要生成提交消息、当前请求是否要求推送、执行角色、是否为无需工具的普通问答、是否承接上文，以及是否正好命中某个已发现的 CLI 入口及命中哪一个。返回的 `tier`、`intent`、`role`、`gitAction`、`needsCommitMessage`、`isPush`、`conversational`、`refersToPrevious`、`commandIndex` 由 `BuddyRouter` 采用；逐题 `decisions` 以 `judgment` 字段写入 `BuddyDecision`，面板可展示模型与依据。`gitAction` 非 none 时进入 Git 模型旁路，`gitWorkflowGuidance` 按动作生成提交／推送／同步／继续合并的步骤与冲突消解、推送被拒恢复路径。
 
 候选 CLI 入口来自项目清单（`inspectProject` 的 `commands` 加上 `pwd` / `ls -la` 等内建只读入口），由 Host 作为 `commands` 发给 System One。命中后 Host 只执行清单里已有的调用字符串，不把用户原文拼进命令。为避免过长选项列表拖累本地小模型，候选上限为 12 个。
 
@@ -23,7 +23,7 @@ Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 System 
 接线语义：
 
 - 用户显式指定的执行角色（`settings.role != "auto"`）优先于 System One；未指定时以 System One 判定为准，缺少服务时回退本地 `specialist` 规则。
-- 推送模型旁路以 System One 的 `isPush` 为准；缺少服务时退回正则预筛 `isGitPushRequest`。正则是纯离线兜底，不再是进入旁路的第一判断层。
+- Git 模型旁路以 System One 的 `gitAction` / `isPush` 为准；缺少服务时退回正则预筛 `isGitPushRequest`。正则是纯离线兜底，不再是进入旁路的第一判断层。
 - 精确 CLI 入口以 System One 选中的 `commandIndex` 为准；缺少服务时不执行零模型旁路。
 - System One 超时（默认 4 秒）、认证、限流、网络或协议错误全部由 `BuddyRouter` 捕获并 `diagnose`，随后使用本地兜底完成该回合，不阻断原生请求。
 - `buddySettingsSchema.jev`（默认开启）关闭时完全不调用 System One，退回本地兜底。

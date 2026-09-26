@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -21,10 +21,13 @@ import {
   type GitLogCommit,
   type GitLogRef,
   type GitWorkspaceStatus,
+  type GitSyncResult,
+  type GitSyncStrategy,
   gitCommitMessageSchema,
   gitFilePathSchema,
 } from "@codexhost/shared-contracts";
 import { readConnection } from "@codexhost/buddy-engine";
+import { readGitSubmoduleStatus } from "./git-submodule-status.js";
 
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -38,6 +41,61 @@ const LOG_SEPARATOR = "\u001e";
 const FIELD_SEPARATOR = "\u001f";
 const FAST_MESSAGE_MODEL = /(?:flash|fast|turbo|mini|nano|haiku|lite|small)/iu;
 
+function localizedGitError(detail: string): string {
+  if (/not a git repository/iu.test(detail)) {
+    return "当前目录不是 Git 仓库。";
+  }
+  if (/not a working tree/iu.test(detail)) {
+    return "当前目录不是 Git 工作区。";
+  }
+  if (
+    /no such remote|does not appear to be a git repository|repository .* does not exist/iu.test(
+      detail,
+    )
+  ) {
+    return "找不到 Git 远程仓库。";
+  }
+  if (
+    /could not read Username|Authentication failed|Permission denied|publickey|access denied/iu.test(
+      detail,
+    )
+  ) {
+    return "Git 认证失败，请检查凭据或远程仓库访问权限。";
+  }
+  if (
+    /could not resolve host|unable to access|Failed to connect|Connection timed out|network is unreachable/iu.test(
+      detail,
+    )
+  ) {
+    return "无法连接 Git 远程仓库，请检查网络后重试。";
+  }
+  if (/no upstream|no tracking information|has no upstream branch/iu.test(detail)) {
+    return "当前分支没有上游远程分支。";
+  }
+  if (/nothing to commit|no changes added to commit|nothing added to commit/iu.test(detail)) {
+    return "没有可提交的变更。";
+  }
+  if (/pathspec .* did not match|did not match any file/iu.test(detail)) {
+    return "指定的 Git 路径不存在或未被跟踪。";
+  }
+  if (/would be overwritten by merge/iu.test(detail)) {
+    return "合并会覆盖本地未提交的改动，请先处理这些文件。";
+  }
+  if (/would be overwritten by checkout/iu.test(detail)) {
+    return "切换分支会覆盖本地未提交的改动，请先处理这些文件。";
+  }
+  if (/cannot lock ref|unable to create .*lock|index\.lock|Another git process/iu.test(detail)) {
+    return "Git 仓库正被其他进程占用，请稍后重试。";
+  }
+  if (/CONFLICT|Automatic merge failed|fix conflicts/iu.test(detail)) {
+    return "Git 合并发生冲突，请解决冲突后重试。";
+  }
+  if (/fatal:|error:/iu.test(detail)) {
+    return detail.replace(/^(?:fatal|error):\s*/iu, "").trim() || "Git 操作失败。";
+  }
+  return detail;
+}
+
 export class GitWorkspaceError extends Error {
   constructor(
     message: string,
@@ -47,6 +105,22 @@ export class GitWorkspaceError extends Error {
   ) {
     super(message, options);
     this.name = "GitWorkspaceError";
+  }
+}
+
+/**
+ * 推送被远端拒绝（通常因为本地落后）。保留结构化信息，让路由层可以自动
+ * 进入"拉取并同步"，而不是把 raw git stderr 直接抛给用户。
+ */
+export class GitPushRejectedError extends GitWorkspaceError {
+  constructor(
+    message: string,
+    readonly behind: number,
+    stdout = "",
+    stderr = "",
+  ) {
+    super(message, stdout, stderr);
+    this.name = "GitPushRejectedError";
   }
 }
 
@@ -73,7 +147,7 @@ async function runGit(
     const failure = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
     const detail = (failure.stderr || failure.stdout || failure.message || "git failed").trim();
     throw new GitWorkspaceError(
-      detail.slice(0, 20_000),
+      localizedGitError(detail).slice(0, 20_000),
       failure.stdout ?? "",
       failure.stderr ?? "",
       { cause: error },
@@ -92,6 +166,24 @@ function isConflicted(indexStatus: string, workTreeStatus: string): boolean {
     (indexStatus === "A" && workTreeStatus === "A") ||
     (indexStatus === "D" && workTreeStatus === "D")
   );
+}
+
+// 判断是否存在未完成的合并或变基。直接依赖 git 的元数据目录，稳定且无需解析日志。
+async function operationState(
+  cwd: string,
+  git: (cwd: string, arguments_: readonly string[]) => Promise<CommandResult>,
+): Promise<"merge" | "rebase" | null> {
+  const [mergeHead, rebaseMerge, rebaseApply] = await Promise.all([
+    git(cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).catch(() => null),
+    git(cwd, ["rev-parse", "--git-path", "rebase-merge"]).catch(() => null),
+    git(cwd, ["rev-parse", "--git-path", "rebase-apply"]).catch(() => null),
+  ]);
+  if (mergeHead?.stdout.trim()) return "merge";
+  for (const candidate of [rebaseMerge, rebaseApply]) {
+    const directory = candidate?.stdout.trim();
+    if (directory && (await pathExists(directory))) return "rebase";
+  }
+  return null;
 }
 
 function parsePorcelainStatus(output: string): Array<Omit<GitChange, "submodule">> {
@@ -149,9 +241,9 @@ function absoluteGitPath(cwd: string, filePath: string): string {
 async function submodules(
   cwd: string,
   git: (cwd: string, arguments_: readonly string[]) => Promise<CommandResult> = runGit,
-): Promise<SubmoduleState[]> {
+): Promise<{ submodules: SubmoduleState[]; warnings: string[] }> {
   const [result, porcelain] = await Promise.all([
-    git(cwd, ["submodule", "status", "--recursive"]),
+    readGitSubmoduleStatus(cwd, git),
     git(cwd, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]),
   ]);
   const dirty = new Set(
@@ -159,7 +251,7 @@ async function submodules(
       .filter((change) => change.workTreeStatus === "M" || change.indexStatus === "M")
       .map((change) => change.path),
   );
-  return result.stdout
+  const modules = result.stdout
     .split("\n")
     .map((line) => line.trimEnd())
     .filter(Boolean)
@@ -184,6 +276,7 @@ async function submodules(
               : "current";
       return [{ path: gitFilePathSchema.parse(pathValue), status }];
     });
+  return { submodules: modules, warnings: result.warnings };
 }
 
 function parseBranch(header: string | undefined): BranchState {
@@ -208,8 +301,9 @@ function parseBranch(header: string | undefined): BranchState {
   const [local, tracking] = value.split("...", 2);
   const branch = local?.split(" ")[0] ?? null;
   const upstream = tracking?.split(" ")[0] ?? null;
-  const ahead = Number(/(?:^|\s)ahead (\d+)/u.exec(value)?.[1] ?? 0);
-  const behind = Number(/(?:^|\s)behind (\d+)/u.exec(value)?.[1] ?? 0);
+  // 计数出现在 `[ahead 2, behind 1]` 中，`behind` 前是 `[` 或空格而非单词边界。
+  const ahead = Number(/(?:^|[^a-z])ahead (\d+)/u.exec(value)?.[1] ?? 0);
+  const behind = Number(/(?:^|[^a-z])behind (\d+)/u.exec(value)?.[1] ?? 0);
   return {
     branch: branch || null,
     detached: false,
@@ -222,6 +316,22 @@ function parseBranch(header: string | undefined): BranchState {
 
 function absoluteWorkspace(cwd: string): string {
   return path.resolve(cwd);
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await stat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 远端拒绝推送时 git 的措辞在不同版本和传输层略有差异，这里统一识别常见的 non-fast-forward 信号。
+function isNonFastForward(detail: string): boolean {
+  return /non-fast-forward|fetch first|Updates were rejected|failed to push some refs|tip of your current branch is behind|cannot lock ref|stale info/iu.test(
+    detail,
+  );
 }
 
 function parseRefs(output: string): GitLogRef[] {
@@ -310,6 +420,7 @@ function parseCommitFiles(statusOutput: string, numberOutput: string): GitCommit
 
 export class GitWorkspace {
   #queue: Promise<unknown> = Promise.resolve();
+  readonly #mutations = new Map<string, Promise<unknown>>();
 
   constructor(private readonly environment: NodeJS.ProcessEnv = process.env) {}
 
@@ -319,6 +430,18 @@ export class GitWorkspace {
 
   async status(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#serial(() => this.#statusUnlocked(cwd));
+  }
+
+  async root(cwd: string): Promise<string | null> {
+    try {
+      const result = await this.#run(absoluteWorkspace(cwd), ["rev-parse", "--show-toplevel"]);
+      return realpath(result.stdout.trim());
+    } catch (error) {
+      if (error instanceof GitWorkspaceError && /not a git repository/u.test(error.message)) {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async diff(cwd: string, filePath: string): Promise<GitDiffResult> {
@@ -404,7 +527,7 @@ export class GitWorkspace {
   }
 
   async stage(cwd: string, paths: readonly string[]): Promise<GitWorkspaceStatus> {
-    return this.#serial(async () => {
+    return this.#mutation(cwd, ["stage", ...[...paths].sort()], async () => {
       const workspace = absoluteWorkspace(cwd);
       const validated = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       if (validated.length > 0) {
@@ -415,7 +538,7 @@ export class GitWorkspace {
   }
 
   async unstage(cwd: string, paths: readonly string[]): Promise<GitWorkspaceStatus> {
-    return this.#serial(async () => {
+    return this.#mutation(cwd, ["unstage", ...[...paths].sort()], async () => {
       const workspace = absoluteWorkspace(cwd);
       const validated = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       if (validated.length > 0) {
@@ -431,7 +554,7 @@ export class GitWorkspace {
     push: boolean,
     paths: readonly string[] = [],
   ): Promise<GitCommitResult> {
-    return this.#serial(async () => {
+    return this.#mutation(cwd, ["commit", message, push, [...paths].sort()], async () => {
       const workspace = absoluteWorkspace(cwd);
       const parsedMessage = gitCommitMessageSchema.parse(message);
       const validatedPaths = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
@@ -444,7 +567,7 @@ export class GitWorkspace {
       let pushed = false;
       let output = "";
       if (push) {
-        const result = await this.#run(workspace, ["push"]);
+        const result = await this.#pushUnlocked(workspace);
         pushed = true;
         output = result.stdout || result.stderr;
       }
@@ -459,33 +582,131 @@ export class GitWorkspace {
   }
 
   async push(cwd: string): Promise<GitWorkspaceStatus> {
-    return this.#serial(async () => {
+    return this.#mutation(cwd, ["push"], async () => {
       const workspace = absoluteWorkspace(cwd);
-      await this.#run(workspace, ["push"]);
+      await this.#pushUnlocked(workspace);
       return this.#statusUnlocked(workspace);
     });
   }
 
-  async submodules(cwd: string): Promise<{ submodules: GitSubmodule[] }> {
-    return this.#serial(async () => ({
-      submodules: await submodules(absoluteWorkspace(cwd), (worktree, arguments_) =>
+  /** 拉取远端引用，不改变工作区；供同步与状态刷新共用。 */
+  async fetch(cwd: string): Promise<GitWorkspaceStatus> {
+    return this.#mutation(cwd, ["fetch"], async () => {
+      const workspace = absoluteWorkspace(cwd);
+      await this.#fetchUnlocked(workspace);
+      return this.#statusUnlocked(workspace);
+    });
+  }
+
+  /**
+   * 拉取并同步当前分支与上游：先 fetch，再按可快进或合并把远端合入本地。
+   * 默认策略是 merge，保留双方历史；发生冲突时保留冲突工作区并返回冲突文件，
+   * 由上层交给模型消解，不做自动冲突合并。
+   */
+  async sync(cwd: string): Promise<GitSyncResult> {
+    return this.#mutation(cwd, ["sync"], async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const before = await this.#statusUnlocked(workspace);
+      const upstream = before.upstream;
+      if (!upstream) {
+        throw new GitWorkspaceError("当前分支没有上游远程分支，无法拉取同步。");
+      }
+      await this.#fetchUnlocked(workspace);
+      const fetched = await this.#statusUnlocked(workspace);
+      if (fetched.behind === 0) {
+        return {
+          strategy: "up-to-date",
+          behind: 0,
+          conflicts: [],
+          output: "远端没有新的提交，工作区已是最新。",
+          status: fetched,
+        };
+      }
+      const behind = fetched.behind;
+      // ahead 为 0 时可以快进，避免产生多余的合并提交；否则执行真正合并。
+      const strategy: GitSyncStrategy = fetched.ahead === 0 ? "fast-forward" : "merged";
+      try {
+        await this.#run(workspace, ["merge", "--no-edit", upstream]);
+      } catch (error) {
+        const failure = error as GitWorkspaceError;
+        const after = await this.#statusUnlocked(workspace);
+        if (after.conflicts.length > 0) {
+          return {
+            strategy: "conflict",
+            behind,
+            conflicts: after.conflicts,
+            output: (failure.stdout || failure.stderr || failure.message).trim(),
+            status: after,
+          };
+        }
+        throw error;
+      }
+      const after = await this.#statusUnlocked(workspace);
+      return {
+        strategy,
+        behind,
+        conflicts: [],
+        output:
+          strategy === "fast-forward"
+            ? `已快进到远端 ${behind} 个提交。`
+            : `已合并远端 ${behind} 个提交。`,
+        status: after,
+      };
+    });
+  }
+
+  /** 冲突消解并暂存后，提交合并结果。 */
+  async mergeContinue(cwd: string): Promise<GitWorkspaceStatus> {
+    return this.#mutation(cwd, ["merge-continue"], async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const operation = await operationState(workspace, (worktree, arguments_) =>
         this.#run(worktree, arguments_),
-      ),
-    }));
+      );
+      if (operation !== "merge") {
+        throw new GitWorkspaceError("当前没有进行中的合并，无法继续。");
+      }
+      const staged = (await this.#statusUnlocked(workspace)).conflicts.length === 0;
+      if (!staged) {
+        throw new GitWorkspaceError("仍有未解决的冲突文件，先解决并暂存后再继续合并。");
+      }
+      await this.#run(workspace, ["commit", "--no-edit"]);
+      return this.#statusUnlocked(workspace);
+    });
+  }
+
+  /** 放弃当前合并，恢复到合并前状态。 */
+  async mergeAbort(cwd: string): Promise<GitWorkspaceStatus> {
+    return this.#mutation(cwd, ["merge-abort"], async () => {
+      const workspace = absoluteWorkspace(cwd);
+      const operation = await operationState(workspace, (worktree, arguments_) =>
+        this.#run(worktree, arguments_),
+      );
+      if (!operation) {
+        throw new GitWorkspaceError("当前没有进行中的合并或变基，无法中止。");
+      }
+      await this.#run(workspace, [operation === "rebase" ? "rebase" : "merge", "--abort"]);
+      return this.#statusUnlocked(workspace);
+    });
+  }
+
+  async submodules(cwd: string): Promise<{ submodules: GitSubmodule[]; warnings: string[] }> {
+    return this.#serial(() =>
+      submodules(absoluteWorkspace(cwd), (worktree, arguments_) => this.#run(worktree, arguments_)),
+    );
   }
 
   async updateSubmodule(
     cwd: string,
     input: Pick<GitSubmoduleUpdateParams, "path" | "init">,
   ): Promise<GitWorkspaceStatus> {
-    return this.#serial(async () => {
+    return this.#mutation(cwd, ["submodule-update", input.path, input.init], async () => {
       const workspace = absoluteWorkspace(cwd);
       const pathValue = gitFilePathSchema.parse(input.path);
       absoluteGitPath(workspace, pathValue);
       const known = await submodules(workspace, (worktree, arguments_) =>
         this.#run(worktree, arguments_),
       );
-      if (!known.some((entry) => entry.path === pathValue)) {
+      if (!known.submodules.some((entry) => entry.path === pathValue)) {
         throw new GitWorkspaceError("所选路径不是已声明的 Git 子模块。");
       }
       await this.#run(workspace, [
@@ -728,10 +949,56 @@ export class GitWorkspace {
     });
   }
 
+  // 进行中的相同写操作共用结果；成功或失败后均允许用户显式重试。
+  #mutation<T>(cwd: string, input: readonly unknown[], operation: () => Promise<T>): Promise<T> {
+    const key = JSON.stringify([absoluteWorkspace(cwd), input]);
+    const existing = this.#mutations.get(key);
+    if (existing) return existing as Promise<T>;
+    const request = this.#serial(operation).finally(() => {
+      if (this.#mutations.get(key) === request) this.#mutations.delete(key);
+    });
+    this.#mutations.set(key, request);
+    return request;
+  }
+
   #serial<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.#queue.then(operation, operation);
     this.#queue = next.catch(() => undefined);
     return next;
+  }
+
+  async #fetchUnlocked(cwd: string): Promise<CommandResult> {
+    return this.#run(cwd, ["fetch", "--prune"]);
+  }
+
+  /**
+   * 推送当前分支；non-fast-forward 被拒时抛结构化错误并带上落后提交数，
+   * 让路由层可以自动进入"拉取并同步"或把冲突交给模型，而不是只显示 raw stderr。
+   */
+  async #pushUnlocked(cwd: string): Promise<CommandResult> {
+    try {
+      return await this.#run(cwd, ["push"]);
+    } catch (error) {
+      const failure = error as GitWorkspaceError;
+      const detail = `${failure.stdout}\n${failure.stderr}\n${failure.message}`;
+      if (isNonFastForward(detail)) {
+        let behind = 0;
+        try {
+          // 推送失败时本地跟踪引用可能还是旧的，先 fetch 才能得到真实落后提交数。
+          await this.#fetchUnlocked(cwd);
+          behind = (await this.#statusUnlocked(cwd)).behind;
+        } catch {
+          behind = 0;
+        }
+        throw new GitPushRejectedError(
+          "推送被远端拒绝：本地与远端已分叉，需要先拉取并同步。",
+          behind,
+          failure.stdout,
+          failure.stderr,
+        );
+      }
+      throw error;
+    }
   }
 
   async #isUntracked(cwd: string, filePath: string): Promise<boolean> {
@@ -810,26 +1077,31 @@ export class GitWorkspace {
 
   async #statusUnlocked(cwd: string): Promise<GitWorkspaceStatus> {
     const workspace = absoluteWorkspace(cwd);
-    const [{ stdout }, head, submoduleStates] = await Promise.all([
+    const [{ stdout }, head, submoduleStates, operation] = await Promise.all([
       this.#run(workspace, ["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"]),
       this.#run(workspace, ["rev-parse", "--short", "HEAD"]).catch(() => ({
         stdout: "",
         stderr: "",
       })),
       submodules(workspace, (worktree, arguments_) => this.#run(worktree, arguments_)),
+      operationState(workspace, (worktree, arguments_) => this.#run(worktree, arguments_)),
     ]);
     const records = stdout.split("\0");
     const header = records.find((record) => record.startsWith("## "));
     const branch = parseBranch(header);
+    const changes = parsePorcelainStatus(stdout).map((change) => ({
+      ...change,
+      submodule: submoduleStates.submodules.find((entry) => entry.path === change.path) ?? null,
+    }));
     return {
       workspace,
       ...branch,
       head: head.stdout.trim() || null,
-      changes: parsePorcelainStatus(stdout).map((change) => ({
-        ...change,
-        submodule: submoduleStates.find((entry) => entry.path === change.path) ?? null,
-      })),
-      submodules: submoduleStates,
+      changes,
+      submodules: submoduleStates.submodules,
+      warnings: submoduleStates.warnings,
+      operation,
+      conflicts: changes.filter((change) => change.conflicted).map((change) => change.path),
     };
   }
 }

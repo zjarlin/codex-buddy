@@ -30,6 +30,10 @@ import {
   type ProjectSyncAddParams,
   type ProjectSyncBindParams,
   type ProjectSyncCloneParams,
+  GIT_WORKFLOW_STATUS_METHOD,
+  GIT_WORKFLOW_RUN_METHOD,
+  gitWorkflowSnapshotSchema,
+  type GitWorkflowSnapshot,
   GIT_STATUS_METHOD,
   GIT_DIFF_METHOD,
   GIT_CONTENT_METHOD,
@@ -44,6 +48,10 @@ import {
   GIT_LOG_METHOD,
   GIT_COMMIT_DETAIL_METHOD,
   GIT_COMMIT_DIFF_METHOD,
+  GIT_FETCH_METHOD,
+  GIT_SYNC_METHOD,
+  GIT_MERGE_CONTINUE_METHOD,
+  GIT_MERGE_ABORT_METHOD,
   gitWorkspaceParamsSchema,
   gitDiffParamsSchema,
   gitContentParamsSchema,
@@ -58,6 +66,7 @@ import {
   gitDiffResultSchema,
   gitContentResultSchema,
   gitCommitResultSchema,
+  gitSyncResultSchema,
   gitMessageModelsSchema,
   gitGeneratedMessageSchema,
   gitSubmoduleListSchema,
@@ -73,6 +82,7 @@ import {
   type GitDiffResult,
   type GitContentResult,
   type GitCommitResult,
+  type GitSyncResult,
   type GitMessageModels,
   type GitGeneratedMessage,
   type GitSubmoduleList,
@@ -292,6 +302,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   addProjectSync?(input: ProjectSyncAddParams): Promise<ProjectSyncSnapshot>;
   bindProjectSync?(input: ProjectSyncBindParams): Promise<ProjectSyncSnapshot>;
   cloneProjectSync?(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot>;
+  inspectGitWorkflow?(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot>;
+  runGitWorkflow?(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot>;
   inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
   inspectGitContent?(input: GitContentParams): Promise<GitContentResult>;
@@ -299,6 +311,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   unstageGitPaths?(input: GitStageParams): Promise<GitWorkspaceStatus>;
   commitGit?(input: GitCommitParams): Promise<GitCommitResult>;
   pushGit?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  fetchGit?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  syncGit?(input: GitWorkspaceParams): Promise<GitSyncResult>;
+  continueGitMerge?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  abortGitMerge?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   listGitMessageModels?(input: GitWorkspaceParams): Promise<GitMessageModels>;
   generateGitMessage?(input: GitMessageGenerateParams): Promise<GitGeneratedMessage>;
   listGitSubmodules?(input: GitWorkspaceParams): Promise<GitSubmoduleList>;
@@ -566,6 +582,19 @@ export function createRendererModelClient(
         ),
       );
     },
+    async inspectGitWorkflow(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot> {
+      return gitWorkflowSnapshotSchema.parse(
+        await manager.sendRequest(
+          GIT_WORKFLOW_STATUS_METHOD,
+          gitWorkspaceParamsSchema.parse(input),
+        ),
+      );
+    },
+    async runGitWorkflow(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot> {
+      return gitWorkflowSnapshotSchema.parse(
+        await manager.sendRequest(GIT_WORKFLOW_RUN_METHOD, gitWorkspaceParamsSchema.parse(input)),
+      );
+    },
     async inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
       const params = gitWorkspaceParamsSchema.parse(input);
       return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_STATUS_METHOD, params));
@@ -593,6 +622,26 @@ export function createRendererModelClient(
     async pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
       const params = gitWorkspaceParamsSchema.parse(input);
       return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_PUSH_METHOD, params));
+    },
+    async fetchGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(await manager.sendRequest(GIT_FETCH_METHOD, params));
+    },
+    async syncGit(input: GitWorkspaceParams): Promise<GitSyncResult> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitSyncResultSchema.parse(await manager.sendRequest(GIT_SYNC_METHOD, params));
+    },
+    async continueGitMerge(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(
+        await manager.sendRequest(GIT_MERGE_CONTINUE_METHOD, params),
+      );
+    },
+    async abortGitMerge(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
+      const params = gitWorkspaceParamsSchema.parse(input);
+      return gitWorkspaceStatusSchema.parse(
+        await manager.sendRequest(GIT_MERGE_ABORT_METHOD, params),
+      );
     },
     async listGitMessageModels(input: GitWorkspaceParams): Promise<GitMessageModels> {
       const params = gitWorkspaceParamsSchema.parse(input);
@@ -638,9 +687,27 @@ export function createRendererModelClient(
     },
     async readWorkspaceFile(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult> {
       const params = workspaceFileReadParamsSchema.parse(input);
-      return workspaceFileReadResultSchema.parse(
-        await manager.sendRequest(WORKSPACE_FILES_READ_METHOD, params),
-      );
+      const result = await manager.sendRequest(WORKSPACE_FILES_READ_METHOD, params);
+      if (
+        typeof result === "object" &&
+        result !== null &&
+        !("revision" in result) &&
+        "content" in result &&
+        typeof result.content === "string"
+      ) {
+        // 兼容尚未发送 revision 的旧 Host，避免升级期间文件预览整体失败。
+        const digest = await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(result.content),
+        );
+        return workspaceFileReadResultSchema.parse({
+          ...result,
+          revision: Array.from(new Uint8Array(digest), (byte) =>
+            byte.toString(16).padStart(2, "0"),
+          ).join(""),
+        });
+      }
+      return workspaceFileReadResultSchema.parse(result);
     },
     async writeWorkspaceFile(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult> {
       const params = workspaceFileWriteParamsSchema.parse(input);

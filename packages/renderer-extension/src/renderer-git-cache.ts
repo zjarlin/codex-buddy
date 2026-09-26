@@ -43,7 +43,12 @@ export class RendererGitCache {
     }
   }
 
-  #read<T>(client: RendererGitClient, threadId: HostThreadId, key: string, read: () => Promise<T>): Promise<T> {
+  #read<T>(
+    client: RendererGitClient,
+    threadId: HostThreadId,
+    key: string,
+    read: () => Promise<T>,
+  ): Promise<T> {
     let entry = this.#find(client, threadId, key);
     if (entry?.request) return entry.request as Promise<T>;
     if (entry?.value !== undefined && entry.expiresAt > Date.now()) {
@@ -57,20 +62,24 @@ export class RendererGitCache {
       if (this.#entries.length > MAX_ENTRIES) this.#entries.shift();
     }
     const pending = entry;
-    const request = read().then((value) => {
-      // 已被写操作清理的请求可以完成，但不能重新填回缓存。
-      if (this.#entries.includes(pending)) this.#store(pending, value);
-      return value;
-    }).finally(() => {
-      delete pending.request;
-      if (pending.value === undefined) this.#remove(pending);
-    });
+    const request = read()
+      .then((value) => {
+        // 已被写操作清理的请求可以完成，但不能重新填回缓存。
+        if (this.#entries.includes(pending)) this.#store(pending, value);
+        return value;
+      })
+      .finally(() => {
+        delete pending.request;
+        if (pending.value === undefined) this.#remove(pending);
+      });
     pending.request = request;
     return request;
   }
 
   peekStatus(client: RendererGitClient, threadId: HostThreadId): GitWorkspaceStatus | null {
-    return this.#find(client, threadId, "status")?.value as GitWorkspaceStatus | undefined ?? null;
+    return (
+      (this.#find(client, threadId, "status")?.value as GitWorkspaceStatus | undefined) ?? null
+    );
   }
 
   status(client: RendererGitClient, threadId: HostThreadId): Promise<GitWorkspaceStatus> {

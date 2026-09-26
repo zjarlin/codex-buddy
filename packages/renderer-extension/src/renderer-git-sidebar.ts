@@ -10,6 +10,7 @@ import type {
   GitSubmoduleUpdateParams,
   GitWorkspaceParams,
   GitWorkspaceStatus,
+  GitSyncResult,
   HostThreadId,
   WorkspaceFileReadParams,
   WorkspaceFileReadResult,
@@ -18,6 +19,8 @@ import type {
   WorkspaceFilesListParams,
   WorkspaceFilesListResult,
 } from "@codexhost/shared-contracts";
+import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
+import { RendererGitCache } from "./renderer-git-cache.js";
 import { createRendererGitContent } from "./renderer-git-content.js";
 import {
   createRendererProjectSyncPanel,
@@ -38,6 +41,10 @@ export interface RendererGitClient {
     status: GitWorkspaceStatus;
   }>;
   pushGit(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  fetchGit?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  syncGit?(input: GitWorkspaceParams): Promise<GitSyncResult>;
+  continueGitMerge?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
+  abortGitMerge?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   listGitMessageModels(input: GitWorkspaceParams): Promise<{
     models: GitMessageModel[];
     defaultModel: string | null;
@@ -77,6 +84,10 @@ export const GIT_SIDEBAR_GENERATE_ATTRIBUTE = "data-codexhost-git-sidebar-genera
 export const GIT_SIDEBAR_COMMIT_ATTRIBUTE = "data-codexhost-git-sidebar-commit";
 export const GIT_SIDEBAR_COMMIT_PUSH_ATTRIBUTE = "data-codexhost-git-sidebar-commit-push";
 export const GIT_SIDEBAR_PUSH_ATTRIBUTE = "data-codexhost-git-sidebar-push";
+export const GIT_SIDEBAR_SYNC_ATTRIBUTE = "data-codexhost-git-sidebar-sync";
+export const GIT_SIDEBAR_CONFLICT_ATTRIBUTE = "data-codexhost-git-sidebar-conflict";
+export const GIT_SIDEBAR_MERGE_CONTINUE_ATTRIBUTE = "data-codexhost-git-sidebar-merge-continue";
+export const GIT_SIDEBAR_MERGE_ABORT_ATTRIBUTE = "data-codexhost-git-sidebar-merge-abort";
 
 const SIDEBAR_THREAD_ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
 const APP_SIDEBAR_SELECTOR = "#app-shell-sidebar";
@@ -104,14 +115,16 @@ interface GitDirectory {
   path: string;
   directories: Map<string, GitDirectory>;
   changes: GitChange[];
+  count: number;
 }
 
 function buildGitTree(changes: readonly GitChange[]): GitDirectory {
-  const root: GitDirectory = { name: "", path: "", directories: new Map(), changes: [] };
+  const root: GitDirectory = { name: "", path: "", directories: new Map(), changes: [], count: 0 };
   for (const change of changes) {
     const parts = change.path.split("/").filter(Boolean);
     const name = parts.pop();
     if (!name) continue;
+    root.count += 1;
     let directory = root;
     for (const part of parts) {
       let child = directory.directories.get(part);
@@ -121,9 +134,11 @@ function buildGitTree(changes: readonly GitChange[]): GitDirectory {
           path: directory.path ? `${directory.path}/${part}` : part,
           directories: new Map(),
           changes: [],
+          count: 0,
         };
         directory.directories.set(part, child);
       }
+      child.count += 1;
       directory = child;
     }
     directory.changes.push(change);
@@ -242,13 +257,14 @@ export function installRendererGitSidebar(options: {
   const shadow = root.attachShadow({ mode: "open" });
   const style = document.createElement("style");
   style.textContent = `
+    ${gitButtonLoadingStyles}
     :host { display:block; position:absolute; z-index:4; inset:0; min-width:0; min-height:0; pointer-events:none; }
     .codexhost-git-shell { display:contents; color:var(--text-primary,inherit); }
     .codexhost-git-rail { position:absolute; z-index:2; inset:0 auto 0 0; display:flex; width:38px; flex-direction:column; align-items:center; gap:6px; padding:8px 3px; background:var(--surface-primary,transparent); border-right:1px solid var(--border-default, color-mix(in srgb,currentColor 14%,transparent)); pointer-events:auto; }
     .codexhost-git-rail button { display:grid; place-items:center; width:28px; height:28px; padding:0; color:inherit; background:transparent; border:0; border-radius:6px; cursor:pointer; opacity:.68; }
     .codexhost-git-rail button:hover, .codexhost-git-rail button[aria-current="page"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
     .codexhost-git-panel { position:absolute; inset:0 0 0 38px; display:flex; min-width:0; flex-direction:column; overflow:hidden; background:var(--surface-primary,inherit); pointer-events:auto; }
-    .codexhost-git-panel[hidden], .codexhost-git-head[hidden], .codexhost-git-branch[hidden], .codexhost-git-projects[hidden], .codexhost-git-workspace[hidden], .codexhost-git-commit-box[hidden], .codexhost-git-modules[hidden] { display:none; }
+    .codexhost-git-panel[hidden], .codexhost-git-head[hidden], .codexhost-git-branch[hidden], .codexhost-git-conflict[hidden], .codexhost-git-projects[hidden], .codexhost-git-workspace[hidden], .codexhost-git-commit-box[hidden], .codexhost-git-modules[hidden] { display:none; }
     .codexhost-git-head { display:flex; align-items:center; min-height:38px; gap:4px; padding:5px 8px; font-size:12px; font-weight:600; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 12%,transparent)); }
     .codexhost-git-heading { min-width:0; flex:1; padding-left:4px; }
     .codexhost-git-project { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
@@ -257,6 +273,12 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-head button:hover, .codexhost-git-head button[aria-selected="true"] { background:color-mix(in srgb,currentColor 10%,transparent); }
     .codexhost-git-head button:disabled { cursor:default; opacity:.4; }
     .codexhost-git-branch { display:flex; gap:8px; padding:7px 10px; color:inherit; font-size:11px; opacity:.7; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
+    .codexhost-git-conflict { display:flex; align-items:center; gap:8px; padding:6px 10px; color:inherit; font-size:11px; line-height:1.35; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); background:color-mix(in srgb,currentColor 7%,transparent); }
+    .codexhost-git-conflict-text { min-width:0; flex:1; }
+    .codexhost-git-conflict-actions { display:flex; flex:none; gap:4px; }
+    .codexhost-git-conflict-actions button { min-height:22px; padding:2px 8px; color:inherit; background:transparent; border:1px solid color-mix(in srgb,currentColor 24%,transparent); border-radius:5px; cursor:pointer; font-size:11px; }
+    .codexhost-git-conflict-actions button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 12%,transparent); }
+    .codexhost-git-conflict-actions button:disabled { cursor:default; opacity:.4; }
     .codexhost-git-workspace { display:flex; min-height:0; flex:1; flex-direction:column; }
     .codexhost-git-status-tabs { display:flex; align-items:center; min-height:32px; padding:2px 5px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
     .codexhost-git-status-tab { display:flex; align-items:center; min-height:26px; gap:4px; padding:3px 7px; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; font-size:11px; opacity:.65; }
@@ -350,6 +372,25 @@ export function installRendererGitSidebar(options: {
   head.append(heading, refresh);
   const branch = document.createElement("div");
   branch.className = "codexhost-git-branch";
+  // 冲突/合并进行中横幅：说明当前处于合并态并提供继续或中止；仅在有操作时显示。
+  const conflictBanner = document.createElement("div");
+  conflictBanner.className = "codexhost-git-conflict";
+  conflictBanner.hidden = true;
+  conflictBanner.setAttribute(GIT_SIDEBAR_CONFLICT_ATTRIBUTE, "v1");
+  const conflictText = document.createElement("span");
+  conflictText.className = "codexhost-git-conflict-text";
+  const conflictActions = document.createElement("div");
+  conflictActions.className = "codexhost-git-conflict-actions";
+  const mergeContinue = document.createElement("button");
+  mergeContinue.type = "button";
+  mergeContinue.textContent = "解决并继续";
+  mergeContinue.setAttribute(GIT_SIDEBAR_MERGE_CONTINUE_ATTRIBUTE, "v1");
+  const mergeAbort = document.createElement("button");
+  mergeAbort.type = "button";
+  mergeAbort.textContent = "中止合并";
+  mergeAbort.setAttribute(GIT_SIDEBAR_MERGE_ABORT_ATTRIBUTE, "v1");
+  conflictActions.append(mergeContinue, mergeAbort);
+  conflictBanner.append(conflictText, conflictActions);
   const workspace = document.createElement("div");
   workspace.className = "codexhost-git-workspace";
   const statusTabs = document.createElement("div");
@@ -425,7 +466,11 @@ export function installRendererGitSidebar(options: {
   push.type = "button";
   push.textContent = "推送";
   push.setAttribute(GIT_SIDEBAR_PUSH_ATTRIBUTE, "v1");
-  commitActions.append(stageAll, commit, commitPush, push);
+  const sync = document.createElement("button");
+  sync.type = "button";
+  sync.textContent = "拉取并同步";
+  sync.setAttribute(GIT_SIDEBAR_SYNC_ATTRIBUTE, "v1");
+  commitActions.append(stageAll, commit, commitPush, push, sync);
   const notice = document.createElement("p");
   notice.className = "codexhost-git-notice";
   notice.hidden = true;
@@ -443,7 +488,14 @@ export function installRendererGitSidebar(options: {
     getClient: () => options.getProjectSyncClient?.() ?? null,
     ...(options.signal ? { signal: options.signal } : {}),
   });
-  panel.append(head, branch, commitBox, workspace);
+  const warnings = document.createElement("p");
+  warnings.className = "codexhost-git-notice";
+  warnings.style.padding = "6px 9px";
+  warnings.style.whiteSpace = "pre-line";
+  warnings.setAttribute("role", "status");
+  warnings.setAttribute("data-codexhost-git-warnings", "v1");
+  warnings.hidden = true;
+  panel.append(head, branch, warnings, conflictBanner, commitBox, workspace);
   shell.append(rail, panel);
   shadow.append(style, shell);
 
@@ -452,9 +504,52 @@ export function installRendererGitSidebar(options: {
   let current: GitWorkspaceStatus | null = null;
   let selectedChange: string | null = null;
   let changeTab: "changes" | "staged" = "changes";
-  let treeView = false;
-  const collapsedDirectories = new Set<string>();
-  let busy = false;
+  let treeView = true;
+  const expandedDirectories = new Set<string>();
+  let expansionRevision = 0;
+  let renderedList: {
+    status: GitWorkspaceStatus | null;
+    tab: string;
+    tree: boolean;
+    expansion: number;
+  } | null = null;
+  const cache = new RendererGitCache();
+  let warmTimer: ReturnType<typeof setTimeout> | undefined;
+  refresh.dataset.gitAction = "refresh";
+  stageAll.dataset.gitAction = "stage-all";
+  generate.dataset.gitAction = "generate";
+  commit.dataset.gitAction = "commit";
+  commitPush.dataset.gitAction = "commit-push";
+  push.dataset.gitAction = "push";
+  sync.dataset.gitAction = "sync";
+  mergeContinue.dataset.gitAction = "merge-continue";
+  mergeAbort.dataset.gitAction = "merge-abort";
+  const pending = new WeakMap<RendererGitClient, Map<HostThreadId, string>>();
+  const pendingAction = (): string | undefined => {
+    const { client, threadId } = options.getContext();
+    return client && threadId ? pending.get(client)?.get(threadId) : undefined;
+  };
+  const isBusy = (): boolean => pendingAction() !== undefined;
+  const beginAction = (request: RendererGitContext, action: string): void => {
+    if (!request.client || !request.threadId) return;
+    let actions = pending.get(request.client);
+    if (!actions) {
+      actions = new Map();
+      pending.set(request.client, actions);
+    }
+    actions.set(request.threadId, action);
+  };
+  const finishAction = (request: RendererGitContext): void => {
+    if (!request.client || !request.threadId) return;
+    pending.get(request.client)?.delete(request.threadId);
+    if (disposed) return;
+    const active = context();
+    if (active.client === request.client && active.threadId === request.threadId) {
+      current = cache.peekStatus(request.client, request.threadId) ?? current;
+      if (!modelsLoaded) void loadModels();
+      render();
+    }
+  };
   let modelsLoaded = false;
   let generation = 0;
   let disposed = false;
@@ -470,13 +565,21 @@ export function installRendererGitSidebar(options: {
         if (!request.threadId || !request.client?.writeWorkspaceFile) {
           throw new Error("当前工作区不支持写入文件。");
         }
-        const result = await request.client.writeWorkspaceFile({
-          threadId: request.threadId,
-          path: selectedChange ?? "",
-          content: value,
-          expectedRevision: revision,
-        });
-        return { revision: result.revision };
+        if (isBusy()) throw new Error("请等待当前 Git 操作完成。");
+        beginAction(request, `save:${selectedChange}`);
+        updateBusy();
+        try {
+          const result = await request.client.writeWorkspaceFile({
+            threadId: request.threadId,
+            path: selectedChange ?? "",
+            content: value,
+            expectedRevision: revision,
+          });
+          cache.invalidate(request.client);
+          return { revision: result.revision };
+        } finally {
+          finishAction(request);
+        }
       },
     },
     onClose() {
@@ -517,13 +620,13 @@ export function installRendererGitSidebar(options: {
     contextGeneration += 1;
     generation += 1;
     contentView.close();
-    current = null;
-    busy = false;
+    current = next.client && next.threadId ? cache.peekStatus(next.client, next.threadId) : null;
     modelsLoaded = false;
     model.replaceChildren();
     message.value = "";
     changeTab = "changes";
-    collapsedDirectories.clear();
+    expandedDirectories.clear();
+    expansionRevision += 1;
     setNotice("");
     render();
     return true;
@@ -588,7 +691,7 @@ export function installRendererGitSidebar(options: {
     projectName.textContent = workspacePath
       ? (workspacePath.split(/[/\\]/u).filter(Boolean).at(-1) ?? workspacePath)
       : context().threadId
-        ? busy
+        ? isBusy()
           ? "正在读取项目…"
           : "未检测到工作区"
         : "未选择项目";
@@ -600,6 +703,35 @@ export function installRendererGitSidebar(options: {
       : context().threadId
         ? "未检测到工作区"
         : "未选择项目";
+    warnings.textContent = current?.warnings?.join("\n") ?? "";
+    warnings.hidden = !warnings.textContent;
+    const operation = current?.operation ?? null;
+    const conflicts = current?.conflicts ?? [];
+    conflictBanner.hidden = operation === null;
+    if (operation !== null) {
+      const label = operation === "rebase" ? "变基" : "合并";
+      conflictText.textContent =
+        conflicts.length > 0
+          ? `${label}进行中：${conflicts.length} 个冲突文件待解决。把冲突交给 AI 解决后回到此处继续。`
+          : `${label}进行中：冲突已解决，可继续完成${label}。`;
+      mergeContinue.disabled = isBusy() || conflicts.length > 0;
+      mergeAbort.disabled = isBusy();
+    }
+    if (
+      renderedList?.status === current &&
+      renderedList.tab === changeTab &&
+      renderedList.tree === treeView &&
+      renderedList.expansion === expansionRevision
+    ) {
+      updateBusy();
+      return;
+    }
+    renderedList = {
+      status: current,
+      tab: changeTab,
+      tree: treeView,
+      expansion: expansionRevision,
+    };
     list.replaceChildren();
     submoduleList.replaceChildren(submoduleTitle);
     const entries = current?.changes ?? [];
@@ -622,6 +754,7 @@ export function installRendererGitSidebar(options: {
     ): void => {
       const row = document.createElement("div");
       row.className = "codexhost-git-change";
+      row.dataset.path = change.path;
       row.setAttribute("aria-selected", String(selectedChange === change.path));
       row.title = change.originalPath ? `${change.originalPath} → ${change.path}` : change.path;
       const name = document.createElement("span");
@@ -636,7 +769,8 @@ export function installRendererGitSidebar(options: {
         action === "stage" ? "M12 5v14M5 12h14" : "M5 12h14",
       );
       actionButton.className = "codexhost-git-change-action";
-      actionButton.disabled = busy;
+      actionButton.dataset.gitAction = `${action}:${change.path}`;
+      actionButton.disabled = isBusy();
       actionButton.setAttribute(
         action === "stage" ? GIT_SIDEBAR_STAGE_ATTRIBUTE : GIT_SIDEBAR_UNSTAGE_ATTRIBUTE,
         "v1",
@@ -658,13 +792,11 @@ export function installRendererGitSidebar(options: {
         left.name.localeCompare(right.name, "zh-CN", { numeric: true }),
       );
       for (const child of children) {
-        const count = (value: GitDirectory): number =>
-          value.changes.length +
-          [...value.directories.values()].reduce((total, nested) => total + count(nested), 0);
-        const collapsed = collapsedDirectories.has(child.path);
+        const collapsed = !expandedDirectories.has(child.path);
         const row = document.createElement("button");
         row.type = "button";
         row.className = "codexhost-git-directory";
+        row.title = child.path;
         row.style.paddingLeft = `${8 + depth * 12}px`;
         row.setAttribute("aria-expanded", String(!collapsed));
         const icon = document.createElement("span");
@@ -674,13 +806,14 @@ export function installRendererGitSidebar(options: {
         name.textContent = child.name;
         const badge = document.createElement("span");
         badge.className = "codexhost-git-directory-count";
-        badge.textContent = String(count(child));
+        badge.textContent = String(child.count);
         row.append(icon, name, badge);
         row.addEventListener(
           "click",
           () => {
-            if (collapsed) collapsedDirectories.delete(child.path);
-            else collapsedDirectories.add(child.path);
+            if (collapsed) expandedDirectories.add(child.path);
+            else expandedDirectories.delete(child.path);
+            expansionRevision += 1;
             render();
           },
           listenerOptions,
@@ -721,8 +854,10 @@ export function installRendererGitSidebar(options: {
       const update = document.createElement("button");
       update.type = "button";
       update.textContent = submodule.status === "uninitialized" ? "初始化" : "更新";
+      update.dataset.gitAction = `submodule:${submodule.path}`;
+      update.dataset.current = String(submodule.status === "current");
       update.disabled =
-        busy || submodule.status === "current" || !context().client?.updateGitSubmodule;
+        isBusy() || submodule.status === "current" || !context().client?.updateGitSubmodule;
       update.addEventListener(
         "click",
         () => void updateSubmodule(submodule.path, submodule.status === "uninitialized"),
@@ -744,10 +879,11 @@ export function installRendererGitSidebar(options: {
     render();
     contentView.showDiff(pathValue, { path: pathValue, diff: "", truncated: false });
     try {
-      const [result, content] = await Promise.all([
-        request.client.inspectGitDiff({ threadId: request.threadId, path: pathValue }),
-        request.client.inspectGitContent({ threadId: request.threadId, path: pathValue }),
-      ]);
+      const { diff: result, content } = await cache.diff(
+        request.client,
+        request.threadId,
+        pathValue,
+      );
       if (isCurrentRequest(request) && requestGeneration === contentGeneration) {
         contentView.showDiff(pathValue, result, content);
         contentView.setStageHandler(() => updateStaged(pathValue, true));
@@ -768,24 +904,54 @@ export function installRendererGitSidebar(options: {
     notice.hidden = value.length === 0;
   };
 
+  const syncNotice = (result: GitSyncResult): string => {
+    switch (result.strategy) {
+      case "up-to-date":
+        return "远端没有新的提交，已是最新。";
+      case "fast-forward":
+        return `已快进合入远端 ${result.behind} 个提交。`;
+      case "merged":
+        return `已合并远端 ${result.behind} 个提交。`;
+      case "conflict":
+        return `同步产生冲突，${result.conflicts.length} 个文件需要解决；交给 AI 解决后在本面板继续合并。`;
+    }
+  };
+
   function updateBusy(): void {
     const client = context().client;
     const hasCommittable = current?.changes.some((change) => !change.conflicted) ?? false;
     stageAll.disabled =
-      busy || !client || !(current?.changes.some((change) => !change.conflicted) ?? false);
-    generate.disabled = busy || !client || !modelsLoaded || !model.value;
-    commit.disabled = busy || !client || !hasCommittable;
+      isBusy() || !client || !(current?.changes.some((change) => !change.conflicted) ?? false);
+    generate.disabled = isBusy() || !client || !modelsLoaded || !model.value;
+    commit.disabled = isBusy() || !client || !hasCommittable;
     commitPush.disabled = commit.disabled;
-    push.disabled = busy || !client;
-    model.disabled = busy || !modelsLoaded;
-    refresh.disabled = busy;
+    push.disabled = isBusy() || !client;
+    sync.disabled = isBusy() || !client?.syncGit;
+    model.disabled = isBusy() || !modelsLoaded;
+    refresh.disabled = isBusy() || !client;
+    mergeContinue.disabled =
+      isBusy() || !client?.continueGitMerge || (current?.conflicts?.length ?? 0) > 0;
+    mergeAbort.disabled = isBusy() || !client?.abortGitMerge;
+    contentView.setBusy(isBusy());
+    for (const button of shadow.querySelectorAll<HTMLButtonElement>("button[data-git-action]")) {
+      button.setAttribute("aria-busy", String(button.dataset.gitAction === pendingAction()));
+    }
+    for (const row of list.querySelectorAll<HTMLElement>(".codexhost-git-change")) {
+      row.setAttribute("aria-selected", String(row.dataset.path === selectedChange));
+      const action = row.querySelector<HTMLButtonElement>("button");
+      if (action) action.disabled = isBusy() || !client;
+    }
+    for (const button of submoduleList.querySelectorAll<HTMLButtonElement>("button")) {
+      button.disabled =
+        isBusy() || !client?.updateGitSubmodule || button.dataset.current === "true";
+    }
   }
 
   const loadModels = async (): Promise<void> => {
     const request = context();
     if (!request.threadId || !request.client) return;
     try {
-      const result = await request.client.listGitMessageModels({ threadId: request.threadId });
+      const result = await cache.models(request.client, request.threadId);
       if (!isCurrentRequest(request)) return;
       model.replaceChildren();
       for (const item of result.models.filter((candidate) => candidate.eligible)) {
@@ -806,44 +972,33 @@ export function installRendererGitSidebar(options: {
     }
   };
 
-  const reloadWorkspace = async (): Promise<void> => {
-    const request = context();
-    if (!request.threadId || !request.client) return;
-    const status = await request.client.inspectGitStatus({ threadId: request.threadId });
-    if (!isCurrentRequest(request)) return;
-    current = status;
-    render();
-  };
-
   const updateStaged = async (pathValue: string, stage: boolean): Promise<void> => {
     const request = context();
-    if (!request.threadId || !request.client || busy) return;
-    busy = true;
+    if (!request.threadId || !request.client || isBusy()) return;
+    generation += 1;
+    beginAction(request, stage ? `stage:${pathValue}` : `unstage:${pathValue}`);
     setNotice("");
     render();
     try {
-      await (stage ? request.client.stageGitPaths : request.client.unstageGitPaths)({
+      const status = await (stage ? request.client.stageGitPaths : request.client.unstageGitPaths)({
         threadId: request.threadId,
         paths: [pathValue],
       });
+      cache.update(request.client, request.threadId, status);
       if (!isCurrentRequest(request)) return;
-      await reloadWorkspace();
-      if (!isCurrentRequest(request)) return;
+      current = status;
       setNotice(stage ? "已暂存文件。" : "已取消暂存。");
     } catch (error) {
       if (!isCurrentRequest(request)) return;
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
-      if (isCurrentRequest(request)) {
-        busy = false;
-        render();
-      }
+      finishAction(request);
     }
   };
 
   const submit = async (pushAfterCommit: boolean): Promise<void> => {
     const request = context();
-    if (busy) return;
+    if (isBusy()) return;
     if (!request.threadId || !request.client) {
       setNotice("未选择可用的 Git 工作区。");
       render();
@@ -869,7 +1024,8 @@ export function installRendererGitSidebar(options: {
       return;
     }
     const commitMessage = message.value;
-    busy = true;
+    generation += 1;
+    beginAction(request, pushAfterCommit ? "commit-push" : "commit");
     setNotice(
       pushAfterCommit
         ? `正在提交${stagedPaths.length > 0 ? "已暂存" : "当前"}变更并推送…`
@@ -878,27 +1034,25 @@ export function installRendererGitSidebar(options: {
     render();
     try {
       if (stagedPaths.length === 0) {
-        await request.client.stageGitPaths({ threadId: request.threadId, paths });
+        const staged = await request.client.stageGitPaths({ threadId: request.threadId, paths });
+        cache.update(request.client, request.threadId, staged);
+        if (isCurrentRequest(request)) current = staged;
       }
       if (!isCurrentRequest(request)) return;
       const result = await request.client.commitGit({
         threadId: request.threadId,
         message: commitMessage,
-        // Commit the index after explicitly staging the selected paths.
-        // Passing paths here would use Git's pathspec commit mode and bypass
-        // the index semantics that the two-stage UI exposes to the user.
+        // 已显式暂存目标文件；提交索引，避免 pathspec 提交绕过暂存区语义。
         paths: [],
         push: pushAfterCommit,
       });
+      cache.update(request.client, request.threadId, result.status);
       if (!isCurrentRequest(request)) return;
       current = result.status;
       contentView.close();
+      expandedDirectories.clear();
+      expansionRevision += 1;
       message.value = "";
-      busy = false;
-      render();
-      if (!isCurrentRequest(request)) return;
-      await load(true);
-      if (!isCurrentRequest(request)) return;
       const pushed = pushAfterCommit || result.pushed;
       const commitLabel = result.commit ? ` (${result.commit})` : "";
       setNotice((pushed ? `已提交${commitLabel}并推送。` : `已提交${commitLabel}。`).trim());
@@ -906,16 +1060,13 @@ export function installRendererGitSidebar(options: {
       if (!isCurrentRequest(request)) return;
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
-      if (isCurrentRequest(request)) {
-        busy = false;
-        render();
-      }
+      finishAction(request);
     }
   };
 
   const load = async (force = false): Promise<void> => {
     syncContext();
-    if (disposed || view === "projects" || view === "devices" || (busy && !force)) return;
+    if (disposed || view === "files" || view === "devices" || isBusy()) return;
     const request = context();
     if (!request.threadId || !request.client) {
       current = null;
@@ -923,38 +1074,22 @@ export function installRendererGitSidebar(options: {
       return;
     }
     const requestGeneration = ++generation;
-    const initialContentGeneration = contentGeneration;
-    busy = true;
+    if (force) cache.invalidate(request.client);
+    current = cache.peekStatus(request.client, request.threadId);
+    beginAction(request, "refresh");
     render();
     try {
-      const status = await request.client.inspectGitStatus({ threadId: request.threadId });
+      const status = await cache.status(request.client, request.threadId);
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       current = status;
-      if (!modelsLoaded) void loadModels();
-      busy = false;
-      updateBusy();
       render();
-      const first = status.changes[0];
-      if (
-        view === "commits" &&
-        first &&
-        selectedChange === null &&
-        initialContentGeneration === contentGeneration
-      ) {
-        await openDiff(first.path);
-      }
     } catch (error) {
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       current = null;
       setNotice(error instanceof Error ? error.message : String(error));
-      busy = false;
-      updateBusy();
       render();
     } finally {
-      if (isCurrentRequest(request) && requestGeneration === generation) {
-        busy = false;
-        updateBusy();
-      }
+      finishAction(request);
     }
   };
 
@@ -963,24 +1098,21 @@ export function installRendererGitSidebar(options: {
     const client = request.client;
     const threadId = request.threadId as HostThreadId | null;
     const update = client?.updateGitSubmodule;
-    if (!threadId || !update) return;
-    busy = true;
+    if (!threadId || !update || isBusy()) return;
+    generation += 1;
+    beginAction(request, `submodule:${pathValue}`);
     updateBusy();
     render();
     try {
-      await update({ threadId, path: pathValue, init: initialize });
+      const status = await update({ threadId, path: pathValue, init: initialize });
+      if (client) cache.update(client, threadId, status);
       if (!isCurrentRequest(request)) return;
-      await load(true);
-      if (!isCurrentRequest(request)) return;
+      current = status;
     } catch (error) {
       if (isCurrentRequest(request))
         setNotice(error instanceof Error ? error.message : String(error));
     } finally {
-      if (isCurrentRequest(request)) {
-        busy = false;
-        updateBusy();
-        render();
-      }
+      finishAction(request);
     }
   };
 
@@ -990,7 +1122,6 @@ export function installRendererGitSidebar(options: {
       contentView.close();
       view = "projects";
       filesView.deactivate();
-      generation += 1;
       render();
     },
     listenerOptions,
@@ -1035,7 +1166,6 @@ export function installRendererGitSidebar(options: {
     () => {
       contentView.close();
       view = "devices";
-      generation += 1;
       render();
       projectSyncView.refresh();
     },
@@ -1046,7 +1176,6 @@ export function installRendererGitSidebar(options: {
     () => {
       contentView.close();
       view = "files";
-      generation += 1;
       render();
       syncOfficialPanelState();
     },
@@ -1060,7 +1189,16 @@ export function installRendererGitSidebar(options: {
     },
     listenerOptions,
   );
-  refresh.addEventListener("click", () => void load(), listenerOptions);
+  refresh.addEventListener(
+    "click",
+    () => {
+      if (isBusy()) return;
+      contentView.close();
+      setNotice("");
+      void load(true);
+    },
+    listenerOptions,
+  );
   message.addEventListener(
     "input",
     () => {
@@ -1073,20 +1211,22 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!request.threadId || !request.client || !current || busy) return;
+      if (!request.threadId || !request.client || !current || isBusy()) return;
       const paths = current.changes
         .filter((change) => !change.conflicted && (!change.staged || change.unstaged))
         .map((change) => change.path);
       if (!paths.length) return;
-      busy = true;
+      generation += 1;
+      beginAction(request, "stage-all");
       setNotice("");
       render();
       void request.client
         .stageGitPaths({ threadId: request.threadId, paths })
-        .then(async () => {
+        .then((status) => {
+          if (request.client && request.threadId)
+            cache.update(request.client, request.threadId, status);
           if (!isCurrentRequest(request)) return;
-          await reloadWorkspace();
-          if (!isCurrentRequest(request)) return;
+          current = status;
           setNotice("已暂存全部变更。");
         })
         .catch((error) => {
@@ -1094,10 +1234,7 @@ export function installRendererGitSidebar(options: {
             setNotice(error instanceof Error ? error.message : String(error));
         })
         .finally(() => {
-          if (isCurrentRequest(request)) {
-            busy = false;
-            render();
-          }
+          finishAction(request);
         });
     },
     listenerOptions,
@@ -1106,8 +1243,9 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!request.threadId || !request.client || !model.value || busy) return;
-      busy = true;
+      if (!request.threadId || !request.client || !model.value || isBusy()) return;
+      generation += 1;
+      beginAction(request, "generate");
       setNotice("正在生成提交消息…");
       render();
       void request.client
@@ -1127,10 +1265,7 @@ export function installRendererGitSidebar(options: {
             setNotice(error instanceof Error ? error.message : String(error));
         })
         .finally(() => {
-          if (isCurrentRequest(request)) {
-            busy = false;
-            render();
-          }
+          finishAction(request);
         });
     },
     listenerOptions,
@@ -1141,18 +1276,21 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!request.threadId || !request.client || busy) return;
-      busy = true;
+      if (!request.threadId || !request.client || isBusy()) return;
+      generation += 1;
+      beginAction(request, "push");
       setNotice("正在推送…");
       render();
       void request.client
         .pushGit({ threadId: request.threadId })
-        .then(async () => {
+        .then((status) => {
+          if (request.client && request.threadId)
+            cache.update(request.client, request.threadId, status);
           if (!isCurrentRequest(request)) return;
-          await reloadWorkspace();
-          if (!isCurrentRequest(request)) return;
-          await load(true);
-          if (!isCurrentRequest(request)) return;
+          current = status;
+          contentView.close();
+          expandedDirectories.clear();
+          expansionRevision += 1;
           setNotice("已推送。");
         })
         .catch((error) => {
@@ -1160,11 +1298,103 @@ export function installRendererGitSidebar(options: {
             setNotice(error instanceof Error ? error.message : String(error));
         })
         .finally(() => {
-          if (isCurrentRequest(request)) {
-            busy = false;
-            render();
-          }
+          finishAction(request);
         });
+    },
+    listenerOptions,
+  );
+
+  // 拉取并同步：远端有新提交时快进或合并；发生冲突时保留合并态并提示交给 AI 解决。
+  sync.addEventListener(
+    "click",
+    () => {
+      const request = context();
+      const client = request.client;
+      if (!request.threadId || !client?.syncGit || isBusy()) return;
+      generation += 1;
+      beginAction(request, "sync");
+      setNotice("正在拉取并同步…");
+      render();
+      void client
+        .syncGit({ threadId: request.threadId })
+        .then((result) => {
+          if (client && request.threadId) cache.update(client, request.threadId, result.status);
+          if (!isCurrentRequest(request)) return;
+          current = result.status;
+          contentView.close();
+          expandedDirectories.clear();
+          expansionRevision += 1;
+          setNotice(syncNotice(result));
+        })
+        .catch((error) => {
+          if (isCurrentRequest(request))
+            setNotice(error instanceof Error ? error.message : String(error));
+        })
+        .finally(() => {
+          finishAction(request);
+        });
+    },
+    listenerOptions,
+  );
+
+  const finishOperation = async (
+    run: () => Promise<GitWorkspaceStatus>,
+    pending: string,
+    done: string,
+    action: string,
+  ): Promise<void> => {
+    const request = context();
+    const client = request.client;
+    if (!request.threadId || !client || isBusy()) return;
+    generation += 1;
+    beginAction(request, action);
+    setNotice(pending);
+    render();
+    try {
+      const status = await run();
+      cache.update(client, request.threadId, status);
+      if (!isCurrentRequest(request)) return;
+      current = status;
+      contentView.close();
+      expandedDirectories.clear();
+      expansionRevision += 1;
+      setNotice(done);
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      finishAction(request);
+    }
+  };
+  mergeContinue.addEventListener(
+    "click",
+    () => {
+      const client = context().client;
+      const threadId = context().threadId;
+      const continueMerge = client?.continueGitMerge;
+      if (!continueMerge || !threadId) return;
+      void finishOperation(
+        () => continueMerge.call(client, { threadId }),
+        "正在完成合并…",
+        "合并已完成。",
+        "merge-continue",
+      );
+    },
+    listenerOptions,
+  );
+  mergeAbort.addEventListener(
+    "click",
+    () => {
+      const client = context().client;
+      const threadId = context().threadId;
+      const abortMerge = client?.abortGitMerge;
+      if (!abortMerge || !threadId) return;
+      void finishOperation(
+        () => abortMerge.call(client, { threadId }),
+        "正在中止…",
+        "已中止合并。",
+        "merge-abort",
+      );
     },
     listenerOptions,
   );
@@ -1208,11 +1438,17 @@ export function installRendererGitSidebar(options: {
     attributeFilter: ["aria-label", "aria-pressed"],
   });
   mount();
+  const warmCache = (): void => {
+    clearTimeout(warmTimer);
+    warmTimer = setTimeout(() => void load(), 250);
+  };
+  warmCache();
   return {
     syncContext() {
       if (syncContext()) {
         if (view === "files") filesView.refresh();
-        void load();
+        if (view === "projects") warmCache();
+        else void load();
       }
     },
     refresh() {
@@ -1224,6 +1460,8 @@ export function installRendererGitSidebar(options: {
     },
     dispose() {
       disposed = true;
+      clearTimeout(warmTimer);
+      cache.clear();
       observer.disconnect();
       filesView.dispose();
       projectSyncView.dispose();

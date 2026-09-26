@@ -297,6 +297,7 @@ describe("Renderer fixed Model request client", () => {
     const client = createRendererModelClient([{ addNotificationCallback, sendRequest }]);
     if (!client) throw new Error("Synthetic Model client was not created");
     expect(Object.keys(client).sort()).toEqual([
+      "abortGitMerge",
       "acceptProjectSync",
       "addProjectSync",
       "bindProjectSync",
@@ -313,7 +314,9 @@ describe("Renderer fixed Model request client", () => {
       "cloneProjectSync",
       "commitGit",
       "configureProjectSyncGit",
+      "continueGitMerge",
       "executeThreadCommand",
+      "fetchGit",
       "forkThread",
       "generateGitMessage",
       "importHarnessSession",
@@ -362,6 +365,7 @@ describe("Renderer fixed Model request client", () => {
       "subscribeCodexAccounts",
       "subscribeThreadUsage",
       "syncCodexCatalog",
+      "syncGit",
       "syncProjectSync",
       "unstageGitPaths",
       "updateGitSubmodule",
@@ -839,6 +843,8 @@ describe("Renderer fixed Model request client", () => {
       upstream: "origin/main",
       ahead: 0,
       behind: 0,
+      operation: null,
+      conflicts: [],
       changes: [],
       submodules: [],
     };
@@ -932,6 +938,34 @@ describe("Renderer fixed Model request client", () => {
       threadId,
       model: "deepseek-flash",
       paths: ["src/app.ts"],
+    });
+  });
+
+  it("adds a revision when an older Host returns file content without one", async () => {
+    const sendRequest = vi.fn().mockResolvedValueOnce({
+      workspace: "/repo",
+      path: "src/app.ts",
+      size: 4,
+      content: "test",
+      binary: false,
+      truncated: false,
+    });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic Model client was not created");
+
+    await expect(
+      client.readWorkspaceFile?.({
+        threadId: hostThreadIdSchema.parse("thread-1"),
+        path: "src/app.ts",
+      }),
+    ).resolves.toEqual({
+      workspace: "/repo",
+      path: "src/app.ts",
+      size: 4,
+      revision: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      content: "test",
+      binary: false,
+      truncated: false,
     });
   });
 });

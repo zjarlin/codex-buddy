@@ -1,4 +1,4 @@
-import type { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { execFileSync, type ChildProcessWithoutNullStreams, type spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -345,6 +345,7 @@ function createFixture(
       : {}),
     environment: {
       CODEXHOST_DATA_DIR: mappingStoreDirectory,
+      CODEXHOST_GIT_AUTO_PUSH: "0",
       ...(options.environment ?? {}),
     },
     ...(options.pluginDirectory ? { pluginRoots: [options.pluginDirectory] } : {}),
@@ -8481,4 +8482,129 @@ describe("Buddy privacy send boundary", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+});
+
+describe("AppServerHost project Git workflow", () => {
+  it.each(["native", "external"])(
+    "waits for project tasks and shares automatic/manual execution through %s",
+    async (executor) => {
+      const directory = mkdtempSync(path.join(tmpdir(), "codexhost-project-workflow-"));
+      execFileSync("git", ["init", "-q", directory]);
+      writeFileSync(path.join(directory, "work.txt"), "pending change\n");
+      const fixture = createFixture({ environment: { CODEXHOST_GIT_AUTO_PUSH: "1" } });
+      let nativeActive = true;
+      const nativeRequests: JsonObject[] = [];
+      const answer = (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n").filter(Boolean)) {
+          const request = JSON.parse(line) as JsonObject;
+          nativeRequests.push(request);
+          if (request.method === "thread/list") {
+            writeRequest(fixture.official.stdout, {
+              id: requiredMessageId(request),
+              result: {
+                data: [
+                  {
+                    id: "native-peer",
+                    cwd: directory,
+                    status: { type: nativeActive ? "active" : "idle" },
+                  },
+                ],
+                nextCursor: null,
+              },
+            });
+          } else if (request.method === "thread/read") {
+            writeRequest(fixture.official.stdout, {
+              id: requiredMessageId(request),
+              result: {
+                thread: {
+                  id: (request.params as JsonObject).threadId ?? "native-peer",
+                  cwd: directory,
+                  status: { type: nativeActive ? "active" : "idle" },
+                  turns: [],
+                },
+              },
+            });
+          } else if (request.method === "turn/start") {
+            writeRequest(fixture.official.stdout, {
+              id: requiredMessageId(request),
+              result: { turn: { id: "native-workflow" } },
+            });
+            writeRequest(fixture.official.stdout, {
+              method: "turn/started",
+              params: { threadId: "native-peer", turn: { id: "native-workflow" } },
+            });
+          }
+        }
+      };
+      fixture.official.stdin.on("data", answer);
+      try {
+        const threadId = await startExternalThread(fixture, "codexhost/pi-native", 1, {
+          cwd: directory,
+        });
+        const session = fixture.adapter.sessions[0];
+        if (!session) throw new Error("外部 Harness 会话未创建");
+        const execute = vi.spyOn(session, "execute");
+        await completePiTurn(fixture, threadId, 2);
+        await vi.waitFor(
+          () => expect(nativeRequests.some((entry) => entry.method === "thread/list")).toBe(true),
+          { timeout: 3000 },
+        );
+        expect(execute.mock.calls).toMatchObject([[{ type: "turn.start" }]]);
+        nativeActive = false;
+        if (executor === "native") {
+          writeRequest(fixture.official.stdout, {
+            method: "turn/completed",
+            params: {
+              threadId: "native-peer",
+              turn: { id: "native-finished", status: "completed" },
+            },
+          });
+        } else {
+          await completePiTurn(fixture, threadId, 3);
+        }
+        const starts = () =>
+          executor === "native"
+            ? nativeRequests.filter((entry) => entry.method === "turn/start").length
+            : execute.mock.calls.length - 2;
+        await vi.waitFor(() => expect(starts()).toBe(1), { timeout: 3000 });
+        writeRequest(fixture.desktopInput, {
+          id: 10,
+          method: "codexhost/git/workflow/run",
+          params: { threadId },
+        });
+        expect(await fixture.collector.waitFor((message) => requestId(message, 10))).toMatchObject({
+          result: { phase: "running", threadId: executor === "native" ? "native-peer" : threadId },
+        });
+        expect(starts()).toBe(1);
+        if (executor === "native") {
+          writeRequest(fixture.official.stdout, {
+            method: "turn/completed",
+            params: {
+              threadId: "native-peer",
+              turn: { id: "native-workflow", status: "completed" },
+            },
+          });
+        } else {
+          session.succeedTurn();
+        }
+        let queryId = 10;
+        await vi.waitFor(async () => {
+          queryId++;
+          writeRequest(fixture.desktopInput, {
+            id: queryId,
+            method: "codexhost/git/workflow/status",
+            params: { threadId },
+          });
+          const response = await fixture.collector.waitFor((message) =>
+            requestId(message, queryId),
+          );
+          expect(response).toMatchObject({ result: { phase: "failed" } });
+        });
+        expect(starts()).toBe(1);
+      } finally {
+        await stopFixture(fixture);
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 });

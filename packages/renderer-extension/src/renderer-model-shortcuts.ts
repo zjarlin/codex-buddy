@@ -142,7 +142,13 @@ export function mountModelShortcuts(
     const favorites = readModelFavorites(harness);
     const visibleModels = [...favorites]
       .map((id) => view.models.find((model) => model.id === id))
-      .filter((model) => model !== undefined);
+      .filter((model) => model !== undefined)
+      .sort((a, b) =>
+        a.label.localeCompare(b.label, chinese ? "zh-CN" : "en", {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      );
     const nextSignature = JSON.stringify([
       visibleModels,
       view.selected,

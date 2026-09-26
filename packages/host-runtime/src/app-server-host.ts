@@ -1,3 +1,8 @@
+import {
+  ProjectGitWorkflow,
+  type ProjectGitWorkflowGroup,
+  projectGitWorkflowPrompt,
+} from "./project-git-workflow.js";
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { InterruptedConversations } from "./buddy/continuation.js";
@@ -20,6 +25,8 @@ import {
   buddyJevKeySchema,
 } from "@codexhost/shared-contracts";
 import {
+  GIT_WORKFLOW_STATUS_METHOD,
+  GIT_WORKFLOW_RUN_METHOD,
   GIT_STATUS_METHOD,
   GIT_DIFF_METHOD,
   GIT_CONTENT_METHOD,
@@ -34,6 +41,10 @@ import {
   GIT_LOG_METHOD,
   GIT_COMMIT_DETAIL_METHOD,
   GIT_COMMIT_DIFF_METHOD,
+  GIT_FETCH_METHOD,
+  GIT_SYNC_METHOD,
+  GIT_MERGE_CONTINUE_METHOD,
+  GIT_MERGE_ABORT_METHOD,
   gitWorkspaceParamsSchema,
   gitDiffParamsSchema,
   gitContentParamsSchema,
@@ -222,7 +233,7 @@ import {
   OfficialRuntimeScope,
 } from "./codex-runtime/official-runtime-scope.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
-import { GitWorkspace, GitWorkspaceError } from "./git-workspace.js";
+import { GitPushRejectedError, GitWorkspace, GitWorkspaceError } from "./git-workspace.js";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -315,6 +326,7 @@ export interface AppServerHostOptions {
   onCreateRequestRoute?: (observation: CreateRequestRouteObservation) => void;
   onRequestRoute?: (observation: RequestRouteObservation) => void;
   updateCoordinator?: HostUpdateCoordinator;
+  gitWorkflowGroup?: ProjectGitWorkflowGroup;
   onDelegationApi?: (api: DelegationControlRegistration) => (() => void) | undefined;
 }
 
@@ -593,6 +605,7 @@ export class AppServerHost {
   #delegationCoordinator: HarnessDelegationCoordinator;
   #sessionImportRequests: SessionImportRequests | undefined;
   readonly #gitWorkspace = new GitWorkspace();
+  readonly #gitWorkflow: ProjectGitWorkflow;
   readonly #projectSync: ProjectSyncPeer;
   #unregisterDelegationApi: (() => void) | undefined;
   #unsubscribeAccountState: (() => void) | undefined;
@@ -624,6 +637,18 @@ export class AppServerHost {
       diagnosticOutput: process.stderr,
       ...options,
     };
+    this.#gitWorkflow = new ProjectGitWorkflow({
+      ...(options.gitWorkflowGroup ? { group: options.gitWorkflowGroup } : {}),
+      project: async (threadId) =>
+        this.#gitWorkspace.root(await this.#gitWorkspaceForThread(threadId)),
+      activeThreads: () => this.#projectActiveThreads(),
+      status: (cwd) => this.#gitWorkspace.status(cwd),
+      start: (threadId, cwd, beforeStart) =>
+        this.#startProjectGitWorkflow(threadId, cwd, beforeStart),
+      diagnose: (error) => this.#diagnose(error),
+      changed: () => this.#signalActiveWorkChanged(false),
+      automatic: () => (this.#options.environment ?? process.env).CODEXHOST_GIT_AUTO_PUSH !== "0",
+    });
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
     this.#projectSync = new ProjectSyncPeer(environment);
@@ -833,6 +858,7 @@ export class AppServerHost {
   close(): void {
     if (this.#closeRequested) return;
     this.#closeRequested = true;
+    this.#gitWorkflow.close();
     this.#buddy?.close();
     this.#privateChat?.close();
     this.#externalRuntime.idleRelease.disable();
@@ -846,6 +872,7 @@ export class AppServerHost {
   }
 
   async #closeOfficialRuntime(): Promise<void> {
+    this.#gitWorkflow.close();
     await this.#projectSync.close();
     this.#buddy?.close();
     this.#privateChat?.close();
@@ -986,6 +1013,7 @@ export class AppServerHost {
 
   #hasActiveWork(): boolean {
     return (
+      this.#gitWorkflow.hasActiveWork ||
       this.#buddy?.hasActiveWork === true ||
       this.#externalSteering.hasPending() ||
       this.#pendingOfficialTurnStarts.size > 0 ||
@@ -1003,7 +1031,8 @@ export class AppServerHost {
     }
   }
 
-  #signalActiveWorkChanged(): void {
+  #signalActiveWorkChanged(notifyWorkflow = true): void {
+    if (notifyWorkflow) this.#gitWorkflow.activityChanged();
     if (!this.#closeRequested && this.#hasActiveWork()) return;
     const waiters = [...this.#activeWorkDrainWaiters];
     this.#activeWorkDrainWaiters.clear();
@@ -1203,6 +1232,26 @@ export class AppServerHost {
         return;
       }
     }
+    if (
+      request.method === GIT_WORKFLOW_STATUS_METHOD ||
+      request.method === GIT_WORKFLOW_RUN_METHOD
+    ) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const { threadId } = gitWorkspaceParamsSchema.parse(request.params);
+          const snapshot =
+            request.method === GIT_WORKFLOW_RUN_METHOD
+              ? await this.#gitWorkflow.run(threadId)
+              : await this.#gitWorkflow.inspect(threadId);
+          await this.#writer.json(
+            rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }),
+          );
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32090, errorMessage(error)));
+        }
+      });
+      return;
+    }
     if (request.method === LOADED_SESSIONS_METHOD) {
       await this.#writer.json(
         rpcEnvelope(request, { result: this.#externalRuntime.idleRelease.list() }),
@@ -1241,7 +1290,11 @@ export class AppServerHost {
       request.method === GIT_SUBMODULE_UPDATE_METHOD ||
       request.method === GIT_LOG_METHOD ||
       request.method === GIT_COMMIT_DETAIL_METHOD ||
-      request.method === GIT_COMMIT_DIFF_METHOD
+      request.method === GIT_COMMIT_DIFF_METHOD ||
+      request.method === GIT_FETCH_METHOD ||
+      request.method === GIT_SYNC_METHOD ||
+      request.method === GIT_MERGE_CONTINUE_METHOD ||
+      request.method === GIT_MERGE_ABORT_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleGitRequest(request));
       return;
@@ -1590,6 +1643,10 @@ export class AppServerHost {
     if (request.method === "turn/start") {
       const params = requestObject(request);
       const threadId = params.threadId;
+      if (typeof threadId === "string") {
+        this.#pendingOfficialTurnStarts.set(request.id, threadId);
+        this.#gitWorkflow.forget(threadId);
+      }
       const resolution =
         typeof threadId === "string"
           ? await this.#resolveExternalThread(threadId)
@@ -1602,12 +1659,19 @@ export class AppServerHost {
           ),
         );
       }
-      if (await this.#writeResolutionError(request, resolution)) return;
+      if (await this.#writeResolutionError(request, resolution)) {
+        this.#pendingOfficialTurnStarts.delete(request.id);
+        return;
+      }
       if (resolution.kind === "external") {
-        this.#dispatchDesktopRequest(
-          () => this.#startExternalTurn(request, resolution.thread),
-          resolution.thread.id,
-        );
+        this.#dispatchDesktopRequest(async () => {
+          try {
+            await this.#startExternalTurn(request, resolution.thread);
+          } finally {
+            this.#pendingOfficialTurnStarts.delete(request.id);
+            this.#signalActiveWorkChanged();
+          }
+        }, resolution.thread.id);
         return;
       }
       const buddy = this.#buddy;
@@ -1615,6 +1679,9 @@ export class AppServerHost {
         this.#dispatchDesktopRequest(async () => {
           try {
             if (await buddy.route(request)) {
+              if (typeof threadId === "string" && !buddy.activeThreadIds.includes(threadId)) {
+                this.#pendingOfficialTurnStarts.delete(request.id);
+              }
               return;
             }
             if (typeof threadId === "string") {
@@ -1950,10 +2017,6 @@ export class AppServerHost {
     if (value.method === "turn/completed" && typeof params.threadId === "string") {
       this.#forgetPendingOfficialTurnStarts(params.threadId);
       this.#activeOfficialTurns.delete(params.threadId);
-      this.#signalActiveWorkChanged();
-      const delegation = await this.#repository.getDelegationByChild(
-        hostThreadIdSchema.parse(params.threadId),
-      );
       const turn = isRecord(params.turn) ? params.turn : null;
       const status =
         turn?.status === "failed"
@@ -1961,6 +2024,15 @@ export class AppServerHost {
           : turn?.status === "interrupted" || turn?.status === "cancelled"
             ? "interrupted"
             : "completed";
+      if (turn && typeof turn.id === "string") {
+        void this.#gitWorkflow
+          .completed(params.threadId, turn.id, status)
+          .catch((error) => this.#diagnose(error));
+      }
+      this.#signalActiveWorkChanged();
+      const delegation = await this.#repository.getDelegationByChild(
+        hostThreadIdSchema.parse(params.threadId),
+      );
       if (this.#pendingOfficialDelegationThreads.has(params.threadId)) {
         this.#pendingOfficialTerminalStatuses.set(params.threadId, status);
       }
@@ -2554,6 +2626,76 @@ export class AppServerHost {
     }
   }
 
+  async #projectActiveThreads(): Promise<string[]> {
+    const current = (): string[] => [
+      ...this.#activeOfficialTurns.keys(),
+      ...this.#pendingOfficialTurnStarts.values(),
+      ...(this.#buddy?.activeThreadIds ?? []),
+      ...this.#runningSubagentsByParent.keys(),
+      ...this.#pendingExternalCommandRequests,
+      ...this.#externalRuntime
+        .values()
+        .filter(
+          (thread) =>
+            thread.running || thread.activeTurnId || this.#externalSteering.hasPending(thread.id),
+        )
+        .map((thread) => thread.id),
+    ];
+    const active = new Set(current());
+    // 包含连接 Host 前已经运行的原生任务；分页读完，不能只判断侧栏可见任务。
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    do {
+      const response = await this.#requestOfficial("thread/list", {
+        limit: 100,
+        archived: false,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (isRecord(response.error))
+        throw new Error(String(response.error.message ?? "无法读取项目任务状态"));
+      const page = isRecord(response.result) ? response.result : null;
+      if (!page || !Array.isArray(page.data)) throw new Error("项目任务状态响应无效");
+      for (const entry of page.data) {
+        if (
+          isRecord(entry) &&
+          typeof entry.id === "string" &&
+          isRecord(entry.status) &&
+          entry.status.type === "active"
+        )
+          active.add(entry.id);
+      }
+      cursor = typeof page.nextCursor === "string" ? page.nextCursor : null;
+      if (cursor && seen.has(cursor)) throw new Error("项目任务列表分页未前进");
+      if (cursor) seen.add(cursor);
+    } while (cursor);
+    for (const id of current()) active.add(id);
+    return [...active];
+  }
+
+  async #startProjectGitWorkflow(
+    threadId: string,
+    cwd: string,
+    beforeStart: () => Promise<void>,
+  ): Promise<string> {
+    if (await this.#buddy?.privateMode()) throw new Error("隐私模式下不自动推送代码。");
+    const resolution = await this.#resolveExternalThread(threadId);
+    if (resolution.kind === "error") throw new Error(resolution.error.message);
+    if (resolution.kind === "external") {
+      await beforeStart();
+      const turnId = randomUUID();
+      await this.#startDelegatedExternalTurn(resolution.thread, projectGitWorkflowPrompt, turnId);
+      return turnId;
+    }
+    if (this.#buddy)
+      return this.#buddy.startGitWorkflow(threadId, cwd, projectGitWorkflowPrompt, beforeStart);
+    await beforeStart();
+    const result = await this.#sendOfficialDelegationThread({
+      threadId,
+      message: projectGitWorkflowPrompt,
+    });
+    return result.turnId;
+  }
+
   async #gitWorkspaceForThread(threadId: string): Promise<string> {
     const loaded = this.#externalRuntime.get(threadId);
     if (loaded) return loaded.cwd;
@@ -2754,6 +2896,27 @@ export class AppServerHost {
         return;
       }
 
+      if (
+        request.method === GIT_FETCH_METHOD ||
+        request.method === GIT_SYNC_METHOD ||
+        request.method === GIT_MERGE_CONTINUE_METHOD ||
+        request.method === GIT_MERGE_ABORT_METHOD
+      ) {
+        const params = gitWorkspaceParamsSchema.safeParse(request.params);
+        if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
+        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const result =
+          request.method === GIT_FETCH_METHOD
+            ? await this.#gitWorkspace.fetch(cwd)
+            : request.method === GIT_SYNC_METHOD
+              ? await this.#gitWorkspace.sync(cwd)
+              : request.method === GIT_MERGE_CONTINUE_METHOD
+                ? await this.#gitWorkspace.mergeContinue(cwd)
+                : await this.#gitWorkspace.mergeAbort(cwd);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
       if (request.method === GIT_DIFF_METHOD) {
         const params = gitDiffParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git diff 参数无效。");
@@ -2815,6 +2978,19 @@ export class AppServerHost {
       });
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
+      // 推送被拒时回带结构化数据，界面据此提示"拉取并同步"，而不是只显示 raw stderr。
+      if (error instanceof GitPushRejectedError) {
+        await this.#writer.json(
+          rpcEnvelope(request, {
+            error: {
+              code: -32094,
+              message: error.message,
+              data: jsonValueSchema.parse({ kind: "push-rejected", behind: error.behind }),
+            },
+          }),
+        );
+        return;
+      }
       await this.#writer.json(rpcError(request, -32093, errorMessage(error).slice(0, 20_000)));
     }
   }
@@ -4501,6 +4677,11 @@ export class AppServerHost {
       thread.activeTurnId = null;
       thread.projectedTurns.delete(event.turnId);
       thread.responseGates.delete(event.turnId);
+      if (!ephemeralTurn) {
+        void this.#gitWorkflow
+          .completed(thread.id, event.turnId, String(result.completedTurn.status))
+          .catch((error) => this.#diagnose(error));
+      }
       this.#signalActiveWorkChanged();
       const delegation = await this.#repository.getDelegationByChild(thread.record.hostThreadId);
       if (delegation) {

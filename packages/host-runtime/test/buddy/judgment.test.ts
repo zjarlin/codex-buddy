@@ -42,6 +42,20 @@ function response(overrides: Record<string, unknown> = {}) {
       },
       destructive: { type: "noul", noul: 0.05 },
       push: { type: "noul", noul: 0.98 },
+      gitAction: {
+        type: "choice",
+        choice: "commit-push",
+        probabilities: {
+          none: 0.02,
+          commit: 0.02,
+          "commit-push": 0.9,
+          push: 0.03,
+          sync: 0.02,
+          "merge-continue": 0.01,
+        },
+        confidence: 0.9,
+      },
+      commitMessage: { type: "noul", noul: 0.95 },
       role: {
         type: "choice",
         choice: "io",

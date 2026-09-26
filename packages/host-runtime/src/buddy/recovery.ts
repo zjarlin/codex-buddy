@@ -36,6 +36,10 @@ export class AutomaticRecovery {
     return this.#waiting > 0;
   }
 
+  get threadIds(): string[] {
+    return [...this.#states.keys()];
+  }
+
   watch(threadId: string, model: string, allowModelSwitch = true): void {
     this.cancel(threadId);
     this.#states.set(threadId, {

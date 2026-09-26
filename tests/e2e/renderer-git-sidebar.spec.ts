@@ -42,6 +42,7 @@ const { outputFiles } = await build({
         };
         const status = {
           workspace: "/repo", branch: "main", detached: false, head: "abc123", upstream: "origin/main", ahead: 1, behind: 0,
+          operation: null, conflicts: [],
           submodules: [{ path: "vendor/lib", status: "uninitialized" }],
           changes: [
             { path: "src/app.ts", indexStatus:" ", workTreeStatus:"M", staged:false, unstaged:true, untracked:false, conflicted:false, submodule:null },
@@ -65,8 +66,8 @@ const { outputFiles } = await build({
         addOfficialButton("显示/隐藏侧边面板", "files");
         addOfficialButton("切换底部面板显示", "terminal");
         const client = {
-          inspectGitStatus: async () => structuredClone(status),
-          inspectGitDiff: async () => ({ path:"src/app.ts", diff:"+changed", truncated:false }),
+          inspectGitStatus: async () => { calls.push(["status"]); return structuredClone(status); },
+          inspectGitDiff: async (input) => { calls.push(["diff", input]); return { path:input.path, diff:"+changed", truncated:false }; },
           inspectGitContent: async (input) => {
             calls.push(["content", input]);
             return {
@@ -97,6 +98,24 @@ const { outputFiles } = await build({
             return { commit: "def4567", pushed: input.push, output: "", status: structuredClone(status) };
           },
           pushGit: async () => structuredClone(status),
+          syncGit: async (input) => {
+            calls.push(["sync", input]);
+            status.behind = 0;
+            status.ahead = 0;
+            return { strategy: "fast-forward", behind: 1, conflicts: [], output: "", status: structuredClone(status) };
+          },
+          continueGitMerge: async (input) => {
+            calls.push(["mergeContinue", input]);
+            status.operation = null;
+            status.conflicts = [];
+            return structuredClone(status);
+          },
+          abortGitMerge: async (input) => {
+            calls.push(["mergeAbort", input]);
+            status.operation = null;
+            status.conflicts = [];
+            return structuredClone(status);
+          },
           listGitMessageModels: async () => ({ models: [
             { id: "gpt-strong", label: "gpt-strong", tier: "夯", eligible: true },
             { id: "deepseek-flash", label: "deepseek-flash", tier: "垃", eligible: true },
@@ -123,7 +142,11 @@ const { outputFiles } = await build({
           },
           readWorkspaceFile: async (input) => {
             calls.push(["readFile", input]);
-            return { workspace: "/repo", path: input.path, size: 25, revision: "a".repeat(64), content: "export const app = true;\\n", binary: false, truncated: false };
+            const response = { workspace: "/repo", path: input.path, size: 25, revision: "a".repeat(64), content: "export const app = true;\\n", binary: false, truncated: false };
+            if (Reflect.get(globalThis, "gitSidebarFixture")?.omitReadRevision) {
+              delete response.revision;
+            }
+            return response;
           },
           writeWorkspaceFile: async (input) => {
             calls.push(["writeFile", input]);
@@ -220,6 +243,8 @@ test("ignores a delayed Git diff after selecting another file", async ({ page })
   const root = page.locator("[data-codexhost-git-sidebar]");
   const content = page.locator("[data-codexhost-git-content]");
   await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.locator("[data-codexhost-git-sidebar-tree]").click();
+  await root.locator('.codexhost-git-change[title="src/app.ts"]').click();
   await expect(content.getByText("正在加载差异…")).toBeVisible();
   await root.locator('.codexhost-git-change[title="src/components/button.ts"]').click();
   await expect(content.locator(".codexhost-git-diff")).toHaveText("+newer");
@@ -348,6 +373,8 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
   await expect(preview).toHaveCount(0);
 
   await root.getByRole("button", { name: "提交" }).click();
+  await root.locator("[data-codexhost-git-sidebar-tree]").click();
+  await root.locator(".codexhost-git-change").first().click();
   const sidebarBox = await sidebar.boundingBox();
   const panelBox = await root.locator(".codexhost-git-panel").boundingBox();
   expect(sidebarBox).not.toBeNull();
@@ -357,6 +384,11 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
   expect(panelBox?.height).toBe(sidebarBox?.height);
   const gitContent = page.locator("[data-codexhost-git-content]");
   await expect(gitContent.locator(".codexhost-git-diff")).toHaveText("+changed");
+  await expect(gitContent.getByRole("button", { name: "统一" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await gitContent.getByRole("button", { name: "并排" }).click();
   await expect(gitContent.getByRole("button", { name: "并排" })).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -414,7 +446,12 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
     "aria-pressed",
     "true",
   );
-  await expect(root.locator(".codexhost-git-directory").filter({ hasText: "src" })).toBeVisible();
+  await expect(root.locator(".codexhost-git-directory").filter({ hasText: "src" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await root.locator(".codexhost-git-directory").filter({ hasText: "src" }).click();
+  await root.locator(".codexhost-git-directory").filter({ hasText: "components" }).click();
   await expect(
     root.locator(".codexhost-git-directory").filter({ hasText: "components" }),
   ).toBeVisible();
@@ -503,6 +540,7 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
     });
   });
   await root.getByRole("button", { name: "刷新" }).click();
+  await root.locator('.codexhost-git-directory[title="src"]').click();
   await root.locator('.codexhost-git-change[title="src/conflict.ts"]').click();
   await expect(gitContent.getByText("冲突：需要合并")).toBeVisible();
   await expect(gitContent.getByRole("button", { name: "暂存" })).toBeDisabled();
@@ -575,6 +613,28 @@ test("follows the active chat project and ignores stale status across hosts", as
   await expect(page.locator("[data-codexhost-git-content]")).toHaveCount(0);
 });
 
+test("opens a file preview when an older Host omits the revision", async ({ page }) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "gitSidebarFixture").omitReadRevision = true;
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.getByRole("button", { name: "文件浏览器" }).click();
+  const filesPanel = root.locator("[data-codexhost-workspace-files-panel]");
+  await filesPanel.getByRole("button", { name: /src/ }).click();
+  await filesPanel.getByRole("button", { name: /app\.ts/ }).click();
+
+  const preview = page.locator("[data-codexhost-workspace-file-preview]");
+  await expect(preview).toHaveAttribute("data-open", "true");
+  await expect(preview.locator("[data-codexhost-workspace-file-editor] .cm-content")).toHaveText(
+    "export const app = true;",
+  );
+  await expect(preview.getByText(/Invalid input: expected string/)).toHaveCount(0);
+});
+
 test("keeps generated messages and commit operations bound to their original project", async ({
   page,
 }) => {
@@ -604,8 +664,13 @@ test("keeps generated messages and commit operations bound to their original pro
   await expect(message).toHaveValue("");
   await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").setContext("thread-1"));
-  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeDisabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveMessage());
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
   await expect(message).toHaveValue("");
   await message.fill("new draft");
   await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
@@ -618,4 +683,328 @@ test("keeps generated messages and commit operations bound to their original pro
     ),
   );
   expect(commits).toEqual([]);
+});
+
+test("keeps large projects collapsed, reuses reads, and clears diff cache after push", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const change = fixture.status.changes[0];
+    fixture.status.changes = Array.from({ length: 10_000 }, (_, index) => ({
+      ...change,
+      path: `dir-${Math.floor(index / 100)}/file-${index}.ts`,
+    }));
+    const readContent = fixture.client.inspectGitContent;
+    fixture.client.inspectGitContent = async (input: { path: string }) => {
+      const content = await readContent(input);
+      const lines = Array.from({ length: 10_000 }, (_, index) => `line ${index + 1}`);
+      return {
+        ...content,
+        base: lines.join("\n"),
+        working: [...lines.slice(0, -1), "changed tail"].join("\n"),
+      };
+    };
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  const content = page.locator("[data-codexhost-git-content]");
+  const countReads = (method: string) =>
+    page.evaluate(
+      (method) =>
+        Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+          (call: unknown[]) => call[0] === method,
+        ).length,
+      method,
+    );
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(root.locator(".codexhost-git-directory")).toHaveCount(100);
+  await expect(root.locator(".codexhost-git-change")).toHaveCount(0);
+  await expect(content).toHaveCount(0);
+  expect(await countReads("diff")).toBe(0);
+  expect(await countReads("content")).toBe(0);
+  await root.locator("[data-codexhost-git-sidebar-projects]").click();
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  expect(await countReads("status")).toBe(1);
+  await root.locator('.codexhost-git-directory[title="dir-0"]').click();
+  const file = root.locator('.codexhost-git-change[title="dir-0/file-0.ts"]');
+  const originalRow = await file.elementHandle();
+  await file.click();
+  await expect(content.getByRole("button", { name: "统一" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(content.locator(".codexhost-git-diff")).toHaveText("+changed");
+  await expect(content.locator(".split-row")).toHaveCount(0);
+  expect(await originalRow?.evaluate((element) => element.isConnected)).toBe(true);
+  await content.getByRole("button", { name: "并排" }).click();
+  await expect(content.locator(".split-row")).toHaveCount(100);
+  await content.locator(".body").evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(content.locator(".right .line").last()).toHaveText("changed tail");
+  expect(await content.locator(".split-row").count()).toBeLessThanOrEqual(100);
+  await page.keyboard.press("Escape");
+  await file.click();
+  await expect(content.locator(".codexhost-git-diff")).toHaveText("+changed");
+  expect(await countReads("diff")).toBe(1);
+  expect(await countReads("content")).toBe(1);
+  await root.locator("[data-codexhost-git-sidebar-push]").click();
+  await expect(root.getByText("已推送。")).toBeVisible();
+  await expect(content).toHaveCount(0);
+  await expect(root.locator(".codexhost-git-change")).toHaveCount(0);
+  expect(await countReads("status")).toBe(1);
+  await root.locator('.codexhost-git-directory[title="dir-0"]').click();
+  await file.click();
+  await expect(content.locator(".codexhost-git-diff")).toHaveText("+changed");
+  expect(await countReads("diff")).toBe(2);
+  expect(await countReads("content")).toBe(2);
+});
+
+test("shows pending actions, ignores repeated clicks and permits retry after failure", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: single request");
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const methods = [
+      "inspectGitStatus",
+      "stageGitPaths",
+      "unstageGitPaths",
+      "generateGitMessage",
+      "commitGit",
+      "pushGit",
+      "updateGitSubmodule",
+      "syncGit",
+      "continueGitMerge",
+      "abortGitMerge",
+    ];
+    fixture.pendingCalls = [];
+    for (const method of methods) {
+      fixture.client[method] = () => {
+        fixture.pendingCalls.push(method);
+        return new Promise((resolve, reject) => {
+          fixture.rejectAction = () => reject(new Error("operation failed; retry"));
+          fixture.resolveAction = () =>
+            resolve(
+              method === "generateGitMessage"
+                ? { message: "fix: generated", model: "deepseek-flash" }
+                : method === "commitGit"
+                  ? { commit: "abc123", pushed: false, status: structuredClone(fixture.status) }
+                  : method === "syncGit"
+                    ? { strategy: "up-to-date", behind: 0, status: structuredClone(fixture.status) }
+                    : structuredClone(fixture.status),
+            );
+        });
+      };
+    }
+    fixture.status.operation = "merge";
+    fixture.status.conflicts = [];
+    fixture.status.changes[0].staged = true;
+    fixture.status.changes[0].unstaged = false;
+    fixture.status.warnings = ["子模块 aio-plugin-documentation-agent 缺少 .gitmodules 映射"];
+  });
+  const refresh = root.getByRole("button", { name: "刷新", exact: true });
+  await refresh.click();
+  await expect(refresh).toHaveAttribute("aria-busy", "true");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveAction());
+  await expect(root.locator("[data-codexhost-git-warnings]")).toContainText(
+    "aio-plugin-documentation-agent",
+  );
+
+  const actions = [
+    ["stage-all", "stageGitPaths"],
+    ["generate", "generateGitMessage"],
+    ["commit", "commitGit"],
+    ["commit-push", "commitGit"],
+    ["push", "pushGit"],
+    ["sync", "syncGit"],
+    ["merge-continue", "continueGitMerge"],
+    ["merge-abort", "abortGitMerge"],
+    ["refresh", "inspectGitStatus"],
+    ["submodule:vendor/lib", "updateGitSubmodule"],
+  ];
+  for (const [action, method] of actions) {
+    const button = root.locator(`button[data-git-action="${action}"]`);
+    await expect(button).toBeEnabled();
+    const before = await page.evaluate(
+      () => Reflect.get(globalThis, "gitSidebarFixture").pendingCalls.length,
+    );
+    await button.evaluate((element) => {
+      element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    await expect(button).toBeDisabled();
+    await expect(refresh).toBeDisabled();
+    const calls = await page.evaluate(
+      () => Reflect.get(globalThis, "gitSidebarFixture").pendingCalls,
+    );
+    expect(calls.slice(before)).toEqual([method]);
+    expect(
+      await button.evaluate((element) => getComputedStyle(element, "::after").animationName),
+    ).toBe("codexhost-git-spin");
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").rejectAction());
+    await expect(button).toHaveAttribute("aria-busy", "false");
+    await expect(root.getByText("operation failed; retry", { exact: true })).toBeVisible();
+    if (action !== "refresh")
+      await expect(root.locator("[data-codexhost-git-warnings]")).toBeVisible();
+    // 刷新失败会清空当前快照，先重试恢复，再验证其他操作。
+    if (action === "refresh") {
+      await refresh.click();
+      await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveAction());
+    }
+  }
+  const push = root.locator("[data-codexhost-git-sidebar-push]");
+  await push.click();
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveAction());
+  await expect(push).toBeEnabled();
+  await expect(root.getByText("已推送。", { exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("keeps pending saves and stage clicks single, preserving edits made during a save", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.locator('.codexhost-git-directory[title="src"]').click();
+  await root.locator('.codexhost-git-change[title="src/app.ts"]').click();
+  const content = page.locator("[data-codexhost-git-content]");
+  await content.getByRole("button", { name: "结果", exact: true }).click();
+  const editor = content.getByRole("textbox", { name: "合并结果" });
+  await expect(editor).toHaveValue("export const app = true;\n");
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.saveCalls = [];
+    fixture.stageCalls = [];
+    fixture.client.writeWorkspaceFile = (input: unknown) => {
+      fixture.saveCalls.push(input);
+      return new Promise((resolve) => {
+        fixture.resolveSave = () => resolve({ revision: "b".repeat(64) });
+      });
+    };
+    fixture.client.stageGitPaths = (input: unknown) => {
+      fixture.stageCalls.push(input);
+      return new Promise((resolve) => {
+        fixture.resolveStage = () => resolve(structuredClone(fixture.status));
+      });
+    };
+  });
+  await editor.fill("saved snapshot\n");
+  const save = content.getByRole("button", { name: "保存", exact: true });
+  const stage = content.getByRole("button", { name: "暂存", exact: true });
+  await save.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await expect(save).toHaveAttribute("aria-busy", "true");
+  await expect(stage).toBeDisabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeDisabled();
+  await editor.fill("new unsaved edit\n");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveSave());
+  await expect(save).toHaveAttribute("aria-busy", "false");
+  await expect(save).toBeEnabled();
+  await expect(stage).toBeDisabled();
+  const writes = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").saveCalls);
+  expect(writes).toEqual([
+    {
+      threadId: "thread-1",
+      path: "src/app.ts",
+      content: "saved snapshot\n",
+      expectedRevision: "a".repeat(64),
+    },
+  ]);
+  await save.click();
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveSave());
+  await expect(stage).toBeEnabled();
+  await stage.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await expect(stage).toHaveAttribute("aria-busy", "true");
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").stageCalls),
+  ).toHaveLength(1);
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveStage());
+  await expect(stage).toHaveAttribute("aria-busy", "false");
+  await expect(stage).toBeEnabled();
+
+  // 已关闭文件的保存回包不能改写随后打开文件的 revision 或草稿。
+  await editor.fill("pending old file\n");
+  await save.click();
+  await root.locator('.codexhost-git-directory[title="src/components"]').click();
+  await root.locator('.codexhost-git-change[title="src/components/button.ts"]').click();
+  await expect(content.locator(".title strong")).toHaveText("src/components/button.ts");
+  await content.getByRole("button", { name: "结果", exact: true }).click();
+  await editor.fill("new file edit\n");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveSave());
+  await expect(editor).toHaveValue("new file edit\n");
+  await expect(save).toBeEnabled();
+  await save.click();
+  const lastWrite = await page.evaluate(() =>
+    Reflect.get(globalThis, "gitSidebarFixture").saveCalls.at(-1),
+  );
+  expect(lastWrite).toMatchObject({
+    path: "src/components/button.ts",
+    expectedRevision: "a".repeat(64),
+  });
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveSave());
+  expect(errors).toEqual([]);
+});
+
+test("pulls and syncs from the sidebar and surfaces an in-progress merge", async ({ page }) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const sync = root.locator("[data-codexhost-git-sidebar-sync]");
+  await expect(sync).toBeVisible();
+  await sync.click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual(["sync", { threadId: "thread-1" }]);
+  await expect(root.getByText("已快进合入远端 1 个提交。")).toBeVisible();
+
+  // 进入合并冲突态后，横幅列出冲突文件并提供继续/中止。
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.operation = "merge";
+    fixture.status.conflicts = ["src/app.ts"];
+  });
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  const banner = root.locator("[data-codexhost-git-sidebar-conflict]");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("1 个冲突文件待解决");
+  await expect(root.locator("[data-codexhost-git-sidebar-merge-continue]")).toBeDisabled();
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.operation = null;
+    fixture.status.conflicts = [];
+  });
+  await root.locator("[data-codexhost-git-sidebar-merge-abort]").click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual(["mergeAbort", { threadId: "thread-1" }]);
+  await expect(banner).toBeHidden();
 });

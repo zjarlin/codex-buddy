@@ -27,7 +27,7 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
-| [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏操作与列表、聊天区域差异、关闭与布局行为；维护 Git 界面时阅读。 |
+| [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏、聊天区域差异、项目空闲自动推送与输入框工作流按钮；维护 Git 界面时阅读。 |
 | [`product/workspace-files.md`](product/workspace-files.md) | 左侧工作区文件树、CodeMirror 编辑与保存契约、revision 冲突保护和路径安全限制；维护文件浏览器时阅读。 |
 
 ## Harness 专项

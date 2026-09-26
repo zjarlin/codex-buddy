@@ -352,6 +352,10 @@ export {
   GIT_LOG_METHOD,
   GIT_COMMIT_DETAIL_METHOD,
   GIT_COMMIT_DIFF_METHOD,
+  GIT_FETCH_METHOD,
+  GIT_SYNC_METHOD,
+  GIT_MERGE_CONTINUE_METHOD,
+  GIT_MERGE_ABORT_METHOD,
   GIT_FILE_PATH_MAX_LENGTH,
   GIT_COMMIT_MESSAGE_MAX_LENGTH,
   GIT_DIFF_MAX_BYTES,
@@ -380,6 +384,8 @@ export {
   gitDiffResultSchema,
   gitContentResultSchema,
   gitCommitResultSchema,
+  gitSyncStrategySchema,
+  gitSyncResultSchema,
   gitMessageModelSchema,
   gitMessageModelsSchema,
   gitGeneratedMessageSchema,
@@ -407,6 +413,8 @@ export type {
   GitDiffResult,
   GitContentResult,
   GitCommitResult,
+  GitSyncStrategy,
+  GitSyncResult,
   GitMessageModel,
   GitMessageModels,
   GitGeneratedMessage,
@@ -493,3 +501,10 @@ export type {
   BuddyPrivateSnapshot,
   BuddyPrivateModel,
 } from "./buddy-private.js";
+
+export {
+  GIT_WORKFLOW_STATUS_METHOD,
+  GIT_WORKFLOW_RUN_METHOD,
+  gitWorkflowSnapshotSchema,
+  type GitWorkflowSnapshot,
+} from "./git-workflow.js";

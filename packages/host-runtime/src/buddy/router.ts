@@ -36,11 +36,7 @@ import { parallelExecutionGuidance, singleExecutorPacket } from "./delegation.js
 import { AutomaticRecovery } from "./recovery.js";
 import { InterruptedConversations } from "./continuation.js";
 import { formatExecutionTopology } from "./plan-graph.js";
-import {
-  GitPushBypassScores,
-  gitPushGuidance,
-  gitPushSkills,
-} from "./git-push-bypass.js";
+import { GitPushBypassScores, gitPushSkills, gitWorkflowGuidance } from "./git-push-bypass.js";
 import { createJevClient, type SystemOneCommand } from "./judgment.js";
 import type { TypeSafeClient } from "@codexhost/jev";
 import {
@@ -341,6 +337,86 @@ export class BuddyRouter {
 
   get hasActiveWork(): boolean {
     return this.#jobs.size > 0 || this.#active.size > 0 || this.#recovery.pending;
+  }
+
+  get activeThreadIds(): string[] {
+    return [...new Set([...this.#jobs.keys(), ...this.#active, ...this.#recovery.threadIds])];
+  }
+
+  // 明确的工作流入口不再做意图分类，也不经过高级模型规划；沿用现有 Git 技能与执行约束。
+  async startGitWorkflow(
+    threadId: string,
+    cwd: string,
+    prompt: string,
+    beforeStart: () => Promise<void>,
+  ): Promise<string> {
+    await this.#loadSettings();
+    if (this.#settings.privateMode) throw new Error("隐私模式下不自动推送代码。");
+    if (this.#threads.get(threadId)?.mode === "plan")
+      throw new Error("规划模式下不执行推送工作流。");
+    const nativeModels = await this.#nativeModels(threadId);
+    const inventory = await discoverModels({
+      home: this.#home,
+      environment: this.options.environment,
+      settings: this.#settings,
+      nativeModels,
+      signal: new AbortController().signal,
+      tier: "standard",
+    });
+    const model = inventory.executor;
+    if (!model) throw new Error("没有可用的 Git 执行模型。");
+    if (this.#settings.executorModel && model !== this.#settings.executorModel)
+      throw new Error("指定的执行模型当前不可用。");
+    const skills = await gitPushSkills(this.options.request, cwd, [{ type: "text", text: prompt }]);
+    await beforeStart();
+    this.#setDecision(threadId, {
+      threadId,
+      turnId: null,
+      phase: "executing",
+      role: "git",
+      difficulty: "standard",
+      score: 45,
+      reason: "项目推送工作流",
+      plannerModel: null,
+      executorModel: model,
+      acceptedModel: null,
+      involvedModels: [model],
+      plan: null,
+      command: null,
+      exitCode: null,
+      updatedAt: new Date().toISOString(),
+      modelBypass: this.#bypassScores.start(model, skills.skills, skills.warning),
+    });
+    this.#active.add(threadId);
+    try {
+      const response = await this.options.request("turn/start", {
+        threadId,
+        cwd,
+        input: skills.input,
+        model,
+        effort: null,
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model,
+            reasoning_effort: null,
+            developer_instructions: gitWorkflowGuidance("commit-push", true),
+          },
+        },
+      });
+      const turnId = object(result(response).turn).id;
+      if (typeof turnId !== "string") throw new Error("推送工作流没有返回回合 ID。");
+      this.#update(threadId, { turnId, acceptedModel: model });
+      return turnId;
+    } catch (error) {
+      this.#active.delete(threadId);
+      this.#update(threadId, {
+        phase: "failed",
+        ...this.#finishBypass(threadId, "failed"),
+        reason: String(error),
+      });
+      throw error;
+    }
   }
 
   track(request: JsonRpcRequest): void {
@@ -1021,7 +1097,7 @@ export class BuddyRouter {
         ? ""
         : parallelExecutionGuidance(inventory, fixedExecutor),
       nativePlanning || conversational || role === "executor" ? "" : roleInstructions[role],
-      modelBypass ? gitPushGuidance : "",
+      modelBypass ? gitWorkflowGuidance(selected.gitAction, selected.needsCommitMessage) : "",
       bypassSkills?.warning
         ? `技能上下文状态：${bypassSkills.warning}。只使用实际可用的技能，不宣称缺失技能已加载。`
         : "",

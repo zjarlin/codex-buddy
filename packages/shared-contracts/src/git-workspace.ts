@@ -16,6 +16,10 @@ export const GIT_SUBMODULE_UPDATE_METHOD = "codexhost/git/submodule/update";
 export const GIT_LOG_METHOD = "codexhost/git/log";
 export const GIT_COMMIT_DETAIL_METHOD = "codexhost/git/commit-detail";
 export const GIT_COMMIT_DIFF_METHOD = "codexhost/git/commit-diff";
+export const GIT_FETCH_METHOD = "codexhost/git/fetch";
+export const GIT_SYNC_METHOD = "codexhost/git/sync";
+export const GIT_MERGE_CONTINUE_METHOD = "codexhost/git/merge/continue";
+export const GIT_MERGE_ABORT_METHOD = "codexhost/git/merge/abort";
 
 export const GIT_FILE_PATH_MAX_LENGTH = 16_384;
 export const GIT_COMMIT_MESSAGE_MAX_LENGTH = 20_000;
@@ -114,7 +118,10 @@ export const gitSubmoduleSchema = z
 export type GitSubmodule = z.infer<typeof gitSubmoduleSchema>;
 
 export const gitSubmoduleListSchema = z
-  .object({ submodules: z.array(gitSubmoduleSchema).max(10_000) })
+  .object({
+    submodules: z.array(gitSubmoduleSchema).max(10_000),
+    warnings: z.array(z.string()).optional(),
+  })
   .strict();
 export type GitSubmoduleList = z.infer<typeof gitSubmoduleListSchema>;
 
@@ -184,9 +191,29 @@ export const gitWorkspaceStatusSchema = z
     behind: z.number().int().nonnegative(),
     changes: z.array(gitChangeSchema),
     submodules: z.array(gitSubmoduleSchema),
+    warnings: z.array(z.string()).optional(),
+    // 进行中的合并/变基操作；null 表示当前没有未完成的合并或变基。
+    operation: z.enum(["merge", "rebase"]).nullable().default(null),
+    // 冲突文件路径，便于界面与模型直接定位而无需再次扫描 changes。
+    conflicts: z.array(gitFilePathSchema).default([]),
   })
   .strict();
 export type GitWorkspaceStatus = z.infer<typeof gitWorkspaceStatusSchema>;
+
+// 拉取并同步的结果：策略说明本次如何合入远端，冲突时列出待消解的文件。
+export const gitSyncStrategySchema = z.enum(["up-to-date", "fast-forward", "merged", "conflict"]);
+export type GitSyncStrategy = z.infer<typeof gitSyncStrategySchema>;
+
+export const gitSyncResultSchema = z
+  .object({
+    strategy: gitSyncStrategySchema,
+    behind: z.number().int().nonnegative(),
+    conflicts: z.array(gitFilePathSchema),
+    output: z.string(),
+    status: gitWorkspaceStatusSchema,
+  })
+  .strict();
+export type GitSyncResult = z.infer<typeof gitSyncResultSchema>;
 
 export const gitDiffResultSchema = z
   .object({

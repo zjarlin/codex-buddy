@@ -5,9 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  listThreadTerminals,
   openThreadTerminal,
   ThreadTerminalError,
   threadTerminalResumeCommand,
+  windowsTerminalInvocation,
 } from "../src/thread-terminal.js";
 
 const cleanup: string[] = [];
@@ -49,13 +51,20 @@ describe("thread terminal", () => {
     );
   });
 
+  it("lists installed macOS terminals and falls back to Terminal by default", async () => {
+    const terminals = await listThreadTerminals({ platform: "darwin" });
+    const apple = terminals.terminals.find((terminal) => terminal.id === "apple-terminal");
+    expect(apple).toMatchObject({ installed: true, default: true });
+    expect(terminals.terminals.map((terminal) => terminal.id)).toContain("ghostty");
+  });
+
   it("opens Terminal.app with the official Codex resume command on macOS", async () => {
     const directory = await workspace();
     const spawnTerminal = fakeSpawn();
     const codexPath = path.join(directory, "codex");
     const sessionId = "019efd3b-5f35-71a1-9b7f-247fd8a79b6a";
 
-    const result = await openThreadTerminal(directory, sessionId, codexPath, {
+    const result = await openThreadTerminal(directory, sessionId, codexPath, "apple-terminal", {
       platform: "darwin",
       spawnTerminal,
     });
@@ -72,7 +81,7 @@ describe("thread terminal", () => {
     );
     expect(result).toEqual({
       workspace: await realpath(directory),
-      terminal: "terminal",
+      terminal: "apple-terminal",
       mode: "resume",
     });
   });
@@ -81,10 +90,13 @@ describe("thread terminal", () => {
     const directory = await workspace();
     const spawnTerminal = fakeSpawn();
 
-    await openThreadTerminal(path.join(directory, "."), "session-id", "/bin/codex", {
-      platform: "darwin",
-      spawnTerminal,
-    });
+    await openThreadTerminal(
+      path.join(directory, "."),
+      "session-id",
+      "/bin/codex",
+      "apple-terminal",
+      { platform: "darwin", spawnTerminal },
+    );
 
     const [, arguments_] = spawnTerminal.mock.calls[0] as unknown as [string, string[], unknown];
     expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
@@ -96,7 +108,7 @@ describe("thread terminal", () => {
     const sessionId = "session-'; touch /tmp/not-written; echo '";
 
     await expect(
-      openThreadTerminal(directory, sessionId, "/tmp/codex path", {
+      openThreadTerminal(directory, sessionId, "/tmp/codex path", "apple-terminal", {
         platform: "darwin",
         spawnTerminal,
       }),
@@ -107,7 +119,7 @@ describe("thread terminal", () => {
   it("passes the resume command to Linux and Windows terminals", async () => {
     const directory = await workspace();
     const linuxSpawn = fakeSpawn();
-    await openThreadTerminal(directory, "session-id", "/opt/codex", {
+    await openThreadTerminal(directory, "session-id", "/opt/codex", "x-terminal-emulator", {
       platform: "linux",
       spawnTerminal: linuxSpawn,
     });
@@ -124,33 +136,89 @@ describe("thread terminal", () => {
       { detached: true, stdio: "ignore", windowsHide: true },
     );
 
-    const windowsSpawn = fakeSpawn();
-    await openThreadTerminal(directory, "session-id", "C:\\Codex\\codex.exe", {
-      platform: "win32",
-      spawnTerminal: windowsSpawn,
+    const invocation = windowsTerminalInvocation(
+      "windows-terminal",
+      "C:\\Windows\\wt.exe",
+      await realpath(directory),
+      "C:\\Codex\\codex.exe",
+      "session-id",
+    );
+    expect(invocation.command).toBe("C:\\Windows\\wt.exe");
+    expect(invocation.arguments_.slice(0, 5)).toEqual([
+      "-d",
+      await realpath(directory),
+      "powershell.exe",
+      "-NoExit",
+      "-Command",
+    ]);
+    expect(invocation.arguments_[5]).toContain("codex.exe");
+    expect(invocation.arguments_[5]).toContain("'session-id'");
+    expect(invocation.arguments_[5]).toContain(`'${await realpath(directory)}'`);
+  });
+
+  it("opens Ghostty through its macOS bundle action", async () => {
+    const directory = await workspace();
+    const spawnTerminal = fakeSpawn();
+
+    await openThreadTerminal(directory, "session-id", "/opt/codex", "ghostty", {
+      platform: "darwin",
+      spawnTerminal,
     });
-    const [command, arguments_] = windowsSpawn.mock.calls[0] as unknown as [
+
+    const [command, arguments_] = spawnTerminal.mock.calls[0] as unknown as [
       string,
       string[],
       unknown,
     ];
-    expect(command).toMatch(/cmd\.exe$/i);
-    expect(arguments_.slice(0, 9)).toEqual([
-      "/d",
-      "/s",
-      "/c",
-      "start",
-      "",
-      "wt.exe",
-      "-d",
-      await realpath(directory),
-      "powershell.exe",
+    expect(command).toBe("/usr/bin/open");
+    expect(arguments_.slice(0, 3)).toEqual(["-na", "/Applications/Ghostty.app", "--args"]);
+    expect(arguments_.slice(3)).toEqual([
+      "-e",
+      "sh",
+      "-lc",
+      `cd '${await realpath(directory)}' && '/opt/codex' resume 'session-id' -C '${await realpath(directory)}'`,
     ]);
-    expect(arguments_[9]).toBe("-NoExit");
-    expect(arguments_[10]).toBe("-Command");
-    expect(arguments_[11]).toContain("codex.exe");
-    expect(arguments_[11]).toContain('resume "session-id"');
-    expect(arguments_[11]).toContain(`-C "${await realpath(directory)}"`);
+  });
+
+  it("starts PowerShell and Command Prompt with their native flags", async () => {
+    const directory = await workspace();
+    const powershell = windowsTerminalInvocation(
+      "powershell",
+      "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      await realpath(directory),
+      "C:\\Codex\\codex.exe",
+      "session-id",
+    );
+    const powershellArguments = powershell.arguments_;
+    expect(powershellArguments[0]).toBe("-NoExit");
+    expect(powershellArguments[1]).toBe("-Command");
+    expect(powershellArguments[2]).toContain("Set-Location -LiteralPath");
+    expect(powershellArguments[2]).toContain("resume 'session-id'");
+
+    const commandPrompt = windowsTerminalInvocation(
+      "command-prompt",
+      "C:\\Windows\\System32\\cmd.exe",
+      await realpath(directory),
+      "C:\\Codex\\codex.exe",
+      "session-id",
+    );
+    const commandArguments = commandPrompt.arguments_;
+    expect(commandArguments[0]).toBe("/d");
+    expect(commandArguments[1]).toBe("/k");
+    expect(commandArguments[2]).toContain("resume session-id -C");
+  });
+
+  it("rejects a terminal that is not installed", async () => {
+    const directory = await workspace();
+    const spawnTerminal = fakeSpawn();
+
+    await expect(
+      openThreadTerminal(directory, "session-id", "/opt/codex", "wezterm", {
+        platform: "darwin",
+        spawnTerminal,
+      }),
+    ).rejects.toThrow("未找到 WezTerm");
+    expect(spawnTerminal).not.toHaveBeenCalled();
   });
 
   it("rejects invalid session ids and Codex paths before spawning", async () => {
@@ -158,10 +226,16 @@ describe("thread terminal", () => {
     const spawnTerminal = fakeSpawn();
 
     await expect(
-      openThreadTerminal(directory, " ", "/bin/codex", { platform: "darwin", spawnTerminal }),
+      openThreadTerminal(directory, " ", "/bin/codex", "apple-terminal", {
+        platform: "darwin",
+        spawnTerminal,
+      }),
     ).rejects.toThrow("会话 ID 无效");
     await expect(
-      openThreadTerminal(directory, "session-id", "\0", { platform: "darwin", spawnTerminal }),
+      openThreadTerminal(directory, "session-id", "\0", "apple-terminal", {
+        platform: "darwin",
+        spawnTerminal,
+      }),
     ).rejects.toThrow("Codex 路径无效");
     expect(spawnTerminal).not.toHaveBeenCalled();
   });
@@ -172,13 +246,19 @@ describe("thread terminal", () => {
     await writeFile(file, "not a directory\n");
 
     await expect(
-      openThreadTerminal(path.join(directory, "missing"), "session-id", "/bin/codex", {
-        platform: "darwin",
-        spawnTerminal: fakeSpawn(),
-      }),
+      openThreadTerminal(
+        path.join(directory, "missing"),
+        "session-id",
+        "/bin/codex",
+        "apple-terminal",
+        {
+          platform: "darwin",
+          spawnTerminal: fakeSpawn(),
+        },
+      ),
     ).rejects.toThrow(ThreadTerminalError);
     await expect(
-      openThreadTerminal(file, "session-id", "/bin/codex", {
+      openThreadTerminal(file, "session-id", "/bin/codex", "apple-terminal", {
         platform: "darwin",
         spawnTerminal: fakeSpawn(),
       }),
@@ -196,7 +276,7 @@ describe("thread terminal", () => {
     ) => SpawnedChild;
 
     await expect(
-      openThreadTerminal(directory, "session-id", "/bin/codex", {
+      openThreadTerminal(directory, "session-id", "/bin/codex", "apple-terminal", {
         platform: "darwin",
         spawnTerminal,
       }),

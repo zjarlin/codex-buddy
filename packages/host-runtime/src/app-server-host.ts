@@ -71,13 +71,15 @@ import {
   workspaceFileReadParamsSchema,
   workspaceFileWriteParamsSchema,
   THREAD_TERMINAL_OPEN_METHOD,
+  THREAD_TERMINAL_LIST_METHOD,
+  threadTerminalListParamsSchema,
   threadTerminalOpenParamsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
-import { openThreadTerminal } from "./thread-terminal.js";
+import { listThreadTerminals, openThreadTerminal } from "./thread-terminal.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import { ProjectSyncPeer } from "./project-sync-peer.js";
@@ -1328,6 +1330,10 @@ export class AppServerHost {
     }
     if (request.method === THREAD_TERMINAL_OPEN_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleThreadTerminalRequest(request));
+      return;
+    }
+    if (request.method === THREAD_TERMINAL_LIST_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleThreadTerminalListRequest(request));
       return;
     }
     if (
@@ -2785,6 +2791,17 @@ export class AppServerHost {
     }
   }
 
+  async #handleThreadTerminalListRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = threadTerminalListParamsSchema.safeParse(request.params);
+      if (!params.success) throw new Error("终端列表参数无效。");
+      const result = await listThreadTerminals();
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32096, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
   async #handleThreadTerminalRequest(request: JsonRpcRequest): Promise<void> {
     try {
       const params = threadTerminalOpenParamsSchema.safeParse(request.params);
@@ -2796,6 +2813,7 @@ export class AppServerHost {
         cwd,
         params.data.threadId,
         this.#options.stockCodexPath,
+        params.data.terminalId,
       );
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {

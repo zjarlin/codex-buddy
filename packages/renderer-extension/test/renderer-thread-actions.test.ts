@@ -117,11 +117,7 @@ class FakeElement {
     const results: FakeElement[] = [];
     const walk = (node: FakeElement): void => {
       for (const child of node.children) {
-        if (selector === "[data-codexhost-thread-actions-error]") {
-          if (child.attributes.has("data-codexhost-thread-actions-error")) results.push(child);
-        } else if (selector === `[data-codexhost-thread-actions-trigger]`) {
-          if (child.attributes.has("data-codexhost-thread-actions-trigger")) results.push(child);
-        } else if (selector.startsWith("[")) {
+        if (selector.startsWith("[")) {
           if (child.matchesAttributes(selector)) results.push(child);
         } else if (child.tagName === selector) {
           results.push(child);
@@ -260,6 +256,13 @@ function sidebarRow(document_: FakeDocument, hostId: string, threadId: string): 
 }
 
 function clientWith(openThreadTerminal: (input: { threadId: string }) => Promise<unknown>) {
+  const listThreadTerminals = vi.fn(async () => ({
+    terminals: [
+      { id: "apple-terminal", name: "Terminal", installed: true, default: true },
+      { id: "ghostty", name: "Ghostty", installed: true, default: false },
+      { id: "warp", name: "Warp", installed: false, default: false },
+    ],
+  }));
   return {
     forkThread: vi.fn(),
     inspectHarness: vi.fn(),
@@ -277,10 +280,24 @@ function clientWith(openThreadTerminal: (input: { threadId: string }) => Promise
     readUpdateStatus: vi.fn(),
     listCodexAccounts: vi.fn(),
     refreshCodexAccounts: vi.fn(),
+    listThreadTerminals,
     openThreadTerminal: vi.fn(openThreadTerminal),
   } as unknown as RendererModelClient & {
+    listThreadTerminals: ReturnType<typeof vi.fn>;
     openThreadTerminal: ReturnType<typeof vi.fn>;
   };
+}
+
+async function openRowMenu(row: FakeElement, document_: FakeDocument): Promise<FakeElement> {
+  const trigger = required(
+    row.querySelector("[data-codexhost-thread-actions-trigger]"),
+    "trigger was not injected",
+  );
+  trigger.dispatch("click");
+  return required(
+    document_.body.querySelector("[data-codexhost-thread-actions-menu]"),
+    "menu was not opened",
+  );
 }
 
 async function settle(): Promise<void> {
@@ -296,7 +313,11 @@ describe("renderer thread actions", () => {
   it("injects exactly one more-actions trigger per resolvable row", () => {
     const document_ = installFakeBrowser();
     const row = sidebarRow(document_, "local", "thread-a");
-    const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+    const client = clientWith(async () => ({
+      workspace: "/tmp/repo",
+      terminal: "apple-terminal",
+      mode: "resume",
+    }));
     const installed = installRendererThreadActions({
       getClient: () => client,
       getLocale: () => "zh-CN",
@@ -322,22 +343,45 @@ describe("renderer thread actions", () => {
     });
     installed.refresh();
 
-    const trigger = required(
-      row.querySelector("[data-codexhost-thread-actions-trigger]"),
-      "trigger was not injected",
-    );
-    trigger.dispatch("click");
-
-    const portal = required(
-      document_.body.querySelector("[data-codexhost-thread-actions-menu]"),
-      "menu was not opened",
-    );
+    const portal = await openRowMenu(row, document_);
     expect(portal).toBeTruthy();
     const item = required(portal.querySelector("button"), "menu item was not rendered");
     item.dispatch("click");
     await settle();
 
-    expect(client.openThreadTerminal).toHaveBeenCalledWith({ threadId: "thread-a" });
+    expect(client.openThreadTerminal).toHaveBeenCalledWith({
+      threadId: "thread-a",
+      terminalId: "apple-terminal",
+    });
+    installed.dispose();
+  });
+
+  it("opens with a selected installed terminal and disables missing terminals", async () => {
+    const document_ = installFakeBrowser();
+    const row = sidebarRow(document_, "local", "thread-a");
+    const client = clientWith(async () => ({
+      workspace: "/tmp/repo",
+      terminal: "ghostty",
+      mode: "resume",
+    }));
+    const installed = installRendererThreadActions({
+      getClient: () => client,
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+
+    const portal = await openRowMenu(row, document_);
+    await settle();
+    const options = portal.querySelectorAll("[data-codexhost-thread-actions-terminal-option]");
+    expect(options).toHaveLength(3);
+    expect(options[2]?.disabled).toBe(true);
+    options[1]?.dispatch("click");
+    await settle();
+
+    expect(client.openThreadTerminal).toHaveBeenCalledWith({
+      threadId: "thread-a",
+      terminalId: "ghostty",
+    });
     installed.dispose();
   });
 
@@ -360,7 +404,10 @@ describe("renderer thread actions", () => {
     item.dispatch("click");
     await settle();
 
-    expect(client.openThreadTerminal).toHaveBeenCalledWith({ threadId: "thread-b" });
+    expect(client.openThreadTerminal).toHaveBeenCalledWith({
+      threadId: "thread-b",
+      terminalId: "apple-terminal",
+    });
     installed.dispose();
   });
 

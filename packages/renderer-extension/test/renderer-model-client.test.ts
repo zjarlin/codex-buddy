@@ -403,6 +403,7 @@ describe("Renderer fixed Model request client", () => {
       "listLoadedSessions",
       "listSessionImportSources",
       "listThreadOwnership",
+      "listThreadTerminals",
       "listWorkspaceFiles",
       "openHarnessWebUi",
       "openThreadTerminal",

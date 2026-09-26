@@ -1,7 +1,11 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Terminal from "lucide/dist/esm/icons/terminal.mjs";
-import { hostThreadIdSchema } from "@codexhost/shared-contracts";
+import {
+  hostThreadIdSchema,
+  type ThreadTerminalDescriptor,
+  type ThreadTerminalId,
+} from "@codexhost/shared-contracts";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
 import {
@@ -14,6 +18,8 @@ import {
 const TRIGGER_ATTRIBUTE = "data-codexhost-thread-actions-trigger";
 const MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const OPEN_TERMINAL_ATTRIBUTE = "data-codexhost-thread-actions-open-terminal";
+const TERMINAL_SUBMENU_ATTRIBUTE = "data-codexhost-thread-actions-terminal-submenu";
+const TERMINAL_OPTION_ATTRIBUTE = "data-codexhost-thread-actions-terminal-option";
 const MENU_WIDTH = 216;
 const VIEWPORT_MARGIN = 8;
 const MENU_GAP = 6;
@@ -28,6 +34,13 @@ const style = `
 [${MENU_ATTRIBUTE}] [role="menuitem"]:hover,[${MENU_ATTRIBUTE}] [role="menuitem"]:focus-visible{background:color-mix(in srgb,currentColor 12%,transparent);outline:none}
 [${MENU_ATTRIBUTE}] [role="menuitem"]:disabled{opacity:.55;cursor:wait}
 [${MENU_ATTRIBUTE}] [role="menuitem"] svg{flex:none}
+[${TERMINAL_SUBMENU_ATTRIBUTE}]{margin:2px 0 0;padding:4px 0 0;border-top:1px solid color-mix(in srgb,currentColor 12%,transparent)}
+[${TERMINAL_SUBMENU_ATTRIBUTE}]::before{display:block;padding:4px 8px;color:color-mix(in srgb,currentColor 65%,transparent);font-size:11px;content:attr(data-label)}
+[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:30px;padding:5px 8px 5px 24px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit}
+[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]:hover,[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]:focus-visible{background:color-mix(in srgb,currentColor 12%,transparent);outline:none}
+[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]:disabled{opacity:.55;cursor:default}
+[${TERMINAL_SUBMENU_ATTRIBUTE}] [aria-checked="true"]::before{content:"✓";position:absolute;margin-left:-16px}
+[${TERMINAL_OPTION_ATTRIBUTE}][aria-checked="true"]{font-weight:600}
 [${MENU_ATTRIBUTE}] [data-codexhost-thread-actions-error]{padding:5px 8px;color:var(--color-token-text-warning,#b77b20);font-size:12px;overflow-wrap:anywhere}
 [${MENU_ATTRIBUTE}] [data-codexhost-thread-actions-error]:empty{display:none}
 `;
@@ -40,12 +53,34 @@ interface RowEntry {
   onContextMenu: (event: MouseEvent) => void;
 }
 
+interface TerminalSelection {
+  descriptors: ThreadTerminalDescriptor[];
+  selected: ThreadTerminalId | null;
+}
+
 function menuLabel(locale: Locale): string {
   return locale === "zh-CN" ? "更多操作" : "More actions";
 }
 
 function openTerminalLabel(locale: Locale): string {
   return locale === "zh-CN" ? "从终端打开" : "Open in Terminal";
+}
+
+function chooseTerminalLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "选择终端" : "Choose Terminal";
+}
+
+function notInstalledLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "未安装" : "Not installed";
+}
+
+function defaultTerminal(selection: TerminalSelection): ThreadTerminalDescriptor | null {
+  return (
+    selection.descriptors.find((terminal) => terminal.id === selection.selected) ??
+    selection.descriptors.find((terminal) => terminal.default && terminal.installed) ??
+    selection.descriptors.find((terminal) => terminal.installed) ??
+    null
+  );
 }
 
 function nativeThreadId(hostId: string, row: HTMLElement): string | null {
@@ -76,6 +111,32 @@ export function installRendererThreadActions(options: {
   let openMenu: HTMLElement | null = null;
   let disposed = false;
   let scheduled = false;
+  const terminalSelections = new Map<string, TerminalSelection>();
+  const terminalLoads = new Map<string, Promise<TerminalSelection>>();
+
+  const terminalSelection = async (hostId: string): Promise<TerminalSelection | null> => {
+    const client = options.getClient(hostId);
+    if (!client?.listThreadTerminals) return null;
+    const existing = terminalSelections.get(hostId);
+    if (existing) return existing;
+    let loading = terminalLoads.get(hostId);
+    if (!loading) {
+      loading = client
+        .listThreadTerminals()
+        .then((result) => {
+          const selection = { descriptors: result.terminals, selected: null };
+          terminalSelections.set(hostId, selection);
+          return selection;
+        })
+        .finally(() => terminalLoads.delete(hostId));
+      terminalLoads.set(hostId, loading);
+    }
+    try {
+      return await loading;
+    } catch {
+      return null;
+    }
+  };
 
   const closeMenu = (): void => {
     openMenu?.remove();
@@ -123,6 +184,7 @@ export function installRendererThreadActions(options: {
     threadId: string,
     menu: HTMLElement,
     item: HTMLButtonElement,
+    terminalId?: ThreadTerminalId,
   ): Promise<void> => {
     const client = options.getClient(hostId);
     if (!client?.openThreadTerminal) {
@@ -133,7 +195,19 @@ export function installRendererThreadActions(options: {
     item.disabled = true;
     if (error) error.textContent = "";
     try {
-      await client.openThreadTerminal({ threadId: hostThreadIdSchema.parse(threadId) });
+      const selection = await terminalSelection(hostId);
+      const selectedTerminal =
+        (terminalId
+          ? selection?.descriptors.find((terminal) => terminal.id === terminalId)
+          : null) ?? (selection ? defaultTerminal(selection) : null);
+      if (terminalId && selection && !selectedTerminal?.installed) {
+        throw new Error(notInstalledLabel(options.getLocale()));
+      }
+      if (selection && selectedTerminal) selection.selected = selectedTerminal.id;
+      await client.openThreadTerminal({
+        threadId: hostThreadIdSchema.parse(threadId),
+        ...(selectedTerminal ? { terminalId: selectedTerminal.id } : {}),
+      });
       if (openRow === row) closeMenu();
     } catch (failure) {
       if (disposed || openRow !== row) return;
@@ -144,6 +218,44 @@ export function installRendererThreadActions(options: {
         }`;
       }
     }
+  };
+
+  const appendTerminalOptions = (
+    menu: HTMLElement,
+    row: HTMLElement,
+    hostId: string,
+    threadId: string,
+    item: HTMLButtonElement,
+    selection: TerminalSelection,
+  ): void => {
+    const submenu = document.createElement("div");
+    submenu.setAttribute(TERMINAL_SUBMENU_ATTRIBUTE, "");
+    submenu.setAttribute("data-label", chooseTerminalLabel(options.getLocale()));
+    submenu.setAttribute("role", "group");
+    submenu.setAttribute("aria-label", chooseTerminalLabel(options.getLocale()));
+    const active = defaultTerminal(selection);
+    for (const terminal of selection.descriptors) {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.setAttribute("role", "menuitemradio");
+      option.setAttribute("aria-checked", terminal.id === active?.id ? "true" : "false");
+      option.setAttribute(TERMINAL_OPTION_ATTRIBUTE, "");
+      option.disabled = !terminal.installed;
+      const name = document.createElement("span");
+      name.textContent = terminal.name;
+      const state = document.createElement("span");
+      state.textContent = terminal.installed ? "" : notInstalledLabel(options.getLocale());
+      state.style.opacity = ".65";
+      state.style.fontSize = "12px";
+      option.append(name, state);
+      option.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void openTerminal(row, hostId, threadId, menu, item, terminal.id);
+      });
+      submenu.append(option);
+    }
+    menu.append(submenu);
   };
 
   const buildMenu = (row: HTMLElement, hostId: string, threadId: string): HTMLElement => {
@@ -173,6 +285,12 @@ export function installRendererThreadActions(options: {
     error.setAttribute("data-codexhost-thread-actions-error", "");
     error.setAttribute("role", "alert");
     menu.append(item, error);
+    void terminalSelection(hostId).then((selection) => {
+      if (!selection || disposed) return;
+      if (menu.querySelector(`[${TERMINAL_SUBMENU_ATTRIBUTE}]`)) return;
+      if (selection.descriptors.length > 1)
+        appendTerminalOptions(menu, row, hostId, threadId, item, selection);
+    });
     return menu;
   };
 

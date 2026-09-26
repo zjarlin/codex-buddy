@@ -48,10 +48,21 @@ export {
 } from "./idle-release.js";
 export {
   THREAD_TERMINAL_OPEN_METHOD,
+  THREAD_TERMINAL_LIST_METHOD,
+  threadTerminalDescriptorSchema,
+  threadTerminalIdSchema,
+  threadTerminalListParamsSchema,
+  threadTerminalListResultSchema,
   threadTerminalOpenParamsSchema,
   threadTerminalOpenResultSchema,
 } from "./thread-terminal.js";
-export type { ThreadTerminalOpenParams, ThreadTerminalOpenResult } from "./thread-terminal.js";
+export type {
+  ThreadTerminalDescriptor,
+  ThreadTerminalId,
+  ThreadTerminalListResult,
+  ThreadTerminalOpenParams,
+  ThreadTerminalOpenResult,
+} from "./thread-terminal.js";
 export {
   LOADED_SESSIONS_METHOD,
   loadedSessionsSchema,

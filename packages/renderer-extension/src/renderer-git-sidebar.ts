@@ -996,7 +996,7 @@ export function installRendererGitSidebar(options: {
       for (const item of result.models.filter((candidate) => candidate.eligible)) {
         const option = document.createElement("option");
         option.value = item.id;
-        option.textContent = `${item.label} · ${item.tier}${item.recommended ? " · 推荐" : ""}`;
+        option.textContent = `${item.recommended ? "★ " : ""}${item.label}`;
         model.append(option);
       }
       if (result.defaultModel) model.value = result.defaultModel;

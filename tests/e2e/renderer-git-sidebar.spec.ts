@@ -67,11 +67,12 @@ const { outputFiles } = await build({
         addOfficialButton("切换底部面板显示", "terminal");
         const client = {
           inspectGitStatus: async () => { calls.push(["status"]); return structuredClone(status); },
-          inspectGitDiff: async (input) => { calls.push(["diff", input]); return { path:input.path, diff:"+changed", truncated:false }; },
+          inspectGitDiff: async (input) => { calls.push(["diff", input]); return { path:input.path, diff:input.path === "vendor/lib" ? "-Subproject commit abc123\\n+Subproject commit abc123-dirty" : "+changed", truncated:false }; },
           inspectGitContent: async (input) => {
             calls.push(["content", input]);
             return {
               path: input.path,
+              kind: input.path === "vendor/lib" ? "submodule" : "file",
               baseLabel: "HEAD",
               base: "export const app = false;\\n",
               working: "export const app = true;\\n",
@@ -970,6 +971,46 @@ test("keeps pending saves and stage clicks single, preserving edits made during 
     expectedRevision: "a".repeat(64),
   });
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveSave());
+  expect(errors).toEqual([]);
+});
+
+test("previews a submodule as a read-only Git diff and restores the file editor after switching files", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.locator('.codexhost-git-directory[title="vendor"]').click();
+  await root.locator('.codexhost-git-change[title="vendor/lib"]').click();
+  const content = page.locator("[data-codexhost-git-content]");
+  await expect(content.locator(".codexhost-git-diff")).toContainText(
+    "+Subproject commit abc123-dirty",
+  );
+  await expect(content.locator(".status")).toContainText("子模块仅展示提交引用差异");
+  await expect(content.getByRole("button", { name: "并排", exact: true })).toBeHidden();
+  await expect(content.getByRole("button", { name: "结果", exact: true })).toBeHidden();
+  await expect(content.getByRole("button", { name: "保存", exact: true })).toBeHidden();
+  await expect(content.getByRole("button", { name: "暂存", exact: true })).toBeEnabled();
+  await page.keyboard.press("Meta+s");
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+        ([name]: string[]) => name === "writeFile",
+      ),
+    ),
+  ).toEqual([]);
+  await root.locator('.codexhost-git-directory[title="src"]').click();
+  await root.locator('.codexhost-git-change[title="src/app.ts"]').click();
+  await content.getByRole("button", { name: "结果", exact: true }).click();
+  await expect(content.getByRole("textbox", { name: "合并结果" })).toHaveValue(
+    "export const app = true;\n",
+  );
+  await expect(content.getByRole("button", { name: "保存", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

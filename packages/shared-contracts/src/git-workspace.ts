@@ -232,6 +232,7 @@ export type GitDiffResult = z.infer<typeof gitDiffResultSchema>;
 export const gitContentResultSchema = z
   .object({
     path: gitFilePathSchema,
+    kind: z.enum(["file", "submodule", "directory"]).optional(),
     baseLabel: z.string(),
     base: z.string(),
     working: z.string(),

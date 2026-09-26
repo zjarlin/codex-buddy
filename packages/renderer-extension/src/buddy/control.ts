@@ -1,9 +1,5 @@
-import type {
-  BuddyDecision,
-  BuddyModelRefresh,
-  BuddySettings,
-  BuddySnapshot,
-} from "@codexhost/shared-contracts";
+import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
+import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { plannerInputControl } from "./planner-input.js";
 
@@ -12,15 +8,27 @@ const messages = {
     waiting: "夯规划 → 垃执行",
     disabled: "固定模型 · 不规划",
     disconnected: "未连接路由",
-    enabled: "自动规划",
+    enabled: "Auto Router",
+    planningMode: "自动规划",
     privateMode: "隐私",
     privateActive: "隐私 · 自动选择离线模型",
     bypass: "旁路优先",
     modeGroup: "运行模式",
+    privateGroup: "隐私模式",
+    routerGroup: "Auto Router",
+    planningGroup: "自动规划",
     routeGroup: "路由策略",
-    modelGroup: "模型偏好",
-    enabledHint: "按任务难度自动选择规划与执行模型",
+    modelGroup: "规划与执行模型",
+    routingTab: "路由",
+    interruptedTab: "中断会话",
+    taskTab: "任务详情",
+    enabledHint: "接管普通请求；关闭后使用当前选定模型直接执行",
     privateHint: "只使用离线 q3 模型，优先于普通路由",
+    privateOwnerHint: "开启后接管普通 Auto Router，下面的路由策略不可配置。",
+    routerOwnerHint: "System One、旁路和自动规划都隶属于 Auto Router。",
+    planningOwnerHint: "复杂任务先由夯模型只读规划；常规任务直接执行。",
+    planningDisabledHint: "Auto Router 已关闭，使用当前选定模型直接执行。",
+    privateDisabledHint: "隐私模式已接管普通 Auto Router。",
     bypassHint: "推送请求直达垃模型；精确只读命令可零模型执行",
     jevHint: "用 JEV System One 判断路由、难度、推送意图和执行角色",
     jevKey: "JEV API Key",
@@ -59,12 +67,16 @@ const messages = {
     planner: "夯 · 规划模型",
     worker: "垃 · 执行模型",
     choose: "动态选择",
-    refresh: "刷新模型",
-    refreshSummary: (value: BuddyModelRefresh) =>
-      `远程返回 ${value.returned} 个，同步 ${value.synchronized} 个，可路由 ${value.eligible} 个` as string,
     cancel: "取消规划",
     cancelRecovery: "取消自动续接",
     retrying: "等待自动续接",
+    interruptedGroup: "最近中断会话",
+    interruptedHint: "点击会话可手动恢复最近中断的请求。",
+    interruptedEmpty: "暂无最近中断会话。",
+    interruptedLoading: "正在读取最近中断会话…",
+    resume: "恢复",
+    resuming: "正在恢复…",
+    resumeFailed: "恢复失败",
     roleLabel: "执行角色",
     reason: "路由依据",
     jev: "JEV 判断",
@@ -90,21 +102,35 @@ const messages = {
     bypassPhase: "命令旁路",
     completed: "已结束",
     failed: "失败",
+    interrupted: "已中断",
     cancelled: "已取消",
   },
   en: {
     waiting: "夯 plans → 垃 executes",
     disabled: "Fixed model · No planning",
     disconnected: "Router disconnected",
-    enabled: "Automatic planning",
+    enabled: "Auto Router",
+    planningMode: "Automatic planning",
     privateMode: "Private",
     privateActive: "Private · Automatic offline model",
     bypass: "Prefer bypass",
     modeGroup: "Mode",
+    privateGroup: "Private mode",
+    routerGroup: "Auto Router",
+    planningGroup: "Automatic planning",
     routeGroup: "Routing",
-    modelGroup: "Models",
-    enabledHint: "Choose planning and execution models by task difficulty",
+    modelGroup: "Planning and execution models",
+    routingTab: "Routing",
+    interruptedTab: "Interrupted",
+    taskTab: "Task details",
+    enabledHint: "Take over ordinary requests; off uses the selected model directly",
     privateHint: "Use offline q3 models and take priority over normal routing",
+    privateOwnerHint: "Takes over normal Auto Router; routing controls below cannot be configured.",
+    routerOwnerHint: "System One, bypass, and automatic planning all belong to Auto Router.",
+    planningOwnerHint:
+      "Use the 夯 model for read-only planning on complex tasks; execute ordinary tasks directly.",
+    planningDisabledHint: "Auto Router is off; use the selected model directly.",
+    privateDisabledHint: "Private mode has taken over normal Auto Router.",
     bypassHint: "Route push requests to 垃; exact read-only commands can run without a model",
     jevHint: "Use JEV System One to judge route, difficulty, push intent, and execution role",
     jevKey: "JEV API key",
@@ -145,12 +171,16 @@ const messages = {
     planner: "夯 · Planner",
     worker: "垃 · Executor",
     choose: "Dynamic selection",
-    refresh: "Refresh models",
-    refreshSummary: (value: BuddyModelRefresh) =>
-      `${value.returned} returned, ${value.synchronized} synced, ${value.eligible} routable` as string,
     cancel: "Cancel planning",
     cancelRecovery: "Cancel recovery",
     retrying: "Waiting to continue",
+    interruptedGroup: "Recent interrupted conversations",
+    interruptedHint: "Click a conversation to resume its interrupted request.",
+    interruptedEmpty: "No recently interrupted conversations.",
+    interruptedLoading: "Loading recently interrupted conversations…",
+    resume: "Resume",
+    resuming: "Resuming…",
+    resumeFailed: "Resume failed",
     roleLabel: "Execution role",
     reason: "Routing reason",
     jev: "JEV judgment",
@@ -176,6 +206,7 @@ const messages = {
     bypassPhase: "Command bypass",
     completed: "Finished",
     failed: "Failed",
+    interrupted: "Interrupted",
     cancelled: "Cancelled",
   },
 };
@@ -188,10 +219,15 @@ const style = `
 [data-buddy-router][data-model-bypass] summary{border:2px solid #508df2;background:color-mix(in srgb,#4385ff 16%,transparent)}
 [data-buddy-router][data-model-bypass] summary b{background:#245ec4;color:#fff;border-radius:5px;padding:2px 6px}
 [data-buddy-router] .buddy-panel{padding:8px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:9px;margin-top:5px;background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:inherit;max-height:300px;overflow:auto;color-scheme:inherit}
+[data-buddy-router] .buddy-tabs{display:flex;gap:4px;margin:0 0 8px;padding:2px;border-radius:8px;background:color-mix(in srgb,currentColor 6%,transparent)}
+[data-buddy-router] .buddy-tab{flex:1;min-width:0;padding:4px 7px;border:0;border-radius:6px;font-size:11px;color:inherit;opacity:.7}
+[data-buddy-router] .buddy-tab[aria-selected=true]{background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));opacity:1;box-shadow:0 1px 3px rgb(0 0 0 / 14%)}
+[data-buddy-router] .buddy-tab-panel[hidden]{display:none}
 [data-buddy-router] .buddy-settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 12px;margin-bottom:6px}
 [data-buddy-router] .buddy-section{display:contents}
 [data-buddy-router] .buddy-section-title{display:none}
 [data-buddy-router] .buddy-setting{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;min-height:28px}
+[data-buddy-router] .buddy-setting[data-disabled=true]{opacity:.48}
 [data-buddy-router] .buddy-setting-copy{min-width:0;flex-shrink:0}
 [data-buddy-router] .buddy-setting-copy b{font-weight:500;font-size:11px;line-height:16px}
 [data-buddy-router] .buddy-setting-copy small{display:none}
@@ -200,6 +236,7 @@ const style = `
 [data-buddy-router] .buddy-switch:checked{border-color:#508df2;background:#508df2}
 [data-buddy-router] .buddy-switch:checked::after{transform:translateX(14px)}
 [data-buddy-router] .buddy-select{width:100%;max-width:190px;min-width:0;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:3px 5px;font-size:11px;height:26px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
+[data-buddy-router] .buddy-select:disabled,[data-buddy-router] .buddy-switch:disabled,[data-buddy-router] .buddy-key input:disabled,[data-buddy-router] .buddy-key button:disabled{cursor:default}
 [data-buddy-router] .buddy-section>button{justify-self:start;margin-top:2px}
 [data-buddy-router] .buddy-actions:not(:empty){display:flex;gap:6px;margin:0}
 [data-buddy-router] .buddy-key{display:flex;flex-direction:column;gap:6px;grid-column:1/-1;margin:6px 0}
@@ -207,6 +244,16 @@ const style = `
 [data-buddy-router] .buddy-key-status{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 [data-buddy-router] .buddy-key-state{font-size:11px;opacity:.75}
 [data-buddy-router] .buddy-key-state[data-configured=true]{color:#3fa96a;opacity:1}
+[data-buddy-router] .buddy-interrupted{grid-column:1/-1;display:flex;flex-direction:column;gap:5px;margin:5px 0}
+[data-buddy-router] .buddy-interrupted-heading{font-size:11px;font-weight:500}
+[data-buddy-router] .buddy-interrupted-note{font-size:11px;opacity:.65}
+[data-buddy-router] .buddy-interrupted-list{display:flex;flex-direction:column;gap:4px;min-width:0}
+[data-buddy-router] .buddy-interrupted-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:7px;padding:6px 7px}
+[data-buddy-router] .buddy-interrupted-copy{min-width:0}
+[data-buddy-router] .buddy-interrupted-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
+[data-buddy-router] .buddy-interrupted-status{display:block;margin-top:2px;font-size:10px;opacity:.65}
+[data-buddy-router] .buddy-interrupted-item button{padding:3px 8px;font-size:10px}
+[data-buddy-router] .buddy-interrupted-error{color:#d65f55}
 [data-buddy-router] .buddy-footer{display:flex;align-items:center;justify-content:flex-end;gap:6px}
 [data-buddy-router] :is(dl,p):empty{display:none}
 [data-buddy-router] button{display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;padding:4px 10px}
@@ -248,8 +295,23 @@ export function installBuddyControl(
   summary.append(title, status);
   const panel = document.createElement("div");
   panel.className = "buddy-panel";
+  const tabs = document.createElement("div");
+  tabs.className = "buddy-tabs";
+  tabs.setAttribute("role", "tablist");
+  const routingPanel = document.createElement("div");
+  routingPanel.className = "buddy-tab-panel";
+  routingPanel.dataset.buddyTabPanel = "routing";
+  const interruptedPanel = document.createElement("div");
+  interruptedPanel.className = "buddy-tab-panel";
+  interruptedPanel.dataset.buddyTabPanel = "interrupted";
+  const taskPanel = document.createElement("div");
+  taskPanel.className = "buddy-tab-panel";
+  taskPanel.dataset.buddyTabPanel = "task";
+  const taskEmpty = document.createElement("p");
+  taskEmpty.className = "buddy-note";
   const controls = document.createElement("div");
   controls.className = "buddy-settings";
+  const routingFields = document.createElement("dl");
   const actions = document.createElement("div");
   actions.className = "buddy-actions";
   const fields = document.createElement("dl");
@@ -257,22 +319,28 @@ export function installBuddyControl(
   error.setAttribute("role", "alert");
   const note = document.createElement("p");
   note.className = "buddy-note";
-  const refreshStatus = document.createElement("p");
-  refreshStatus.setAttribute("role", "status");
-  refreshStatus.className = "buddy-note";
   const footer = document.createElement("div");
   footer.className = "buddy-footer";
   footer.append(actions);
   const inputArea = document.createElement("div");
   let inputKey = "";
   let inputClient: RendererModelClient | null = null;
-  panel.append(inputArea, controls, fields, error, refreshStatus, note, footer);
+  routingPanel.append(controls, routingFields);
+  taskPanel.append(inputArea, taskEmpty, fields, error, note, footer);
+  panel.append(tabs, routingPanel, interruptedPanel, taskPanel);
   root.append(styles, summary, panel);
   let disposed = false;
   let busy = false;
   let snapshot: BuddySnapshot | null = null;
+  let interrupted: BuddyInterrupted["threads"] = [];
+  let interruptedClient: RendererModelClient | null = null;
+  let interruptedLoading = false;
+  let interruptedError = "";
+  let interruptedUpdatedAt = 0;
+  const resumePending = new Set<string>();
   let context: BuddyControlContext | null = null;
   let fingerprint = "";
+  let activeTab: "routing" | "interrupted" | "task" = "routing";
   const t = () => messages[getLocale()];
   const report = (failure: unknown): void => {
     error.textContent = failure instanceof Error ? failure.message : String(failure);
@@ -289,12 +357,63 @@ export function installBuddyControl(
       report(failure);
     }
   };
-  const row = (label: string, value: string): void => {
+  const interruptedKey = (thread: BuddyInterrupted["threads"][number]): string =>
+    JSON.stringify([thread.threadId, thread.turnId]);
+  const refreshInterrupted = async (client: RendererModelClient, force = false): Promise<void> => {
+    if (
+      !client.buddyInterrupted ||
+      (interruptedClient === client && !force && Date.now() - interruptedUpdatedAt < 15_000)
+    ) {
+      return;
+    }
+    interruptedClient = client;
+    interruptedLoading = true;
+    interruptedError = "";
+    try {
+      const result = await client.buddyInterrupted();
+      if (disposed || context?.client !== client) return;
+      interrupted = result.threads;
+      interruptedUpdatedAt = Date.now();
+    } catch (failure) {
+      if (disposed || context?.client !== client) return;
+      interrupted = [];
+      interruptedError = failure instanceof Error ? failure.message : String(failure);
+    } finally {
+      if (context?.client === client) {
+        interruptedLoading = false;
+        render();
+      }
+    }
+  };
+  const resumeInterrupted = async (
+    client: RendererModelClient,
+    thread: BuddyInterrupted["threads"][number],
+  ): Promise<void> => {
+    const key = interruptedKey(thread);
+    if (!client.buddyContinue || resumePending.has(key)) return;
+    resumePending.add(key);
+    interruptedError = "";
+    render();
+    try {
+      await client.buddyContinue(thread.threadId, thread.turnId);
+      if (disposed || context?.client !== client) return;
+      interrupted = interrupted.filter((candidate) => interruptedKey(candidate) !== key);
+      snapshot = (await client.buddyStatus?.()) ?? snapshot;
+      render();
+    } catch (failure) {
+      if (disposed || context?.client !== client) return;
+      interruptedError = `${t().resumeFailed}: ${failure instanceof Error ? failure.message : String(failure)}`;
+    } finally {
+      resumePending.delete(key);
+      if (context?.client === client) render();
+    }
+  };
+  const row = (label: string, value: string, parent: HTMLElement = fields): void => {
     const dt = document.createElement("dt");
     dt.textContent = label;
     const dd = document.createElement("dd");
     dd.textContent = value;
-    fields.append(dt, dd);
+    parent.append(dt, dd);
   };
   const section = (title: string): HTMLElement => {
     const section = document.createElement("section");
@@ -306,14 +425,54 @@ export function installBuddyControl(
     controls.append(section);
     return section;
   };
+  const renderTabs = (): void => {
+    const m = t();
+    const tabsConfig = [
+      ["routing", m.routingTab],
+      ["interrupted", m.interruptedTab],
+      ["task", m.taskTab],
+    ] as const;
+    if (tabs.childElementCount !== tabsConfig.length) {
+      tabs.replaceChildren();
+      for (const [id, label] of tabsConfig) {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.className = "buddy-tab";
+        tab.dataset.buddyTab = id;
+        tab.setAttribute("role", "tab");
+        tab.textContent = label;
+        tab.addEventListener("click", () => {
+          activeTab = id;
+          renderTabs();
+        });
+        tabs.append(tab);
+      }
+    } else {
+      for (const [index, [id, label]] of tabsConfig.entries()) {
+        const tab = tabs.children[index] as HTMLButtonElement;
+        tab.textContent = label;
+        tab.dataset.buddyTab = id;
+      }
+    }
+    for (const tab of tabs.querySelectorAll<HTMLButtonElement>("[data-buddy-tab]")) {
+      const selected = tab.dataset.buddyTab === activeTab;
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+    }
+    routingPanel.hidden = activeTab !== "routing";
+    interruptedPanel.hidden = activeTab !== "interrupted";
+    taskPanel.hidden = activeTab !== "task";
+  };
   const switchRow = (
     parent: HTMLElement,
     label: string,
-    key: "enabled" | "bypass" | "privateMode" | "jev",
+    key: "enabled" | "planning" | "bypass" | "privateMode" | "jev",
     hint: string,
+    disabled = false,
   ): void => {
     const wrapper = document.createElement("label");
     wrapper.className = "buddy-setting";
+    wrapper.dataset.disabled = String(disabled);
     wrapper.title = hint;
     const copy = document.createElement("span");
     copy.className = "buddy-setting-copy";
@@ -328,6 +487,7 @@ export function installBuddyControl(
     input.setAttribute("role", "switch");
     input.checked = snapshot?.settings[key] ?? false;
     input.setAttribute("aria-checked", String(input.checked));
+    input.disabled = disabled;
     input.addEventListener("change", () => {
       input.setAttribute("aria-checked", String(input.checked));
       void setting({ [key]: input.checked });
@@ -342,9 +502,11 @@ export function installBuddyControl(
     entries: [string, string][],
     selected: string,
     change: (id: string) => void,
+    disabled = false,
   ): void => {
     const wrapper = document.createElement("label");
     wrapper.className = "buddy-setting";
+    wrapper.dataset.disabled = String(disabled);
     wrapper.title = hint;
     const copy = document.createElement("span");
     copy.className = "buddy-setting-copy";
@@ -363,6 +525,7 @@ export function installBuddyControl(
       input.append(option);
     }
     input.value = selected;
+    input.disabled = disabled;
     input.addEventListener("change", () => change(input.value));
     wrapper.append(copy, input);
     parent.append(wrapper);
@@ -377,7 +540,7 @@ export function installBuddyControl(
     parent.append(button);
   };
   // JEV 连接配置：密钥只提交给 Host 且不回填，网关地址可回填显示。
-  const keyRow = (parent: HTMLElement): void => {
+  const keyRow = (parent: HTMLElement, disabled = false): void => {
     const client = context?.client;
     if (!client?.buddyJevKey) {
       return;
@@ -389,12 +552,14 @@ export function installBuddyControl(
     keyInput.type = "password";
     keyInput.autocomplete = "off";
     keyInput.spellcheck = false;
+    keyInput.disabled = disabled;
     keyInput.placeholder = t().jevKeyPlaceholder;
     keyInput.setAttribute("aria-label", t().jevKey);
     const urlInput = document.createElement("input");
     urlInput.type = "url";
     urlInput.autocomplete = "off";
     urlInput.spellcheck = false;
+    urlInput.disabled = disabled;
     urlInput.placeholder = t().jevBaseUrlPlaceholder;
     urlInput.setAttribute("aria-label", t().jevBaseUrl);
     urlInput.title = t().jevBaseUrlHint;
@@ -410,6 +575,7 @@ export function installBuddyControl(
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = t().jevKeySave;
+    save.disabled = disabled;
     save.addEventListener("click", () => {
       const typedKey = keyInput.value.trim();
       // 未重新输入密钥时省略 apiKey，保留已存密钥；网关地址总是按输入框同步。
@@ -428,6 +594,7 @@ export function installBuddyControl(
     const clear = document.createElement("button");
     clear.type = "button";
     clear.textContent = t().jevKeyClear;
+    clear.disabled = disabled;
     clear.addEventListener("click", () => {
       void (async () => {
         snapshot = (await client.buddyJevKey?.({ apiKey: null, baseURL: null })) ?? snapshot;
@@ -439,6 +606,64 @@ export function installBuddyControl(
     wrapper.append(keyInput, urlInput, status);
     parent.append(wrapper);
   };
+  const interruptedRow = (parent: HTMLElement): void => {
+    const client = context?.client;
+    if (!client?.buddyInterrupted || !client.buddyContinue) {
+      return;
+    }
+    const wrapper = document.createElement("div");
+    wrapper.className = "buddy-interrupted";
+    const heading = document.createElement("b");
+    heading.className = "buddy-interrupted-heading";
+    heading.textContent = t().interruptedGroup;
+    const note = document.createElement("div");
+    note.className = "buddy-interrupted-note";
+    note.textContent = interruptedLoading ? t().interruptedLoading : t().interruptedHint;
+    wrapper.append(heading, note);
+    if (interruptedError) {
+      const failure = document.createElement("div");
+      failure.className = "buddy-interrupted-note buddy-interrupted-error";
+      failure.setAttribute("role", "status");
+      failure.textContent = interruptedError;
+      wrapper.append(failure);
+    }
+    if (!interruptedLoading && interrupted.length === 0 && !interruptedError) {
+      const empty = document.createElement("div");
+      empty.className = "buddy-interrupted-note";
+      empty.textContent = t().interruptedEmpty;
+      wrapper.append(empty);
+    }
+    if (interrupted.length > 0) {
+      const list = document.createElement("div");
+      list.className = "buddy-interrupted-list";
+      for (const thread of interrupted) {
+        const item = document.createElement("div");
+        item.className = "buddy-interrupted-item";
+        const copy = document.createElement("span");
+        copy.className = "buddy-interrupted-copy";
+        const title = document.createElement("b");
+        title.className = "buddy-interrupted-title";
+        title.title = thread.title;
+        title.textContent = thread.title;
+        const state = document.createElement("small");
+        state.className = "buddy-interrupted-status";
+        state.textContent = t()[thread.status];
+        copy.append(title, state);
+        const resume = document.createElement("button");
+        resume.type = "button";
+        resume.textContent = resumePending.has(interruptedKey(thread)) ? t().resuming : t().resume;
+        resume.disabled = resumePending.has(interruptedKey(thread));
+        resume.addEventListener("click", () => {
+          void resumeInterrupted(client, thread);
+        });
+        item.append(copy, resume);
+        list.append(item);
+      }
+      wrapper.append(list);
+    }
+    wrapper.title = t().interruptedHint;
+    parent.append(wrapper);
+  };
   const render = (): void => {
     const m = t();
     if (!snapshot) {
@@ -448,6 +673,15 @@ export function installBuddyControl(
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
     const pending =
       snapshot.settings.enabled && !snapshot.settings.privateMode ? decision?.pendingInput : null;
+    if (
+      pending ||
+      (decision &&
+        snapshot.settings.enabled &&
+        !snapshot.settings.privateMode &&
+        ["planning", "discovering", "retrying"].includes(decision.phase))
+    ) {
+      activeTab = "task";
+    }
     root.toggleAttribute("data-planner-input", Boolean(pending));
     const nextInputKey = pending ? JSON.stringify([decision?.threadId, pending, getLocale()]) : "";
     if (nextInputKey !== inputKey || inputClient !== context?.client) {
@@ -514,80 +748,92 @@ export function installBuddyControl(
     if (bypass) {
       status.textContent += ` · ${m.skipPlanner} · ${m.bypassScore} ${bypassScore}`;
     }
-    const signature = JSON.stringify([snapshot, context?.threadId, getLocale()]);
+    const signature = JSON.stringify([
+      snapshot,
+      context?.threadId,
+      getLocale(),
+      interrupted,
+      interruptedLoading,
+      interruptedError,
+      [...resumePending],
+    ]);
     if (signature === fingerprint) {
       return;
     }
     fingerprint = signature;
     controls.replaceChildren();
+    routingFields.replaceChildren();
     actions.replaceChildren();
     fields.replaceChildren();
     error.textContent = "";
-    const mode = section(m.modeGroup);
-    switchRow(mode, m.privateMode, "privateMode", m.privateHint);
-    switchRow(mode, m.enabled, "enabled", m.enabledHint);
-    if (!snapshot.settings.privateMode && snapshot.settings.enabled) {
-      const route = section(m.routeGroup);
-      switchRow(route, m.bypass, "bypass", m.bypassHint);
-      switchRow(route, m.jev, "jev", m.jevHint);
-      if (snapshot.settings.jev) {
-        select(
-          route,
-          m.systemOneModel,
-          m.systemOneModelHint,
-          [
-            ["typesafe/jev", m.systemOneModelJev],
-            ["laya", m.systemOneModelLaya],
-          ],
-          snapshot.settings.systemOneModel,
-          (model) => {
-            void setting({ systemOneModel: model });
-          },
-        );
-        keyRow(route);
+    const privacy = section(m.privateGroup);
+    switchRow(privacy, m.privateMode, "privateMode", m.privateHint);
+    row(m.privateMode, m.privateOwnerHint, routingFields);
+    const router = section(m.routerGroup);
+    switchRow(router, m.enabled, "enabled", m.enabledHint);
+    row(m.enabled, m.routerOwnerHint, routingFields);
+    if (!snapshot.settings.enabled || snapshot.settings.privateMode) {
+      row(
+        m.routeGroup,
+        snapshot.settings.privateMode ? m.privateDisabledHint : m.planningDisabledHint,
+        routingFields,
+      );
+    }
+    const routingDisabled = !snapshot.settings.enabled || snapshot.settings.privateMode;
+    const route = section(m.routeGroup);
+    switchRow(route, m.bypass, "bypass", m.bypassHint, routingDisabled);
+    switchRow(route, m.jev, "jev", m.jevHint, routingDisabled);
+    if (snapshot.settings.jev) {
+      keyRow(route, routingDisabled);
+    }
+    select(
+      route,
+      m.roleLabel,
+      m.roleHint,
+      ["auto", "git", "io", "executor"].map((role) => [
+        role,
+        m[role as "auto" | "git" | "io" | "executor"],
+      ]),
+      snapshot.settings.role,
+      (role) => {
+        void setting({ role: role as BuddySettings["role"] });
+      },
+      routingDisabled,
+    );
+    const planning = section(m.planningGroup);
+    switchRow(planning, m.planningMode, "planning", m.planningOwnerHint, routingDisabled);
+    const models = section(m.modelGroup);
+    for (const [key, tier, label, hint] of [
+      ["plannerModel", "夯", m.planner, m.plannerHint],
+      ["executorModel", "垃", m.worker, m.workerHint],
+    ] as const) {
+      const options: [string, string][] = [
+        ["", m.choose],
+        ...snapshot.models
+          .filter((model) => model.eligible && model.tier === tier)
+          .map((model): [string, string] => [model.id, model.id]),
+      ];
+      const configured = snapshot.settings[key];
+      if (configured && !options.some(([id]) => id === configured)) {
+        options.push([configured, `${configured} (${m.unknown})`]);
       }
       select(
-        route,
-        m.roleLabel,
-        m.roleHint,
-        ["auto", "git", "io", "executor"].map((role) => [
-          role,
-          m[role as "auto" | "git" | "io" | "executor"],
-        ]),
-        snapshot.settings.role,
-        (role) => {
-          void setting({ role: role as BuddySettings["role"] });
-        },
-      );
-      const models = section(m.modelGroup);
-      for (const [key, tier, label, hint] of [
-        ["plannerModel", "夯", m.planner, m.plannerHint],
-        ["executorModel", "垃", m.worker, m.workerHint],
-      ] as const) {
-        const options: [string, string][] = [
-          ["", m.choose],
-          ...snapshot.models
-            .filter((model) => model.eligible && model.tier === tier)
-            .map((model): [string, string] => [model.id, model.id]),
-        ];
-        const configured = snapshot.settings[key];
-        if (configured && !options.some(([id]) => id === configured)) {
-          options.push([configured, `${configured} (${m.unknown})`]);
-        }
-        select(models, label, hint, options, configured ?? "", (id) => {
+        models,
+        label,
+        hint,
+        options,
+        configured ?? "",
+        (id) => {
           void setting({ [key]: id || null });
-        });
-      }
-      button(actions, m.refresh, async () => {
-        const client = context?.client;
-        if (!client?.buddyModels) {
-          return;
-        }
-        snapshot = await client.buddyModels();
-        render();
-      });
+        },
+        routingDisabled || (key === "plannerModel" && !snapshot.settings.planning),
+      );
     }
-    if (decision && snapshot.settings.enabled) {
+    interruptedPanel.replaceChildren();
+    if (snapshot.settings.enabled && !snapshot.settings.privateMode) {
+      interruptedRow(interruptedPanel);
+    }
+    if (decision && snapshot.settings.enabled && !snapshot.settings.privateMode) {
       if (bypass) {
         row(m.bypassScore, bypassScore);
         fields.lastElementChild?.setAttribute("title", m.bypassScoreHint);
@@ -640,16 +886,14 @@ export function installBuddyControl(
         });
       }
     }
-    refreshStatus.textContent = snapshot.modelRefresh
-      ? m.refreshSummary(snapshot.modelRefresh)
-      : "";
-    refreshStatus.hidden = !refreshStatus.textContent;
+    taskEmpty.textContent = fields.childElementCount === 0 ? m.idle : "";
     note.textContent = bypass ? m.bypassScoreHint : "";
     summary.title = snapshot.settings.enabled
       ? m.note
       : getLocale() === "zh-CN"
-        ? "使用当前选定模型直接执行；开启自动规划可恢复规划与执行分工。"
-        : "Use the selected model directly. Enable automatic planning to resume routing.";
+        ? "使用当前选定模型直接执行；开启 Auto Router 可恢复系统判断与路由策略。"
+        : "Use the selected model directly. Enable Auto Router to restore System One and routing.";
+    renderTabs();
   };
   const refreshContext = (): void => {
     const next = disposed ? null : getContext();
@@ -657,6 +901,14 @@ export function installBuddyControl(
       inputArea.replaceChildren();
       inputKey = "";
       inputClient = null;
+      if (context?.client !== next?.client) {
+        interrupted = [];
+        interruptedClient = null;
+        interruptedLoading = false;
+        interruptedError = "";
+        interruptedUpdatedAt = 0;
+        resumePending.clear();
+      }
     }
     context = next;
     if (!next) {
@@ -684,6 +936,14 @@ export function installBuddyControl(
         return;
       }
       snapshot = value;
+      if (
+        value.settings.enabled &&
+        !value.settings.privateMode &&
+        next.client.buddyInterrupted &&
+        next.client.buddyContinue
+      ) {
+        void refreshInterrupted(next.client);
+      }
       render();
     } catch (failure) {
       status.textContent = t().disconnected;

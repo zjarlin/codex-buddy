@@ -56,6 +56,12 @@ export function installSidebarContinuation(options: {
   const chinese = () => options.getLocale() === "zh-CN";
   const keyFor = (hostId: string, thread: InterruptedThread) =>
     JSON.stringify([hostId, thread.threadId, thread.turnId]);
+  const nativeThreadId = (hostId: string, row: HTMLElement): string | null => {
+    const threadId = threadIdFromSidebarRowElement(row);
+    if (!threadId) return null;
+    const hostPrefix = `${hostId}:`;
+    return threadId.startsWith(hostPrefix) ? threadId.slice(hostPrefix.length) : threadId;
+  };
   const clear = (row: HTMLElement) => {
     const entry = mounted.get(row);
     if (!entry) return;
@@ -136,7 +142,7 @@ export function installSidebarContinuation(options: {
     }
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
-      const threadId = threadIdFromSidebarRowElement(row);
+      const threadId = hostId ? nativeThreadId(hostId, row) : null;
       const client = hostId ? options.getClient(hostId) : null;
       if (
         !hostId ||

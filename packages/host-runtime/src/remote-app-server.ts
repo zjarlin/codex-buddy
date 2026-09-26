@@ -6,6 +6,8 @@ import { PassThrough, type Readable, type Writable } from "node:stream";
 
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
 
+import { OFFICIAL_APP_SERVER_MAX_FRAME_BYTES } from "@codexhost/shared-contracts";
+
 import { withRemoteAppServerSocketInitializationLock } from "./remote-socket-lock.js";
 
 export { withRemoteAppServerSocketInitializationLock } from "./remote-socket-lock.js";
@@ -368,7 +370,10 @@ export function createRemoteAppServerWebSocketListener(input: {
     response.writeHead(426, { Connection: "Upgrade", Upgrade: "websocket" });
     response.end();
   });
-  const webSockets = new WebSocketServer({ server, maxPayload: 128 * 1024 * 1024 });
+  const webSockets = new WebSocketServer({
+    server,
+    maxPayload: OFFICIAL_APP_SERVER_MAX_FRAME_BYTES,
+  });
   webSockets.on("error", (error) => {
     input.diagnosticOutput.write(`codexhost remote WebSocket server: ${error.message}\n`);
   });

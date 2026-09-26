@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type RendererSettingsBounds,
   installRendererSettingsHeaderTrigger,
+  installSystemOneModelHeaderControl,
   mountRendererSettingsTrigger,
   selectRendererSettingsHeaderSlot,
 } from "../../src/settings/trigger.js";
+import type { RendererModelClient } from "../../src/renderer-model-client.js";
 
 function bounds(left: number, top: number, width: number, height: number): RendererSettingsBounds {
   return {
@@ -29,6 +31,7 @@ class FakeHeaderElement {
   parentElement: FakeHeaderElement | null = null;
   title = "";
   type = "";
+  value = "";
 
   constructor(
     readonly left = 0,
@@ -55,6 +58,11 @@ class FakeHeaderElement {
   }
   appendChild(child: FakeHeaderElement): FakeHeaderElement {
     return this.insertBefore(child, null);
+  }
+  contains(node: FakeHeaderElement | null): boolean {
+    if (!node) return false;
+    if (node === this) return true;
+    return this.children.some((child) => child.contains(node));
   }
   getBoundingClientRect(): DOMRect {
     return {
@@ -250,6 +258,9 @@ describe("Renderer settings header trigger", () => {
     expect(control.updateButton.style.display).toBe("none");
     control.setUpdateAvailable(true);
     expect(control.updateButton.style.display).toBe("inline-flex");
+    const brandLabel = (control.button.children[1] as unknown as { textContent: string })
+      .textContent;
+    expect(brandLabel).toBe("CodexBuddy");
     expect(control.updateButton.style.background).toBe("#2563eb");
     expect(control.updateButton.style.color).toBe("#ffffff");
     expect(
@@ -377,5 +388,109 @@ describe("Renderer settings header trigger", () => {
         },
       ]),
     ).toBeNull();
+  });
+});
+
+describe("System One model header control", () => {
+  it("mounts beside the native actions and saves the selected System One model", async () => {
+    const shell = createFakeHeader({ nativeActions: true });
+    const document = stubHeaderDocument(() => shell.header);
+    const buddyConfigure = vi.fn(async (settings) => ({
+      settings,
+      models: [],
+      decisions: [],
+      jevKeyConfigured: false,
+      jevBaseUrl: null,
+    }));
+    const client = {
+      buddyStatus: vi.fn(async () => ({
+        settings: {
+          enabled: true,
+          planning: true,
+          privateMode: false,
+          role: "auto",
+          bypass: true,
+          jev: true,
+          systemOneModel: "typesafe/jev",
+          plannerModel: null,
+          executorModel: null,
+        },
+        models: [],
+        decisions: [],
+        jevKeyConfigured: false,
+        jevBaseUrl: null,
+      })),
+      buddyConfigure,
+    } as unknown as RendererModelClient;
+
+    try {
+      const control = installSystemOneModelHeaderControl({
+        getClient: () => client,
+        getLocale: () => "zh-CN",
+        ownerDocument: document,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(control.root).not.toBeNull();
+      expect(shell.surface.children).toEqual([shell.pageHeader, control.root, shell.actionGroup]);
+      const select = control.root?.children[1] as unknown as FakeHeaderElement;
+      expect(select.value).toBe("typesafe/jev");
+      select.value = "laya";
+      select.listeners.get("change")?.({ stopPropagation: vi.fn() });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(buddyConfigure).toHaveBeenCalledWith(
+        expect.objectContaining({ systemOneModel: "laya" }),
+      );
+      control.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not issue status requests from MutationObserver-driven reposition calls", async () => {
+    const shell = createFakeHeader({ nativeActions: true });
+    const document = stubHeaderDocument(() => shell.header);
+    const buddyStatus = vi.fn(async () => ({
+      settings: {
+        enabled: true,
+        planning: true,
+        privateMode: false,
+        role: "auto",
+        bypass: true,
+        jev: true,
+        systemOneModel: "typesafe/jev",
+        plannerModel: null,
+        executorModel: null,
+      },
+      models: [],
+      decisions: [],
+      jevKeyConfigured: false,
+      jevBaseUrl: null,
+    }));
+    const client = { buddyStatus } as unknown as RendererModelClient;
+
+    try {
+      const control = installSystemOneModelHeaderControl({
+        getClient: () => client,
+        getLocale: () => "zh-CN",
+        ownerDocument: document,
+      });
+      await vi.waitFor(() => expect(buddyStatus).toHaveBeenCalledTimes(1));
+
+      // 大量 DOM 变动触发的 scan 只重新定位，不得再次请求 buddyStatus。
+      for (let index = 0; index < 500; index += 1) control.reposition();
+      expect(buddyStatus).toHaveBeenCalledTimes(1);
+
+      // 显式 refresh 会拉取一次新的状态。
+      for (let index = 0; index < 20; index += 1) await Promise.resolve();
+      expect(control.refresh()).toBe(true);
+      await Promise.resolve();
+      expect(buddyStatus).toHaveBeenCalledTimes(2);
+      control.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

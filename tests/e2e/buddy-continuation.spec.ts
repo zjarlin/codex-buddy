@@ -11,7 +11,7 @@ const bundle = await build({
     import { installSidebarContinuation } from './packages/renderer-extension/src/buddy/continuation.ts';
     import { installBuddyControl } from './packages/renderer-extension/src/buddy/control.ts';
     globalThis.mountRecovery = () => {
-      const snapshot = { settings: { enabled:true,privateMode:false,bypass:true,role:'auto',plannerModel:null,executorModel:null }, models:[], decisions:[{
+      const snapshot = { settings: { enabled:true,planning:true,privateMode:false,bypass:true,role:'auto',plannerModel:null,executorModel:null }, models:[], decisions:[{
         threadId:'work',turnId:'failed',phase:'retrying',role:'executor',difficulty:'simple',score:15,
         reason:'失败 3/9 次，8 秒后自动续接并切换模型。',plannerModel:null,executorModel:'cheap-a',acceptedModel:'cheap-a',plan:null,command:null,exitCode:null,updatedAt:'fixture'
       }] };
@@ -155,6 +155,38 @@ test("sidebar recovery follows privacy, running state, row replacement and dispo
   await expect(resume).toHaveCount(0);
   await expect(page.locator("[data-native-status]")).toBeVisible();
   await expect(page.locator("[data-buddy-sidebar-recovery]")).toHaveCount(0);
+});
+
+test("sidebar recovery matches native thread ids inside host-prefixed rows", async ({ page }) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  await page.evaluate(() => {
+    document.body.replaceChildren();
+    const row = document.createElement("div");
+    const attrs = {
+      "data-app-action-sidebar-thread-row": "",
+      "data-app-action-sidebar-thread-host-id": "local",
+      "data-app-action-sidebar-thread-id": "local:thread",
+      "data-app-action-sidebar-thread-active": "false",
+    };
+    for (const [key, value] of Object.entries(attrs)) row.setAttribute(key, value);
+    row.innerHTML =
+      '<div class="w-4 shrink-0"><span data-native-status>!</span></div><div data-thread-title-trigger><span data-thread-title>网络中断的会话</span></div>';
+    Object.defineProperty(row, "__reactFiber$fixture", {
+      value: {
+        memoizedProps: {
+          conversationId: "local:thread",
+          dataAttributes: attrs,
+        },
+      },
+    });
+    document.body.append(row);
+    Reflect.set(globalThis, "row", row);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  const resume = page.locator("[data-buddy-resume]");
+  await expect(resume).toHaveCount(1);
+  await expect(page.locator("[data-buddy-sidebar-recovery]")).toHaveCount(1);
 });
 
 test("host changes ignore an in-flight continuation response", async ({ page }) => {

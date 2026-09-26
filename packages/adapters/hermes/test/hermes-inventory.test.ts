@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 
@@ -6,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   catalogModelsFromInventory,
+  hermesInventoryPathsForTests,
   inventoryPythonCandidates,
   venvPythonFromShim,
 } from "../src/hermes-inventory.js";
@@ -60,6 +62,72 @@ describe("Hermes model catalog", () => {
 });
 
 describe("Hermes inventory process", () => {
+  it.each([
+    [
+      "current",
+      "def build_models_payload(ctx, *, include_unconfigured=False, picker_hints=False, canonical_order=False, pricing=False, capabilities=False, refresh=False, max_models=None):",
+    ],
+    [
+      "legacy",
+      "def build_models_payload(ctx, *, explicit_only=False, include_unconfigured=False, picker_hints=False, canonical_order=False, pricing=False, capabilities=False, refresh=False, probe_custom_providers=False, probe_current_custom_provider=False, max_models=None):",
+    ],
+  ])("adapts the inventory probe to the %s Hermes signature", async (_name, signature) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "hermes-inventory-"));
+    const packageDirectory = path.join(directory, "hermes_cli");
+    const pythonExecutable = process.env.CODEXHOST_TEST_PYTHON ?? "python3";
+    try {
+      await mkdir(packageDirectory);
+      await writeFile(path.join(packageDirectory, "__init__.py"), "");
+      await writeFile(
+        path.join(packageDirectory, "inventory.py"),
+        `class ConfigContext:
+    current_provider = "zai"
+    current_model = "glm-5-turbo"
+
+def load_picker_context():
+    return ConfigContext()
+
+${signature}
+    return {"providers": [{"slug": "zai", "name": "Z.AI", "models": ["glm-5-turbo"]}]}
+`,
+      );
+      const runner = `import sys
+sys.path.insert(0, ${JSON.stringify(directory)})
+exec(${JSON.stringify(hermesInventoryPathsForTests.script)})`;
+      const child = spawn(pythonExecutable, ["-I", "-c", runner], {
+        cwd: directory,
+        env: { ...process.env, PYTHONPATH: directory },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      const exitCode = await new Promise<number | null>((resolve) =>
+        child.on("close", resolve),
+      );
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({
+        models: [
+          {
+            modelId: "zai:glm-5-turbo",
+            label: "glm-5-turbo",
+            provider: "Z.AI",
+            available: true,
+          },
+        ],
+        currentModelId: "zai:glm-5-turbo",
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the interpreter next to the official Windows launcher", () => {
     expect(
       inventoryPythonCandidates(

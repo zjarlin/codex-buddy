@@ -19,8 +19,11 @@ import type {
 import { installRendererSettingsShell, type RendererSettingsShell } from "./settings/shell.js";
 import {
   installRendererSettingsHeaderTrigger,
+  installSystemOneModelHeaderControl,
   type RendererSettingsHeaderTriggerControl,
+  type SystemOneModelHeaderControl,
 } from "./settings/trigger.js";
+import type { RendererModelClient } from "./renderer-model-client.js";
 
 const UPDATE_CHECK_TIMEOUT_MS = 5_000;
 const UPDATE_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000] as const;
@@ -32,6 +35,7 @@ export interface RendererSettingsLifecycleOptions {
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
+  getBuddyClient?(): RendererModelClient | null;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
 }
@@ -50,6 +54,7 @@ export function installRendererSettingsLifecycle(
   let locale = resolveRendererSettingsLocale(ownerWindow.navigator.languages);
   let shell: RendererSettingsShell | null = null;
   let trigger: RendererSettingsHeaderTriggerControl | null = null;
+  let systemOneModel: SystemOneModelHeaderControl | null = null;
   let localeRequest: Promise<void> | null = null;
   let checkedUpdateClient: RendererUpdateClient | null = null;
   let retryUpdateClient: RendererUpdateClient | null = null;
@@ -98,6 +103,11 @@ export function installRendererSettingsLifecycle(
       },
     });
     nextTrigger.setUpdateAvailable(updateAvailable);
+    systemOneModel = installSystemOneModelHeaderControl({
+      getClient: options.getBuddyClient ?? (() => null),
+      getLocale: () => (locale === "zh-CN" ? "zh-CN" : "en"),
+      ownerDocument: ownerWindow.document,
+    });
     shell = nextShell;
     trigger = nextTrigger;
     return { shell: nextShell, trigger: nextTrigger };
@@ -226,8 +236,11 @@ export function installRendererSettingsLifecycle(
     },
     refresh() {
       const refreshed = trigger?.refresh() ?? false;
+      // scan 只负责重新定位控件。System One 的数据由挂载时和显式 refresh 拉取，
+      // 避免 MutationObserver 驱动的 scan 反复触发 buddyStatus 请求。
+      const systemOneRefreshed = systemOneModel?.reposition?.() ?? false;
       refreshUpdateIndicator();
-      return refreshed;
+      return refreshed || systemOneRefreshed;
     },
     dispose() {
       if (disposed) return;
@@ -236,8 +249,10 @@ export function installRendererSettingsLifecycle(
       updateCheckGeneration += 1;
       lifecycleController.abort();
       clearUpdateRetry();
+      systemOneModel?.dispose();
       trigger?.dispose();
       shell?.dispose();
+      systemOneModel = null;
       trigger = null;
       shell = null;
     },

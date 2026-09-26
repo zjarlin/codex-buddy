@@ -70,11 +70,14 @@ import {
   workspaceFilesListParamsSchema,
   workspaceFileReadParamsSchema,
   workspaceFileWriteParamsSchema,
+  THREAD_TERMINAL_OPEN_METHOD,
+  threadTerminalOpenParamsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
 } from "@codexhost/shared-contracts";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
+import { openThreadTerminal } from "./thread-terminal.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import { ProjectSyncPeer } from "./project-sync-peer.js";
@@ -1321,6 +1324,10 @@ export class AppServerHost {
       request.method === WORKSPACE_FILES_WRITE_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleWorkspaceFilesRequest(request));
+      return;
+    }
+    if (request.method === THREAD_TERMINAL_OPEN_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleThreadTerminalRequest(request));
       return;
     }
     if (
@@ -2775,6 +2782,24 @@ export class AppServerHost {
       throw new WorkspaceFilesError("不支持的文件请求。");
     } catch (error) {
       await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleThreadTerminalRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = threadTerminalOpenParamsSchema.safeParse(request.params);
+      if (!params.success) throw new Error("打开终端参数无效。");
+      const resolution = await this.#locateExternalThread(params.data.threadId);
+      if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以从终端续接。");
+      const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+      const result = await openThreadTerminal(
+        cwd,
+        params.data.threadId,
+        this.#options.stockCodexPath,
+      );
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32095, errorMessage(error).slice(0, 20_000)));
     }
   }
 

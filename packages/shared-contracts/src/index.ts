@@ -13,6 +13,7 @@ export {
   type BuddyPlannerInput,
   type BuddyAnswer,
   buddySettingsSchema,
+  buddySettingsFileSchema,
   buddySnapshotSchema,
   buddyDecisionSchema,
   buddyJevKeySchema,
@@ -45,6 +46,12 @@ export {
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
 } from "./idle-release.js";
+export {
+  THREAD_TERMINAL_OPEN_METHOD,
+  threadTerminalOpenParamsSchema,
+  threadTerminalOpenResultSchema,
+} from "./thread-terminal.js";
+export type { ThreadTerminalOpenParams, ThreadTerminalOpenResult } from "./thread-terminal.js";
 export {
   LOADED_SESSIONS_METHOD,
   loadedSessionsSchema,
@@ -337,6 +344,7 @@ export type {
   UpdateStatusResult,
 } from "./updates.js";
 export { WORKSPACE_CONTRACT_VERSION } from "./version.js";
+export { OFFICIAL_APP_SERVER_MAX_FRAME_BYTES } from "./official-transport.js";
 export {
   GIT_STATUS_METHOD,
   GIT_DIFF_METHOD,

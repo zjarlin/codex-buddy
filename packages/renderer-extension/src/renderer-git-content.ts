@@ -122,6 +122,7 @@ export function createRendererGitContent(options: {
     .actions { display:flex; flex:none; align-items:center; gap:4px; }
     .actions button, .icon { display:grid; min-height:28px; place-items:center; padding:3px 8px; color:inherit; background:transparent; border:1px solid transparent; border-radius:5px; cursor:pointer; font-size:11px; }
     .actions button:hover, .icon:hover { background:color-mix(in srgb,currentColor 10%,transparent); }
+    button[hidden], .segmented[hidden] { display:none; }
     button:focus-visible { outline:2px solid var(--text-link,#339cff); outline-offset:1px; }
     button:disabled { cursor:default; opacity:.38; }
     .icon { width:28px; padding:0; font-size:20px; }
@@ -379,6 +380,7 @@ export function createRendererGitContent(options: {
       Boolean(saving || staging) ||
       !dirty ||
       !content ||
+      (content.kind !== undefined && content.kind !== "file") ||
       content.binary ||
       content.truncated;
     stageButton.disabled =
@@ -524,7 +526,7 @@ export function createRendererGitContent(options: {
       title.textContent = label;
       baseMeta.textContent = work ? `基准：${work.baseLabel}` : "统一差异";
       resultMeta.textContent = work?.conflicted ? "冲突：需要合并" : "工作区";
-      unified.textContent = result.diff ? unifiedText(result) : "正在加载差异…";
+      unified.textContent = work || result.diff ? unifiedText(result) : "正在加载差异…";
       setup.hidden = true;
       meta.hidden = false;
       mode = "unified";
@@ -532,14 +534,16 @@ export function createRendererGitContent(options: {
       splitValue = null;
       splitStart = -1;
       body.scrollTop = 0;
+      const textFile = !work?.kind || work.kind === "file";
+      segmented.hidden = !work || !textFile;
       if (work) {
         original = work.working;
         editor.value = work.working;
         setDirty(false);
-        saveButton.hidden = !options.actions || work.binary || work.truncated;
+        saveButton.hidden = !textFile || !options.actions || work.binary || work.truncated;
         stageButton.hidden = false;
-        oursButton.hidden = !work.conflicted || work.ours === null;
-        theirsButton.hidden = !work.conflicted || work.theirs === null;
+        oursButton.hidden = !textFile || !work.conflicted || work.ours === null;
+        theirsButton.hidden = !textFile || !work.conflicted || work.theirs === null;
       } else {
         original = "";
         editor.value = "";
@@ -550,11 +554,15 @@ export function createRendererGitContent(options: {
         theirsButton.hidden = true;
       }
       setNotice(
-        work?.binary
-          ? "二进制文件不支持合并编辑。"
-          : work?.truncated
-            ? "文件过大，只展示差异。"
-            : "",
+        work?.kind === "submodule"
+          ? "子模块仅展示提交引用差异；模块内文件请切换到该仓库查看。"
+          : work?.kind === "directory"
+            ? "目录仅展示差异，请选择具体文件进行编辑。"
+            : work?.binary
+              ? "二进制文件不支持合并编辑。"
+              : work?.truncated
+                ? "文件过大，只展示差异。"
+                : "",
       );
       render();
       if (!opened) {

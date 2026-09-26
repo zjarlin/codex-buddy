@@ -1465,6 +1465,49 @@ describe("Git push model bypass", () => {
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({ plannerModel: "gpt-planner" });
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
   });
+
+  it("keeps System One and bypass active when automatic planning is off", async () => {
+    const f = await fixture({
+      jev: jevClient(jevResponse("code", 1.2, 0.97, "git")),
+    });
+    await f.router.configure({ planning: false });
+    await f.router.route(f.turn("把当前改动同步到远端"));
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      judgment: { source: "system-one" },
+      plannerModel: null,
+      modelBypass: { kind: "git-push" },
+    });
+  });
+
+  it("loads persisted settings with future keys without rejecting the runtime", async () => {
+    const f = await fixture();
+    await writeFile(
+      join(f.home, "buddy-router.json"),
+      JSON.stringify({ enabled: true, planning: true, futureSwitch: "ignored" }),
+      { mode: 0o600 },
+    );
+
+    expect((await f.router.snapshot()).settings).toMatchObject({
+      enabled: true,
+      planning: true,
+    });
+    await expect(f.router.configure({ futureSwitch: true } as never)).rejects.toThrow();
+  });
+
+  it("skips the planner for complex requests when automatic planning is off", async () => {
+    const f = await fixture({ jev: jevClient(jevResponse("plan", 2, 0.02, "executor")) });
+    await f.router.configure({ planning: false });
+    await f.router.route(f.turn("实现一个跨模块的认证重构"));
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      difficulty: "advanced",
+      plannerModel: null,
+      judgment: { source: "system-one" },
+    });
+  });
 });
 
 describe("JEV judgment integration", () => {

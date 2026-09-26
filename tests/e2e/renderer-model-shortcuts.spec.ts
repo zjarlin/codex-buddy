@@ -46,7 +46,7 @@ const { outputFiles } = await build({
         },
       };
       trigger.__reactFiber$fixture.return = { memoizedProps: { client: queryClient } };
-      const snapshot = { settings: { enabled: true, privateMode: false, bypass: true, role: "auto", plannerModel: null, executorModel: null }, models: [], decisions: [] };
+      const snapshot = { settings: { enabled: true, planning: true, privateMode: false, bypass: true, role: "auto", plannerModel: null, executorModel: null }, models: [], decisions: [] };
       const client = {
         buddyStatus: async () => structuredClone(snapshot),
         buddyConfigure: async (settings) => {
@@ -162,7 +162,7 @@ test("favorite chips persist and select the exact native model with planning dis
   ]);
   await expect(page.locator("[data-buddy-router] summary")).toContainText("固定模型 · 不规划");
   await page.locator("[data-buddy-router] summary").click();
-  await page.getByRole("switch", { name: /自动规划/ }).click();
+  await page.getByRole("switch", { name: /Auto Router/ }).click();
   await expect(page.locator("[data-buddy-router] summary")).not.toContainText("固定模型");
   await page.setViewportSize({ width: 720, height: 800 });
   const settings = page.locator(".buddy-settings");

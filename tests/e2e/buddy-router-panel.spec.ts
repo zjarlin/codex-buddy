@@ -10,7 +10,7 @@ const { outputFiles } = await build({
     contents: `
       import { installBuddyControl } from "./packages/renderer-extension/src/buddy/control.ts";
       const snapshot = {
-        settings: { enabled: true, privateMode: false, bypass: true, jev: true, role: "auto", plannerModel: null, executorModel: null },
+        settings: { enabled: true, planning: true, privateMode: false, bypass: true, jev: true, role: "auto", plannerModel: null, executorModel: null },
         models: [
           { id: "gpt-planner", tier: "夯", eligible: true },
           { id: "deepseek-flash", tier: "垃", eligible: true },
@@ -27,6 +27,11 @@ const { outputFiles } = await build({
       globalThis.buddyThreadId = "fixture";
       globalThis.buddyContextEnabled = true;
       globalThis.buddyStatusPending = false;
+      globalThis.buddyInterrupted = [
+        { threadId: "stalled", turnId: "interrupted-turn", title: "网络中断的会话", status: "interrupted" }
+      ];
+      globalThis.buddyContinueCalls = [];
+      globalThis.buddyContinueFailure = true;
       const client = {
         buddyStatus: async () => {
           if (globalThis.buddyStatusPending) {
@@ -50,6 +55,12 @@ const { outputFiles } = await build({
           snapshot.decisions[0].phase = "cancelled";
           snapshot.decisions[0].pendingInput = null;
           return structuredClone(snapshot);
+        },
+        buddyInterrupted: async () => ({ threads: structuredClone(globalThis.buddyInterrupted), unreadable: 0 }),
+        buddyContinue: async (threadId, turnId) => {
+          globalThis.buddyContinueCalls.push([threadId, turnId]);
+          if (globalThis.buddyContinueFailure) throw new Error("网络不可用");
+          globalThis.buddyInterrupted = [];
         },
         buddyModels: async () => structuredClone(snapshot),
         buddyJevKey: async (config) => {
@@ -81,6 +92,42 @@ const { outputFiles } = await build({
 });
 const browserBundle = outputFiles[0]?.text;
 if (!browserBundle) throw new Error("Buddy router panel bundle was not generated");
+
+test("lists recently interrupted conversations and resumes them from the panel", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.setContent(
+    '<body style="background:#191b20;color:#e5e7ec;font:14px system-ui"></body>',
+  );
+  await page.addScriptTag({ content: browserBundle });
+  await page.locator("[data-buddy-router] summary").click();
+  await page.getByRole("tab", { name: "中断会话" }).click();
+  const group = page.locator("[data-buddy-router] .buddy-interrupted");
+  await expect(page.locator("[data-buddy-router]")).toContainText("最近中断会话");
+  await expect(group).toContainText("网络中断的会话");
+  await expect(group).toContainText("已中断");
+  await group.getByRole("button", { name: "恢复" }).click();
+  await expect(group).toContainText("恢复失败: 网络不可用");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyContinueCalls"))).toEqual([
+    ["stalled", "interrupted-turn"],
+  ]);
+  await page.evaluate(() => Reflect.set(globalThis, "buddyContinueFailure", false));
+  await group.getByRole("button", { name: "恢复" }).click();
+  await expect(group).toContainText("暂无最近中断会话。");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyContinueCalls"))).toEqual([
+    ["stalled", "interrupted-turn"],
+    ["stalled", "interrupted-turn"],
+  ]);
+  await page.getByRole("tab", { name: "路由" }).click();
+  await page.getByRole("switch", { name: /Auto Router/ }).click();
+  await page.getByRole("tab", { name: "中断会话" }).click();
+  await expect(group).toHaveCount(0);
+  await page.getByRole("tab", { name: "路由" }).click();
+  await page.getByRole("switch", { name: /隐私/ }).click();
+  await page.getByRole("tab", { name: "中断会话" }).click();
+  await expect(group).toHaveCount(0);
+});
 
 test("shows all task models without clipping and explains a fixed executor", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
@@ -129,13 +176,13 @@ test("shows all task models without clipping and explains a fixed executor", asy
   ).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await summary.click();
-  await expect(
-    page.getByText("远程返回 31 个，同步 3 个，可路由 3 个", { exact: true }),
-  ).toBeVisible();
+  await page.getByRole("tab", { name: "任务详情" }).click();
   await expect(page.getByText("本次任务模型", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "路由" }).click();
   await page
     .getByRole("combobox", { name: "垃 · 执行模型", exact: true })
     .selectOption("deepseek-flash");
+  await page.getByRole("tab", { name: "路由" }).click();
   await expect(page.getByRole("combobox", { name: "垃 · 执行模型" }).locator("..")).toHaveAttribute(
     "title",
     "指定后由单个模型执行，不使用子代理或自动换模",
@@ -143,6 +190,7 @@ test("shows all task models without clipping and explains a fixed executor", asy
   expect(
     await page.evaluate(() => Reflect.get(globalThis, "buddyWrites").at(-1).executorModel),
   ).toBe("deepseek-flash");
+  await page.getByRole("tab", { name: "任务详情" }).click();
   await page.evaluate((value) => Reflect.get(globalThis, "setBuddyDecision")(value), {
     ...decision,
     phase: "completed",
@@ -187,7 +235,7 @@ test("removes Auto Router while a status request is pending and ignores its late
   await expect(router).toHaveCount(0);
 });
 
-test("Auto Router switches reveal only meaningful configuration", async ({ page }) => {
+test("Auto Router separates routing controls from automatic planning", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.setViewportSize({ width: 390, height: 800 });
   await page.setContent(
@@ -196,28 +244,58 @@ test("Auto Router switches reveal only meaningful configuration", async ({ page 
   await page.addScriptTag({ content: browserBundle });
   await page.locator("[data-buddy-router] summary").click();
 
-  const enabled = page.getByRole("switch", { name: /自动规划/ });
+  const enabled = page.getByRole("switch", { name: /Auto Router/ });
+  const planning = page.getByRole("switch", { name: /自动规划/ });
   const privateMode = page.getByRole("switch", { name: /隐私/ });
+  const bypass = page.getByRole("switch", { name: /旁路优先/ });
+  const systemOne = page.getByRole("switch", { name: /JEV 判断/ });
+  const role = page.getByRole("combobox", { name: "执行角色" });
+  const planner = page.getByRole("combobox", { name: "夯 · 规划模型" });
+  const executor = page.getByRole("combobox", { name: "垃 · 执行模型" });
   await expect(enabled).toHaveAttribute("aria-checked", "true");
+  await expect(planning).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByText("隐私模式", { exact: true })).toBeHidden();
   await expect(page.getByText("路由策略", { exact: true })).toBeHidden();
-  await expect(page.getByText("模型偏好", { exact: true })).toBeHidden();
-  await expect(page.getByRole("combobox", { name: "执行角色" })).toBeVisible();
+  await expect(page.getByText("规划与执行模型", { exact: true })).toBeHidden();
+  await expect(role).toBeVisible();
+  await expect(role).toBeEnabled();
+  await expect(planner).toBeEnabled();
+  await expect(executor).toBeEnabled();
+  await expect(bypass).toBeEnabled();
+  await expect(systemOne).toBeEnabled();
+
+  await planning.click();
+  await expect(planning).toHaveAttribute("aria-checked", "false");
+  await expect(bypass).toBeEnabled();
+  await expect(systemOne).toBeEnabled();
+  await expect(role).toBeEnabled();
+  await expect(planner).toBeDisabled();
+  await expect(executor).toBeEnabled();
 
   await enabled.click();
   await expect(enabled).toHaveAttribute("aria-checked", "false");
-  await expect(page.getByText("路由策略", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("模型偏好", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("combobox", { name: "执行角色" })).toHaveCount(0);
+  await expect(bypass).toBeDisabled();
+  await expect(systemOne).toBeDisabled();
+  await expect(role).toBeDisabled();
+  await expect(planner).toBeDisabled();
+  await expect(executor).toBeDisabled();
+  await expect(
+    page.getByText("Auto Router 已关闭，使用当前选定模型直接执行。", { exact: true }),
+  ).toBeVisible();
 
   await enabled.click();
-  await expect(page.getByText("路由策略", { exact: true })).toBeHidden();
+  await expect(role).toBeEnabled();
+  await expect(planning).toHaveAttribute("aria-checked", "false");
   await privateMode.click();
   await expect(privateMode).toHaveAttribute("aria-checked", "true");
-  await expect(page.getByText("路由策略", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("模型偏好", { exact: true })).toHaveCount(0);
+  await expect(role).toBeDisabled();
+  await expect(planner).toBeDisabled();
+  await expect(executor).toBeDisabled();
   await expect(page.getByText("隐私 · 自动选择离线模型", { exact: true })).toBeVisible();
+  await expect(page.getByText("隐私模式已接管普通 Auto Router。", { exact: true })).toBeVisible();
 
   expect(await page.evaluate(() => Reflect.get(globalThis, "buddyWrites"))).toEqual([
+    expect.objectContaining({ planning: false }),
     expect.objectContaining({ enabled: false }),
     expect.objectContaining({ enabled: true }),
     expect.objectContaining({ privateMode: true }),
@@ -299,13 +377,14 @@ for (const colorScheme of ["light", "dark"] as const) {
     );
     await page.screenshot({ path: `test-results/buddy-push-bypass-${colorScheme}-collapsed.png` });
     await summary.click();
+    await page.getByRole("tab", { name: "任务详情" }).click();
     await expect(page.getByText("gitlab · gh · prskill", { exact: true })).toBeVisible();
     await expect(
       page
         .getByRole("term")
         .filter({ hasText: "JEV 判断" })
         .locator("..")
-        .getByText(/jev-latest/),
+        .getByText(/typesafe\/jev/),
     ).toBeVisible();
     await expect(page.getByText("75/100 (3/4)", { exact: true })).toHaveAttribute(
       "title",
@@ -321,7 +400,8 @@ for (const colorScheme of ["light", "dark"] as const) {
       },
     });
     await expect(page.getByText("未发现可用 GitHub CLI（gh）skill", { exact: true })).toBeVisible();
-    await page.getByRole("switch", { name: /自动规划/ }).click();
+    await page.getByRole("tab", { name: "路由" }).click();
+    await page.getByRole("switch", { name: /Auto Router/ }).click();
     await expect(router).not.toHaveAttribute("data-model-bypass");
     await expect(summary).toContainText("Auto Router");
     await expect(summary).not.toContainText("旁路成功率");

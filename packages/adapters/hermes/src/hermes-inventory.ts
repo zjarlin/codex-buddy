@@ -18,22 +18,27 @@ import { decodeHermesModelRefId, encodeHermesModelRef } from "./hermes-models.js
 const POSIX_VENV_PYTHON_SHIM_PATTERN = /exec\s+"([^"]+?venv\/bin\/python)"/;
 const WINDOWS_VENV_HERMES_SHIM_PATTERN = /"([^"]+?[\\/]venv[\\/]Scripts[\\/]hermes\.exe)"/i;
 
-const INVENTORY_PROBE_SCRIPT = `
+export const INVENTORY_PROBE_SCRIPT = `
+import inspect
 import json
 from hermes_cli.inventory import build_models_payload, load_picker_context
 context = load_picker_context()
+requested_options = {
+    "explicit_only": True,
+    "include_unconfigured": False,
+    "picker_hints": False,
+    "canonical_order": True,
+    "pricing": False,
+    "capabilities": False,
+    "refresh": False,
+    "probe_custom_providers": False,
+    "probe_current_custom_provider": False,
+    "max_models": 64,
+}
+supported_options = inspect.signature(build_models_payload).parameters
 payload = build_models_payload(
     context,
-    explicit_only=True,
-    include_unconfigured=False,
-    picker_hints=False,
-    canonical_order=True,
-    pricing=False,
-    capabilities=False,
-    refresh=False,
-    probe_custom_providers=False,
-    probe_current_custom_provider=False,
-    max_models=64,
+    **{name: value for name, value in requested_options.items() if name in supported_options},
 )
 available_provider_slugs = {
     str(row.get("slug") or "").strip().lower()
@@ -276,4 +281,5 @@ export function nativeModelIdFromRefId(refId: string): string | null {
 export const hermesInventoryPathsForTests = {
   os,
   path,
+  script: INVENTORY_PROBE_SCRIPT,
 };

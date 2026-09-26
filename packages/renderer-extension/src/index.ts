@@ -242,6 +242,7 @@ export {
   SETTINGS_TRIGGER_ATTRIBUTE,
   inspectRendererSettingsContract,
   installRendererSettingsHeaderTrigger,
+  installSystemOneModelHeaderControl,
   mountRendererSettingsTrigger,
   selectRendererSettingsHeaderSlot,
 } from "./settings/trigger.js";
@@ -251,6 +252,7 @@ export type {
   RendererSettingsHeaderSlotCandidate,
   RendererSettingsHeaderTriggerControl,
   RendererSettingsTriggerControl,
+  SystemOneModelHeaderControl,
 } from "./settings/trigger.js";
 export {
   RENDERER_SETTINGS_ICON_NAMES,

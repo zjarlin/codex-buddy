@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -201,6 +201,66 @@ describe("GitWorkspace", () => {
       conflicted: true,
       ours: "main\n",
       theirs: "feature\n",
+    });
+  });
+
+  it("previews dirty, uninitialized, orphaned and deleted submodules without reading directories", async () => {
+    const { parent } = await submoduleRepository();
+    const directory = path.join(parent, "vendor/child");
+    const git = (...args: string[]) => execFileAsync("git", ["-C", parent, ...args]);
+    const workspace = new GitWorkspace(testGitEnvironment);
+    await writeFile(path.join(directory, "child.txt"), "dirty child\n");
+    expect((await workspace.diff(parent, "vendor/child")).diff).toContain("-dirty");
+    await expect(workspace.content(parent, "vendor/child")).resolves.toMatchObject({
+      kind: "submodule",
+      working: "",
+      binary: false,
+      conflicted: false,
+    });
+    // 未初始化子模块仍有 gitlink，但工作区只有空目录。
+    await rm(directory, { recursive: true });
+    await mkdir(directory);
+    await expect(workspace.content(parent, "vendor/child")).resolves.toMatchObject({
+      kind: "submodule",
+    });
+    const orphan = "orphan-module";
+    const head = (await git("rev-parse", "HEAD")).stdout.trim();
+    await git("update-index", "--add", "--cacheinfo", `160000,${head},${orphan}`);
+    await mkdir(path.join(parent, orphan));
+    expect((await workspace.status(parent)).warnings).toEqual([expect.stringContaining(orphan)]);
+    await expect(workspace.content(parent, orphan)).resolves.toMatchObject({
+      kind: "submodule",
+    });
+    // 已暂存删除后从 HEAD 识别子模块，而非把目录或提交对象当正文。
+    await git("rm", "-f", "--cached", "vendor/child");
+    await expect(workspace.content(parent, "vendor/child")).resolves.toMatchObject({
+      kind: "submodule",
+    });
+    await rm(directory, { recursive: true });
+    await expect(workspace.content(parent, "vendor/child")).resolves.toMatchObject({
+      kind: "submodule",
+    });
+    expect((await workspace.diff(parent, "vendor/child")).diff).toContain("-Subproject commit");
+  });
+
+  it("returns an empty working side for deleted files and read-only directory metadata", async () => {
+    const directory = await repository();
+    const workspace = new GitWorkspace(testGitEnvironment);
+    await rm(path.join(directory, "tracked.txt"));
+    await expect(workspace.content(directory, "tracked.txt")).resolves.toMatchObject({
+      kind: "file",
+      base: "one\n",
+      working: "",
+      binary: false,
+      truncated: false,
+    });
+    await mkdir(path.join(directory, "src"));
+    await writeFile(path.join(directory, "src", "new.txt"), "new\n");
+    await expect(workspace.content(directory, "src")).resolves.toMatchObject({
+      kind: "directory",
+      base: "",
+      working: "",
+      binary: false,
     });
   });
 

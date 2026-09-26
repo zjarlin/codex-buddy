@@ -12,6 +12,10 @@ Codex blue so it stays visible on dark surfaces and is the Renderer settings
 brand icon (settings header mark and the application-header settings trigger
 button).
 
+`codex-logo-monochrome.png` is the Codex mark rendered in neutral black for the
+current product branding. It replaces the earlier blue-forward product mark in
+the settings header and application-header trigger.
+
 `codex-agent.png` is the Codex App GA mark distributed with OpenAI's official
 `openai.chatgpt` VS Code extension. It is bundled as a data URL so the Renderer
 does not depend on a local extension path or a network request.

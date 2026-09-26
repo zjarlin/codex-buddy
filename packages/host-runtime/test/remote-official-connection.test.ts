@@ -101,6 +101,47 @@ describe("remote official app-server connection", () => {
     }
   });
 
+  it("accepts official frames larger than the previous 128 MiB WebSocket ceiling", async () => {
+    // Native thread/read responses for long Threads have exceeded 128 MiB.
+    const oversizedBytes = 128 * 1024 * 1024 + 64 * 1024;
+    const server = createServer();
+    const webSockets = new WebSocketServer({ server });
+    webSockets.on("connection", (webSocket) => {
+      webSocket.on("message", () => {
+        webSocket.send(Buffer.alloc(oversizedBytes, 0x61), { binary: false });
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected a TCP listener");
+      const connection = await createRemoteOfficialAppServerConnection(
+        `ws://127.0.0.1:${address.port}`,
+      );
+      let received = 0;
+      const complete = new Promise<void>((resolve) => {
+        connection.stdout.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+          if (chunk.includes(0x0a)) resolve();
+        });
+      });
+      connection.stdin.write('{"id":1,"method":"thread/read"}\n');
+      await complete;
+      expect(received).toBeGreaterThan(oversizedBytes);
+      expect(connection.closed).toBeDefined();
+      connection.close();
+      await connection.closed;
+    } finally {
+      for (const webSocket of webSockets.clients) webSocket.terminate();
+      await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("matches the native client handshake without offering permessage-deflate", async () => {
     const socketPath = testSocketPath();
     const server = createServer();

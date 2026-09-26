@@ -38,7 +38,7 @@ import CircleHelp from "lucide/dist/esm/icons/circle-question-mark.mjs";
 import X from "lucide/dist/esm/icons/x.mjs";
 import Users from "lucide/dist/esm/icons/users.mjs";
 import Plus from "lucide/dist/esm/icons/plus.mjs";
-import codexLogoUrl from "../assets/codex-logo-bright.png";
+import codexLogoUrl from "../assets/codex-logo-monochrome.png";
 
 export const RENDERER_SETTINGS_ICON_NAMES = [
   "settings",

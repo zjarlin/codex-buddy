@@ -1,12 +1,10 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
 import {
   GIT_DIFF_MAX_BYTES,
-  GIT_CONTENT_MAX_BYTES,
   type GitChange,
   type GitCommitResult,
   type GitCommitDetail,
@@ -27,6 +25,7 @@ import {
   gitFilePathSchema,
 } from "@codexhost/shared-contracts";
 import { readConnection } from "@codexhost/buddy-engine";
+import { readGitContent } from "./git-content.js";
 import { readGitSubmoduleStatus } from "./git-submodule-status.js";
 
 const execFileAsync = promisify(execFile);
@@ -464,66 +463,13 @@ export class GitWorkspace {
       const workspace = absoluteWorkspace(cwd);
       const status = await this.#statusUnlocked(workspace);
       const change = status.changes.find((entry) => entry.path === pathValue);
-      const stage = await this.#run(workspace, ["ls-files", "-u", "-z", "--", pathValue]).catch(
-        () => ({ stdout: "", stderr: "" }),
+      return readGitContent(
+        pathValue,
+        absoluteGitPath(workspace, pathValue),
+        change,
+        (arguments_) => this.#run(workspace, arguments_),
       );
-      const conflicted = Boolean(change?.conflicted) || stage.stdout.length > 0;
-      const base = conflicted
-        ? await this.#optionalBlob(workspace, `:1:${pathValue}`)
-        : change?.untracked
-          ? ""
-          : await this.#optionalBlob(
-              workspace,
-              change?.staged ? `:${pathValue}` : `HEAD:${pathValue}`,
-            );
-      const ours = conflicted ? await this.#optionalBlob(workspace, `:2:${pathValue}`) : null;
-      const theirs = conflicted ? await this.#optionalBlob(workspace, `:3:${pathValue}`) : null;
-      const absolute = absoluteGitPath(workspace, pathValue);
-      const info = await stat(absolute).catch(() => null);
-      const size = info?.size ?? 0;
-      const bytes = (value: string): number => Buffer.byteLength(value, "utf8");
-      const beyondLimit =
-        size > GIT_CONTENT_MAX_BYTES ||
-        bytes(base) > GIT_CONTENT_MAX_BYTES ||
-        bytes(ours ?? "") > GIT_CONTENT_MAX_BYTES ||
-        bytes(theirs ?? "") > GIT_CONTENT_MAX_BYTES;
-      let workingFile = "";
-      let binary = false;
-      let revision = createHash("sha256").update("").digest("hex");
-      if (size <= GIT_CONTENT_MAX_BYTES) {
-        const value = await readFile(absolute);
-        revision = createHash("sha256").update(value).digest("hex");
-        binary = value.includes(0);
-        if (!binary) workingFile = value.toString("utf8");
-      } else {
-        // 超过编辑上限时内容不可保存，固定 revision 只用于保持响应结构稳定。
-        revision = "0".repeat(64);
-      }
-      const truncated = beyondLimit || bytes(workingFile) > GIT_CONTENT_MAX_BYTES;
-      return {
-        path: pathValue,
-        baseLabel: conflicted
-          ? "BASE"
-          : change?.untracked
-            ? "空文件"
-            : change?.staged
-              ? "索引"
-              : "HEAD",
-        base,
-        working: binary ? "" : workingFile,
-        binary,
-        revision,
-        conflicted,
-        ours,
-        theirs,
-        truncated,
-      };
     });
-  }
-
-  async #optionalBlob(cwd: string, revision: string): Promise<string> {
-    return (await this.#run(cwd, ["show", revision]).catch(() => ({ stdout: "", stderr: "" })))
-      .stdout;
   }
 
   async stage(cwd: string, paths: readonly string[]): Promise<GitWorkspaceStatus> {

@@ -405,6 +405,7 @@ describe("Renderer fixed Model request client", () => {
       "listThreadOwnership",
       "listWorkspaceFiles",
       "openHarnessWebUi",
+      "openThreadTerminal",
       "pairProjectSync",
       "pullProjectSyncGit",
       "pushGit",

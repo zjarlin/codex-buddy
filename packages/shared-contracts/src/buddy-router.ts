@@ -49,19 +49,22 @@ export const buddyInterruptedSchema = z.object({
   unreadable: z.number(),
 });
 export type BuddyInterrupted = z.infer<typeof buddyInterruptedSchema>;
-export const buddySettingsSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-    privateMode: z.boolean().default(false),
-    role: z.enum(["auto", "git", "io", "executor"]).default("auto"),
-    bypass: z.boolean().default(true),
-    jev: z.boolean().default(true),
-    // System One 模型名同时是网关平台选择器：`typesafe/jev` 或内网 `laya`。
-    systemOneModel: z.string().trim().min(1).max(200).default("typesafe/jev"),
-    plannerModel: z.string().max(200).nullable().default(null),
-    executorModel: z.string().max(200).nullable().default(null),
-  })
-  .strict();
+const buddySettingsShape = {
+  enabled: z.boolean().default(true),
+  planning: z.boolean().default(true),
+  privateMode: z.boolean().default(false),
+  role: z.enum(["auto", "git", "io", "executor"]).default("auto"),
+  bypass: z.boolean().default(true),
+  jev: z.boolean().default(true),
+  // System One 模型名同时是网关平台选择器：`typesafe/jev` 或内网 `laya`。
+  systemOneModel: z.string().trim().min(1).max(200).default("typesafe/jev"),
+  plannerModel: z.string().max(200).nullable().default(null),
+  executorModel: z.string().max(200).nullable().default(null),
+} as const;
+// 持久化读取允许未知字段：旧运行时不应因为文件里出现新版本开关而拒绝启动。
+export const buddySettingsFileSchema = z.object(buddySettingsShape).passthrough();
+// 浏览器写入仍保持 strict，避免拼写错误或未声明字段静默落盘。
+export const buddySettingsSchema = z.object(buddySettingsShape).strict();
 export type BuddySettings = z.infer<typeof buddySettingsSchema>;
 // JEV 连接单独配置，不进入会回传浏览器的 settings，避免密钥泄露到 renderer。
 // apiKey 与 baseURL 均可选：省略表示保持不变，null/空串表示清除该项。

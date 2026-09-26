@@ -13,8 +13,7 @@ describe("platform packagers", () => {
     expect(source).toContain("codesign --verify --deep --strict");
     expect(source).toContain('runtime/node" -e');
     expect(source).not.toContain("--options runtime");
-    expect(source).toContain('"$ASSETS_DIR/codexhost.ico"');
-    expect(source).toContain("sips -s format png");
+    expect(source).toContain('"$ASSETS_DIR/codexhost.png"');
     expect(source).toContain("iconutil -c icns");
     expect(source).toContain("CFBundleIconFile");
     expect(source).toContain("CodexBuddy.icns");

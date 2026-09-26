@@ -84,12 +84,14 @@ import {
   writeNewThreadExternalConfigurationPreference,
 } from "./renderer-new-thread-preference.js";
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
+import { installRendererThreadActions } from "./renderer-thread-actions.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
+import { RENDERER_INJECTED_CONTROL_SELECTOR } from "./settings/trigger.js";
 import { openRendererThread } from "./renderer-fork-control.js";
 import type {
   RendererConnectionDiagnostics,
@@ -727,6 +729,10 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const threadActions = installRendererThreadActions({
+    getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
   const activeGitContext = () => {
     const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
     for (const mounted of mountedByComposer.values()) {
@@ -777,6 +783,7 @@ export function installRendererBindingProbe(
     getUpdateClient: () => modelControl,
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
+    getBuddyClient: () => modelControl,
     getLoadedSessionsClient: () => modelClientForHost("local"),
     getSessionImportClient: () => {
       const client = modelClientForHost("local");
@@ -2905,10 +2912,18 @@ export function installRendererBindingProbe(
 
   const mutationObserver = new MutationObserver((mutations) => {
     transferReplacedComposers(mutations);
-    scheduleScan(mutations.some(mutationMayChangeComposerTarget));
+    // 忽略 codexhost 自身注入控件产生的 DOM 变更：它们由 scan 触发的
+    // reposition 写入，如果反过来再驱动 scan 就会形成 CPU 满载的自激循环。
+    const relevant = mutations.filter((mutation) => {
+      const target =
+        mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
+      return target?.closest(RENDERER_INJECTED_CONTROL_SELECTOR) === null;
+    });
+    scheduleScan(relevant.some(mutationMayChangeComposerTarget));
   });
   const onHostRouteChange = (): void => {
     sidebarContinuation.refresh();
+    threadActions.refresh();
     sidebarAgentIcons.refresh();
     reconcileHarnessAvailabilityHost();
     gitSidebar.syncContext();
@@ -3126,6 +3141,7 @@ export function installRendererBindingProbe(
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
       sidebarContinuation.dispose();
+      threadActions.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();
       gitWorkflowControl.dispose();

@@ -39,6 +39,12 @@ vi.mock("../src/settings/trigger.js", () => ({
     setUpdateAvailable: triggerSetUpdateAvailable,
     dispose: vi.fn(),
   })),
+  installSystemOneModelHeaderControl: vi.fn(() => ({
+    root: null,
+    refresh: vi.fn(() => false),
+    reposition: vi.fn(() => false),
+    dispose: vi.fn(),
+  })),
 }));
 
 import { installRendererSettingsLifecycle } from "../src/renderer-settings-lifecycle.js";

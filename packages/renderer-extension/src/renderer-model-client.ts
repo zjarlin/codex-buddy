@@ -120,6 +120,11 @@ import {
   type WorkspaceFileReadResult,
   type WorkspaceFileWriteParams,
   type WorkspaceFileWriteResult,
+  THREAD_TERMINAL_OPEN_METHOD,
+  threadTerminalOpenParamsSchema,
+  threadTerminalOpenResultSchema,
+  type ThreadTerminalOpenParams,
+  type ThreadTerminalOpenResult,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   buddyInterruptedSchema,
@@ -341,6 +346,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   listWorkspaceFiles?(input: WorkspaceFilesListParams): Promise<WorkspaceFilesListResult>;
   readWorkspaceFile?(input: WorkspaceFileReadParams): Promise<WorkspaceFileReadResult>;
   writeWorkspaceFile?(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult>;
+  openThreadTerminal?(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -750,6 +756,12 @@ export function createRendererModelClient(
       const params = workspaceFileWriteParamsSchema.parse(input);
       return workspaceFileWriteResultSchema.parse(
         await manager.sendRequest(WORKSPACE_FILES_WRITE_METHOD, params),
+      );
+    },
+    async openThreadTerminal(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult> {
+      const params = threadTerminalOpenParamsSchema.parse(input);
+      return threadTerminalOpenResultSchema.parse(
+        await manager.sendRequest(THREAD_TERMINAL_OPEN_METHOD, params),
       );
     },
     buddyPrivate: async (input: BuddyPrivateRequest) => {

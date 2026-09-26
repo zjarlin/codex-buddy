@@ -13,6 +13,7 @@ import {
 } from "@codexhost/buddy-engine";
 import {
   buddyPrivateModelSchema,
+  buddySettingsFileSchema,
   buddySettingsSchema,
   type BuddyDecision,
   type BuddyAnswer,
@@ -187,7 +188,8 @@ export class BuddyRouter {
 
   async #loadSettings(): Promise<void> {
     try {
-      this.#settings = buddySettingsSchema.parse(
+      // 持久化文件可能由更新版本先写入；读取时忽略未知字段，避免旧运行时被新开关卡死。
+      this.#settings = buddySettingsFileSchema.parse(
         JSON.parse(await readFile(join(this.#home, "buddy-router.json"), "utf8")),
       );
     } catch (error) {
@@ -957,7 +959,10 @@ export class BuddyRouter {
     const role = selected.role;
     const pendingClarification =
       conversational || modelBypass ? undefined : this.#clarifications.get(threadId);
-    const needsPlanning = assessment.tier === "advanced" || pendingClarification !== undefined;
+    const planOnly = object(params.collaborationMode).mode === "plan";
+    const needsPlanning =
+      (settings.planning || planOnly) &&
+      (assessment.tier === "advanced" || pendingClarification !== undefined);
     const inventory = await discoverModels({
       home: this.#home,
       environment: this.options.environment,
@@ -971,7 +976,6 @@ export class BuddyRouter {
     let clarification: string | null = null;
     let validatedPlan: Awaited<ReturnType<BuddyPlanner["plan"]>> | null = null;
     let subagentResults: SubagentRunResult[] = [];
-    const planOnly = object(params.collaborationMode).mode === "plan";
     if (
       (!planOnly || conversational || modelBypass) &&
       fixedExecutor &&
@@ -1066,7 +1070,7 @@ export class BuddyRouter {
         });
       }
     }
-    if (needsPlanning && !planOnly && !inventory.planner) {
+    if (settings.planning && needsPlanning && !planOnly && !inventory.planner) {
       this.#update(threadId, {
         reason:
           "没有满足 advanced 能力梯队的规划模型；已跳过子代理规划，交由当前可用执行模型直接处理。",

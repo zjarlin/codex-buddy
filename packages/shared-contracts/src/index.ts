@@ -56,6 +56,15 @@ export {
   threadTerminalOpenParamsSchema,
   threadTerminalOpenResultSchema,
 } from "./thread-terminal.js";
+export {
+  THREAD_ARCHIVE_COMPLETED_METHOD,
+  threadArchiveCompletedParamsSchema,
+  threadArchiveCompletedResultSchema,
+} from "./thread-archive.js";
+export type {
+  ThreadArchiveCompletedParams,
+  ThreadArchiveCompletedResult,
+} from "./thread-archive.js";
 export type {
   ThreadTerminalDescriptor,
   ThreadTerminalId,

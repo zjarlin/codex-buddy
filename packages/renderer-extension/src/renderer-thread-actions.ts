@@ -1,13 +1,14 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
+import Archive from "lucide/dist/esm/icons/archive.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Terminal from "lucide/dist/esm/icons/terminal.mjs";
-import {
-  hostThreadIdSchema,
-  type ThreadTerminalDescriptor,
-  type ThreadTerminalId,
-} from "@codexhost/shared-contracts";
+import { hostThreadIdSchema, type ThreadTerminalDescriptor } from "@codexhost/shared-contracts";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
+import {
+  getSharedThreadTerminalPreferenceStore,
+  type ThreadTerminalPreferenceStore,
+} from "./thread-terminal-preference.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ID_ATTRIBUTE,
@@ -18,8 +19,7 @@ import {
 const TRIGGER_ATTRIBUTE = "data-codexhost-thread-actions-trigger";
 const MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const OPEN_TERMINAL_ATTRIBUTE = "data-codexhost-thread-actions-open-terminal";
-const TERMINAL_SUBMENU_ATTRIBUTE = "data-codexhost-thread-actions-terminal-submenu";
-const TERMINAL_OPTION_ATTRIBUTE = "data-codexhost-thread-actions-terminal-option";
+const ARCHIVE_COMPLETED_ATTRIBUTE = "data-codexhost-thread-actions-archive-completed";
 const MENU_WIDTH = 216;
 const VIEWPORT_MARGIN = 8;
 const MENU_GAP = 6;
@@ -34,13 +34,6 @@ const style = `
 [${MENU_ATTRIBUTE}] [role="menuitem"]:hover,[${MENU_ATTRIBUTE}] [role="menuitem"]:focus-visible{background:color-mix(in srgb,currentColor 12%,transparent);outline:none}
 [${MENU_ATTRIBUTE}] [role="menuitem"]:disabled{opacity:.55;cursor:wait}
 [${MENU_ATTRIBUTE}] [role="menuitem"] svg{flex:none}
-[${TERMINAL_SUBMENU_ATTRIBUTE}]{margin:2px 0 0;padding:4px 0 0;border-top:1px solid color-mix(in srgb,currentColor 12%,transparent)}
-[${TERMINAL_SUBMENU_ATTRIBUTE}]::before{display:block;padding:4px 8px;color:color-mix(in srgb,currentColor 65%,transparent);font-size:11px;content:attr(data-label)}
-[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:30px;padding:5px 8px 5px 24px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit}
-[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]:hover,[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]:focus-visible{background:color-mix(in srgb,currentColor 12%,transparent);outline:none}
-[${TERMINAL_SUBMENU_ATTRIBUTE}] [role="menuitemradio"]:disabled{opacity:.55;cursor:default}
-[${TERMINAL_SUBMENU_ATTRIBUTE}] [aria-checked="true"]::before{content:"✓";position:absolute;margin-left:-16px}
-[${TERMINAL_OPTION_ATTRIBUTE}][aria-checked="true"]{font-weight:600}
 [${MENU_ATTRIBUTE}] [data-codexhost-thread-actions-error]{padding:5px 8px;color:var(--color-token-text-warning,#b77b20);font-size:12px;overflow-wrap:anywhere}
 [${MENU_ATTRIBUTE}] [data-codexhost-thread-actions-error]:empty{display:none}
 `;
@@ -55,7 +48,6 @@ interface RowEntry {
 
 interface TerminalSelection {
   descriptors: ThreadTerminalDescriptor[];
-  selected: ThreadTerminalId | null;
 }
 
 function menuLabel(locale: Locale): string {
@@ -66,19 +58,33 @@ function openTerminalLabel(locale: Locale): string {
   return locale === "zh-CN" ? "从终端打开" : "Open in Terminal";
 }
 
-function chooseTerminalLabel(locale: Locale): string {
-  return locale === "zh-CN" ? "选择终端" : "Choose Terminal";
+function archiveCompletedLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "归档项目内已完成会话" : "Archive completed conversations in project";
 }
 
-function notInstalledLabel(locale: Locale): string {
-  return locale === "zh-CN" ? "未安装" : "Not installed";
+function archivingCompletedLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "正在归档已完成会话…" : "Archiving completed conversations…";
 }
 
-function defaultTerminal(selection: TerminalSelection): ThreadTerminalDescriptor | null {
+function archiveResultLabel(
+  locale: Locale,
+  result: { archived: number; skipped: number; failed: number },
+): string {
+  return locale === "zh-CN"
+    ? `已归档 ${result.archived} 个；跳过 ${result.skipped} 个；失败 ${result.failed} 个`
+    : `Archived ${result.archived}; skipped ${result.skipped}; failed ${result.failed}`;
+}
+
+function defaultTerminal(
+  selection: TerminalSelection,
+  preference: ThreadTerminalPreferenceStore,
+): ThreadTerminalDescriptor | null {
+  const installed = selection.descriptors.filter((terminal) => terminal.installed);
+  const preferred = preference.get();
   return (
-    selection.descriptors.find((terminal) => terminal.id === selection.selected) ??
-    selection.descriptors.find((terminal) => terminal.default && terminal.installed) ??
-    selection.descriptors.find((terminal) => terminal.installed) ??
+    installed.find((terminal) => terminal.id === preferred) ??
+    installed.find((terminal) => terminal.default) ??
+    installed[0] ??
     null
   );
 }
@@ -102,6 +108,7 @@ function actionSlot(row: HTMLElement): HTMLElement | null {
 export function installRendererThreadActions(options: {
   getClient(hostId: string): RendererModelClient | null;
   getLocale(): Locale;
+  terminalPreference?: ThreadTerminalPreferenceStore;
 }): { refresh(): void; dispose(): void } {
   const styles = document.createElement("style");
   styles.textContent = style;
@@ -113,6 +120,7 @@ export function installRendererThreadActions(options: {
   let scheduled = false;
   const terminalSelections = new Map<string, TerminalSelection>();
   const terminalLoads = new Map<string, Promise<TerminalSelection>>();
+  const terminalPreference = options.terminalPreference ?? getSharedThreadTerminalPreferenceStore();
 
   const terminalSelection = async (hostId: string): Promise<TerminalSelection | null> => {
     const client = options.getClient(hostId);
@@ -124,7 +132,7 @@ export function installRendererThreadActions(options: {
       loading = client
         .listThreadTerminals()
         .then((result) => {
-          const selection = { descriptors: result.terminals, selected: null };
+          const selection = { descriptors: result.terminals };
           terminalSelections.set(hostId, selection);
           return selection;
         })
@@ -184,7 +192,6 @@ export function installRendererThreadActions(options: {
     threadId: string,
     menu: HTMLElement,
     item: HTMLButtonElement,
-    terminalId?: ThreadTerminalId,
   ): Promise<void> => {
     const client = options.getClient(hostId);
     if (!client?.openThreadTerminal) {
@@ -196,14 +203,7 @@ export function installRendererThreadActions(options: {
     if (error) error.textContent = "";
     try {
       const selection = await terminalSelection(hostId);
-      const selectedTerminal =
-        (terminalId
-          ? selection?.descriptors.find((terminal) => terminal.id === terminalId)
-          : null) ?? (selection ? defaultTerminal(selection) : null);
-      if (terminalId && selection && !selectedTerminal?.installed) {
-        throw new Error(notInstalledLabel(options.getLocale()));
-      }
-      if (selection && selectedTerminal) selection.selected = selectedTerminal.id;
+      const selectedTerminal = selection ? defaultTerminal(selection, terminalPreference) : null;
       await client.openThreadTerminal({
         threadId: hostThreadIdSchema.parse(threadId),
         ...(selectedTerminal ? { terminalId: selectedTerminal.id } : {}),
@@ -218,44 +218,6 @@ export function installRendererThreadActions(options: {
         }`;
       }
     }
-  };
-
-  const appendTerminalOptions = (
-    menu: HTMLElement,
-    row: HTMLElement,
-    hostId: string,
-    threadId: string,
-    item: HTMLButtonElement,
-    selection: TerminalSelection,
-  ): void => {
-    const submenu = document.createElement("div");
-    submenu.setAttribute(TERMINAL_SUBMENU_ATTRIBUTE, "");
-    submenu.setAttribute("data-label", chooseTerminalLabel(options.getLocale()));
-    submenu.setAttribute("role", "group");
-    submenu.setAttribute("aria-label", chooseTerminalLabel(options.getLocale()));
-    const active = defaultTerminal(selection);
-    for (const terminal of selection.descriptors) {
-      const option = document.createElement("button");
-      option.type = "button";
-      option.setAttribute("role", "menuitemradio");
-      option.setAttribute("aria-checked", terminal.id === active?.id ? "true" : "false");
-      option.setAttribute(TERMINAL_OPTION_ATTRIBUTE, "");
-      option.disabled = !terminal.installed;
-      const name = document.createElement("span");
-      name.textContent = terminal.name;
-      const state = document.createElement("span");
-      state.textContent = terminal.installed ? "" : notInstalledLabel(options.getLocale());
-      state.style.opacity = ".65";
-      state.style.fontSize = "12px";
-      option.append(name, state);
-      option.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        void openTerminal(row, hostId, threadId, menu, item, terminal.id);
-      });
-      submenu.append(option);
-    }
-    menu.append(submenu);
   };
 
   const buildMenu = (row: HTMLElement, hostId: string, threadId: string): HTMLElement => {
@@ -281,16 +243,56 @@ export function installRendererThreadActions(options: {
       event.stopPropagation();
       void openTerminal(row, hostId, threadId, menu, item);
     });
+    const archive = document.createElement("button");
+    archive.type = "button";
+    archive.setAttribute("role", "menuitem");
+    archive.setAttribute(ARCHIVE_COMPLETED_ATTRIBUTE, "");
+    const archiveLabel = archiveCompletedLabel(options.getLocale());
+    archive.title = archiveLabel;
+    archive.setAttribute("aria-label", archiveLabel);
+    const archiveIcon = document.createElement("span");
+    archiveIcon.style.display = "inline-flex";
+    archiveIcon.style.alignItems = "center";
+    archiveIcon.append(createElement(Archive, { width: 15, height: 15, "aria-hidden": "true" }));
+    const archiveText = document.createElement("span");
+    archiveText.textContent = archiveLabel;
+    archive.append(archiveIcon, archiveText);
+    archive.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const client = options.getClient(hostId);
+      const error = menu.querySelector<HTMLElement>("[data-codexhost-thread-actions-error]");
+      if (!client?.archiveCompletedThreads) {
+        archive.disabled = true;
+        return;
+      }
+      archive.disabled = true;
+      archiveText.textContent = archivingCompletedLabel(options.getLocale());
+      if (error) error.textContent = "";
+      void client
+        .archiveCompletedThreads(threadId)
+        .then((result) => {
+          if (disposed || openRow !== row) return;
+          archiveText.textContent = archiveResultLabel(options.getLocale(), result);
+          schedule();
+        })
+        .catch((failure) => {
+          if (disposed || openRow !== row) return;
+          archiveText.textContent = archiveLabel;
+          archive.disabled = false;
+          if (error) {
+            error.textContent = `${archiveLabel}: ${
+              failure instanceof Error ? failure.message : String(failure)
+            }`;
+          }
+        });
+    });
     const error = document.createElement("div");
     error.setAttribute("data-codexhost-thread-actions-error", "");
     error.setAttribute("role", "alert");
-    menu.append(item, error);
-    void terminalSelection(hostId).then((selection) => {
-      if (!selection || disposed) return;
-      if (menu.querySelector(`[${TERMINAL_SUBMENU_ATTRIBUTE}]`)) return;
-      if (selection.descriptors.length > 1)
-        appendTerminalOptions(menu, row, hostId, threadId, item, selection);
-    });
+    menu.append(item);
+    if (options.getClient(hostId)?.archiveCompletedThreads) menu.append(archive);
+    menu.append(error);
     return menu;
   };
 

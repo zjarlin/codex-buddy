@@ -22,6 +22,8 @@ const bundle = await build({
     globalThis.calls = [];
     globalThis.opened = 0;
     globalThis.fail = true;
+    globalThis.discoveryFail = false;
+    globalThis.running = false;
     globalThis.privateMode = false;
     globalThis.enabled = true;
     globalThis.owner = "codex";
@@ -49,7 +51,10 @@ const bundle = await build({
     const client = {
       buddyStatus: async () => ({settings:{enabled:globalThis.enabled,privateMode:globalThis.privateMode}}),
       listThreadOwnership:async()=>({threads:[{threadId:'thread',owner:globalThis.owner}]}),
-      buddyInterrupted: async () => ({threads:[{threadId:'thread',turnId:'failed',title:'网络中断的会话',status:'failed'}],unreadable:0}),
+      buddyInterrupted: async () => {
+        if (globalThis.discoveryFail) throw new Error('列表读取失败');
+        return {threads:[{threadId:'thread',turnId:'failed',title:'网络中断的会话',status:'failed'}],runningThreadIds:globalThis.running?['thread']:[],unreadable:0};
+      },
       buddyContinue: async (...args) => {
         globalThis.calls.push(args);
         await new Promise(resolve=>globalThis.finishResume=resolve);
@@ -128,13 +133,15 @@ test("sidebar recovery follows privacy, running state, row replacement and dispo
   await page.addScriptTag({ content: browserBundle });
   const resume = page.locator("[data-buddy-resume]");
   await expect(resume).toHaveCount(1);
-  await page.evaluate(() =>
-    Reflect.get(globalThis, "row").setAttribute("data-app-action-sidebar-thread-active", "true"),
-  );
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "running", true);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
   await expect(resume).toHaveCount(0);
-  await page.evaluate(() =>
-    Reflect.get(globalThis, "row").setAttribute("data-app-action-sidebar-thread-active", "false"),
-  );
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "running", false);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
   await expect(resume).toHaveCount(1);
   await page.evaluate(() => {
     Reflect.get(globalThis, "row").remove();
@@ -155,6 +162,58 @@ test("sidebar recovery follows privacy, running state, row replacement and dispo
   await expect(resume).toHaveCount(0);
   await expect(page.locator("[data-native-status]")).toBeVisible();
   await expect(page.locator("[data-buddy-sidebar-recovery]")).toHaveCount(0);
+});
+
+test("sidebar recovery keeps the last successful state when discovery fails", async ({ page }) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
+  await expect(
+    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
+  ).toHaveCount(1);
+  const recoverableStyle = await page
+    .locator("[data-app-action-sidebar-thread-row]")
+    .evaluate((row) => ({
+      background: getComputedStyle(row).backgroundColor,
+      boxShadow: getComputedStyle(row).boxShadow,
+    }));
+  expect(recoverableStyle.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(recoverableStyle.boxShadow).not.toBe("none");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "discoveryFail", true);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
+  await expect(
+    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
+  ).toHaveCount(1);
+  await page.evaluate(() => {
+    document
+      .querySelector("[data-app-action-sidebar-thread-row]")
+      ?.setAttribute("data-app-action-sidebar-thread-active", "true");
+  });
+  await expect(
+    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-running]"),
+  ).toHaveCount(0);
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "discoveryFail", false);
+    Reflect.set(globalThis, "running", true);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
+  await expect(
+    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-running]"),
+  ).toHaveCount(1);
+  const runningStyle = await page
+    .locator("[data-app-action-sidebar-thread-row]")
+    .evaluate((row) => ({
+      background: getComputedStyle(row).backgroundColor,
+      boxShadow: getComputedStyle(row).boxShadow,
+    }));
+  expect(runningStyle.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(runningStyle.boxShadow).not.toBe("none");
+  await page.screenshot({ path: "test-results/buddy-continuation-state.png" });
 });
 
 test("sidebar recovery matches native thread ids inside host-prefixed rows", async ({ page }) => {
@@ -187,6 +246,35 @@ test("sidebar recovery matches native thread ids inside host-prefixed rows", asy
   const resume = page.locator("[data-buddy-resume]");
   await expect(resume).toHaveCount(1);
   await expect(page.locator("[data-buddy-sidebar-recovery]")).toHaveCount(1);
+});
+
+test("sidebar state colors remain distinct in light and dark themes", async ({ page }) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  const row = page.locator("[data-app-action-sidebar-thread-row]");
+  await expect(row).toHaveAttribute("data-buddy-sidebar-recoverable", "");
+  const recoverable = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await row.evaluate((element) =>
+    element.setAttribute("data-app-action-sidebar-thread-active", "true"),
+  );
+  await expect(row).not.toHaveAttribute("data-buddy-sidebar-running", "");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "running", true);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(row).toHaveAttribute("data-buddy-sidebar-running", "");
+  const running = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(running).not.toBe(recoverable);
+  await page.screenshot({ path: "test-results/buddy-continuation-state-light.png" });
+  await page.evaluate(() => {
+    document.documentElement.style.colorScheme = "dark";
+    document.documentElement.style.background = "#191b20";
+    document.documentElement.style.color = "#e5e7ec";
+  });
+  await expect(row).toHaveCSS("color", "rgb(229, 231, 236)");
+  const darkRunning = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(darkRunning).not.toBe("rgba(0, 0, 0, 0)");
+  await page.screenshot({ path: "test-results/buddy-continuation-state-dark.png" });
 });
 
 test("host changes ignore an in-flight continuation response", async ({ page }) => {

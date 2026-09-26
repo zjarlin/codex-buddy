@@ -63,6 +63,13 @@ export interface RendererSettingsMessages {
   readonly idleReleaseFailed: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
+  readonly terminalSection: string;
+  readonly terminalTitle: string;
+  readonly terminalDescription: string;
+  readonly terminalSystemDefault: string;
+  readonly terminalNotInstalled: string;
+  readonly terminalUnavailable: string;
+  readonly terminalLoadFailed: string;
   readonly pageUnavailable: string;
   readonly inDevelopment: string;
   readonly notAvailable: string;
@@ -311,6 +318,13 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleaseFailed: "Sync failed, try again",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
+  terminalSection: "Terminal",
+  terminalTitle: "Default terminal",
+  terminalDescription: "Opens official Codex threads with codex resume in this terminal.",
+  terminalSystemDefault: "System default",
+  terminalNotInstalled: "Not installed",
+  terminalUnavailable: "No supported terminal was found on this computer.",
+  terminalLoadFailed: "Could not read the installed terminals.",
   pageUnavailable: "Page unavailable",
   inDevelopment: "In development",
   notAvailable: "Not available",
@@ -586,6 +600,13 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleaseFailed: "同步失败，请重试",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
+  terminalSection: "终端",
+  terminalTitle: "默认终端",
+  terminalDescription: "使用 codex resume 在该终端中续接官方 Codex 会话。",
+  terminalSystemDefault: "系统默认",
+  terminalNotInstalled: "未安装",
+  terminalUnavailable: "未在本机找到受支持的终端。",
+  terminalLoadFailed: "无法读取本机终端列表。",
   pageUnavailable: "页面不可用",
   inDevelopment: "开发中",
   notAvailable: "暂不可用",

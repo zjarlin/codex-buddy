@@ -137,10 +137,14 @@ export async function judgeWithJev(
       "复杂：设计、重构、跨模块或多步骤",
     ]),
     destructive: noul("这轮请求会改动或删除已有数据、历史或远端状态吗？"),
-    push: noul("这条请求是在要求把已有代码提交或推送到远端仓库吗？"),
+    push: noul(
+      "用户是在要求本回合实际执行把代码提交或推送到远端仓库的操作吗？" +
+        "只是询问、解释、讨论、诊断或提到推送（例如“为什么/如何/会不会触发推送”“推送功能怎么实现”）都不算操作请求。",
+    ),
     // Git 工作流的具体动作：决定旁路回合是只提交、提交并推送，还是同步/继续合并。
-    gitAction: choice("如果这是 Git 请求，用户具体想要哪一种操作？", {
-      none: "不是 Git 请求",
+    // none 同时覆盖“不是 Git 请求”和“只是在提问/讨论”，避免仅凭 push 分数触发旁路。
+    gitAction: choice("用户本回合明确要求执行哪一种 Git 操作？提问或讨论一律选 none。", {
+      none: "没有要求执行 Git 操作（包括提问、解释、讨论或提及推送）",
       commit: "只提交本地改动，不推送",
       "commit-push": "提交改动并推送到远端",
       push: "只推送已有提交，不新建提交",
@@ -190,11 +194,6 @@ export async function judgeWithJev(
   const destructive = result.answers.destructive.noul;
   const push = result.answers.push.noul;
   const gitActionAnswer = result.answers.gitAction.choice;
-  const gitAction: GitAction =
-    (GIT_ACTIONS as readonly string[]).includes(gitActionAnswer) &&
-    result.decisions.gitAction.status !== "defer"
-      ? (gitActionAnswer as GitAction)
-      : "none";
   const needsCommitMessage =
     result.answers.commitMessage.noul > 0.5 &&
     result.decisions.commitMessage.status === "automatic";
@@ -229,6 +228,15 @@ export async function judgeWithJev(
   const conversationalAnswer =
     conversational > 0.5 && result.decisions.conversational.status === "automatic";
   const followUpAnswer = followUp > 0.5 && result.decisions.followUp.status === "automatic";
+  // Git 动作必须以 System One 明确且自动的 gitAction 判定为准。仅在 push 分数高、
+  // 但 gitAction 未达 automatic 或落在 none 时，视为提问/提及而非操作授权，避免误触发旁路。
+  const gitActionAnswered =
+    (GIT_ACTIONS as readonly string[]).includes(gitActionAnswer) &&
+    gitActionAnswer !== "none" &&
+    result.decisions.gitAction.status === "automatic";
+  // 普通问答即使出现“推送/提交”等字眼也不构成 Git 操作授权。
+  const gitAction: GitAction =
+    !conversationalAnswer && gitActionAnswered ? (gitActionAnswer as GitAction) : "none";
   const intent: Assessment["intent"] = conversationalAnswer
     ? "conversation"
     : route === "code"
@@ -249,7 +257,7 @@ export async function judgeWithJev(
     intent,
     conversational: conversationalAnswer,
     refersToPrevious: followUpAnswer,
-    isPush: push > 0.5,
+    isPush: !conversationalAnswer && push > 0.5 && result.decisions.push.status === "automatic",
     pushConfidence: Math.max(push, 1 - push),
     gitAction,
     needsCommitMessage,

@@ -1548,6 +1548,31 @@ describe("JEV judgment integration", () => {
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
   });
 
+  it("does not bypass when a question scores high on push but System One selects no Git action", async () => {
+    const f = await fixture({
+      jev: jevClient(
+        jevResponse("inspect", 0.4, 0.95, "io", {
+          conversational: 0.96,
+          gitAction: "none",
+        }),
+      ),
+    });
+    await f.router.route(f.turn("推送代码为什么会被旁路？"));
+    const decision = (await f.router.snapshot()).decisions[0];
+    expect(decision?.modelBypass).toBeUndefined();
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect(f.forwarded[0]?.params).not.toMatchObject({ model: "gpt-planner" });
+  });
+
+  it("does not bypass when gitAction stays none despite a high push score on a code turn", async () => {
+    const f = await fixture({
+      jev: jevClient(jevResponse("code", 1.2, 0.93, "executor", { gitAction: "none" })),
+    });
+    await f.router.route(f.turn("描述一下推送流程的旁路规则"));
+    expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+  });
+
   it("routes each System One Git action to the cheap model with matching guidance", async () => {
     for (const [action, expected] of [
       ["commit", "只提交本地改动"],

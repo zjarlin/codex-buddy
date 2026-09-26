@@ -18,7 +18,10 @@ import { InterruptedConversations } from "./buddy/continuation.js";
 import {
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
+  THREAD_ARCHIVE_COMPLETED_METHOD,
   buddyContinueSchema,
+  threadArchiveCompletedParamsSchema,
+  threadArchiveCompletedResultSchema,
 } from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
 import { BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
@@ -1149,6 +1152,18 @@ export class AppServerHost {
             rpcEnvelope(request, { result: jsonValueSchema.parse(await this.#interrupted.list()) }),
           );
         }
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+      }
+      return;
+    }
+    if (request.method === THREAD_ARCHIVE_COMPLETED_METHOD) {
+      try {
+        const params = threadArchiveCompletedParamsSchema.parse(request.params);
+        const result = threadArchiveCompletedResultSchema.parse(
+          await this.#interrupted.archiveCompleted(params.threadId),
+        );
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
       }

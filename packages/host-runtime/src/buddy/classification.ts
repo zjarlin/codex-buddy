@@ -173,10 +173,10 @@ export async function classifyWithSystemOne(
     model: jev.model,
     decisions: jev.decisions as NonNullable<BuddyDecision["judgment"]>["decisions"],
   };
-  // 只要 System One 判定为 Git 动作（提交/提交并推送/推送/同步/继续合并）就进入
-  // Git 旁路，交由 git 角色回合按 action 逐步执行；冲突消解仍在该模型回合内完成。
+  // 只有 System One 明确给出 Git 动作（提交/提交并推送/推送/同步/继续合并）才进入旁路。
+  // 单纯提问、讨论或提及推送时 gitAction 会保持 none，即使 push 分数偏高也不得旁路。
   const gitBypass = jev.gitAction !== "none";
-  const modelBypass = environment.settings.bypass && (gitBypass || jev.isPush);
+  const modelBypass = environment.settings.bypass && gitBypass;
   if (modelBypass) {
     assessment.tier = "standard";
     assessment.intent = "git";

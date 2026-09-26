@@ -7,6 +7,7 @@ import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext }
 import type { RendererSettingsMessages } from "./localization.js";
 import { mountIdleReleaseControls } from "./idle-release-controls.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
+import { mountTerminalControls, type RendererThreadTerminalClient } from "./terminal-controls.js";
 import {
   createPreferenceGroup,
   createPreferenceItem,
@@ -17,6 +18,7 @@ import {
 export function createAppearanceSettingsPage(
   messages: RendererSettingsMessages,
   getLoadedSessionsClient: () => LoadedSessionsClient | null = () => null,
+  getThreadTerminalClient: () => RendererThreadTerminalClient | null = () => null,
 ): RendererSettingsPageDefinition {
   return Object.freeze({
     id: "appearance",
@@ -54,12 +56,14 @@ export function createAppearanceSettingsPage(
       card.append(row.item);
 
       context.content.append(heading, description, group);
+      const disposeTerminal = mountTerminalControls(context, messages, getThreadTerminalClient);
       const disposeIdleRelease = mountIdleReleaseControls(
         context,
         messages,
         getLoadedSessionsClient,
       );
       return () => {
+        disposeTerminal();
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         disposeIdleRelease();
       };

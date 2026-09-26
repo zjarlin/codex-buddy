@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RendererModelClient } from "../src/renderer-model-client.js";
 import { installRendererThreadActions } from "../src/renderer-thread-actions.js";
+import type { ThreadTerminalPreferenceStore } from "../src/thread-terminal-preference.js";
 
 /**
  * A deliberately small DOM shim. It implements only the surface the thread
@@ -288,6 +289,13 @@ function clientWith(openThreadTerminal: (input: { threadId: string }) => Promise
   };
 }
 
+function archiveClient(archiveCompletedThreads: (threadId: string) => Promise<unknown>) {
+  const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+  return Object.assign(client, {
+    archiveCompletedThreads: vi.fn(archiveCompletedThreads),
+  });
+}
+
 async function openRowMenu(row: FakeElement, document_: FakeDocument): Promise<FakeElement> {
   const trigger = required(
     row.querySelector("[data-codexhost-thread-actions-trigger]"),
@@ -302,6 +310,17 @@ async function openRowMenu(row: FakeElement, document_: FakeDocument): Promise<F
 
 async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function preference(selected: ReturnType<ThreadTerminalPreferenceStore["get"]>) {
+  let value = selected;
+  return {
+    get: () => value,
+    set: vi.fn((next: ReturnType<ThreadTerminalPreferenceStore["get"]>) => {
+      value = next;
+    }),
+    subscribe: () => () => undefined,
+  } satisfies ThreadTerminalPreferenceStore;
 }
 
 function required<T>(value: T | null | undefined, message: string): T {
@@ -340,6 +359,7 @@ describe("renderer thread actions", () => {
     const installed = installRendererThreadActions({
       getClient: () => client,
       getLocale: () => "en",
+      terminalPreference: preference(null),
     });
     installed.refresh();
 
@@ -356,7 +376,7 @@ describe("renderer thread actions", () => {
     installed.dispose();
   });
 
-  it("opens with a selected installed terminal and disables missing terminals", async () => {
+  it("opens with the installed default terminal selected in Settings", async () => {
     const document_ = installFakeBrowser();
     const row = sidebarRow(document_, "local", "thread-a");
     const client = clientWith(async () => ({
@@ -367,15 +387,14 @@ describe("renderer thread actions", () => {
     const installed = installRendererThreadActions({
       getClient: () => client,
       getLocale: () => "zh-CN",
+      terminalPreference: preference("ghostty"),
     });
     installed.refresh();
 
     const portal = await openRowMenu(row, document_);
-    await settle();
-    const options = portal.querySelectorAll("[data-codexhost-thread-actions-terminal-option]");
-    expect(options).toHaveLength(3);
-    expect(options[2]?.disabled).toBe(true);
-    options[1]?.dispatch("click");
+    const item = required(portal.querySelector("button"), "menu item was not rendered");
+    expect(portal.querySelectorAll("button")).toHaveLength(1);
+    item.dispatch("click");
     await settle();
 
     expect(client.openThreadTerminal).toHaveBeenCalledWith({
@@ -408,6 +427,29 @@ describe("renderer thread actions", () => {
       threadId: "thread-b",
       terminalId: "apple-terminal",
     });
+    installed.dispose();
+  });
+
+  it("archives completed threads from the row menu and reports the result", async () => {
+    const document_ = installFakeBrowser();
+    const row = sidebarRow(document_, "local", "thread-a");
+    const client = archiveClient(async () => ({ archived: 2, skipped: 1, failed: 0 }));
+    const installed = installRendererThreadActions({
+      getClient: () => client,
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+
+    const portal = await openRowMenu(row, document_);
+    const archive = required(
+      portal.querySelector("[data-codexhost-thread-actions-archive-completed]"),
+      "archive item was not rendered",
+    );
+    archive.dispatch("click");
+    await settle();
+
+    expect(client.archiveCompletedThreads).toHaveBeenCalledWith("thread-a");
+    expect(archive.children.some((child) => child.textContent.includes("已归档 2 个"))).toBe(true);
     installed.dispose();
   });
 

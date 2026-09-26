@@ -4481,6 +4481,94 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
+  it("archives completed conversations through the Host method", async () => {
+    const fixture = createFixture();
+    const native = new JsonLineCollector(fixture.official.stdin);
+    await bindOfficialThread(fixture, "target");
+    native
+      .waitFor(
+        (message) => message.method === "thread/read" && message.params?.threadId === "target",
+      )
+      .then((request) => {
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: requiredMessageId(request),
+            result: {
+              thread: { id: "target", cwd: "/project", status: { type: "idle" }, turns: [] },
+            },
+          })}\n`,
+        );
+      });
+    native
+      .waitFor((message) => message.method === "thread/list")
+      .then((request) => {
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: requiredMessageId(request),
+            result: {
+              data: [{ id: "target" }, { id: "done" }, { id: "running" }],
+              nextCursor: null,
+            },
+          })}\n`,
+        );
+      });
+    native
+      .waitFor((message) => message.method === "thread/read" && message.params?.threadId === "done")
+      .then((request) => {
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: requiredMessageId(request),
+            result: {
+              thread: {
+                id: "done",
+                cwd: "/project",
+                status: { type: "idle" },
+                turns: [{ id: "turn", status: "completed" }],
+              },
+            },
+          })}\n`,
+        );
+      });
+    native
+      .waitFor(
+        (message) => message.method === "thread/read" && message.params?.threadId === "running",
+      )
+      .then((request) => {
+        fixture.official.stdout.write(
+          `${JSON.stringify({
+            id: requiredMessageId(request),
+            result: {
+              thread: { id: "running", cwd: "/project", status: { type: "active" }, turns: [] },
+            },
+          })}\n`,
+        );
+      });
+    native
+      .waitFor(
+        (message) => message.method === "thread/archive" && message.params?.threadId === "done",
+      )
+      .then((request) => {
+        fixture.official.stdout.write(
+          `${JSON.stringify({ id: requiredMessageId(request), result: {} })}\n`,
+        );
+      });
+    try {
+      writeRequest(fixture.desktopInput, {
+        id: 59,
+        method: "codexhost/thread/archive-completed",
+        params: { threadId: "target" },
+      });
+      await expect(fixture.collector.waitFor((message) => requestId(message, 59))).resolves.toEqual(
+        {
+          id: 59,
+          result: { archived: 1, skipped: 1, failed: 0 },
+        },
+      );
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("preserves the Desktop Thread persistence mode for an external Harness", async () => {
     const fixture = createFixture();
     writeRequest(fixture.desktopInput, {

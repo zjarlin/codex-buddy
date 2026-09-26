@@ -323,11 +323,19 @@ async function windowsInvocation(
   environment: NodeJS.ProcessEnv,
 ): Promise<TerminalInvocation> {
   const candidates = WINDOWS_TERMINALS;
-  const selected =
-    terminal === "system-default"
-      ? candidates[0]
-      : candidates.find((entry) => entry.id === terminal);
-  if (!selected) throw new ThreadTerminalError("当前系统不支持该终端。");
+  let selected =
+    terminal === "system-default" ? undefined : candidates.find((entry) => entry.id === terminal);
+  if (terminal === "system-default") {
+    for (const candidate of candidates) {
+      if (await candidate.resolve({ platform: "win32", environment })) {
+        selected = candidate;
+        break;
+      }
+    }
+  } else if (!selected) {
+    throw new ThreadTerminalError("当前系统不支持该终端。");
+  }
+  if (!selected) throw new ThreadTerminalError("未找到可用的系统终端。");
   const resolved = await selected.resolve({ platform: "win32", environment });
   if (!resolved) throw new ThreadTerminalError(`未找到 ${selected.name}。`);
   return windowsTerminalInvocation(selected.id, resolved.path, cwd, codexPath, sessionId);
@@ -363,6 +371,16 @@ export function windowsTerminalInvocation(
     return {
       command: executablePath,
       arguments_: ["/d", "/k", `cd /d "${cwd}" && "${codexPath}" resume ${sessionId} -C "${cwd}"`],
+      terminal,
+    };
+  }
+  if (terminal === "nushell") {
+    return {
+      command: executablePath,
+      arguments_: [
+        "-c",
+        `cd ${powerShellQuote(cwd)}; ^${powerShellQuote(codexPath)} resume ${powerShellQuote(sessionId)} -C ${powerShellQuote(cwd)}`,
+      ],
       terminal,
     };
   }

@@ -46,6 +46,7 @@ export const buddyInterruptedSchema = z.object({
       status: z.enum(["failed", "interrupted", "cancelled"]),
     }),
   ),
+  runningThreadIds: z.array(z.string()).default([]),
   unreadable: z.number(),
 });
 export type BuddyInterrupted = z.infer<typeof buddyInterruptedSchema>;

@@ -208,6 +208,32 @@ describe("thread terminal", () => {
     expect(commandArguments[2]).toContain("resume session-id -C");
   });
 
+  it("starts Git Bash and Nushell with their native command flags", async () => {
+    const directory = await workspace();
+    const gitBash = windowsTerminalInvocation(
+      "git-bash",
+      "C:\\Program Files\\Git\\bin\\bash.exe",
+      await realpath(directory),
+      "C:\\Codex\\codex.exe",
+      "session-id",
+    );
+    expect(gitBash.arguments_[0]).toBe("--login");
+    expect(gitBash.arguments_[1]).toBe("-c");
+    expect(gitBash.arguments_[2]).toContain("resume");
+
+    const nushell = windowsTerminalInvocation(
+      "nushell",
+      "C:\\Users\\test\\scoop\\apps\\nu\\current\\nu.exe",
+      await realpath(directory),
+      "C:\\Codex\\codex.exe",
+      "session-id",
+    );
+    expect(nushell.arguments_[0]).toBe("-c");
+    expect(nushell.arguments_[1]).toContain("cd ");
+    expect(nushell.arguments_[1]).toContain("^");
+    expect(nushell.arguments_[1]).toContain("resume 'session-id'");
+  });
+
   it("rejects a terminal that is not installed", async () => {
     const directory = await workspace();
     const spawnTerminal = fakeSpawn();

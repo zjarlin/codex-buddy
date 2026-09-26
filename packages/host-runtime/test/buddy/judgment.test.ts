@@ -95,6 +95,69 @@ describe("JEV judgment", () => {
     expect(judgment.pushConfidence).toBeCloseTo(0.98);
     expect(judgment.model).toBe("typesafe/jev");
     expect(judgment.decisions.route?.status).toBe("automatic");
+    expect(judgment.gitAction).toBe("commit-push");
+  });
+
+  it("does not treat a high push score as a Git action when gitAction is none", async () => {
+    const judgment = await judgeWithJev(
+      client(
+        response({
+          push: { type: "noul", noul: 0.96 },
+          gitAction: {
+            type: "choice",
+            choice: "none",
+            probabilities: {
+              none: 0.9,
+              commit: 0.02,
+              "commit-push": 0.03,
+              push: 0.03,
+              sync: 0.01,
+              "merge-continue": 0.01,
+            },
+            confidence: 0.9,
+          },
+        }),
+      ),
+      { request: "为什么推送会触发旁路？", commands: [] },
+    );
+    // push 分数高只说明"可能想推送"，但 gitAction=none 表示 System One 未确认具体操作，
+    // 因此不构成可授权的 Git 动作。
+    expect(judgment.gitAction).toBe("none");
+    expect(judgment.isPush).toBe(true);
+  });
+
+  it("does not bypass on a conversational turn even when push terms are mentioned", async () => {
+    const judgment = await judgeWithJev(
+      client(response({ conversational: { type: "noul", noul: 0.98 } })),
+      { request: "推送代码这个功能会怎么触发？", commands: [] },
+    );
+    expect(judgment.conversational).toBe(true);
+    expect(judgment.gitAction).toBe("none");
+    expect(judgment.isPush).toBe(false);
+  });
+
+  it("keeps a deferred gitAction at none so review-level signals do not authorize Git", async () => {
+    const judgment = await judgeWithJev(
+      client(
+        response({
+          gitAction: {
+            type: "choice",
+            choice: "commit-push",
+            probabilities: {
+              none: 0.3,
+              commit: 0.15,
+              "commit-push": 0.4,
+              push: 0.1,
+              sync: 0.04,
+              "merge-continue": 0.01,
+            },
+            confidence: 0.5,
+          },
+        }),
+      ),
+      { request: "把改动同步到远端", commands: [] },
+    );
+    expect(judgment.gitAction).toBe("none");
   });
 
   it("raises difficulty for plan routes, high complexity or destructive risk", async () => {

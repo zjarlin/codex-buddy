@@ -131,8 +131,12 @@ import {
   type ThreadTerminalOpenResult,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
+  THREAD_ARCHIVE_COMPLETED_METHOD,
   buddyInterruptedSchema,
+  threadArchiveCompletedParamsSchema,
+  threadArchiveCompletedResultSchema,
   type BuddyInterrupted,
+  type ThreadArchiveCompletedResult,
   BUDDY_PRIVATE_METHOD,
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
@@ -354,6 +358,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   openThreadTerminal?(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
+  archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
@@ -791,6 +796,13 @@ export function createRendererModelClient(
     buddyContinue: async (threadId: string, turnId: string) => {
       await manager.sendRequest(BUDDY_CONTINUE_METHOD, { threadId, turnId });
     },
+    archiveCompletedThreads: async (threadId: string) =>
+      threadArchiveCompletedResultSchema.parse(
+        await manager.sendRequest(
+          THREAD_ARCHIVE_COMPLETED_METHOD,
+          threadArchiveCompletedParamsSchema.parse({ threadId }),
+        ),
+      ),
     buddyModels: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_MODELS_METHOD, {})),
     syncCodexCatalog: async () =>

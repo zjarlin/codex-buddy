@@ -24,6 +24,7 @@ import {
   type SystemOneModelHeaderControl,
 } from "./settings/trigger.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
+import type { RendererThreadTerminalClient } from "./settings/terminal-controls.js";
 
 const UPDATE_CHECK_TIMEOUT_MS = 5_000;
 const UPDATE_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000] as const;
@@ -36,6 +37,7 @@ export interface RendererSettingsLifecycleOptions {
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
   getBuddyClient?(): RendererModelClient | null;
+  getThreadTerminalClient?(): RendererThreadTerminalClient | null;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
 }
@@ -85,6 +87,7 @@ export function installRendererSettingsLifecycle(
       },
       options.getLoadedSessionsClient ?? (() => null),
       options.getProjectSyncClient ?? (() => null),
+      options.getThreadTerminalClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);
     const nextTrigger = installRendererSettingsHeaderTrigger({

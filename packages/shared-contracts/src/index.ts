@@ -506,5 +506,8 @@ export {
   GIT_WORKFLOW_STATUS_METHOD,
   GIT_WORKFLOW_RUN_METHOD,
   gitWorkflowSnapshotSchema,
+  gitWorkflowParamsSchema,
+  type GitWorkflowParams,
   type GitWorkflowSnapshot,
 } from "./git-workflow.js";
+export * from "./git-repositories.js";

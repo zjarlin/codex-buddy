@@ -76,33 +76,54 @@ export class RendererGitCache {
     return request;
   }
 
-  peekStatus(client: RendererGitClient, threadId: HostThreadId): GitWorkspaceStatus | null {
+  peekStatus(
+    client: RendererGitClient,
+    threadId: HostThreadId,
+    repository?: string,
+  ): GitWorkspaceStatus | null {
     return (
-      (this.#find(client, threadId, "status")?.value as GitWorkspaceStatus | undefined) ?? null
+      (this.#find(client, threadId, JSON.stringify([repository, "status"]))?.value as
+        GitWorkspaceStatus | undefined) ?? null
     );
   }
 
-  status(client: RendererGitClient, threadId: HostThreadId): Promise<GitWorkspaceStatus> {
-    return this.#read(client, threadId, "status", () => client.inspectGitStatus({ threadId }));
+  status(
+    client: RendererGitClient,
+    threadId: HostThreadId,
+    repository?: string,
+  ): Promise<GitWorkspaceStatus> {
+    return this.#read(client, threadId, JSON.stringify([repository, "status"]), () =>
+      client.inspectGitStatus({ threadId, ...(repository ? { repository } : {}) }),
+    );
   }
 
-  models(client: RendererGitClient, threadId: HostThreadId) {
-    return this.#read(client, threadId, "models", () => client.listGitMessageModels({ threadId }));
+  models(client: RendererGitClient, threadId: HostThreadId, repository?: string) {
+    return this.#read(client, threadId, JSON.stringify([repository, "models"]), () =>
+      client.listGitMessageModels({ threadId, ...(repository ? { repository } : {}) }),
+    );
   }
 
-  diff(client: RendererGitClient, threadId: HostThreadId, path: string) {
-    return this.#read(client, threadId, `diff:${path}`, async () => {
+  diff(client: RendererGitClient, threadId: HostThreadId, path: string, repository?: string) {
+    return this.#read(client, threadId, JSON.stringify([repository, "diff", path]), async () => {
       const [diff, content] = await Promise.all([
-        client.inspectGitDiff({ threadId, path }),
-        client.inspectGitContent({ threadId, path }),
+        client.inspectGitDiff({ threadId, path, ...(repository ? { repository } : {}) }),
+        client.inspectGitContent({ threadId, path, ...(repository ? { repository } : {}) }),
       ]);
       return { diff, content };
     });
   }
 
-  update(client: RendererGitClient, threadId: HostThreadId, status: GitWorkspaceStatus): void {
+  update(
+    client: RendererGitClient,
+    threadId: HostThreadId,
+    status: GitWorkspaceStatus,
+    repository?: string,
+  ): void {
     this.invalidate(client);
-    this.#store({ client, threadId, key: "status", expiresAt: 0, bytes: 0 }, status);
+    this.#store(
+      { client, threadId, key: JSON.stringify([repository, "status"]), expiresAt: 0, bytes: 0 },
+      status,
+    );
   }
 
   invalidate(client: RendererGitClient): void {

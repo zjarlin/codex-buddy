@@ -1,6 +1,14 @@
 import { execFileSync, type ChildProcessWithoutNullStreams, type spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -8480,6 +8488,111 @@ describe("Buddy privacy send boundary", () => {
     } finally {
       await stopFixture(fixture);
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("AppServerHost linked Git repositories", () => {
+  it("edits, commits and pushes the linked frontend while preserving the backend", async () => {
+    const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "codexhost-linked-rpc-")));
+    const backend = path.join(directory, "backend");
+    const frontend = path.join(directory, "frontend");
+    const remote = path.join(directory, "remote.git");
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-C", cwd, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    for (const repository of [backend, frontend]) {
+      execFileSync("git", ["init", "-q", "-b", "main", repository]);
+      git(repository, "config", "user.name", "Test");
+      git(repository, "config", "user.email", "test@example.com");
+      git(repository, "config", "commit.gpgsign", "false");
+      mkdirSync(path.join(repository, "src"));
+      writeFileSync(path.join(repository, "app.txt"), "original\n");
+      git(repository, "add", "app.txt");
+      git(repository, "commit", "-qm", "init");
+      writeFileSync(path.join(repository, "app.txt"), `${path.basename(repository)} draft\n`);
+    }
+    execFileSync("git", ["init", "-q", "--bare", remote]);
+    git(frontend, "remote", "add", "origin", remote);
+    git(frontend, "push", "-qu", "origin", "main");
+    const backendHead = git(backend, "rev-parse", "HEAD");
+    const fixture = createFixture({ environment: { CODEX_HOME: path.join(directory, "home") } });
+    try {
+      const threadId = await startExternalThread(fixture, "codexhost/pi-native", 1, {
+        cwd: path.join(backend, "src"),
+      });
+      let id = 100;
+      const rpc = async (method: string, params: JsonObject = {}) => {
+        const request = ++id;
+        writeRequest(fixture.desktopInput, {
+          id: request,
+          method,
+          params: { threadId, ...params },
+        });
+        return fixture.collector.waitFor((message) => requestId(message, request));
+      };
+      const ok = async (method: string, params: JsonObject = {}) => {
+        const response = await rpc(method, params);
+        expect(response).not.toHaveProperty("error");
+        return response.result as JsonObject;
+      };
+      expect(await ok("codexhost/git/repositories")).toMatchObject({
+        project: backend,
+        repositories: [{ path: backend, primary: true }],
+      });
+      expect(await rpc("codexhost/git/status", { repository: frontend })).toHaveProperty("error");
+      expect(
+        await rpc("codexhost/workspace/files/write", {
+          repository: frontend,
+          path: "app.txt",
+          content: "unauthorized",
+          expectedRevision: "a".repeat(64),
+        }),
+      ).toHaveProperty("error");
+      await ok("codexhost/git/repository/link", { repository: path.join(frontend, "src") });
+      expect(await ok("codexhost/git/status", { repository: frontend })).toMatchObject({
+        workspace: frontend,
+      });
+      const content = await ok("codexhost/git/content", { repository: frontend, path: "app.txt" });
+      expect(content.working).toBe("frontend draft\n");
+      if (typeof content.revision !== "string") throw new Error("Missing content revision");
+      await ok("codexhost/workspace/files/write", {
+        repository: frontend,
+        path: "app.txt",
+        content: "frontend saved\n",
+        expectedRevision: content.revision,
+      });
+      await ok("codexhost/git/stage", { repository: frontend, paths: ["app.txt"] });
+      await ok("codexhost/git/unstage", { repository: frontend, paths: ["app.txt"] });
+      expect(git(frontend, "diff", "--cached", "--name-only")).toBe("");
+      await ok("codexhost/git/stage", { repository: frontend, paths: ["app.txt"] });
+      expect(
+        await ok("codexhost/git/commit", {
+          repository: frontend,
+          message: "feat: frontend only",
+          paths: [],
+          push: true,
+        }),
+      ).toMatchObject({ pushed: true, status: { workspace: frontend, changes: [], ahead: 0 } });
+      await ok("codexhost/git/push", { repository: frontend });
+      expect(git(remote, "rev-parse", "main")).toBe(git(frontend, "rev-parse", "HEAD"));
+      expect(git(remote, "show", "main:app.txt")).toBe("frontend saved");
+      expect(git(backend, "rev-parse", "HEAD")).toBe(backendHead);
+      expect(git(backend, "diff", "--cached", "--name-only")).toBe("");
+      expect(readFileSync(path.join(backend, "app.txt"), "utf8")).toBe("backend draft\n");
+      expect(await ok("codexhost/git/status")).toMatchObject({ workspace: backend });
+      // 自动工作流不接受手动面板选择的关联仓库。
+      expect(await rpc("codexhost/git/workflow/run", { repository: frontend })).toHaveProperty(
+        "error",
+      );
+      await ok("codexhost/git/repository/unlink", { repository: frontend });
+      expect(await rpc("codexhost/git/push", { repository: frontend })).toHaveProperty("error");
+      expect(readFileSync(path.join(frontend, "app.txt"), "utf8")).toBe("frontend saved\n");
+    } finally {
+      await stopFixture(fixture);
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 });

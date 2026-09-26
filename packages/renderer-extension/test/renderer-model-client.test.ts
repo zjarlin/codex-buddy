@@ -71,6 +71,61 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("validates repository links and preserves the selected repository in Git and file-write requests", async () => {
+    const threadId = hostThreadIdSchema.parse("backend-chat");
+    const target = { threadId, repository: "/frontend" };
+    const repositories = {
+      project: "/backend",
+      repositories: [
+        { path: "/backend", primary: true },
+        { path: "/frontend", primary: false },
+      ],
+    };
+    const status = {
+      workspace: "/frontend",
+      branch: "main",
+      detached: false,
+      head: null,
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+      changes: [],
+      submodules: [],
+    };
+    const written = { workspace: "/frontend", path: "app.txt", size: 5, revision: "b".repeat(64) };
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce(repositories)
+      .mockResolvedValueOnce(repositories)
+      .mockResolvedValueOnce(repositories)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce(written);
+    const client = createRendererModelClient([{ sendRequest }]);
+    await expect(client?.listGitRepositories?.({ threadId })).resolves.toEqual(repositories);
+    await expect(client?.linkGitRepository?.(target)).resolves.toEqual(repositories);
+    await expect(client?.unlinkGitRepository?.(target)).resolves.toEqual(repositories);
+    await expect(client?.inspectGitStatus?.(target)).resolves.toMatchObject(status);
+    const write = {
+      ...target,
+      path: "app.txt",
+      content: "saved",
+      expectedRevision: "a".repeat(64),
+    };
+    await expect(client?.writeWorkspaceFile?.(write)).resolves.toEqual(written);
+    expect(sendRequest.mock.calls).toEqual([
+      ["codexhost/git/repositories", { threadId }],
+      ["codexhost/git/repository/link", target],
+      ["codexhost/git/repository/unlink", target],
+      ["codexhost/git/status", target],
+      ["codexhost/workspace/files/write", write],
+    ]);
+    sendRequest.mockClear();
+    // 提交面板的目标仓库不能流入自动工作流，也不能绕过输入校验。
+    await expect(client?.runGitWorkflow?.(target)).rejects.toThrow();
+    await expect(client?.linkGitRepository?.({ ...target, repository: " " })).rejects.toThrow();
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+
   it("reads draft quota for the selected Account without activating it", async () => {
     const result = {
       accountId: "account-b",
@@ -327,6 +382,7 @@ describe("Renderer fixed Model request client", () => {
       "inspectGitDiff",
       "inspectGitLog",
       "inspectGitStatus",
+      "inspectGitWorkflow",
       "inspectHarness",
       "inspectHarnessAccount",
       "inspectHarnessCommands",
@@ -335,8 +391,10 @@ describe("Renderer fixed Model request client", () => {
       "inspectThreadCommands",
       "inspectThreadUsage",
       "inviteProjectSync",
+      "linkGitRepository",
       "listCodexAccounts",
       "listGitMessageModels",
+      "listGitRepositories",
       "listGitSubmodules",
       "listHarnessAccountSources",
       "listHarnessAccounts",
@@ -356,6 +414,7 @@ describe("Renderer fixed Model request client", () => {
       "refreshCodexAccounts",
       "rejectProjectSync",
       "removeProjectSyncPeer",
+      "runGitWorkflow",
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
@@ -367,6 +426,7 @@ describe("Renderer fixed Model request client", () => {
       "syncCodexCatalog",
       "syncGit",
       "syncProjectSync",
+      "unlinkGitRepository",
       "unstageGitPaths",
       "updateGitSubmodule",
       "writeWorkspaceFile",

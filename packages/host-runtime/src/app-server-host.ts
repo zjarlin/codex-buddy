@@ -1,3 +1,12 @@
+import { GitRepositoryLinks } from "./git-repository-links.js";
+import {
+  GIT_REPOSITORIES_METHOD,
+  GIT_REPOSITORY_LINK_METHOD,
+  GIT_REPOSITORY_UNLINK_METHOD,
+  gitRepositoriesParamsSchema,
+  gitWorkflowParamsSchema,
+  gitRepositoryLinkParamsSchema,
+} from "@codexhost/shared-contracts";
 import {
   ProjectGitWorkflow,
   type ProjectGitWorkflowGroup,
@@ -605,6 +614,7 @@ export class AppServerHost {
   #delegationCoordinator: HarnessDelegationCoordinator;
   #sessionImportRequests: SessionImportRequests | undefined;
   readonly #gitWorkspace = new GitWorkspace();
+  readonly #gitRepositoryLinks: GitRepositoryLinks;
   readonly #gitWorkflow: ProjectGitWorkflow;
   readonly #projectSync: ProjectSyncPeer;
   #unregisterDelegationApi: (() => void) | undefined;
@@ -653,6 +663,9 @@ export class AppServerHost {
     const environment = this.#options.environment ?? process.env;
     this.#projectSync = new ProjectSyncPeer(environment);
     const permanentHome = path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
+    this.#gitRepositoryLinks = new GitRepositoryLinks(permanentHome, (cwd) =>
+      this.#gitWorkspace.root(cwd),
+    );
     this.#ownsOfficialRuntimeScope = options.officialRuntimeScope === undefined;
     this.#officialRuntimeScope =
       options.officialRuntimeScope ??
@@ -1238,7 +1251,7 @@ export class AppServerHost {
     ) {
       this.#dispatchDesktopRequest(async () => {
         try {
-          const { threadId } = gitWorkspaceParamsSchema.parse(request.params);
+          const { threadId } = gitWorkflowParamsSchema.parse(request.params);
           const snapshot =
             request.method === GIT_WORKFLOW_RUN_METHOD
               ? await this.#gitWorkflow.run(threadId)
@@ -1277,6 +1290,9 @@ export class AppServerHost {
       return;
     }
     if (
+      request.method === GIT_REPOSITORIES_METHOD ||
+      request.method === GIT_REPOSITORY_LINK_METHOD ||
+      request.method === GIT_REPOSITORY_UNLINK_METHOD ||
       request.method === GIT_STATUS_METHOD ||
       request.method === GIT_DIFF_METHOD ||
       request.method === GIT_CONTENT_METHOD ||
@@ -2696,6 +2712,16 @@ export class AppServerHost {
     return result.turnId;
   }
 
+  async #resolveGitWorkspace(input: {
+    threadId: string;
+    repository?: string | undefined;
+  }): Promise<string> {
+    return this.#gitRepositoryLinks.resolve(
+      await this.#gitWorkspaceForThread(input.threadId),
+      input.repository,
+    );
+  }
+
   async #gitWorkspaceForThread(threadId: string): Promise<string> {
     const loaded = this.#externalRuntime.get(threadId);
     if (loaded) return loaded.cwd;
@@ -2734,7 +2760,9 @@ export class AppServerHost {
       if (request.method === WORKSPACE_FILES_WRITE_METHOD) {
         const params = workspaceFileWriteParamsSchema.safeParse(request.params);
         if (!params.success) throw new WorkspaceFilesError("文件写入参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = params.data.repository
+          ? await this.#resolveGitWorkspace(params.data)
+          : await this.#gitWorkspaceForThread(params.data.threadId);
         const result = await writeWorkspaceFile(
           cwd,
           params.data.path,
@@ -2824,10 +2852,33 @@ export class AppServerHost {
 
   async #handleGitRequest(request: JsonRpcRequest): Promise<void> {
     try {
+      if (
+        [
+          GIT_REPOSITORIES_METHOD,
+          GIT_REPOSITORY_LINK_METHOD,
+          GIT_REPOSITORY_UNLINK_METHOD,
+        ].includes(request.method)
+      ) {
+        let result;
+        if (request.method === GIT_REPOSITORIES_METHOD) {
+          const params = gitRepositoriesParamsSchema.parse(request.params);
+          const cwd = await this.#gitWorkspaceForThread(params.threadId);
+          result = await this.#gitRepositoryLinks.list(cwd);
+        } else {
+          const params = gitRepositoryLinkParamsSchema.parse(request.params);
+          const cwd = await this.#gitWorkspaceForThread(params.threadId);
+          result =
+            request.method === GIT_REPOSITORY_LINK_METHOD
+              ? await this.#gitRepositoryLinks.link(cwd, params.repository)
+              : await this.#gitRepositoryLinks.unlink(cwd, params.repository);
+        }
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
       if (request.method === GIT_MESSAGE_MODEL_METHOD) {
         const params = gitWorkspaceParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
-        await this.#gitWorkspaceForThread(params.data.threadId);
+        await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.messageModels(
           this.#options.environment ?? process.env,
         );
@@ -2838,7 +2889,7 @@ export class AppServerHost {
       if (request.method === GIT_SUBMODULES_METHOD) {
         const params = gitWorkspaceParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.submodules(cwd);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2847,7 +2898,7 @@ export class AppServerHost {
       if (request.method === GIT_SUBMODULE_UPDATE_METHOD) {
         const params = gitSubmoduleUpdateParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 子模块参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.updateSubmodule(cwd, params.data);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2856,7 +2907,7 @@ export class AppServerHost {
       if (request.method === GIT_LOG_METHOD) {
         const params = gitLogParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 日志参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.log(cwd, params.data.limit);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2865,7 +2916,7 @@ export class AppServerHost {
       if (request.method === GIT_COMMIT_DETAIL_METHOD) {
         const params = gitCommitDetailParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 提交详情参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.commitDetail(cwd, params.data.commit);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2874,7 +2925,7 @@ export class AppServerHost {
       if (request.method === GIT_COMMIT_DIFF_METHOD) {
         const params = gitCommitDiffParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 提交 diff 参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.commitDiff(
           cwd,
           params.data.commit,
@@ -2887,7 +2938,7 @@ export class AppServerHost {
       if (request.method === GIT_STATUS_METHOD || request.method === GIT_PUSH_METHOD) {
         const params = gitWorkspaceParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result =
           request.method === GIT_STATUS_METHOD
             ? await this.#gitWorkspace.status(cwd)
@@ -2904,7 +2955,7 @@ export class AppServerHost {
       ) {
         const params = gitWorkspaceParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result =
           request.method === GIT_FETCH_METHOD
             ? await this.#gitWorkspace.fetch(cwd)
@@ -2920,7 +2971,7 @@ export class AppServerHost {
       if (request.method === GIT_DIFF_METHOD) {
         const params = gitDiffParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git diff 参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.diff(cwd, params.data.path);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2929,7 +2980,7 @@ export class AppServerHost {
       if (request.method === GIT_CONTENT_METHOD) {
         const params = gitContentParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 内容参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.content(cwd, params.data.path);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2938,7 +2989,7 @@ export class AppServerHost {
       if (request.method === GIT_STAGE_METHOD) {
         const params = gitStageParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 暂存参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.stage(cwd, params.data.paths);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2947,7 +2998,7 @@ export class AppServerHost {
       if (request.method === GIT_UNSTAGE_METHOD) {
         const params = gitStageParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 取消暂存参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.unstage(cwd, params.data.paths);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
@@ -2956,7 +3007,7 @@ export class AppServerHost {
       if (request.method === GIT_COMMIT_METHOD) {
         const params = gitCommitParamsSchema.safeParse(request.params);
         if (!params.success) throw new GitWorkspaceError("Git 提交参数无效。");
-        const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+        const cwd = await this.#resolveGitWorkspace(params.data);
         const result = await this.#gitWorkspace.commit(
           cwd,
           params.data.message,
@@ -2969,7 +3020,7 @@ export class AppServerHost {
 
       const params = gitMessageGenerateParamsSchema.safeParse(request.params);
       if (!params.success) throw new GitWorkspaceError("生成提交消息参数无效。");
-      const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+      const cwd = await this.#resolveGitWorkspace(params.data);
       const result = await this.#gitWorkspace.generateMessage({
         cwd,
         model: params.data.model,

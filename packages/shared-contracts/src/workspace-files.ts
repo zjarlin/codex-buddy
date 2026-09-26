@@ -65,6 +65,7 @@ export type WorkspaceFileReadResult = z.infer<typeof workspaceFileReadResultSche
 export const workspaceFileWriteParamsSchema = z
   .object({
     threadId: hostThreadIdSchema,
+    repository: z.string().trim().min(1).max(16_384).optional(),
     path: z.string().min(1).max(WORKSPACE_FILE_PATH_MAX_LENGTH),
     content: z.string().max(WORKSPACE_FILE_WRITE_MAX_BYTES),
     expectedRevision: z.string().regex(/^[a-f0-9]{64}$/u),

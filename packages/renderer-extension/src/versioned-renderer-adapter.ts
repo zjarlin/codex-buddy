@@ -1094,6 +1094,28 @@ export function installCurrentRendererAdapter(): {
     return client;
   };
   const modelControl: RendererModelClient = Object.freeze({
+    listGitRepositories: (
+      input: Parameters<NonNullable<RendererModelClient["listGitRepositories"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.listGitRepositories) throw new Error("Git repository links are unavailable");
+      return client.listGitRepositories(input);
+    },
+    linkGitRepository: (
+      input: Parameters<NonNullable<RendererModelClient["linkGitRepository"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.linkGitRepository) throw new Error("Git repository links are unavailable");
+      return client.linkGitRepository(input);
+    },
+    unlinkGitRepository: (
+      input: Parameters<NonNullable<RendererModelClient["unlinkGitRepository"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.unlinkGitRepository) throw new Error("Git repository links are unavailable");
+      return client.unlinkGitRepository(input);
+    },
+
     inspectGitStatus: (
       input: Parameters<NonNullable<RendererModelClient["inspectGitStatus"]>>[0],
     ) => {

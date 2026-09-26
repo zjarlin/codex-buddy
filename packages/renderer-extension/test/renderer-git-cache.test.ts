@@ -1,5 +1,10 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { hostThreadIdSchema, type GitWorkspaceStatus } from "@codexhost/shared-contracts";
+import {
+  hostThreadIdSchema,
+  type GitWorkspaceStatus,
+  type GitWorkspaceParams,
+  type GitDiffParams,
+} from "@codexhost/shared-contracts";
 import { RendererGitCache } from "../src/renderer-git-cache.js";
 import type { RendererGitClient } from "../src/renderer-git-sidebar.js";
 
@@ -8,6 +13,32 @@ const status = { workspace: "/repo", changes: [] } as unknown as GitWorkspaceSta
 const clientWith = (inspectGitStatus: RendererGitClient["inspectGitStatus"]) =>
   ({ inspectGitStatus }) as RendererGitClient;
 afterEach(() => vi.useRealTimers());
+
+test("isolates repository snapshots and diffs within the same chat", async () => {
+  const cache = new RendererGitCache();
+  const read = vi.fn(async ({ repository }: GitWorkspaceParams) => ({
+    ...status,
+    workspace: repository ?? "/backend",
+  }));
+  const diff = vi.fn(async ({ path, repository }: GitDiffParams) => ({
+    path,
+    diff: repository ?? "/backend",
+    truncated: false,
+  }));
+  const client = {
+    ...clientWith(read),
+    inspectGitDiff: diff,
+    inspectGitContent: vi.fn().mockResolvedValue({}),
+  } as RendererGitClient;
+  await Promise.all([cache.status(client, threadId), cache.status(client, threadId, "/frontend")]);
+  expect(cache.peekStatus(client, threadId)?.workspace).toBe("/backend");
+  expect(cache.peekStatus(client, threadId, "/frontend")?.workspace).toBe("/frontend");
+  expect((await cache.diff(client, threadId, "app.ts")).diff.diff).toBe("/backend");
+  expect((await cache.diff(client, threadId, "app.ts", "/frontend")).diff.diff).toBe("/frontend");
+  await cache.status(client, threadId, "/frontend");
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(diff).toHaveBeenCalledTimes(2);
+});
 
 test("coalesces pending reads, reuses fresh status, and refreshes expired snapshots", async () => {
   vi.useFakeTimers();

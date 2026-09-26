@@ -1,4 +1,17 @@
 import {
+  GIT_REPOSITORIES_METHOD,
+  GIT_REPOSITORY_LINK_METHOD,
+  GIT_REPOSITORY_UNLINK_METHOD,
+  gitRepositoriesParamsSchema,
+  gitWorkflowParamsSchema,
+  type GitWorkflowParams,
+  gitRepositoryLinkParamsSchema,
+  gitRepositoriesSchema,
+  type GitRepositoriesParams,
+  type GitRepositoryLinkParams,
+  type GitRepositories,
+} from "@codexhost/shared-contracts";
+import {
   PROJECT_SYNC_INSPECT_METHOD,
   PROJECT_SYNC_INVITE_METHOD,
   PROJECT_SYNC_PAIR_METHOD,
@@ -302,8 +315,11 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   addProjectSync?(input: ProjectSyncAddParams): Promise<ProjectSyncSnapshot>;
   bindProjectSync?(input: ProjectSyncBindParams): Promise<ProjectSyncSnapshot>;
   cloneProjectSync?(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot>;
-  inspectGitWorkflow?(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot>;
-  runGitWorkflow?(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot>;
+  listGitRepositories?(input: GitRepositoriesParams): Promise<GitRepositories>;
+  linkGitRepository?(input: GitRepositoryLinkParams): Promise<GitRepositories>;
+  unlinkGitRepository?(input: GitRepositoryLinkParams): Promise<GitRepositories>;
+  inspectGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
+  runGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
   inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
   inspectGitContent?(input: GitContentParams): Promise<GitContentResult>;
@@ -582,17 +598,38 @@ export function createRendererModelClient(
         ),
       );
     },
-    async inspectGitWorkflow(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot> {
-      return gitWorkflowSnapshotSchema.parse(
+    async listGitRepositories(input: GitRepositoriesParams): Promise<GitRepositories> {
+      return gitRepositoriesSchema.parse(
         await manager.sendRequest(
-          GIT_WORKFLOW_STATUS_METHOD,
-          gitWorkspaceParamsSchema.parse(input),
+          GIT_REPOSITORIES_METHOD,
+          gitRepositoriesParamsSchema.parse(input),
         ),
       );
     },
-    async runGitWorkflow(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot> {
+    async linkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories> {
+      return gitRepositoriesSchema.parse(
+        await manager.sendRequest(
+          GIT_REPOSITORY_LINK_METHOD,
+          gitRepositoryLinkParamsSchema.parse(input),
+        ),
+      );
+    },
+    async unlinkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories> {
+      return gitRepositoriesSchema.parse(
+        await manager.sendRequest(
+          GIT_REPOSITORY_UNLINK_METHOD,
+          gitRepositoryLinkParamsSchema.parse(input),
+        ),
+      );
+    },
+    async inspectGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot> {
       return gitWorkflowSnapshotSchema.parse(
-        await manager.sendRequest(GIT_WORKFLOW_RUN_METHOD, gitWorkspaceParamsSchema.parse(input)),
+        await manager.sendRequest(GIT_WORKFLOW_STATUS_METHOD, gitWorkflowParamsSchema.parse(input)),
+      );
+    },
+    async runGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot> {
+      return gitWorkflowSnapshotSchema.parse(
+        await manager.sendRequest(GIT_WORKFLOW_RUN_METHOD, gitWorkflowParamsSchema.parse(input)),
       );
     },
     async inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {

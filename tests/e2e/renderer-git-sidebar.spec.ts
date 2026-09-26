@@ -412,6 +412,7 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
         threadId: "thread-1",
         path: "src/app.ts",
         content: "export const app = false;\n",
+        repository: "/repo",
         expectedRevision: "a".repeat(64),
       },
     ]);
@@ -930,6 +931,7 @@ test("keeps pending saves and stage clicks single, preserving edits made during 
       threadId: "thread-1",
       path: "src/app.ts",
       content: "saved snapshot\n",
+      repository: "/repo",
       expectedRevision: "a".repeat(64),
     },
   ]);
@@ -1007,4 +1009,210 @@ test("pulls and syncs from the sidebar and surfaces an in-progress merge", async
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
     .toContainEqual(["mergeAbort", { threadId: "thread-1" }]);
   await expect(banner).toBeHidden();
+});
+
+async function enableLinkedRepositories(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const repositories = [{ path: "/repo", primary: true }];
+    const frontend = structuredClone(fixture.status);
+    frontend.workspace = "/frontend";
+    frontend.changes = [frontend.changes[0]];
+    frontend.submodules = [];
+    const selectedStatus = (repository?: string) => (repository ? frontend : fixture.status);
+    const result = () => ({ project: "/repo", repositories: structuredClone(repositories) });
+    const client = {
+      ...fixture.client,
+      listGitRepositories: async () => result(),
+      linkGitRepository: (input: { repository: string }) => {
+        fixture.calls.push(["link", input]);
+        return new Promise((resolve) => {
+          fixture.resolveLink = () => {
+            repositories.push({ path: input.repository, primary: false });
+            resolve(result());
+          };
+        });
+      },
+      unlinkGitRepository: async (input: { repository: string }) => {
+        fixture.calls.push(["unlink", input]);
+        repositories.splice(
+          repositories.findIndex((entry) => entry.path === input.repository),
+          1,
+        );
+        return result();
+      },
+      inspectGitStatus: async (input: { repository?: string }) =>
+        structuredClone(selectedStatus(input.repository)),
+      inspectGitContent: async (input: { path: string; repository?: string }) => ({
+        ...(await fixture.client.inspectGitContent(input)),
+        working: input.repository ? "frontend draft\n" : "backend draft\n",
+      }),
+      stageGitPaths: async (input: { repository?: string }) => {
+        fixture.calls.push(["stage", input]);
+        const status = selectedStatus(input.repository);
+        status.changes[0].staged = true;
+        status.changes[0].unstaged = false;
+        return structuredClone(status);
+      },
+      commitGit: async (input: { repository?: string; push: boolean }) => {
+        fixture.calls.push(["commit", input]);
+        const status = selectedStatus(input.repository);
+        status.changes = [];
+        return {
+          commit: "frontend-commit",
+          pushed: input.push,
+          output: "",
+          status: structuredClone(status),
+        };
+      },
+      pushGit: async (input: { repository?: string }) => {
+        fixture.calls.push(["push", input]);
+        return structuredClone(selectedStatus(input.repository));
+      },
+    };
+    fixture.linkedClient = client;
+    fixture.setContext("thread-1", client);
+  });
+}
+
+test("links a frontend repository and scopes editing, staging, commit and push to the selected repository", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await enableLinkedRepositories(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const selector = root.getByRole("combobox", { name: "操作仓库" });
+  await expect(selector).toHaveValue("");
+  await root.getByRole("button", { name: "关联仓库", exact: true }).click();
+  await root.getByRole("textbox", { name: "Git 仓库绝对路径" }).fill("/frontend");
+  const link = root.locator('.codexhost-git-repositories button[type="submit"]');
+  await link.evaluate((element) => {
+    const form = (element as HTMLButtonElement).form;
+    if (!form) throw new Error("Missing link form");
+    form.requestSubmit();
+    form.requestSubmit();
+  });
+  await expect(link).toHaveAttribute("aria-busy", "true");
+  await expect(selector).toBeDisabled();
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+        ([name]: string[]) => name === "link",
+      ),
+    ),
+  ).toHaveLength(1);
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveLink());
+  await expect(selector).toHaveValue("/frontend");
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveAttribute(
+    "title",
+    "/frontend",
+  );
+  await root.locator('.codexhost-git-directory[title="src"]').click();
+  await root.locator('.codexhost-git-change[title="src/app.ts"]').click();
+  const content = page.locator("[data-codexhost-git-content]");
+  await content.getByRole("button", { name: "结果", exact: true }).click();
+  const editor = content.getByRole("textbox", { name: "合并结果" });
+  await expect(editor).toHaveValue("frontend draft\n");
+  await editor.fill("frontend saved\n");
+  await content.getByRole("button", { name: "保存", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual([
+      "writeFile",
+      {
+        threadId: "thread-1",
+        repository: "/frontend",
+        path: "src/app.ts",
+        content: "frontend saved\n",
+        expectedRevision: "a".repeat(64),
+      },
+    ]);
+  await content.getByRole("button", { name: "暂存", exact: true }).click();
+  await expect(selector).toBeEnabled();
+  const message = root.locator("[data-codexhost-git-sidebar-message]");
+  await message.fill("frontend draft");
+  await selector.selectOption("");
+  await expect(message).toHaveValue("");
+  await expect(content).toBeHidden();
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveAttribute(
+    "title",
+    "/repo",
+  );
+  await expect(selector).toBeEnabled();
+  await selector.selectOption("/frontend");
+  await message.fill("feat: frontend only");
+  await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
+  await expect(message).toHaveValue("");
+  await root.locator("[data-codexhost-git-sidebar-push]").click();
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  expect(calls).toContainEqual([
+    "stage",
+    { threadId: "thread-1", repository: "/frontend", paths: ["src/app.ts"] },
+  ]);
+  expect(calls).toContainEqual([
+    "commit",
+    {
+      threadId: "thread-1",
+      repository: "/frontend",
+      message: "feat: frontend only",
+      paths: [],
+      push: true,
+    },
+  ]);
+  expect(calls).toContainEqual(["push", { threadId: "thread-1", repository: "/frontend" }]);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.setContext("thread-2", fixture.linkedClient);
+  });
+  await expect(selector).toHaveValue("");
+  await expect(selector).toBeEnabled();
+  await selector.selectOption("/frontend");
+  await root.getByRole("button", { name: "解除仓库关联" }).click();
+  await expect(selector).toHaveValue("");
+  await expect(selector.locator("option")).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test("ignores a linked repository diff that arrives after switching back to the chat project", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await enableLinkedRepositories(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "关联仓库", exact: true }).click();
+  await root.getByRole("textbox", { name: "Git 仓库绝对路径" }).fill("/frontend");
+  await root.getByRole("button", { name: "关联", exact: true }).click();
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveLink());
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.linkedClient.inspectGitDiff = (input: { path: string }) =>
+      new Promise((resolve) => {
+        fixture.resolveLinkedDiff = () =>
+          resolve({ path: input.path, diff: "+frontend", truncated: false });
+      });
+  });
+  await root.locator('.codexhost-git-directory[title="src"]').click();
+  await root.locator('.codexhost-git-change[title="src/app.ts"]').click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => Boolean(Reflect.get(globalThis, "gitSidebarFixture").resolveLinkedDiff)),
+    )
+    .toBe(true);
+  await root.getByRole("combobox", { name: "操作仓库" }).selectOption("");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveLinkedDiff());
+  await expect(page.locator("[data-codexhost-git-content]")).toBeHidden();
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveAttribute(
+    "title",
+    "/repo",
+  );
 });

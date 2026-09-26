@@ -1,13 +1,13 @@
-import type { GitWorkflowSnapshot, GitWorkspaceParams } from "@codexhost/shared-contracts";
+import type { GitWorkflowSnapshot, GitWorkflowParams } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
 
 interface Client {
-  inspectGitWorkflow(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot>;
-  runGitWorkflow(input: GitWorkspaceParams): Promise<GitWorkflowSnapshot>;
+  inspectGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
+  runGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
 }
 interface Context {
   anchor: Element;
-  threadId: GitWorkspaceParams["threadId"];
+  threadId: GitWorkflowParams["threadId"];
   client: Client;
 }
 

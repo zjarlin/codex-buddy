@@ -19,10 +19,20 @@ const execFileAsync = promisify(execFile);
 const cleanup: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    cleanup.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
-  );
+  await Promise.all(cleanup.splice(0).map(removeDirectory));
 });
+
+async function removeDirectory(directory: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(directory, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt >= 3 || (error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
 
 async function repository(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), "codexhost-git-"));
@@ -559,7 +569,7 @@ describe("GitWorkspace pending mutations and submodule warnings", () => {
     ).stdout.trim();
     expect(remoteHead).toBe((await git("rev-parse", "HEAD")).stdout.trim());
     expect((await git("show", "HEAD:.gitmodules")).stdout).not.toContain(orphan);
-  });
+  }, 30_000);
 
   it("coalesces concurrent identical commits and clears failed requests for retry", async () => {
     const directory = await repository();

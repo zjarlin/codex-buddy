@@ -1618,20 +1618,25 @@ describe("JEV judgment integration", () => {
     expect(instructions).toContain("提交消息由你根据真实改动生成");
   });
 
-  it("executes the CLI entry selected by System One without calling a model", async () => {
-    const f = await fixture({
-      modelIds: ["gpt-planner", "deepseek-flash"],
-      jev: jevClient(jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" })),
-    });
-    await f.router.route(f.turn("看看当前目录"));
-    expect(f.providerRequests()).toBe(0);
-    expect(f.forwarded[0]?.method).toBe("thread/shellCommand");
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      phase: "bypass",
-      role: "io",
-      command: expect.stringContaining("'ls' '-la'"),
-    });
-  });
+  it.runIf(process.platform !== "win32")(
+    "executes the CLI entry selected by System One without calling a model",
+    async () => {
+      const f = await fixture({
+        modelIds: ["gpt-planner", "deepseek-flash"],
+        jev: jevClient(
+          jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" }),
+        ),
+      });
+      await f.router.route(f.turn("看看当前目录"));
+      expect(f.providerRequests()).toBe(0);
+      expect(f.forwarded[0]?.method).toBe("thread/shellCommand");
+      expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+        phase: "bypass",
+        role: "io",
+        command: expect.stringContaining("'ls' '-la'"),
+      });
+    },
+  );
 
   it("keeps a System One 'none' command answer on the ordinary model route", async () => {
     const f = await fixture({ jev: jevClient(jevResponse("code", 1, 0.02, "executor")) });

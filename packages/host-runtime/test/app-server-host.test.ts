@@ -1396,7 +1396,9 @@ describe("Buddy privacy send boundary", () => {
 
 describe("AppServerHost linked Git repositories", () => {
   it("edits, commits and pushes the linked frontend while preserving the backend", async () => {
-    const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "codexhost-linked-rpc-")));
+    const directory = realpathSync.native(
+      mkdtempSync(path.join(tmpdir(), "codexhost-linked-rpc-")),
+    );
     const backend = path.join(directory, "backend");
     const frontend = path.join(directory, "frontend");
     const remote = path.join(directory, "remote.git");
@@ -1501,7 +1503,9 @@ describe("AppServerHost linked Git repositories", () => {
 
 describe("AppServerHost project Git workflow", () => {
   it("resolves the repository root from a task cwd inside the worktree", async () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "codexhost-project-workflow-subdir-"));
+    const directory = realpathSync.native(
+      mkdtempSync(path.join(tmpdir(), "codexhost-project-workflow-subdir-")),
+    );
     execFileSync("git", ["init", "-q", directory]);
     const subdirectory = path.join(directory, "packages", "host-runtime");
     mkdirSync(subdirectory, { recursive: true });
@@ -1518,7 +1522,7 @@ describe("AppServerHost project Git workflow", () => {
       });
       await expect(
         fixture.collector.waitFor((message) => requestId(message, 2)),
-      ).resolves.toMatchObject({ result: { workspace: realpathSync(directory), phase: "idle" } });
+      ).resolves.toMatchObject({ result: { workspace: directory, phase: "idle" } });
     } finally {
       await stopFixture(fixture);
       rmSync(directory, { recursive: true, force: true });
@@ -1528,7 +1532,9 @@ describe("AppServerHost project Git workflow", () => {
   it.each(["native", "external"])(
     "waits for project tasks and shares automatic/manual execution through %s",
     async (executor) => {
-      const directory = mkdtempSync(path.join(tmpdir(), "codexhost-project-workflow-"));
+      const directory = realpathSync.native(
+        mkdtempSync(path.join(tmpdir(), "codexhost-project-workflow-")),
+      );
       execFileSync("git", ["init", "-q", directory]);
       writeFileSync(path.join(directory, "work.txt"), "pending change\n");
       const fixture = createFixture({ environment: { CODEXHOST_GIT_AUTO_PUSH: "1" } });
@@ -1628,18 +1634,21 @@ describe("AppServerHost project Git workflow", () => {
           session.succeedTurn();
         }
         let queryId = 10;
-        await vi.waitFor(async () => {
-          queryId++;
-          writeRequest(fixture.desktopInput, {
-            id: queryId,
-            method: "codexhost/git/workflow/status",
-            params: { threadId },
-          });
-          const response = await fixture.collector.waitFor((message) =>
-            requestId(message, queryId),
-          );
-          expect(response).toMatchObject({ result: { phase: "failed" } });
-        });
+        await vi.waitFor(
+          async () => {
+            queryId++;
+            writeRequest(fixture.desktopInput, {
+              id: queryId,
+              method: "codexhost/git/workflow/status",
+              params: { threadId },
+            });
+            const response = await fixture.collector.waitFor((message) =>
+              requestId(message, queryId),
+            );
+            expect(response).toMatchObject({ result: { phase: "failed" } });
+          },
+          { timeout: 10_000 },
+        );
         expect(starts()).toBe(1);
       } finally {
         await stopFixture(fixture);

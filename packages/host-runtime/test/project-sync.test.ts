@@ -93,7 +93,9 @@ describe("ProjectSync", () => {
     if (!firstId) throw new Error("Expected paired device");
     const result = await second.sync(firstId);
     expect(result.projects).toMatchObject([{ name: "project", localPath: null, state: "missing" }]);
-    expect((await first.inspect()).projects[0]?.localPath).toBe(await realpath(project));
+    expect(path.normalize((await first.inspect()).projects[0]?.localPath ?? "")).toBe(
+      path.normalize(await realpath(project)),
+    );
     await second.removePeer(firstId);
     await expect(second.sync(firstId)).rejects.toThrow("not paired");
     const secondId = (await first.inspect()).peers[0]?.id;

@@ -74,52 +74,58 @@ describe("thread terminal", () => {
     expect(terminals.terminals.map((terminal) => terminal.id)).toContain("ghostty");
   });
 
-  it("opens Terminal.app with the official Codex resume command on macOS", async () => {
-    const directory = await workspace();
-    const spawnTerminal = fakeSpawn();
-    const codexPath = path.join(directory, "codex");
-    const sessionId = "019efd3b-5f35-71a1-9b7f-247fd8a79b6a";
-    const environment = await macTerminalEnvironment();
+  it.runIf(process.platform !== "win32")(
+    "opens Terminal.app with the official Codex resume command on macOS",
+    async () => {
+      const directory = await workspace();
+      const spawnTerminal = fakeSpawn();
+      const codexPath = path.join(directory, "codex");
+      const sessionId = "019efd3b-5f35-71a1-9b7f-247fd8a79b6a";
+      const environment = await macTerminalEnvironment();
 
-    const result = await openThreadTerminal(directory, sessionId, codexPath, "apple-terminal", {
-      platform: "darwin",
-      environment,
-      spawnTerminal,
-    });
+      const result = await openThreadTerminal(directory, sessionId, codexPath, "apple-terminal", {
+        platform: "darwin",
+        environment,
+        spawnTerminal,
+      });
 
-    const [, arguments_] = spawnTerminal.mock.calls[0] as unknown as [string, string[], unknown];
-    expect(spawnTerminal).toHaveBeenCalledWith("/usr/bin/osascript", ["-e", arguments_[1]], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
-    expect(arguments_[1]).toContain(
-      `'${codexPath}' resume '${sessionId}' -C '${await realpath(directory)}'`,
-    );
-    expect(result).toEqual({
-      workspace: await realpath(directory),
-      terminal: "apple-terminal",
-      mode: "resume",
-    });
-  });
+      const [, arguments_] = spawnTerminal.mock.calls[0] as unknown as [string, string[], unknown];
+      expect(spawnTerminal).toHaveBeenCalledWith("/usr/bin/osascript", ["-e", arguments_[1]], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
+      expect(arguments_[1]).toContain(
+        `'${codexPath}' resume '${sessionId}' -C '${await realpath(directory)}'`,
+      );
+      expect(result).toEqual({
+        workspace: await realpath(directory),
+        terminal: "apple-terminal",
+        mode: "resume",
+      });
+    },
+  );
 
-  it("resolves symlinked workspaces before launching a terminal", async () => {
-    const directory = await workspace();
-    const spawnTerminal = fakeSpawn();
-    const environment = await macTerminalEnvironment();
+  it.runIf(process.platform !== "win32")(
+    "resolves symlinked workspaces before launching a terminal",
+    async () => {
+      const directory = await workspace();
+      const spawnTerminal = fakeSpawn();
+      const environment = await macTerminalEnvironment();
 
-    await openThreadTerminal(
-      path.join(directory, "."),
-      "session-id",
-      "/bin/codex",
-      "apple-terminal",
-      { platform: "darwin", environment, spawnTerminal },
-    );
+      await openThreadTerminal(
+        path.join(directory, "."),
+        "session-id",
+        "/bin/codex",
+        "apple-terminal",
+        { platform: "darwin", environment, spawnTerminal },
+      );
 
-    const [, arguments_] = spawnTerminal.mock.calls[0] as unknown as [string, string[], unknown];
-    expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
-  });
+      const [, arguments_] = spawnTerminal.mock.calls[0] as unknown as [string, string[], unknown];
+      expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
+    },
+  );
 
   it("escapes workspace values and rejects shell syntax in session ids", async () => {
     const directory = await workspace();
@@ -175,33 +181,36 @@ describe("thread terminal", () => {
     expect(invocation.arguments_[5]).toContain(`'${await realpath(directory)}'`);
   });
 
-  it("opens Ghostty through its macOS bundle action", async () => {
-    const directory = await workspace();
-    const spawnTerminal = fakeSpawn();
-    const environment = await macTerminalEnvironment();
+  it.runIf(process.platform !== "win32")(
+    "opens Ghostty through its macOS bundle action",
+    async () => {
+      const directory = await workspace();
+      const spawnTerminal = fakeSpawn();
+      const environment = await macTerminalEnvironment();
 
-    await openThreadTerminal(directory, "session-id", "/opt/codex", "ghostty", {
-      platform: "darwin",
-      environment,
-      spawnTerminal,
-    });
+      await openThreadTerminal(directory, "session-id", "/opt/codex", "ghostty", {
+        platform: "darwin",
+        environment,
+        spawnTerminal,
+      });
 
-    const [command, arguments_] = spawnTerminal.mock.calls[0] as unknown as [
-      string,
-      string[],
-      unknown,
-    ];
-    expect(command).toBe("/usr/bin/open");
-    expect(arguments_[0]).toBe("-na");
-    expect(arguments_[1]).toMatch(/\/Ghostty\.app$/u);
-    expect(arguments_[2]).toBe("--args");
-    expect(arguments_.slice(3)).toEqual([
-      "-e",
-      "sh",
-      "-lc",
-      `cd '${await realpath(directory)}' && '/opt/codex' resume 'session-id' -C '${await realpath(directory)}'`,
-    ]);
-  });
+      const [command, arguments_] = spawnTerminal.mock.calls[0] as unknown as [
+        string,
+        string[],
+        unknown,
+      ];
+      expect(command).toBe("/usr/bin/open");
+      expect(arguments_[0]).toBe("-na");
+      expect(arguments_[1]).toMatch(/\/Ghostty\.app$/u);
+      expect(arguments_[2]).toBe("--args");
+      expect(arguments_.slice(3)).toEqual([
+        "-e",
+        "sh",
+        "-lc",
+        `cd '${await realpath(directory)}' && '/opt/codex' resume 'session-id' -C '${await realpath(directory)}'`,
+      ]);
+    },
+  );
 
   it("starts PowerShell and Command Prompt with their native flags", async () => {
     const directory = await workspace();

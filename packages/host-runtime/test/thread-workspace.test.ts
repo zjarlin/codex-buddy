@@ -46,7 +46,7 @@ describe("thread workspace", () => {
     const spawnApplication = fakeSpawn();
 
     const result = await openThreadWorkspace(directory, {
-      platform: "darwin",
+      platform: process.platform,
       environment: { PATH: bin },
       spawnApplication,
     });
@@ -147,6 +147,10 @@ describe("thread workspace", () => {
 
   it("reports a spawn failure without claiming success", async () => {
     const directory = await workspace();
+    const bin = await workspace();
+    const code = path.join(bin, "code");
+    await writeFile(code, "#!/bin/sh\n");
+    await chmod(code, 0o755);
     const spawnApplication = vi.fn(() => {
       throw new Error("no vscode");
     }) as unknown as (
@@ -157,10 +161,11 @@ describe("thread workspace", () => {
 
     await expect(
       openThreadWorkspace(directory, {
-        platform: "darwin",
-        environment: { PATH: "/missing" },
+        platform: process.platform,
+        environment: { PATH: bin },
         spawnApplication,
       }),
     ).rejects.toThrow("无法打开 Visual Studio Code");
+    expect(spawnApplication).toHaveBeenCalled();
   });
 });

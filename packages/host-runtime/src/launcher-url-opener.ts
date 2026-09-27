@@ -14,11 +14,13 @@ type SpawnLauncher = (
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const OPEN_TIMEOUT_MS = 10_000;
 
-export function createLauncherUrlOpener(
+function createLauncherCommandOpener(
   environment: NodeJS.ProcessEnv,
+  command: "open-loopback-url" | "open-doubao",
+  operation: string,
   spawnLauncher: SpawnLauncher = (command, arguments_, options) =>
     spawn(command, arguments_, options),
-): ((url: URL) => Promise<void>) | undefined {
+): ((input?: string) => Promise<void>) | undefined {
   const launcher = environment.CODEXHOST_LAUNCHER_EXECUTABLE;
   if (!launcher || !path.isAbsolute(launcher)) return undefined;
   const launcherEnvironment = Object.fromEntries(
@@ -28,29 +30,17 @@ export function createLauncherUrlOpener(
     }),
   );
 
-  return (url) => {
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      !LOOPBACK_HOSTS.has(url.hostname.toLowerCase()) ||
-      url.port === "" ||
-      url.username !== "" ||
-      url.password !== "" ||
-      url.pathname !== "/" ||
-      url.hash !== ""
-    ) {
-      return Promise.reject(new Error("Native URL handoff requires a loopback root URL"));
-    }
-
+  return (input) => {
     return new Promise<void>((resolve, reject) => {
       let child: ChildProcess;
       try {
-        child = spawnLauncher(launcher, ["open-loopback-url"], {
+        child = spawnLauncher(launcher, [command], {
           env: launcherEnvironment,
           stdio: ["pipe", "ignore", "ignore"],
           windowsHide: true,
         });
       } catch {
-        reject(new Error("codexhost native URL opener could not start"));
+        reject(new Error(`${operation} could not start`));
         return;
       }
       let settled = false;
@@ -63,22 +53,63 @@ export function createLauncherUrlOpener(
         if (error) reject(error);
         else resolve();
       };
-      const onError = (): void => finish(new Error("codexhost native URL opener failed"));
+      const onError = (): void => finish(new Error(`${operation} failed`));
       const onExit = (code: number | null): void =>
-        finish(code === 0 ? undefined : new Error("codexhost native URL opener failed"));
+        finish(code === 0 ? undefined : new Error(`${operation} failed`));
       const timeout = setTimeout(() => {
         child.kill();
-        finish(new Error("codexhost native URL opener timed out"));
+        finish(new Error(`${operation} timed out`));
       }, OPEN_TIMEOUT_MS);
       child.once("error", onError);
       child.once("exit", onExit);
       if (!child.stdin) {
         child.kill();
-        finish(new Error("codexhost native URL opener failed"));
+        finish(new Error(`${operation} failed`));
         return;
       }
       child.stdin.once("error", onError);
-      child.stdin.end(url.href);
+      child.stdin.end(input);
     });
   };
+}
+
+export function createLauncherUrlOpener(
+  environment: NodeJS.ProcessEnv,
+  spawnLauncher?: SpawnLauncher,
+): ((url: URL) => Promise<void>) | undefined {
+  const open = createLauncherCommandOpener(
+    environment,
+    "open-loopback-url",
+    "codexhost native URL opener",
+    spawnLauncher,
+  );
+  if (!open) return undefined;
+  return (url) => {
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      !LOOPBACK_HOSTS.has(url.hostname.toLowerCase()) ||
+      url.port === "" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/" ||
+      url.hash !== ""
+    ) {
+      return Promise.reject(new Error("Native URL handoff requires a loopback root URL"));
+    }
+    return open(url.href);
+  };
+}
+
+export function createLauncherDoubaoOpener(
+  environment: NodeJS.ProcessEnv,
+  spawnLauncher?: SpawnLauncher,
+): (() => Promise<void>) | undefined {
+  if (environment.CODEXHOST_REMOTE_SSH_MANAGED === "1") return undefined;
+  const open = createLauncherCommandOpener(
+    environment,
+    "open-doubao",
+    "Doubao native opener",
+    spawnLauncher,
+  );
+  return open ? () => open() : undefined;
 }

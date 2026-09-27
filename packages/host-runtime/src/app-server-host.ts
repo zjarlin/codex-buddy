@@ -1,5 +1,7 @@
 import { GitRepositoryLinks } from "./git-repository-links.js";
 import {
+  DOUBAO_OPEN_METHOD,
+  doubaoOpenParamsSchema,
   GIT_REPOSITORIES_METHOD,
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
@@ -105,6 +107,7 @@ import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { listThreadTerminals, openThreadTerminal } from "./thread-terminal.js";
 import { openThreadWorkspace } from "./thread-workspace.js";
+import { createLauncherDoubaoOpener } from "./launcher-url-opener.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
@@ -1466,6 +1469,10 @@ export class AppServerHost {
     }
     if (request.method === THREAD_WORKSPACE_OPEN_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleThreadWorkspaceOpenRequest(request));
+      return;
+    }
+    if (request.method === DOUBAO_OPEN_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleDoubaoOpenRequest(request));
       return;
     }
     if (
@@ -3142,6 +3149,18 @@ export class AppServerHost {
       const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
       const result = await openThreadWorkspace(cwd);
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32098, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleDoubaoOpenRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      doubaoOpenParamsSchema.parse(request.params);
+      const open = createLauncherDoubaoOpener(this.#options.environment ?? process.env);
+      if (!open) throw new Error("Doubao 只能从本机 CodexBuddy 打开。");
+      await open();
+      await this.#writer.json(rpcEnvelope(request, { result: { application: "doubao" } }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32098, errorMessage(error).slice(0, 20_000)));
     }

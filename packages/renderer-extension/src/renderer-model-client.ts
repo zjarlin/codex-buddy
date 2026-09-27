@@ -1,4 +1,7 @@
 import {
+  DOUBAO_OPEN_METHOD,
+  doubaoOpenResultSchema,
+  type DoubaoOpenResult,
   GIT_REPOSITORIES_METHOD,
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
@@ -390,6 +393,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   listThreadTerminals?(): Promise<ThreadTerminalListResult>;
   openThreadTerminal?(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult>;
   openThreadWorkspace?(input: ThreadWorkspaceOpenParams): Promise<ThreadWorkspaceOpenResult>;
+  openDoubao?(): Promise<DoubaoOpenResult>;
   getThreadTerminalSettings?(): Promise<ThreadTerminalSettings>;
   setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
@@ -838,6 +842,9 @@ export function createRendererModelClient(
       return threadWorkspaceOpenResultSchema.parse(
         await manager.sendRequest(THREAD_WORKSPACE_OPEN_METHOD, params),
       );
+    },
+    async openDoubao(): Promise<DoubaoOpenResult> {
+      return doubaoOpenResultSchema.parse(await manager.sendRequest(DOUBAO_OPEN_METHOD, {}));
     },
     async getThreadTerminalSettings(): Promise<ThreadTerminalSettings> {
       return threadTerminalSettingsSchema.parse(

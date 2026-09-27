@@ -96,6 +96,7 @@ import {
 } from "./renderer-new-thread-preference.js";
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
 import { installRendererThreadActions } from "./renderer-thread-actions.js";
+import { installRendererProjectActions } from "./renderer-project-actions.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import {
   rendererHarnessCommandExecutesDirectly,
@@ -780,6 +781,10 @@ export function installRendererBindingProbe(
   });
   const threadActions = installRendererThreadActions({
     getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
+  const projectActions = installRendererProjectActions({
+    getClient: () => modelClientForHost("local"),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
   const activeGitContext = () => {
@@ -3322,6 +3327,7 @@ export function installRendererBindingProbe(
       disposeTranscriptAutoScroll();
       sidebarContinuation.dispose();
       threadActions.dispose();
+      projectActions.dispose();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();

@@ -80,6 +80,12 @@ export {
 } from "./thread-workspace.js";
 export type { ThreadWorkspaceOpenParams, ThreadWorkspaceOpenResult } from "./thread-workspace.js";
 export {
+  DOUBAO_OPEN_METHOD,
+  doubaoOpenParamsSchema,
+  doubaoOpenResultSchema,
+  type DoubaoOpenResult,
+} from "./doubao.js";
+export {
   THREAD_ARCHIVE_COMPLETED_METHOD,
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,

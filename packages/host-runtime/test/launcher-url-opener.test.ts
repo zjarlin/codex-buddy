@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { createLauncherUrlOpener } from "../src/launcher-url-opener.js";
+import { createLauncherDoubaoOpener, createLauncherUrlOpener } from "../src/launcher-url-opener.js";
 
 type SpawnLauncher = NonNullable<Parameters<typeof createLauncherUrlOpener>[1]>;
 
@@ -17,6 +17,41 @@ function childThatExits(code?: number): ChildProcess {
 }
 
 describe("Launcher URL opener", () => {
+  it("opens Doubao through a fixed native command without forwarding project data", async () => {
+    const launcher = path.resolve("fixture-codexhost");
+    const child = childThatExits(0);
+    let input = "";
+    child.stdin?.on("data", (chunk) => (input += chunk.toString()));
+    const spawnLauncher = vi.fn<SpawnLauncher>(() => child);
+    const open = createLauncherDoubaoOpener(
+      { CODEXHOST_LAUNCHER_EXECUTABLE: launcher, CODEX_CLI_PATH: "private" },
+      spawnLauncher,
+    );
+
+    await expect(open?.()).resolves.toBeUndefined();
+    expect(spawnLauncher).toHaveBeenCalledWith(launcher, ["open-doubao"], {
+      env: {},
+      stdio: ["pipe", "ignore", "ignore"],
+      windowsHide: true,
+    });
+    expect(input).toBe("");
+    expect(
+      createLauncherDoubaoOpener({
+        CODEXHOST_LAUNCHER_EXECUTABLE: launcher,
+        CODEXHOST_REMOTE_SSH_MANAGED: "1",
+      }),
+    ).toBeUndefined();
+    expect(createLauncherDoubaoOpener({})).toBeUndefined();
+  });
+
+  it("reports unsuccessful Doubao native handoff", async () => {
+    const open = createLauncherDoubaoOpener(
+      { CODEXHOST_LAUNCHER_EXECUTABLE: path.resolve("fixture-codexhost") },
+      vi.fn<SpawnLauncher>(() => childThatExits(1)),
+    );
+    await expect(open?.()).rejects.toThrow("Doubao native opener failed");
+  });
+
   it("hands one validated loopback URL to the native Launcher without a shell", async () => {
     const launcher = path.resolve("fixture-codexhost");
     const child = childThatExits(0);

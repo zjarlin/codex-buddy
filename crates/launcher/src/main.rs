@@ -1222,6 +1222,10 @@ fn run(arguments: &[String]) -> Result<(), Box<dyn Error>> {
             codexhost_platform::open_external_url(&url).map_err(Into::into)
         }
         Some("open-loopback-url") => Err("open-loopback-url accepts no arguments".into()),
+        Some("open-doubao") if arguments.len() == 1 => {
+            codexhost_platform::open_external_url("doubao://doubao-chat/chat").map_err(Into::into)
+        }
+        Some("open-doubao") => Err("open-doubao accepts no arguments".into()),
         Some("broker") => run_native_harness_broker_cli(&arguments[1..]),
         Some("harness") | Some("delegate") | Some("thread") => run_delegation_cli(arguments),
         _ => {
@@ -1315,7 +1319,7 @@ mod tests {
         allocate_runtime_control, desktop_controller_command, desktop_environment, emit_ready_line,
         managed_desktop_data_directory, npm_update_runtime_environment, parse_inspect_options,
         parse_launch_options, read_bounded_controller_line, read_bounded_loopback_url,
-        validate_loopback_root_url,
+        run, validate_loopback_root_url,
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{DESKTOP_TREE_REFRESH_INTERVAL, desktop_tree_refresh_due};
@@ -1332,6 +1336,12 @@ mod tests {
             started,
             started + DESKTOP_TREE_REFRESH_INTERVAL,
         ));
+    }
+
+    #[test]
+    fn doubao_handoff_rejects_arguments() {
+        let error = run(&["open-doubao".into(), "extra".into()]).expect_err("unexpected argument");
+        assert_eq!(error.to_string(), "open-doubao accepts no arguments");
     }
 
     #[test]

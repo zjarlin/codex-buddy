@@ -158,6 +158,14 @@ import {
   type BuddySettings,
 } from "@codexhost/shared-contracts";
 import {
+  HARNESS_LAUNCH_SETTINGS_GET_METHOD,
+  HARNESS_LAUNCH_SETTINGS_SET_METHOD,
+  harnessLaunchSettingsGetSchema,
+  harnessLaunchSettingsSetSchema,
+  harnessLaunchSettingsSchema,
+  type HarnessLaunchSettings,
+  type HarnessLaunchSettingsGet,
+  type HarnessLaunchSettingsSet,
   IDLE_RELEASE_SETTINGS_METHOD,
   LOADED_SESSIONS_METHOD,
   loadedSessionsSchema,
@@ -240,6 +248,7 @@ import {
 import {
   createRendererRequestSender,
   RendererMethodUnavailableError,
+  type RendererRequestOptions,
 } from "./renderer-request-sender.js";
 import {
   createRendererSessionImportClient,
@@ -248,6 +257,14 @@ import {
 
 export const HARNESS_INSPECT_METHOD = "codexhost/harness/inspect";
 export const HARNESS_PLUGIN_LIST_METHOD = "codexhost/harness/plugins/list";
+import {
+  CREDENTIAL_IMPORTS_METHOD,
+  credentialImportsParamsSchema,
+  credentialImportsResultSchema,
+  type CredentialImportsRequest,
+  type CredentialImportsResult,
+} from "@codexhost/shared-contracts";
+
 export const HARNESS_ACCOUNT_SOURCES_METHOD = "codexhost/harness/accounts/sources";
 export const HARNESS_ACCOUNT_INSPECT_METHOD = "codexhost/harness/accounts/inspect";
 export const HARNESS_WEB_UI_OPEN_METHOD = "codexhost/harness/web-ui/open";
@@ -370,13 +387,18 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   }): Promise<BuddySnapshot>;
   buddyCancel?(threadId: string): Promise<BuddySnapshot>;
   buddyAnswer?(input: BuddyAnswer): Promise<BuddySnapshot>;
+  getHarnessLaunchSettings?(input: HarnessLaunchSettingsGet): Promise<HarnessLaunchSettings>;
+  setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
   currentHostId?(): string | null;
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
-  inspectHarness(input: HarnessInspectParams): Promise<HarnessInspection>;
+  inspectHarness(
+    input: HarnessInspectParams,
+    options?: RendererRequestOptions,
+  ): Promise<HarnessInspection>;
   openHarnessWebUi?(input: HarnessWebUiOpenParams): Promise<void>;
   inspectThread(input: ThreadInspectionParams): Promise<ThreadInspection>;
   inspectHarnessCommands(input: HarnessCommandsInspectParams): Promise<HarnessCommandCatalog>;
@@ -397,6 +419,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   listHarnessAccountSources?(): Promise<HarnessAccountSourceListResult>;
   inspectHarnessAccount?(input: HarnessAccountInspectParams): Promise<HarnessAccountInspectResult>;
   listHarnessAccounts?(input?: HarnessAccountListParams): Promise<HarnessAccountListResult>;
+  credentialImports?(
+    request: CredentialImportsRequest,
+    targetHarnessId?: string,
+  ): Promise<CredentialImportsResult>;
   listCodexAccounts(): Promise<CodexAccountListResult>;
   refreshCodexAccounts(): Promise<CodexAccountListResult>;
   subscribeCodexAccounts?(listener: (state: CodexAccountChanged) => void): () => void;
@@ -462,14 +488,19 @@ export function createRendererModelClient(
   const source = managers[0];
   if (managers.length !== 1 || !source) return null;
   const manager = {
-    sendRequest: createRendererRequestSender((method, params) =>
-      source.sendRequest(method, params),
+    sendRequest: createRendererRequestSender((method, params, options) =>
+      options === undefined
+        ? source.sendRequest(method, params)
+        : source.sendRequest(method, params, options),
     ),
   };
 
-  const inspectHarness = async (input: HarnessInspectParams): Promise<HarnessInspection> => {
+  const inspectHarness = async (
+    input: HarnessInspectParams,
+    options?: RendererRequestOptions,
+  ): Promise<HarnessInspection> => {
     const params = harnessInspectParamsSchema.parse(input);
-    const result = await manager.sendRequest(HARNESS_INSPECT_METHOD, params);
+    const result = await manager.sendRequest(HARNESS_INSPECT_METHOD, params, options);
     return harnessInspectionSchema.parse(result);
   };
   const inspectHarnessCommands = async (
@@ -819,6 +850,26 @@ export function createRendererModelClient(
       ),
     buddyCancel: async (threadId: string) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_CANCEL_METHOD, { threadId })),
+    async getHarnessLaunchSettings(
+      input: HarnessLaunchSettingsGet,
+    ): Promise<HarnessLaunchSettings> {
+      return harnessLaunchSettingsSchema.parse(
+        await manager.sendRequest(
+          HARNESS_LAUNCH_SETTINGS_GET_METHOD,
+          harnessLaunchSettingsGetSchema.parse(input),
+        ),
+      );
+    },
+    async setHarnessLaunchSettings(
+      input: HarnessLaunchSettingsSet,
+    ): Promise<HarnessLaunchSettings> {
+      return harnessLaunchSettingsSchema.parse(
+        await manager.sendRequest(
+          HARNESS_LAUNCH_SETTINGS_SET_METHOD,
+          harnessLaunchSettingsSetSchema.parse(input),
+        ),
+      );
+    },
     async listLoadedSessions(): Promise<LoadedSession[]> {
       return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
     },
@@ -970,6 +1021,17 @@ export function createRendererModelClient(
         await manager.sendRequest(
           HARNESS_ACCOUNT_INSPECT_METHOD,
           harnessAccountInspectParamsSchema.parse(input),
+        ),
+      );
+    },
+    async credentialImports(
+      request: CredentialImportsRequest,
+      targetHarnessId?: string,
+    ): Promise<CredentialImportsResult> {
+      return credentialImportsResultSchema.parse(
+        await manager.sendRequest(
+          CREDENTIAL_IMPORTS_METHOD,
+          credentialImportsParamsSchema.parse({ request, targetHarnessId }),
         ),
       );
     },

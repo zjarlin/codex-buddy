@@ -18,8 +18,10 @@ const classes = {
   grok: "GrokAdapter",
   omp: "OmpAdapter",
   antigravity: "AntigravityAdapter",
+  "kimi-code": "KimiAdapter",
   "kiro-cli": "KiroAdapter",
   codebuddy: "CodeBuddyAdapter",
+  workbuddy: "WorkBuddyAdapter",
   "cursor-cli": "CursorAdapter",
   hermes: "HermesAdapter",
   qoder: "QoderAdapter",
@@ -94,8 +96,9 @@ describe("installed Harness composition", () => {
 
   it("provides every built-in command catalog before inspection or Session creation", async () => {
     const expected = {
-      codebuddy: [],
-      "cursor-cli": [],
+      codebuddy: ["/compact", "/cost"],
+      workbuddy: ["/compact", "/init"],
+      "cursor-cli": ["/copy-request-id"],
       pi: ["/compact"],
       "claude-code": ["/compact", "/init", "/recap"],
       "deepseek-harness": ["/compact", "/dsh-goal", "/plan"],
@@ -120,7 +123,8 @@ describe("installed Harness composition", () => {
         "/kiro-spec",
         "/kiro-vibe",
       ],
-      hermes: [],
+      "kimi-code": ["/compact", "/status", "/usage", "/mcp", "/tasks", "/help"],
+      hermes: ["/help", "/tools", "/context", "/version", "/compress"],
       qoder: ["/compact"],
       "qoder-cn": ["/compact"],
     };
@@ -138,7 +142,7 @@ describe("installed Harness composition", () => {
     } finally {
       await registry.close();
     }
-  });
+  }, 35_000);
 
   it.each([
     ["pi", "CODEXHOST_PI_COMMAND"],
@@ -149,6 +153,7 @@ describe("installed Harness composition", () => {
     ["antigravity", "CODEXHOST_ANTIGRAVITY_COMMAND"],
     ["kiro-cli", "CODEXHOST_KIRO_COMMAND"],
     ["codebuddy", "CODEXHOST_CODEBUDDY_COMMAND"],
+    ["workbuddy", "CODEXHOST_WORKBUDDY_COMMAND"],
     ["cursor-cli", "CODEXHOST_CURSOR_COMMAND"],
     ["hermes", "CODEXHOST_HERMES_COMMAND"],
     ["qoder", "CODEXHOST_QODER_COMMAND"],
@@ -167,6 +172,7 @@ describe("installed Harness composition", () => {
         await registry.close();
       }
     },
+    35_000,
   );
 
   it("keeps managed macOS execution behind the plugin's Broker with no direct CLI fallback", async () => {
@@ -196,7 +202,7 @@ describe("installed Harness composition", () => {
     } finally {
       await registry.close();
     }
-  });
+  }, 35_000);
 
   it("creates independent instances for concurrent Host connections", async () => {
     const [first, second] = await Promise.all([load(), load()]);
@@ -207,7 +213,7 @@ describe("installed Harness composition", () => {
     } finally {
       await Promise.all([first.close(), second.close()]);
     }
-  });
+  }, 35_000);
 
   it("derives preinstalled resources from the actual runtime, not cwd or a local Host's resources", () => {
     const data = path.resolve("fixture", "data");

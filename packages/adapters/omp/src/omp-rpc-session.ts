@@ -11,6 +11,7 @@ import {
   type JsonValue,
 } from "@codexhost/shared-contracts";
 
+import { parseOmpAvailableCommands, type OmpAvailableCommand } from "./omp-slash-commands.js";
 import { resolveOmpExecutable, withNodeRuntimeOnPath } from "./command.js";
 import type { OmpSessionHistory } from "./omp-history.js";
 
@@ -43,6 +44,7 @@ export type OmpInteractionRequest =
       method: "select";
       title: string;
       options: string[];
+      optionDetails?: Array<{ description?: string }>;
       timeoutMs?: number;
     }
   | {
@@ -181,6 +183,11 @@ export interface OmpRpcSessionOptions {
   cancelTimeoutMs?: number;
   closeTimeoutMs?: number;
   onSubagentEvent?: (event: OmpTurnEvent) => void;
+  /**
+   * Subscribe to native subagent frames during startup (default true). Short-lived
+   * transports that never run Turns, such as inspection or transcript reads, opt out.
+   */
+  subscribeSubagentEvents?: boolean;
   onFault?: (error: OmpRpcFaultError) => void;
 }
 
@@ -470,7 +477,8 @@ export function ompRpcProcessCommand(
     : [];
   const arguments_ = [
     "--mode",
-    "rpc",
+    // OMP only creates ask and connects its tool UI in rpc-ui mode.
+    "rpc-ui",
     ...permissionArguments,
     ...modelArguments,
     ...sessionArguments,
@@ -521,6 +529,7 @@ export class OmpRpcSession {
   #failed = false;
   #pending = new Map<string, PendingCommand>();
   #state: OmpSessionState | null = null;
+  #availableCommands: OmpAvailableCommand[] | null = null;
   #latestCacheHitRatePercent: number | null | undefined;
   #manualCompaction: ManualCompaction | null = null;
   #stderrTail = "";
@@ -624,6 +633,13 @@ export class OmpRpcSession {
       ),
     ]);
     await this.#send("negotiate_protocol", { protocolVersion: 2 }).catch(() => undefined);
+    // OMP servers gate subagent lifecycle/progress/event frames behind an explicit
+    // subscription that defaults to "off". Subscribe during startup so native
+    // subagent delegations reach the Host; OMP builds without the command reject
+    // it and this degrades gracefully.
+    if (this.#options.subscribeSubagentEvents !== false) {
+      await this.#send("set_subagent_subscription", { level: "events" }).catch(() => undefined);
+    }
     try {
       this.#state = parseSessionState(await this.#send("get_state", {}));
     } catch (error) {
@@ -893,7 +909,12 @@ export class OmpRpcSession {
     }
     const frame =
       "cancelled" in response
-        ? { type: "extension_ui_response", id: response.requestId, cancelled: true }
+        ? {
+            type: "extension_ui_response",
+            id: response.requestId,
+            cancelled: true,
+            ...(reason === "expired" ? { timedOut: true } : {}),
+          }
         : "confirmed" in response
           ? { type: "extension_ui_response", id: response.requestId, confirmed: response.confirmed }
           : { type: "extension_ui_response", id: response.requestId, value: response.value };
@@ -1008,8 +1029,18 @@ export class OmpRpcSession {
     }
   }
 
+  /** Latest `available_commands_update` of the running process, if any. */
+  get availableCommands(): readonly OmpAvailableCommand[] | null {
+    return this.#availableCommands;
+  }
+
   #handle(value: Record<string, unknown>): void {
     if (this.#closed || this.#failed) return;
+    if (value.type === "available_commands_update") {
+      // Command catalog state, not Turn content.
+      this.#availableCommands = parseOmpAvailableCommands(value.commands);
+      return;
+    }
     if (value.type === "ready") {
       this.#readyResolve?.();
       this.#readyResolve = null;
@@ -1292,11 +1323,31 @@ export class OmpRpcSession {
       ) {
         throw new OmpRpcFaultError("protocolError", "Omp RPC select request has invalid options");
       }
+      let optionDetails: Array<{ description?: string }> | undefined;
+      if (value.optionDetails !== undefined) {
+        if (
+          !Array.isArray(value.optionDetails) ||
+          value.optionDetails.length !== value.options.length ||
+          !value.optionDetails.every(
+            (detail): detail is { description?: string } =>
+              typeof detail === "object" &&
+              detail !== null &&
+              !Array.isArray(detail) &&
+              (detail.description === undefined || typeof detail.description === "string"),
+          )
+        ) {
+          throw new OmpRpcFaultError("protocolError", "Omp RPC select option details are invalid");
+        }
+        optionDetails = value.optionDetails.map(({ description }) =>
+          description === undefined ? {} : { description },
+        );
+      }
       request = {
         requestId,
         method,
         title,
         options: [...value.options],
+        ...(optionDetails ? { optionDetails } : {}),
         ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
       };
     } else if (method === "confirm") {
@@ -1403,8 +1454,14 @@ export class OmpRpcSession {
 
   #updateTool(active: ActiveTurn, value: Record<string, unknown>): void {
     const callId = value.toolCallId;
-    const outputResult = jsonValueSchema.safeParse(value.partialResult);
-    if (typeof callId !== "string" || !active.tools.has(callId) || !outputResult.success) {
+    if (typeof callId !== "string" || callId.length === 0) {
+      throw new OmpRpcFaultError("protocolError", "Omp RPC returned an invalid Tool update");
+    }
+    // Omp reports background job progress after `tool_execution_end`, so an
+    // update for an already-completed or unknown call is not a protocol fault.
+    if (!active.tools.has(callId)) return;
+    const outputResult = jsonValueSchema.safeParse(value.partialResult ?? null);
+    if (!outputResult.success) {
       throw new OmpRpcFaultError("protocolError", "Omp RPC returned an invalid Tool update");
     }
     active.onEvent({ type: "tool.updated", callId, output: outputResult.data });
@@ -1413,10 +1470,15 @@ export class OmpRpcSession {
   #completeTool(active: ActiveTurn, value: Record<string, unknown>): void {
     const callId = value.toolCallId;
     const toolName = value.toolName;
+    if (typeof callId !== "string" || callId.length === 0) {
+      throw new OmpRpcFaultError("protocolError", "Omp RPC returned an invalid Tool end");
+    }
+    const expectedName = active.tools.get(callId);
+    // Background jobs can finish again after their call or parent Turn ended.
+    // Ignore untracked calls before validating payloads intended for active Tools.
+    if (expectedName === undefined) return;
     const result = jsonValueSchema.safeParse(value.result);
-    const expectedName = typeof callId === "string" ? active.tools.get(callId) : undefined;
     if (
-      typeof callId !== "string" ||
       typeof toolName !== "string" ||
       expectedName !== toolName ||
       (value.isError !== undefined && typeof value.isError !== "boolean") ||

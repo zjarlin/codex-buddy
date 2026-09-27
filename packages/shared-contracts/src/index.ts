@@ -37,6 +37,7 @@ export {
   type BuddyInterrupted,
 } from "./buddy-router.js";
 import { z } from "zod";
+export * from "./credential-imports.js";
 import { WORKSPACE_CONTRACT_VERSION } from "./version.js";
 export {
   IDLE_RELEASE_SETTINGS_METHOD,
@@ -124,6 +125,7 @@ export type {
   HarnessPluginListResult,
   HarnessPluginManifest,
 } from "./harness-plugins.js";
+export * from "./harness-launch-settings.js";
 export { codexhostErrorSchema } from "./errors.js";
 export {
   codexAccountUsageParamsSchema,
@@ -539,3 +541,15 @@ export {
   type GitWorkflowSnapshot,
 } from "./git-workflow.js";
 export * from "./git-repositories.js";
+
+export {
+  DELEGATION_MENTION_PATH_PREFIX,
+  HARNESS_COMMAND_MENTION_PATH_PREFIX,
+  delegationMentionPath,
+  harnessCommandMentionPath,
+  restoreHarnessCommandMentions,
+  formatDelegationMentionLink,
+  stripDelegationMentions,
+  type DelegationMention,
+  type DelegationMentionRewrite,
+} from "./delegation-mention.js";

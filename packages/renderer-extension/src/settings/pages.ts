@@ -215,6 +215,24 @@ function aboutPage(messages: RendererSettingsMessages): RendererSettingsPageDefi
   });
 }
 
+function updateStarBanner(document: Document, messages: RendererSettingsMessages): HTMLElement {
+  const banner = document.createElement("div");
+  banner.className = "settings-update-star";
+  const copy = document.createElement("p");
+  copy.className = "settings-update-star__copy";
+  copy.textContent = messages.updateStarCallout;
+  const link = document.createElement("a");
+  link.className = "settings-update-link settings-update-star__link";
+  link.href = CODEXHOST_GITHUB_REPOSITORY_URL;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  const star = createRendererSettingsIcon("star", 14);
+  star.classList.add("settings-update-star__mark");
+  link.append(createRendererSettingsIcon("github", 15), messages.updateStarLink, star);
+  banner.append(copy, link);
+  return banner;
+}
+
 function updatesPage(
   messages: RendererSettingsMessages,
   getClient: () => RendererUpdateClient | null,
@@ -332,15 +350,21 @@ function updatesPage(
       controls.append(manualTitle, manualNpm, manualWindowsInstaller, actions);
 
       // Release notes render below the fold, in the page scroller rather than a
-      // nested one.
+      // nested one. The Star banner stays above them so it remains visible
+      // without scrolling past the notes.
       const notes = document.createElement("div");
       notes.className = "settings-update-notes-section";
+      const starBanner = updateStarBanner(document, messages);
 
-      context.content.append(heading, metadata, panel, controls, notes);
+      context.content.append(heading, metadata, panel, controls, starBanner, notes);
 
       // Presentation-only: emphasise the manual path once the automatic one has
       // visibly failed.
       const setManualFallback = (fallback: boolean): void => {
+        // While automatic update works, manual download is a one-line escape hatch;
+        // once it fails, the section returns at full weight.
+        controls.className =
+          !fallback && !windows ? "settings-update-controls is-quiet" : "settings-update-controls";
         manualNpmDescription.textContent = windows
           ? messages.updateWindowsNpmDescription
           : fallback
@@ -363,6 +387,7 @@ function updatesPage(
 
       const renderUnavailable = (detail: string): void => {
         panel.dataset.updateState = "unavailable";
+        delete panel.dataset.inline;
         panel.replaceChildren();
         const copy = document.createElement("p");
         copy.className = "settings-update-summary";
@@ -371,14 +396,16 @@ function updatesPage(
         notes.replaceChildren();
       };
 
+      // Failed requests point at the manual download without exposing internal
+      // detail. A start timeout is handled separately: the Host may still be
+      // updating, so continue reading status rather than retrying the start.
       const renderRequestFailure = (error: unknown): void => {
+        console.error("codexhost update request failed", error);
         renderPendingStatus(
           null,
           error instanceof RendererUpdateRequestTimeoutError
             ? messages.updateRequestTimeout
-            : error instanceof Error
-              ? error.message
-              : messages.updateFailed,
+            : messages.updateServiceUnavailable,
           "failed",
         );
       };
@@ -397,11 +424,17 @@ function updatesPage(
             {
               success(result) {
                 const message = statusMessage(result.status, messages);
-                if (isPendingStatus(result.status)) scheduleStatusPoll(client);
                 if (message) renderPendingStatus(result.status, message);
+                if (result.status === null || isPendingStatus(result.status)) {
+                  scheduleStatusPoll(client);
+                }
               },
               failure(error) {
-                renderRequestFailure(error);
+                if (error instanceof RendererUpdateRequestTimeoutError) {
+                  scheduleStatusPoll(client);
+                } else {
+                  renderRequestFailure(error);
+                }
               },
             },
           );
@@ -414,6 +447,7 @@ function updatesPage(
         viewPhase: UpdateStatus["phase"] | "pending" = status?.phase ?? "pending",
       ): void => {
         panel.dataset.updateState = viewPhase;
+        delete panel.dataset.inline;
         panel.replaceChildren();
         panel.append(createPanelHead(document, viewPhase, message));
         setManualFallback(viewPhase === "failed");
@@ -436,14 +470,6 @@ function updatesPage(
           detail.textContent = `${percent}% · ${formatUpdateBytes(status.downloadedBytes)} / ${formatUpdateBytes(status.totalBytes)}`;
           panel.append(progress, detail);
         }
-        if (viewPhase === "failed") {
-          const retry = document.createElement("button");
-          retry.type = "button";
-          retry.className = "settings-command-button";
-          retry.append(createRendererSettingsIcon("refresh", 16), messages.updateRetry);
-          retry.addEventListener("click", () => void load());
-          panel.append(createPanelActions(document, retry));
-        }
       };
 
       const start = (client: RendererUpdateClient): void => {
@@ -463,7 +489,11 @@ function updatesPage(
             },
             failure(error) {
               pending = false;
-              renderRequestFailure(error);
+              if (error instanceof RendererUpdateRequestTimeoutError) {
+                scheduleStatusPoll(client, true);
+              } else {
+                renderRequestFailure(error);
+              }
             },
           },
         );
@@ -502,21 +532,26 @@ function updatesPage(
         panel.dataset.updateState = view;
         panel.replaceChildren();
         setManualFallback(Boolean(result.error) || actionableStatus !== null);
-        if (result.error || !result.updateAvailable || windows || actionableStatus) {
-          panel.append(
-            createPanelHead(
-              document,
-              view,
-              actionableStatus
-                ? (statusMessage(actionableStatus, messages) ?? messages.updateFailed)
-                : result.error
-                  ? messages.updateFailed
-                  : result.updateAvailable
+        // Every state gets a status line; a bare button in an empty card reads as unfinished.
+        const inlineUpdate =
+          !result.error && !windows && !actionableStatus && result.updateAvailable;
+        if (inlineUpdate) panel.dataset.inline = "";
+        else delete panel.dataset.inline;
+        panel.append(
+          createPanelHead(
+            document,
+            view,
+            actionableStatus
+              ? (statusMessage(actionableStatus, messages) ?? messages.updateFailed)
+              : result.error
+                ? messages.updateFailed
+                : result.updateAvailable
+                  ? windows
                     ? messages.updateWindowsManualRequired
-                    : messages.updateUpToDate,
-            ),
-          );
-        }
+                    : messages.updateAvailable
+                  : messages.updateUpToDate,
+          ),
+        );
         if (actionableStatus?.error) {
           const error = document.createElement("p");
           error.className = "settings-update-error";

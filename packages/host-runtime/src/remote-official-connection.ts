@@ -3,8 +3,6 @@ import { PassThrough, Writable } from "node:stream";
 
 import WebSocket, { type RawData } from "ws";
 
-import { OFFICIAL_APP_SERVER_MAX_FRAME_BYTES } from "@codexhost/shared-contracts";
-
 import type {
   OfficialAppServerConnection,
   OfficialAppServerExit,
@@ -43,7 +41,10 @@ export async function createRemoteOfficialAppServerConnection(
   let outputPaused = false;
 
   const webSocketOptions = {
-    maxPayload: OFFICIAL_APP_SERVER_MAX_FRAME_BYTES,
+    // This private native listener can return large history pages, including
+    // images. Match stdio instead of retiring the connection at an arbitrary
+    // response size; ws uses zero for an unlimited payload.
+    maxPayload: 0,
     // The native Codex daemon client uses tokio-tungstenite without offering
     // permessage-deflate. Keep the same handshake for every private listener.
     perMessageDeflate: false,

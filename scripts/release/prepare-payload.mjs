@@ -238,17 +238,6 @@ export async function writeThirdPartyNotices(root, payloadRoot) {
     "",
   );
   await copyReleaseFile(
-    path.join(root, "third-party", "opencodex.LICENSE"),
-    path.join(licensesDirectory, "opencodex-LICENSE.txt"),
-    "opencodex native profile license",
-  );
-  notices.push(
-    "opencodex native profiles (2d4d7a22381a2e497c2442902104619e25f937c7)",
-    "License: MIT",
-    "License text: licenses/opencodex-LICENSE.txt",
-    "",
-  );
-  await copyReleaseFile(
     path.join(root, "packages", "buddy-engine", "LICENSE"),
     path.join(licensesDirectory, "codex-buddy-LICENSE.txt"),
     "Codex Buddy engine license",
@@ -288,7 +277,6 @@ export function expectedPayloadPaths(target) {
     "licenses/OpenCode-SDK-LICENSE.txt",
     "licenses/Qoder-Agent-SDK-LICENSE.txt",
     "licenses/QoderCN-Agent-SDK-LICENSE.txt",
-    "licenses/opencodex-LICENSE.txt",
     "licenses/codex-buddy-LICENSE.txt",
     "licenses/diff-LICENSE.txt",
     "licenses/smol-toml-LICENSE.txt",

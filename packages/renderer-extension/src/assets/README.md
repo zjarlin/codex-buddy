@@ -1,16 +1,17 @@
 # Renderer brand assets
 
-`codexhost-logo.png` is the 3:4 codexhost product logo used by the installer and
-application branding. `codexhost-icon.png` is its square crop used for the
-in-product brand mark.
-
-`codexhost-logo-transparent.png` is the white-background-free square logo
-extracted from `codexhost-logo.png`. `codex-logo.png` is the Codex X mark
+`codex-logo.png` is the Codex X mark
 source and `codex-logo-transparent.png` is its white-background-free square
 variant. `codex-logo-bright.png` recolors that mark in the official bright
-Codex blue so it stays visible on dark surfaces and is the Renderer settings
-brand icon (settings header mark and the application-header settings trigger
-button).
+Codex blue so it stays visible on dark surfaces.
+
+`codexhost-app-icon.svg` is the vector master of the codexhost brand icon: a
+light gray rounded tile with a charcoal C and central rounded square, padded to
+the macOS icon grid. It is the Renderer settings brand icon (settings header
+mark and the application-header settings trigger button).
+`crates/launcher/assets/codexhost.png` is a 1024px render of this SVG for macOS
+application and DMG icons. Windows application and installer icons use the
+multi-size `crates/launcher/assets/codexhost.ico` generated from that PNG.
 
 `codex-logo-monochrome.png` is the Codex mark rendered in neutral black for the
 current product branding. It replaces the earlier blue-forward product mark in
@@ -34,6 +35,13 @@ mark, 40×40 viewBox and rounded clipping are preserved without modification.
 It matches `packages/adapters/codebuddy/assets/icon.svg` byte for byte; both
 copies are bundled locally so no network request is needed.
 
+`workbuddy-agent.svg` is the WorkBuddy mark provided as `10001.svg` from a
+capture of `https://www.workbuddy.ai/`. The original green gradient, yellow
+glow, white mark, 130×130 viewBox and rounded clipping are preserved without
+modification. It matches `packages/adapters/workbuddy/assets/icon.svg` byte
+for byte, which is also used by the README capability table; both copies are
+bundled locally so no installed application path or network request is needed.
+
 `cursor-agent.svg` is the unmodified official Cursor Cube favicon from
 `https://cursor.com/favicon.svg`, with its original 512×512 viewBox, dark rounded
 plate and light mark. It matches `packages/adapters/cursor-cli/assets/icon.svg`
@@ -54,10 +62,5 @@ resized copy of the Grok mark served by `grok.com`, provided from a captured
 first-party page asset so the Renderer does not make a network request. The
 square source is stored with transparent rounded corners so the black plate
 does not render as a hard square.
-
-`codexhost-readme.svg` embeds `codex-agent.png`, `claude-agent.svg`, and
-`pi-agent.svg` in a responsive vector composition. Its background is `#F2EDE7`.
-The README references this SVG through HTML because GitHub strips inline CSS
-background and border-radius declarations from Markdown HTML.
 
 These product names and marks remain trademarks of their respective owners.

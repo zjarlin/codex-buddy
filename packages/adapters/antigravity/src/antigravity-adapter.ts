@@ -114,6 +114,7 @@ export interface AntigravityAdapterOptions {
   inspectTimeoutMs?: number;
   printTimeout?: string;
   toolOutputLimit?: number;
+  subagentObservationTimeoutMs?: number;
 }
 
 interface ActiveTurn {
@@ -161,6 +162,7 @@ const antigravityHarnessId = harnessIdSchema.parse("antigravity");
 const DEFAULT_INSPECT_TIMEOUT_MS = 20_000;
 const DEFAULT_PRINT_TIMEOUT = "30m";
 const DEFAULT_TOOL_OUTPUT_LIMIT = 64_000;
+const DEFAULT_SUBAGENT_OBSERVATION_TIMEOUT_MS = 30_000;
 const CONTEXT_USAGE_TIMEOUT_MS = 8_000;
 const CONTEXT_USAGE_RETRY_MS = 100;
 const TRAJECTORY_TIMEOUT_MS = 2_000;
@@ -491,6 +493,7 @@ class AntigravitySession implements HarnessSession {
   readonly #onClosed: () => void;
   readonly #printTimeout: string;
   readonly #toolOutputLimit: number;
+  readonly #subagentObservationTimeoutMs: number;
   readonly #history: AntigravityHistory;
   readonly #subagentObservers = new Set<AntigravitySubagents>();
   #active: ActiveTurn | null = null;
@@ -515,6 +518,7 @@ class AntigravitySession implements HarnessSession {
     printTimeout: string;
     thinkingOptionId?: HarnessThinkingOptionId;
     toolOutputLimit: number;
+    subagentObservationTimeoutMs: number;
     onClosed(): void;
   }) {
     this.#catalog = input.catalog;
@@ -528,6 +532,7 @@ class AntigravitySession implements HarnessSession {
     this.#printTimeout = input.printTimeout;
     this.#thinkingOptionId = input.thinkingOptionId ?? input.history.thinkingOptionId;
     this.#toolOutputLimit = input.toolOutputLimit;
+    this.#subagentObservationTimeoutMs = input.subagentObservationTimeoutMs;
     this.#onClosed = input.onClosed;
     this.initialState = this.#state();
     this.outputs = this.#channel.outputs;
@@ -722,6 +727,7 @@ class AntigravitySession implements HarnessSession {
         port: () => this.#languageServerPort(active),
         cwd: this.#cwd,
         outputLimit: this.#toolOutputLimit,
+        observationTimeoutMs: this.#subagentObservationTimeoutMs,
         initialStates: this.#history
           .snapshot()
           .flatMap((turn) =>
@@ -1434,6 +1440,7 @@ export class AntigravityAdapter implements HarnessAdapter {
   readonly #printTimeout: string;
   readonly #sessions = new Set<AntigravitySession>();
   readonly #toolOutputLimit: number;
+  readonly #subagentObservationTimeoutMs: number;
   #closed = false;
   #quota: AntigravityQuotaSnapshot | null = null;
   #quotaCwd: string | null = null;
@@ -1446,6 +1453,12 @@ export class AntigravityAdapter implements HarnessAdapter {
     this.#inspectTimeoutMs = options.inspectTimeoutMs ?? DEFAULT_INSPECT_TIMEOUT_MS;
     this.#printTimeout = options.printTimeout ?? DEFAULT_PRINT_TIMEOUT;
     this.#toolOutputLimit = options.toolOutputLimit ?? DEFAULT_TOOL_OUTPUT_LIMIT;
+    const subagentObservationTimeoutMs =
+      options.subagentObservationTimeoutMs ?? DEFAULT_SUBAGENT_OBSERVATION_TIMEOUT_MS;
+    if (!Number.isFinite(subagentObservationTimeoutMs) || subagentObservationTimeoutMs <= 0) {
+      throw new RangeError("subagentObservationTimeoutMs must be a finite positive number");
+    }
+    this.#subagentObservationTimeoutMs = subagentObservationTimeoutMs;
   }
 
   async inspect(input: InspectHarnessInput = {}): Promise<HarnessInspection> {
@@ -1646,6 +1659,7 @@ export class AntigravityAdapter implements HarnessAdapter {
             printTimeout: this.#printTimeout,
             ...(params.thinkingOptionId ? { thinkingOptionId: params.thinkingOptionId } : {}),
             toolOutputLimit: this.#toolOutputLimit,
+            subagentObservationTimeoutMs: this.#subagentObservationTimeoutMs,
             onClosed: () => this.#sessions.delete(session),
           });
           this.#sessions.add(session);
@@ -1684,6 +1698,7 @@ export class AntigravityAdapter implements HarnessAdapter {
             printTimeout: this.#printTimeout,
             ...(params.thinkingOptionId ? { thinkingOptionId: params.thinkingOptionId } : {}),
             toolOutputLimit: this.#toolOutputLimit,
+            subagentObservationTimeoutMs: this.#subagentObservationTimeoutMs,
             onClosed: () => this.#sessions.delete(session),
           });
           this.#sessions.add(session);
@@ -1746,6 +1761,7 @@ export class AntigravityAdapter implements HarnessAdapter {
       printTimeout: this.#printTimeout,
       ...(thinkingOptionId ? { thinkingOptionId } : {}),
       toolOutputLimit: this.#toolOutputLimit,
+      subagentObservationTimeoutMs: this.#subagentObservationTimeoutMs,
       onClosed: () => this.#sessions.delete(session),
     });
     this.#sessions.add(session);

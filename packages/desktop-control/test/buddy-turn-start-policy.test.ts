@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { buddyTurnStartOptions } from "../src/buddy-turn-start-policy.js";
-import { installDraftPrewarmPolicyBridge } from "../src/renderer-draft-prewarm-runtime.js";
+import { createDraftPrewarmPolicyBridge } from "../src/renderer-draft-prewarm-runtime.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -35,7 +35,7 @@ it("keeps a slow planning submission pending until its single native receipt arr
     onRequest: vi.fn(),
     dispatchAppServerResponse: vi.fn(),
   };
-  installDraftPrewarmPolicyBridge(
+  createDraftPrewarmPolicyBridge(
     manager,
     bridge,
     "local",

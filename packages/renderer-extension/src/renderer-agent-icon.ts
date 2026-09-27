@@ -1,9 +1,11 @@
+import kimiAgentIconUrl from "./assets/kimi-agent.svg";
 import codexAgentIconUrl from "./assets/codex-agent.png";
 import grokAgentIconUrl from "./assets/grok-agent.png";
 import hermesAgentIconUrl from "./assets/hermes-agent.png";
 import antigravityAgentIconUrl from "./assets/antigravity-agent.svg";
 import kiroAgentIconUrl from "./assets/kiro-agent.svg";
 import codeBuddyAgentIconUrl from "./assets/codebuddy-agent.svg";
+import workBuddyAgentIconUrl from "./assets/workbuddy-agent.svg";
 import cursorAgentIconUrl from "./assets/cursor-agent.svg";
 import ompAgentIconUrl from "./assets/omp-agent.svg";
 import openCodeAgentIconUrl from "./assets/opencode-agent.png";
@@ -21,10 +23,12 @@ export const RENDERER_AGENT_LABELS: Record<RendererAgent, string> = {
   antigravity: "Antigravity CLI",
   "kiro-cli": "Kiro CLI",
   codebuddy: "CodeBuddy",
+  workbuddy: "WorkBuddy",
   "cursor-cli": "Cursor CLI (Experimental)",
   hermes: "Hermes",
   qoder: "Qoder",
   "qoder-cn": "Qoder CN",
+  "kimi-code": "Kimi Code",
 };
 
 const PI_PATHS = [
@@ -124,17 +128,23 @@ export function createRendererAgentIcon(
     agent === "antigravity" ||
     agent === "kiro-cli" ||
     agent === "codebuddy" ||
-    agent === "cursor-cli"
+    agent === "workbuddy" ||
+    agent === "cursor-cli" ||
+    agent === "kimi-code"
   ) {
     const image = ownerDocument.createElement("img");
     image.src =
-      agent === "codebuddy"
-        ? codeBuddyAgentIconUrl
-        : agent === "cursor-cli"
-          ? cursorAgentIconUrl
-          : agent === "kiro-cli"
-            ? kiroAgentIconUrl
-            : antigravityAgentIconUrl;
+      agent === "kimi-code"
+        ? kimiAgentIconUrl
+        : agent === "codebuddy"
+          ? codeBuddyAgentIconUrl
+          : agent === "workbuddy"
+            ? workBuddyAgentIconUrl
+            : agent === "cursor-cli"
+              ? cursorAgentIconUrl
+              : agent === "kiro-cli"
+                ? kiroAgentIconUrl
+                : antigravityAgentIconUrl;
     image.alt = "";
     image.draggable = false;
     image.style.width = `${size}px`;

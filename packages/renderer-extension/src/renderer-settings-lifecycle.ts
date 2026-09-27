@@ -18,9 +18,9 @@ import type {
 } from "./settings/session-import-page.js";
 import { installRendererSettingsShell, type RendererSettingsShell } from "./settings/shell.js";
 import {
-  installRendererSettingsHeaderTrigger,
+  installRendererSettingsRailTrigger,
+  type RendererSettingsRailTriggerControl,
   installSystemOneModelHeaderControl,
-  type RendererSettingsHeaderTriggerControl,
   type SystemOneModelHeaderControl,
 } from "./settings/trigger.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
@@ -55,7 +55,7 @@ export function installRendererSettingsLifecycle(
   const lifecycleController = new AbortController();
   let locale = resolveRendererSettingsLocale(ownerWindow.navigator.languages);
   let shell: RendererSettingsShell | null = null;
-  let trigger: RendererSettingsHeaderTriggerControl | null = null;
+  let trigger: RendererSettingsRailTriggerControl | null = null;
   let systemOneModel: SystemOneModelHeaderControl | null = null;
   let localeRequest: Promise<void> | null = null;
   let checkedUpdateClient: RendererUpdateClient | null = null;
@@ -69,7 +69,7 @@ export function installRendererSettingsLifecycle(
 
   const mount = (): {
     shell: RendererSettingsShell;
-    trigger: RendererSettingsHeaderTriggerControl;
+    trigger: RendererSettingsRailTriggerControl;
   } => {
     const messages = rendererSettingsMessages(locale);
     const definitions = createDefaultRendererSettingsPages(
@@ -90,7 +90,7 @@ export function installRendererSettingsLifecycle(
       options.getThreadTerminalClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);
-    const nextTrigger = installRendererSettingsHeaderTrigger({
+    const nextTrigger = installRendererSettingsRailTrigger({
       available: nextShell.supported,
       messages,
       ownerDocument: ownerWindow.document,

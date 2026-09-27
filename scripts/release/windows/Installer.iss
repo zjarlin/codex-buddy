@@ -13,6 +13,7 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName=CodexBuddy
+UninstallDisplayIcon={app}\bin\codexhost-start.exe
 
 #if Architecture == "x64"
 ArchitecturesAllowed=x64compatible

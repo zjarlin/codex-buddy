@@ -14,6 +14,7 @@ describe("platform packagers", () => {
     expect(source).toContain('runtime/node" -e');
     expect(source).not.toContain("--options runtime");
     expect(source).toContain('"$ASSETS_DIR/codexhost.png"');
+    expect(source).not.toContain("sips -s format png");
     expect(source).toContain("iconutil -c icns");
     expect(source).toContain("CFBundleIconFile");
     expect(source).toContain("CodexBuddy.icns");
@@ -79,7 +80,8 @@ describe("platform packagers", () => {
     expect(workflow).toContain("release:npm:meta");
     expect(workflow).toContain("release:npm:publish");
     expect(workflow).toContain('--tag "$NPM_TAG"');
-    expect(workflow).toContain("secrets.NPM_TOKEN");
+    expect(workflow).not.toContain("secrets.NPM_TOKEN");
+    expect(workflow).not.toContain("NODE_AUTH_TOKEN");
     expect(workflow).toContain("id-token: write");
 
     expect(workflow).not.toContain("smoke-npm:");

@@ -124,7 +124,7 @@ describe("interrupted conversations", () => {
             thread: {
               cwd: threadId === "other" ? "/other-project" : "/project",
               status: { type: threadId === "active" ? "active" : "idle" },
-              turns: [{ id: `${threadId}-turn`, status: turns[threadId] }],
+              turns: [{ id: `${threadId}-turn`, status: turns[threadId] ?? "unknown" }],
             },
           },
         };

@@ -83,7 +83,7 @@ describe("CDP client", () => {
       },
     ];
     const fetchImpl: CdpFetch = async () => ({ ok: true, status: 200, json: async () => targets });
-    await expect(listCdpTargets("http://127.0.0.1:9222", fetchImpl)).resolves.toEqual(targets);
+    await expect(listCdpTargets("http://127.0.0.1:9222", fetchImpl)).resolves.toEqual([targets[1]]);
     await expect(waitForRendererTarget("http://127.0.0.1:9222", { fetchImpl })).resolves.toEqual(
       targets[1],
     );
@@ -115,6 +115,35 @@ describe("CDP client", () => {
         webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/page-1",
       },
     ]);
+  });
+
+  it("skips targets that cannot be attached instead of failing discovery", async () => {
+    const page = {
+      id: "page-1",
+      type: "page",
+      title: "Codex",
+      url: "app://-/index.html",
+      webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/page-1",
+    };
+    const fetchImpl: CdpFetch = async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return [
+          {
+            id: "worker-1",
+            type: "worker",
+            title: "",
+            url: "",
+            webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/worker-1",
+          },
+          { id: "page-2", type: "page", title: "Claimed", url: "app://-/index.html" },
+          page,
+        ];
+      },
+    });
+
+    await expect(listCdpTargets("http://127.0.0.1:9222", fetchImpl)).resolves.toEqual([page]);
   });
 
   it("validates browser-level discovery metadata", async () => {

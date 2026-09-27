@@ -11,6 +11,7 @@ import {
   type JsonValue,
 } from "@codexhost/shared-contracts";
 
+import { parsePiNativeCommands, type PiNativeCommand } from "./pi-slash-commands.js";
 import type { PiEmptySessionConfiguration } from "./pi-empty-session.js";
 import { resolvePiExecutable, withNodeRuntimeOnPath } from "./command.js";
 import type { PiSessionHistory } from "./pi-history.js";
@@ -23,6 +24,8 @@ import {
 } from "./pi-usage.js";
 import type { PiNativeModel, PiNativeModelRef } from "./pi-model-catalog.js";
 import { verifyPiSessionCwd } from "./pi-session-file.js";
+import { PiSubagentRpc } from "./pi-subagent-rpc.js";
+import type { PiSubagentInspection, PiSubagentNode } from "./pi-subagents.js";
 
 export interface PiSessionState {
   sessionId: string;
@@ -494,6 +497,7 @@ export class PiRpcSession {
   #latestCacheHitRatePercent: number | null | undefined;
   #manualCompaction: ManualCompaction | null = null;
   #stderrTail = "";
+  readonly #subagents: PiSubagentRpc;
 
   constructor(
     options: PiRpcSessionOptions,
@@ -507,11 +511,18 @@ export class PiRpcSession {
     }
     this.#options = {
       commandTimeoutMs: 30_000,
-      cancelTimeoutMs: 2_000,
+      // Bounds proven stable settlement (Abort acknowledgement plus agent_settled and get_state
+      // confirmation), not the RPC write round trip; must exceed the Host's 20s external steering
+      // bound so a slow cancellation times out gracefully instead of faulting the whole Session.
+      cancelTimeoutMs: 30_000,
       closeTimeoutMs: 2_000,
       ...options,
     };
     this.#processAdapter = processAdapter;
+    this.#subagents = new PiSubagentRpc(
+      (type, payload) => this.#send(type, payload),
+      this.#options.commandTimeoutMs,
+    );
   }
 
   get state(): PiSessionState {
@@ -521,6 +532,14 @@ export class PiRpcSession {
 
   get stderrTail(): string {
     return this.#stderrTail;
+  }
+
+  setSubagentStatusHandler(handler: (runs: PiSubagentNode[]) => void): void {
+    this.#subagents.setHandler(handler);
+  }
+
+  inspectSubagent(id: string): Promise<PiSubagentInspection> {
+    return this.#subagents.inspect(id);
   }
 
   setAutonomousTurnHandler(handler: (turn: PiAutonomousTurn) => void): void {
@@ -595,6 +614,11 @@ export class PiRpcSession {
       throw fault;
     }
     return this;
+  }
+
+  /** Live slash commands, prompt templates and skills of the running Pi Session. */
+  async getCommands(): Promise<PiNativeCommand[]> {
+    return parsePiNativeCommands(await this.#send("get_commands", {}));
   }
 
   async getEntries(): Promise<PiSessionHistory> {
@@ -918,6 +942,7 @@ export class PiRpcSession {
       this.#handleResponse(value);
       return;
     }
+    if (this.#subagents.handle(value)) return;
     if (value.type === "compaction_start") {
       this.#compactionActive = true;
       this.#compactionTurn = this.#activeTurn;
@@ -1547,6 +1572,7 @@ export class PiRpcSession {
   }
 
   #rejectAll(error: Error): void {
+    this.#subagents.close(error);
     for (const pending of this.#pending.values()) {
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.reject(error);

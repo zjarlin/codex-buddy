@@ -1,3 +1,8 @@
+import {
+  credentialImportEnglish,
+  credentialImportChinese,
+  type CredentialImportMessages,
+} from "./credential-import-messages.js";
 import type { DefaultRendererSettingsPageId } from "./pages.js";
 
 export const RENDERER_SETTINGS_LOCALES = ["en", "zh-CN"] as const;
@@ -18,6 +23,7 @@ export interface RendererSettingsLanguageControl {
 }
 
 export interface RendererSettingsMessages {
+  readonly credentialImports: CredentialImportMessages;
   readonly locale: RendererSettingsLocale;
   readonly title: string;
   readonly close: string;
@@ -108,13 +114,10 @@ export interface RendererSettingsMessages {
   readonly accountColumnAccount: string;
   readonly accountConnected: string;
   readonly accountDefaultBadge: string;
-  readonly accountColumnActions: string;
   readonly accountSearch: string;
   readonly accountEmpty: string;
   readonly accountNoMatches: string;
-  readonly accountNativeManaged: string;
   readonly accountNativeManagementHint: string;
-  readonly accountDetailsClose: string;
   readonly accountDefaultHint: string;
   readonly accountCreditsRemaining: string;
   readonly accountCreditsLoading: string;
@@ -167,8 +170,21 @@ export interface RendererSettingsMessages {
   readonly connectionStatus: string;
   readonly connectionHostsScrollLeft: string;
   readonly connectionHostsScrollRight: string;
+  readonly launchPathLabel: string;
+  readonly launchPathPlaceholder: string;
+  readonly launchPathWorkbuddyHelp: string;
+  readonly launchPathSave: string;
+  readonly launchPathReset: string;
+  readonly launchPathRestart: string;
+  readonly launchPathSaved: string;
+  readonly launchPathAutomatic: string;
+  readonly launchPathSaving: string;
+  readonly launchPathLoading: string;
+  readonly launchPathLoadError: string;
+  readonly launchPathSaveError: string;
   readonly connectionOpenInstallation: string;
   readonly connectionOpenHarnessWeb: string;
+  readonly connectionDeepSeekTestedVersions: string;
   readonly connectionInstall: string;
   readonly connectionInstallDescription: string;
   readonly connectionErrorTitle: string;
@@ -210,6 +226,7 @@ export interface RendererSettingsMessages {
   readonly updateInstalling: string;
   readonly updateInstallingNpm: string;
   readonly updateRequestTimeout: string;
+  readonly updateServiceUnavailable: string;
   readonly updateRestarting: string;
   readonly updateSucceeded: string;
   readonly updateFailed: string;
@@ -224,6 +241,8 @@ export interface RendererSettingsMessages {
   readonly updateCopyFailed: string;
   readonly updateDownloadFromReleases: string;
   readonly updateDownloadWindowsInstaller: string;
+  readonly updateStarCallout: string;
+  readonly updateStarLink: string;
   readonly aboutTagline: string;
   readonly aboutParagraphs: readonly string[];
   readonly aboutOpenSource: string;
@@ -262,10 +281,11 @@ export interface RendererSettingsMessages {
 }
 
 const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
+  credentialImports: credentialImportEnglish,
   locale: "en",
   title: "Settings",
   close: "Close settings",
-  starOnGitHub: "Give us a Star~",
+  starOnGitHub: "Star to support",
   sectionsLabel: "Settings sections",
   generalSection: "General",
   otherSection: "Other",
@@ -370,15 +390,12 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   accountConnected: "Accounts",
   accountDefaultBadge: "Current",
   accountColumnAccount: "Account",
-  accountColumnActions: "Manage",
   accountSearch: "Search accounts or Agents…",
   accountEmpty:
     "No current identities found. Sign in through Codex Desktop or your Harness's native client.",
   accountNoMatches: "No matching accounts.",
-  accountNativeManaged: "Native management",
   accountNativeManagementHint:
     "This account comes from {harness}'s native authentication. This page only displays identity and limits; manage sign-in, sign-out and switching in the native client.",
-  accountDetailsClose: "Close account details",
   accountDefaultHint: "This is the current identity for all Codex Threads.",
   accountCreditsRemaining: "Remaining",
   accountCreditsLoading: "Loading limits…",
@@ -431,11 +448,27 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   connectionStatus: "Status",
   connectionHostsScrollLeft: "Show previous Hosts",
   connectionHostsScrollRight: "Show more Hosts",
-  connectionOpenInstallation: "Open official installation page",
+  launchPathLabel: "Installed application path",
+  launchPathPlaceholder: "Installation folder, e.g. D:\\program\\WorkBuddy",
+  launchPathWorkbuddyHelp:
+    "This integration requires the WorkBuddy app. If it is not detected automatically, enter its installation folder. codexhost locates the required files inside it. Restart codexhost after saving to apply.",
+  launchPathSave: "Save path",
+  launchPathReset: "Clear override",
+  launchPathRestart: "Saved. Restart codexhost to apply; running sessions are unchanged.",
+  launchPathSaved: "This Host is using the saved override. Availability is checked separately.",
+  launchPathAutomatic:
+    "No saved override. Uses environment configuration, then automatic discovery.",
+  launchPathSaving: "Saving…",
+  launchPathLoading: "Loading launch settings…",
+  launchPathLoadError: "Could not load launch settings. Reopen this detail panel to retry.",
+  launchPathSaveError:
+    "Could not save. Enter an existing absolute installation folder on this Host and check configuration permissions.",
+  connectionOpenInstallation: "Show installation instructions",
   connectionOpenHarnessWeb: "Open DeepSeek Harness Web",
+  connectionDeepSeekTestedVersions:
+    "Supported DSH versions: 0.1.2-rc.1, 0.1.5-rc.1, 0.1.5-rc.2, 0.1.5-rc.3, 0.1.7-rc.1 and 0.1.7-rc.2. Other versions may connect after native protocol checks, but are not listed as supported.",
   connectionInstall: "Install",
-  connectionInstallDescription:
-    "This Harness was not detected. Follow its official installation guide, then return here and run the check again.",
+  connectionInstallDescription: "This Harness was not detected.",
   connectionErrorTitle: "Connection check failed",
   connectionErrorLog: "Error log",
   connectionOpenIssue: "Open GitHub Issue",
@@ -477,7 +510,10 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateWaitingForExit: "Waiting for the application to close...",
   updateInstalling: "Installing update...",
   updateInstallingNpm: "Installing update through npm...",
-  updateRequestTimeout: "The update service did not respond. Try again.",
+  updateRequestTimeout:
+    "The update service did not respond. Download the latest version from GitHub Releases below.",
+  updateServiceUnavailable:
+    "Automatic updates are unavailable right now. Download the latest version from GitHub Releases below.",
   updateRestarting: "Restarting to finish the update...",
   updateSucceeded: "Update installed successfully.",
   updateFailed: "Update failed.",
@@ -495,6 +531,9 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateCopyFailed: "Copy failed",
   updateDownloadFromReleases: "Download from GitHub Releases",
   updateDownloadWindowsInstaller: "Download Windows installer",
+  updateStarCallout:
+    "If CodexHost has helped you, please Star it on GitHub. It means a lot to us 👉",
+  updateStarLink: "GitHub",
   aboutTagline: "Run Pi and other Harnesses in Codex Desktop",
   aboutParagraphs: Object.freeze([
     "We believe Codex Desktop offers the best desktop development experience available today.",
@@ -545,10 +584,11 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
 });
 
 const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
+  credentialImports: credentialImportChinese,
   locale: "zh-CN",
   title: "设置",
   close: "关闭设置",
-  starOnGitHub: "点个 Star~",
+  starOnGitHub: "Star 支持",
   sectionsLabel: "设置分类",
   generalSection: "通用",
   otherSection: "其他",
@@ -648,14 +688,11 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   accountConnected: "账号",
   accountDefaultBadge: "当前",
   accountColumnAccount: "账号",
-  accountColumnActions: "管理",
   accountSearch: "搜索账号或 Agent…",
   accountEmpty: "尚未识别到当前身份，请在 Codex Desktop 或对应 Harness 的原生客户端登录。",
   accountNoMatches: "没有匹配的账号。",
-  accountNativeManaged: "原生管理",
   accountNativeManagementHint:
     "此账号来自 {harness} 的原生登录。这里只读展示身份与额度；登录、退出和切换请在其原生客户端中完成。",
-  accountDetailsClose: "关闭账号详情",
   accountDefaultHint: "所有 Codex 会话当前使用此身份。",
   accountCreditsRemaining: "剩余",
   accountCreditsLoading: "正在读取额度…",
@@ -708,11 +745,25 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   connectionStatus: "状态",
   connectionHostsScrollLeft: "查看前面的 Host",
   connectionHostsScrollRight: "查看更多 Host",
-  connectionOpenInstallation: "前往官方安装页面",
+  launchPathLabel: "应用安装路径",
+  launchPathPlaceholder: "填写安装目录，例如 D:\\program\\WorkBuddy",
+  launchPathWorkbuddyHelp:
+    "此接入依赖 WorkBuddy 应用。若未自动识别，请填写应用安装目录，codexhost 会自动定位所需文件。保存后重启 codexhost 生效。",
+  launchPathSave: "保存路径",
+  launchPathReset: "清除自定义路径",
+  launchPathRestart: "已保存，重启 codexhost 后生效；当前运行中的会话不受影响。",
+  launchPathSaved: "此 Host 正在使用已保存的路径；是否可用仍以连接检测结果为准。",
+  launchPathAutomatic: "未设置自定义路径，使用环境变量配置或自动发现。",
+  launchPathSaving: "正在保存…",
+  launchPathLoading: "正在读取启动设置…",
+  launchPathLoadError: "无法读取启动设置，请重新打开此详情面板重试。",
+  launchPathSaveError: "保存失败。请填写此 Host 上实际存在的安装目录绝对路径，并确认配置目录可写。",
+  connectionOpenInstallation: "查看安装指引",
   connectionOpenHarnessWeb: "打开 DeepSeek Harness Web",
+  connectionDeepSeekTestedVersions:
+    "支持 DSH 版本：0.1.2-rc.1、0.1.5-rc.1、0.1.5-rc.2、0.1.5-rc.3、0.1.7-rc.1 和 0.1.7-rc.2。其他版本可以在通过原生协议检查后尝试连接，但尚未列入支持列表。",
   connectionInstall: "安装",
-  connectionInstallDescription:
-    "尚未检测到该 Harness。请按照官方安装指南完成安装，然后返回此页面重新检查。",
+  connectionInstallDescription: "尚未检测到该 Harness。",
   connectionErrorTitle: "连接检查失败",
   connectionErrorLog: "错误日志",
   connectionOpenIssue: "提交 GitHub Issue",
@@ -751,7 +802,8 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateWaitingForExit: "正在等待应用退出...",
   updateInstalling: "正在安装更新...",
   updateInstallingNpm: "正在通过 npm 安装...",
-  updateRequestTimeout: "更新服务未响应，请重试。",
+  updateRequestTimeout: "更新服务未响应，请通过下方 GitHub Releases 手动下载最新版本。",
+  updateServiceUnavailable: "暂时无法自动更新，请通过下方 GitHub Releases 手动下载最新版本。",
   updateRestarting: "正在重启以完成更新...",
   updateSucceeded: "更新安装成功。",
   updateFailed: "更新失败。",
@@ -770,6 +822,8 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateCopyFailed: "复制失败",
   updateDownloadFromReleases: "前往 GitHub Releases 下载",
   updateDownloadWindowsInstaller: "下载 Windows 安装包",
+  updateStarCallout: "如果 CodexHost 帮到了你，请在 GitHub 点个 Star，这对我们意义重大 👉",
+  updateStarLink: "GitHub",
   aboutTagline: "在 Codex Desktop 中运行 Pi 和其他 Harness",
   aboutParagraphs: Object.freeze([
     "我们认为 Codex Desktop 提供了目前最好的桌面开发交互体验。",

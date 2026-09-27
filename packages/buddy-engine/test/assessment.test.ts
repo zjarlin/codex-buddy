@@ -42,7 +42,9 @@ describe("offline fallback assessment", () => {
         emptyProject,
       ),
     ).resolves.toMatchObject({ tier: "advanced" });
-    await expect(assess([{ type: "text", text: "   " }], undefined, emptyProject)).resolves.toMatchObject({
+    await expect(
+      assess([{ type: "text", text: "   " }], undefined, emptyProject),
+    ).resolves.toMatchObject({
       tier: "advanced",
     });
   });

@@ -41,10 +41,7 @@ export interface ClassificationEnvironment {
  * 项目清单中可被精确执行的 CLI 入口，作为 System One 的选择候选。
  * 参数只来自清单本身，任何用户原文都不会拼进命令。
  */
-export function dispatchCandidates(
-  project: Project,
-  cwd: string | undefined,
-): SystemOneCommand[] {
+export function dispatchCandidates(project: Project, cwd: string | undefined): SystemOneCommand[] {
   const discovered = project.commands
     .filter((item) => invocation(item.command).length > 0)
     .map((item) => ({
@@ -100,10 +97,7 @@ function recentTextForJev(recent: unknown[]): string {
  * 分类阶段的历史读取：失败时返回空历史，让 System One 仍能只凭本轮文本判断。
  * 真正需要历史的规划阶段仍使用 recentMessages，失败照常中止本回合。
  */
-async function classificationHistory(
-  request: NativeRequest,
-  threadId: string,
-): Promise<unknown[]> {
+async function classificationHistory(request: NativeRequest, threadId: string): Promise<unknown[]> {
   try {
     return await recentMessages(request, threadId);
   } catch {
@@ -212,7 +206,13 @@ export async function classifyWithFallback(
   const previousPlan = environment.previousPlan(path.threadId);
   // 兜底路径无法判断承接关系，直接读取有界历史交给本地评级；失败按空历史处理。
   const recent = await classificationHistory(environment.request, path.threadId);
-  const assessment = await assessWithContext(path.input, path.cwd, path.project, recent, previousPlan);
+  const assessment = await assessWithContext(
+    path.input,
+    path.cwd,
+    path.project,
+    recent,
+    previousPlan,
+  );
   const modelBypass = environment.settings.bypass && isGitPushRequest(path.input);
   if (modelBypass) {
     assessment.tier = "standard";

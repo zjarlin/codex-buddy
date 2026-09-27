@@ -35,6 +35,7 @@ import { RendererSessionImportUnavailableError } from "../../src/renderer-sessio
 const HARNESS_SESSION_LIST_METHOD = "codexhost/harness/session-import/list";
 const HARNESS_SESSION_IMPORT_METHOD = "codexhost/harness/session-import/import";
 import {
+  CODEXHOST_GITHUB_REPOSITORY_URL,
   CODEXHOST_RELEASES_LATEST_URL,
   createDefaultRendererSettingsPages,
 } from "../../src/settings/pages.js";
@@ -1611,7 +1612,7 @@ describe("Renderer Updates page", () => {
     expect(visibleText(starBanner)).toContain("如果 CodexHost 帮到了你，请在 GitHub 点个 Star");
     const starLink = descendants(starBanner).find(({ tagName }) => tagName === "a");
     expect(starLink).toMatchObject({
-      href: "https://github.com/BytePioneer-AI/codex-host",
+      href: CODEXHOST_GITHUB_REPOSITORY_URL,
       target: "_blank",
       rel: "noopener noreferrer",
     });

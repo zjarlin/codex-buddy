@@ -208,7 +208,8 @@ export async function judgeWithJev(
     commandChoice !== "none" &&
     result.decisions.commandIndex.status === "automatic";
   const index = exact ? Number(commandChoice.slice(1)) : NaN;
-  const commandIndex = Number.isInteger(index) && index >= 0 && index < commands.length ? index : null;
+  const commandIndex =
+    Number.isInteger(index) && index >= 0 && index < commands.length ? index : null;
 
   const risky = destructive > 0.5 && result.decisions.destructive.status === "automatic";
   // 难度以复杂度分数为主：高级档即使置信度未达自动阈值也保守进入夯规划。

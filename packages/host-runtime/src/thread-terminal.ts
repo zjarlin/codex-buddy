@@ -165,16 +165,44 @@ const MAC_TERMINALS: TerminalCandidate[] = [
     id: "apple-terminal",
     name: "Terminal",
     default: true,
-    resolve: () => macApplication("Terminal", process.env),
+    resolve: (context) => macApplication("Terminal", context.environment),
   },
-  { id: "iterm2", name: "iTerm2", resolve: () => macApplication("iTerm", process.env) },
-  { id: "ghostty", name: "Ghostty", resolve: () => macApplication("Ghostty", process.env) },
-  { id: "warp", name: "Warp", resolve: () => macApplication("Warp", process.env) },
-  { id: "wezterm", name: "WezTerm", resolve: () => macApplication("WezTerm", process.env) },
-  { id: "alacritty", name: "Alacritty", resolve: () => macApplication("Alacritty", process.env) },
-  { id: "kitty", name: "kitty", resolve: () => macApplication("kitty", process.env) },
-  { id: "hyper", name: "Hyper", resolve: () => macApplication("Hyper", process.env) },
-  { id: "tabby", name: "Tabby", resolve: () => macApplication("Tabby", process.env) },
+  {
+    id: "iterm2",
+    name: "iTerm2",
+    resolve: (context) => macApplication("iTerm", context.environment),
+  },
+  {
+    id: "ghostty",
+    name: "Ghostty",
+    resolve: (context) => macApplication("Ghostty", context.environment),
+  },
+  { id: "warp", name: "Warp", resolve: (context) => macApplication("Warp", context.environment) },
+  {
+    id: "wezterm",
+    name: "WezTerm",
+    resolve: (context) => macApplication("WezTerm", context.environment),
+  },
+  {
+    id: "alacritty",
+    name: "Alacritty",
+    resolve: (context) => macApplication("Alacritty", context.environment),
+  },
+  {
+    id: "kitty",
+    name: "kitty",
+    resolve: (context) => macApplication("kitty", context.environment),
+  },
+  {
+    id: "hyper",
+    name: "Hyper",
+    resolve: (context) => macApplication("Hyper", context.environment),
+  },
+  {
+    id: "tabby",
+    name: "Tabby",
+    resolve: (context) => macApplication("Tabby", context.environment),
+  },
 ];
 
 const WINDOWS_TERMINALS: (TerminalCandidate & { id: WindowsTerminalId })[] = [
@@ -211,8 +239,11 @@ const WINDOWS_TERMINALS: (TerminalCandidate & { id: WindowsTerminalId })[] = [
   },
 ];
 
-async function terminalDescriptors(platform: NodeJS.Platform): Promise<ThreadTerminalDescriptor[]> {
-  const context = { platform, environment: process.env };
+async function terminalDescriptors(
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv,
+): Promise<ThreadTerminalDescriptor[]> {
+  const context = { platform, environment };
   const candidates =
     platform === "darwin" ? MAC_TERMINALS : platform === "win32" ? WINDOWS_TERMINALS : [];
   if (candidates.length === 0) {
@@ -229,10 +260,10 @@ async function terminalDescriptors(platform: NodeJS.Platform): Promise<ThreadTer
 }
 
 export async function listThreadTerminals(
-  options: { platform?: NodeJS.Platform } = {},
+  options: { platform?: NodeJS.Platform; environment?: NodeJS.ProcessEnv } = {},
 ): Promise<ThreadTerminalListResult> {
   const platform = options.platform ?? process.platform;
-  const terminals = await terminalDescriptors(platform);
+  const terminals = await terminalDescriptors(platform, options.environment ?? process.env);
   const defaultTerminal =
     terminals.find((terminal) => terminal.default && terminal.installed)?.id ??
     terminals.find((terminal) => terminal.installed)?.id ??

@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -24,6 +24,15 @@ async function workspace(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), "codexhost-terminal-"));
   cleanup.push(directory);
   return directory;
+}
+
+async function macTerminalEnvironment(): Promise<NodeJS.ProcessEnv> {
+  const home = await workspace();
+  await Promise.all([
+    mkdir(path.join(home, "Applications", "Terminal.app"), { recursive: true }),
+    mkdir(path.join(home, "Applications", "Ghostty.app"), { recursive: true }),
+  ]);
+  return { HOME: home };
 }
 
 type SpawnedChild = {
@@ -52,7 +61,10 @@ describe("thread terminal", () => {
   });
 
   it("lists installed macOS terminals and falls back to Terminal by default", async () => {
-    const terminals = await listThreadTerminals({ platform: "darwin" });
+    const terminals = await listThreadTerminals({
+      platform: "darwin",
+      environment: await macTerminalEnvironment(),
+    });
     const apple = terminals.terminals.find((terminal) => terminal.id === "apple-terminal");
     expect(apple).toMatchObject({ installed: true, default: true });
     expect(terminals.terminals.map((terminal) => terminal.id)).toContain("ghostty");
@@ -63,9 +75,11 @@ describe("thread terminal", () => {
     const spawnTerminal = fakeSpawn();
     const codexPath = path.join(directory, "codex");
     const sessionId = "019efd3b-5f35-71a1-9b7f-247fd8a79b6a";
+    const environment = await macTerminalEnvironment();
 
     const result = await openThreadTerminal(directory, sessionId, codexPath, "apple-terminal", {
       platform: "darwin",
+      environment,
       spawnTerminal,
     });
 
@@ -159,9 +173,11 @@ describe("thread terminal", () => {
   it("opens Ghostty through its macOS bundle action", async () => {
     const directory = await workspace();
     const spawnTerminal = fakeSpawn();
+    const environment = await macTerminalEnvironment();
 
     await openThreadTerminal(directory, "session-id", "/opt/codex", "ghostty", {
       platform: "darwin",
+      environment,
       spawnTerminal,
     });
 

@@ -127,15 +127,14 @@ exec(${JSON.stringify(hermesInventoryPathsForTests.script)})`;
       child.stderr.on("data", (chunk: Buffer) => {
         stderr += chunk.toString("utf8");
       });
-      const exitCode = await new Promise<number | null>((resolve) =>
-        child.on("close", resolve),
-      );
+      const exitCode = await new Promise<number | null>((resolve) => child.on("close", resolve));
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
       expect(JSON.parse(stdout)).toEqual({
         models: [
           {
             modelId: "zai:glm-5-turbo",
+            modelIdAliases: [],
             label: "glm-5-turbo",
             provider: "Z.AI",
             available: true,

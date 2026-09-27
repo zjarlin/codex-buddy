@@ -128,13 +128,52 @@ describe("JEV judgment", () => {
 
   it("does not bypass on a conversational turn even when push terms are mentioned", async () => {
     const judgment = await judgeWithJev(
-      client(response({ conversational: { type: "noul", noul: 0.98 } })),
+      client(
+        response({
+          route: {
+            type: "choice",
+            choice: "inspect",
+            probabilities: { code: 0, inspect: 1, plan: 0, other: 0 },
+            confidence: 1,
+          },
+          conversational: { type: "noul", noul: 0.98 },
+        }),
+      ),
       { request: "推送代码这个功能会怎么触发？", commands: [] },
     );
     expect(judgment.conversational).toBe(true);
     expect(judgment.gitAction).toBe("none");
     expect(judgment.isPush).toBe(false);
   });
+
+  it.each([
+    { request: "能帮我修改代码吗？", route: "code", attachments: 0, destructive: 0.05 },
+    { request: "可以设计并实现这个功能吗？", route: "plan", attachments: 0, destructive: 0.05 },
+    { request: "解释这张图", route: "inspect", attachments: 1, destructive: 0.05 },
+    { request: "可以删除旧数据吗？", route: "inspect", attachments: 0, destructive: 0.99 },
+  ])(
+    "keeps conflicting execution evidence with the Agent: $request",
+    async ({ request, route, attachments, destructive }) => {
+      const judgment = await judgeWithJev(
+        client(
+          response({
+            route: {
+              type: "choice",
+              choice: route,
+              probabilities: Object.fromEntries(
+                ["code", "inspect", "plan", "other"].map((key) => [key, key === route ? 1 : 0]),
+              ),
+              confidence: 1,
+            },
+            conversational: { type: "noul", noul: 0.98 },
+            destructive: { type: "noul", noul: destructive },
+          }),
+        ),
+        { request, attachmentCount: attachments, commands: [] },
+      );
+      expect(judgment.conversational).toBe(false);
+    },
+  );
 
   it("keeps a deferred gitAction at none so review-level signals do not authorize Git", async () => {
     const judgment = await judgeWithJev(

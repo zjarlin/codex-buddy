@@ -434,6 +434,69 @@ const jevClient = (body: unknown) =>
   });
 
 describe("Buddy family policy", () => {
+  it("routes questions to Doubao and the next action back to the Agent", async () => {
+    const f = await fixture({
+      modelIds: ["gpt-planner", "deepseek-flash", "doubao"],
+      classify: {
+        forText: (text) => ({ conversational: text.includes("是什么意思"), role: "executor" }),
+      },
+    });
+    await f.router.route(f.turn("数据库事务是什么意思？"));
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "doubao" });
+    expect(JSON.stringify(f.forwarded[0]?.params)).toContain("本回合是纯问答旁路");
+    expect(f.requested.some((entry) => entry.method === "thread/start")).toBe(false);
+    expect((await f.router.snapshot()).decisions[0]?.reason).toContain("问答旁路至 doubao");
+    f.router.observe({
+      method: "turn/completed",
+      params: { threadId: "work", turn: { id: "answer", status: "completed" } },
+    });
+    await f.router.route(f.turn("能帮我添加事务吗？"));
+    expect(f.forwarded[1]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect(JSON.stringify(f.forwarded[1]?.params)).not.toContain("本回合是纯问答旁路");
+  });
+
+  it.each([{ bypass: false }, { executorModel: "deepseek-flash" }, { jev: false }])(
+    "keeps question bypass subordinate to explicit settings: %j",
+    async (settings) => {
+      const f = await fixture({
+        modelIds: ["deepseek-flash", "doubao"],
+        classify: { conversational: true },
+      });
+      await f.router.configure(settings);
+      await f.router.route(f.turn("你好"));
+      expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+      expect(JSON.stringify(f.forwarded[0]?.params)).not.toContain("本回合是纯问答旁路");
+    },
+  );
+
+  it("shows a reason and retains the Agent when Doubao is unavailable", async () => {
+    const f = await fixture({ classify: { conversational: true } });
+    await f.router.route(f.turn("什么是数据库事务？"));
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect((await f.router.snapshot()).decisions[0]?.reason).toContain("没有可用 Doubao");
+  });
+
+  it("does not plan a complex knowledge question or change explicit Plan Mode", async () => {
+    const f = await fixture({
+      modelIds: ["gpt-planner", "doubao"],
+      jev: jevClient(
+        jevResponse("inspect", 2, 0.02, "executor", { conversational: 0.98, gitAction: "none" }),
+      ),
+    });
+    await f.router.route(
+      f.turn("解释分布式事务的不同实现", { collaborationMode: { mode: "plan", settings: {} } }),
+    );
+    expect(f.forwarded[0]?.params).toMatchObject({
+      model: "doubao",
+      collaborationMode: { mode: "plan" },
+    });
+    expect(f.requested.some((entry) => entry.method === "thread/start")).toBe(false);
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      plannerModel: null,
+      score: 15,
+    });
+  });
+
   it("preserves explicit structured output requests without planning or model selection", async () => {
     const f = await fixture();
     const request = f.turn("为当前任务生成标题", {

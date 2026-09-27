@@ -23,7 +23,7 @@ import {
 } from "@codexhost/shared-contracts";
 import type { JsonObject, JsonRpcRequest, JsonValue } from "@codexhost/protocol-core";
 import { BuddyPlanner, object, result, type NativeRequest } from "./planner.js";
-import { discoverModels, type NativeModelCatalog } from "./models.js";
+import { chooseConversationModel, discoverModels, type NativeModelCatalog } from "./models.js";
 import { recentMessages } from "./history.js";
 import {
   classifyWithFallback,
@@ -961,6 +961,8 @@ export class BuddyRouter {
       conversational || modelBypass ? undefined : this.#clarifications.get(threadId);
     const planOnly = object(params.collaborationMode).mode === "plan";
     const needsPlanning =
+      !conversational &&
+      !modelBypass &&
       (settings.planning || planOnly) &&
       (assessment.tier === "advanced" || pendingClarification !== undefined);
     const inventory = await discoverModels({
@@ -972,6 +974,19 @@ export class BuddyRouter {
       tier: assessment.tier === "simple" ? "simple" : "standard",
     });
     this.#models = inventory.models;
+    const questionBypass =
+      settings.bypass && selected.source === "system-one" && conversational && !fixedExecutor;
+    const answerModel = questionBypass ? chooseConversationModel(inventory.models) : null;
+    if (answerModel) {
+      inventory.executor = answerModel;
+      this.#update(threadId, {
+        reason: `System One 确认纯问答；问答旁路至 ${answerModel}，跳过规划与执行分工。`,
+      });
+    } else if (questionBypass) {
+      this.#update(threadId, {
+        reason: "System One 确认纯问答，但实时目录没有可用 Doubao；保留现有 Agent 模型直接回答。",
+      });
+    }
     let packet = "";
     let clarification: string | null = null;
     let validatedPlan: Awaited<ReturnType<BuddyPlanner["plan"]>> | null = null;
@@ -1096,6 +1111,9 @@ export class BuddyRouter {
     const guidance = [
       originalSettings.developer_instructions,
       `本回合请求的模型 ID 是 ${JSON.stringify(model)}。被问及模型身份时区分请求的模型 ID 与无法独立验证的网关实际后端，不根据旧对话中的模型名猜测。`,
+      answerModel
+        ? "本回合是纯问答旁路。依据当前对话与已有知识直接回答，不调用工具、读取工作区、运行命令、修改文件或委派子代理。缺少事实时明确说明，不声称完成实际操作。后续执行请求由下一回合重新分类。"
+        : "",
       nativePlanning || conversational ? "" : roleInstructions.executor,
       modelBypass || nativePlanning || (conversational && !fixedExecutor)
         ? ""
@@ -1139,7 +1157,7 @@ export class BuddyRouter {
       ...(clarification ? { reason: "需要澄清，已交回原生对话；尚未启动执行模型。" } : {}),
     });
     this.track(rewritten);
-    if (!modelBypass && !nativePlanning && typeof model === "string") {
+    if (!modelBypass && !answerModel && !nativePlanning && typeof model === "string") {
       this.#recovery.watch(threadId, model, !fixedExecutor);
       const recoveryContext: JsonObject = {};
       const original = object(rewritten.params) as JsonObject;

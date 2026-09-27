@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSelectionPolicy, type SelectionPolicy } from "../../src/buddy/model-policy.js";
-import { chooseModels, discoverModels } from "../../src/buddy/models.js";
+import { chooseConversationModel, chooseModels, discoverModels } from "../../src/buddy/models.js";
 import { buddySettingsSchema } from "@codexhost/shared-contracts";
 
 const directories: string[] = [];
@@ -16,6 +16,25 @@ afterEach(async () => {
 });
 
 describe("economic execution pools", () => {
+  it("selects only eligible Doubao IDs, preferring the exact gateway alias", () => {
+    const models = chooseModels(
+      ["doubao", "volcengine/doubao-lite", "doubao-seed-2", "not-doubao", "doubao-image"],
+      {
+        ids: new Set(["doubao", "volcengine/doubao-lite", "not-doubao", "doubao-image"]),
+        contextWindows: new Map(),
+      },
+      {},
+    ).models;
+    expect(chooseConversationModel(models)).toBe("doubao");
+    expect(chooseConversationModel(models.filter((model) => model.id !== "doubao"))).toBe(
+      "volcengine/doubao-lite",
+    );
+    expect(
+      chooseConversationModel(
+        models.filter((model) => model.id !== "doubao" && model.id !== "volcengine/doubao-lite"),
+      ),
+    ).toBeNull();
+  });
   const ids = [
     "gpt-planner",
     "primary-flash",

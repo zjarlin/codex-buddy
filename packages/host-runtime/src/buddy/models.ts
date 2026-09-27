@@ -67,6 +67,19 @@ export function modelTier(id: string): "夯" | "垃" {
   return /(?:^|[/:])(?:gpt|claude)(?=[\d._-]|$)/iu.test(id) ? "夯" : "垃";
 }
 
+/** 问答只从供应商与原生目录共同确认可用的 Doubao 文本模型中选择。 */
+export function chooseConversationModel(models: BuddyModel[]): string | null {
+  const candidates = models.filter(
+    (model) => model.eligible && /(?:^|[/:])doubao(?:[._-]|$)/iu.test(model.id),
+  );
+  candidates.sort((a, b) => {
+    const priority = (id: string): number =>
+      /^doubao$/iu.test(id) ? 2 : /(?:flash|lite|mini)/iu.test(id) ? 1 : 0;
+    return priority(b.id) - priority(a.id) || b.id.localeCompare(a.id, "en", { numeric: true });
+  });
+  return candidates[0]?.id ?? null;
+}
+
 export function chooseModels(
   ids: string[],
   nativeModels: Pick<NativeModelCatalog, "ids" | "contextWindows">,

@@ -161,7 +161,11 @@ export async function classifyWithSystemOne(
       );
     }
   }
-  const assessment: Assessment = { tier: jev.tier, intent: jev.intent, reason: jev.reason };
+  const assessment: Assessment = {
+    tier: jev.conversational ? "simple" : jev.tier,
+    intent: jev.intent,
+    reason: jev.reason,
+  };
   const judgment: NonNullable<BuddyDecision["judgment"]> = {
     source: "system-one",
     model: jev.model,

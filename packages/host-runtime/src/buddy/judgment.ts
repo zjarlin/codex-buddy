@@ -157,7 +157,12 @@ export async function judgeWithJev(
       io: "文件、目录、日志、构建、测试、启动等 IO 操作",
       executor: "编码、实现、设计或普通问答",
     }),
-    conversational: noul("这条请求是无需工具和代码改动的普通问答或简短寒暄吗？"),
+    conversational: noul(
+      "用户本轮是否只需要依据已有对话和通用知识作答，无需使用工具、读取工作区或外部实时信息、修改文件或执行操作？" +
+        "解释概念、知识问答、寒暄属于问答；按实际意图判断，不按问号或疑问句式判断。" +
+        "例如‘能帮我修一下吗’‘可以运行测试吗’‘查一下当前日志为什么报错’属于执行请求。" +
+        "承接上文的‘可以，就这样做’以及先解释再实施的混合请求也属于执行请求。",
+    ),
     followUp: noul("这条请求是在承接上文已讨论的任务、方案或步骤，而不是提出新的独立任务吗？"),
     exactCommand: noul("这条请求是否正好对应下面列出的某个已发现 CLI 入口？"),
     commandIndex: choice("如果是，应执行哪一个已发现入口？", commandCriteria),
@@ -227,7 +232,13 @@ export async function judgeWithJev(
     tier = "standard";
   }
   const conversationalAnswer =
-    conversational > 0.5 && result.decisions.conversational.status === "automatic";
+    conversational > 0.5 &&
+    result.decisions.conversational.status === "automatic" &&
+    (input.attachmentCount ?? 0) === 0 &&
+    route !== "code" &&
+    route !== "plan" &&
+    !risky &&
+    !exact;
   const followUpAnswer = followUp > 0.5 && result.decisions.followUp.status === "automatic";
   // Git 动作必须以 System One 明确且自动的 gitAction 判定为准。仅在 push 分数高、
   // 但 gitAction 未达 automatic 或落在 none 时，视为提问/提及而非操作授权，避免误触发旁路。

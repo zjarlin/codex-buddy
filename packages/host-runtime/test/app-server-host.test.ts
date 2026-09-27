@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -1496,7 +1497,7 @@ describe("AppServerHost linked Git repositories", () => {
       expect(readFileSync(path.join(frontend, "app.txt"), "utf8")).toBe("frontend saved\n");
     } finally {
       await stopFixture(fixture);
-      rmSync(directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 });

@@ -17,28 +17,31 @@ const status = {
 } as const;
 
 describe("update runtime contracts", () => {
-  it("accepts bounded check, start, and status results", () => {
-    expect(
-      updateCheckResultSchema.parse({
-        currentVersion: "1.2.2",
+  it.each(["BytePioneer-AI/codex-host", "zjarlin/codex-buddy"])(
+    "accepts bounded results from %s",
+    (repository) => {
+      expect(
+        updateCheckResultSchema.parse({
+          currentVersion: "1.2.2",
+          installation: "macos-dmg",
+          latestVersion: "1.2.3",
+          updateAvailable: true,
+          installationAvailable: true,
+          releaseNotes: "## Changes\n\n- Safer updates",
+          releaseNotesUrl: `https://github.com/${repository}/releases/tag/v1.2.3`,
+          status: null,
+          error: null,
+        }),
+      ).toMatchObject({
         installation: "macos-dmg",
         latestVersion: "1.2.3",
         updateAvailable: true,
-        installationAvailable: true,
-        releaseNotes: "## Changes\n\n- Safer updates",
-        releaseNotesUrl: "https://github.com/BytePioneer-AI/codex-host/releases/tag/v1.2.3",
-        status: null,
-        error: null,
-      }),
-    ).toMatchObject({
-      installation: "macos-dmg",
-      latestVersion: "1.2.3",
-      updateAvailable: true,
-    });
-    expect(updateStartResultSchema.parse({ status })).toEqual({ status });
-    expect(updateStatusResultSchema.parse({ status })).toEqual({ status });
-    expect(updateStatusResultSchema.parse({ status: null })).toEqual({ status: null });
-  });
+      });
+      expect(updateStartResultSchema.parse({ status })).toEqual({ status });
+      expect(updateStatusResultSchema.parse({ status })).toEqual({ status });
+      expect(updateStatusResultSchema.parse({ status: null })).toEqual({ status: null });
+    },
+  );
 
   it("accepts bounded download progress and rejects impossible byte counts", () => {
     expect(

@@ -1,6 +1,6 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
-import { hostThreadIdSchema, type BuddyInterrupted } from "@codexhost/shared-contracts";
+import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
@@ -13,14 +13,19 @@ type InterruptedThread = BuddyInterrupted["threads"][number];
 const marker = "data-buddy-sidebar-recovery";
 const runningMarker = "data-buddy-sidebar-running";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
+const stateMarker = "data-buddy-sidebar-state";
 
 // 覆盖原生状态槽的视觉内容，卸载时保留 React 管理的原始节点。
 const style = `
-[${runningMarker}]{background:color-mix(in srgb,var(--color-token-text-warning,#b77b20) 9%,transparent)!important;box-shadow:inset 3px 0 0 var(--color-token-text-warning,#b77b20)!important}
-[${recoverableMarker}]{background:color-mix(in srgb,var(--color-token-text-warning,#b77b20) 7%,transparent)!important;box-shadow:inset 3px 0 0 var(--color-token-text-warning,#b77b20)!important}
+[${runningMarker}]{background:color-mix(in srgb,#18a058 10%,transparent)!important;box-shadow:inset 3px 0 0 #18a058!important}
+[${recoverableMarker}]{background:color-mix(in srgb,#d99000 9%,transparent)!important;box-shadow:inset 3px 0 0 #d99000!important}
+[${stateMarker}="failed"]{background:color-mix(in srgb,#d64b3f 9%,transparent)!important;box-shadow:inset 3px 0 0 #d64b3f!important}
+[${stateMarker}="cancelled"]{background:color-mix(in srgb,#4b7bd6 9%,transparent)!important;box-shadow:inset 3px 0 0 #4b7bd6!important}
 [${marker}]{position:relative}
 [${marker}]>:not([data-buddy-resume]){visibility:hidden}
-[data-buddy-resume]{position:absolute;inset:50% auto auto 50%;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:3px;border:0;border-radius:5px;background:transparent;color:var(--color-token-text-warning,#b77b20);cursor:pointer}
+[data-buddy-resume]{position:absolute;inset:50% auto auto 50%;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:3px;border:0;border-radius:5px;background:transparent;color:#b66a00;cursor:pointer}
+[${stateMarker}="failed"] [data-buddy-resume]{color:#c73b31}
+[${stateMarker}="cancelled"] [data-buddy-resume]{color:#3569bd}
 [data-buddy-resume]:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
 [data-buddy-resume]:focus-visible{outline:2px solid #508df2;outline-offset:1px}
 [data-buddy-resume]:disabled{opacity:.6;cursor:wait}
@@ -45,6 +50,7 @@ export function installSidebarContinuation(options: {
       client: RendererModelClient;
       threads: Map<string, InterruptedThread>;
       runningThreadIds: Set<string>;
+      resumeEnabled: boolean;
       pending: boolean;
       updatedAt: number;
     }
@@ -77,10 +83,14 @@ export function installSidebarContinuation(options: {
     clear(row);
     row.removeAttribute(runningMarker);
     row.removeAttribute(recoverableMarker);
+    row.removeAttribute(stateMarker);
   };
-  const decorate = (row: HTMLElement, running: boolean, recoverable: boolean) => {
+  const decorate = (row: HTMLElement, running: boolean, thread: InterruptedThread | undefined) => {
     row.toggleAttribute(runningMarker, running);
-    row.toggleAttribute(recoverableMarker, !running && recoverable);
+    row.toggleAttribute(recoverableMarker, !running && thread !== undefined);
+    if (running) row.setAttribute(stateMarker, "running");
+    else if (thread) row.setAttribute(stateMarker, thread.status);
+    else row.removeAttribute(stateMarker);
   };
   const schedule = () => {
     if (disposed || scheduled) return;
@@ -94,26 +104,13 @@ export function installSidebarContinuation(options: {
     try {
       const snapshot = await state.client.buddyStatus();
       if (disposed || hosts.get(hostId) !== state) return;
-      if (!snapshot.settings.enabled || snapshot.settings.privateMode) {
-        state.threads.clear();
-        state.runningThreadIds.clear();
-        return;
-      }
+      // 手动恢复独立于自动路由，固定模型模式仍允许恢复；隐私模式仅保留状态。
+      state.resumeEnabled = !snapshot.settings.privateMode;
       const result = await state.client.buddyInterrupted();
-      const ownership = result.threads.length
-        ? await state.client.listThreadOwnership({
-            threadIds: result.threads.map((thread) => hostThreadIdSchema.parse(thread.threadId)),
-          })
-        : { threads: [] };
       if (disposed || hosts.get(hostId) !== state) return;
-      const native = new Set<string>(
-        ownership.threads
-          .filter((thread) => thread.owner === "codex")
-          .map((thread) => thread.threadId),
-      );
       state.threads = new Map(
         result.threads
-          .filter((thread) => native.has(thread.threadId))
+          .filter((thread) => thread.owner === "codex")
           .map((thread) => [thread.threadId, thread]),
       );
       state.runningThreadIds = new Set(result.runningThreadIds);
@@ -175,6 +172,7 @@ export function installSidebarContinuation(options: {
           client,
           threads: new Map(),
           runningThreadIds: new Set(),
+          resumeEnabled: false,
           pending: false,
           updatedAt: 0,
         };
@@ -183,13 +181,14 @@ export function installSidebarContinuation(options: {
       if (!state.pending && Date.now() - state.updatedAt >= 15_000) void load(hostId, state);
       const thread = state.threads.get(threadId);
       const running = state.runningThreadIds.has(threadId);
-      decorate(row, running, thread !== undefined);
+      decorate(row, running, thread);
       const title = row.querySelector("[data-thread-title-trigger]");
       const slot = title?.previousElementSibling;
       // 仅接管已验证的标题前状态槽，结构变化时不猜测其他按钮的位置。
       if (
         !thread ||
         running ||
+        !state.resumeEnabled ||
         !(slot instanceof HTMLElement) ||
         !slot.matches("div.w-4.shrink-0") ||
         continued.has(keyFor(hostId, thread))
@@ -210,7 +209,8 @@ export function installSidebarContinuation(options: {
           event.stopPropagation();
           if (
             row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) !== hostId ||
-            threadIdFromSidebarRowElement(row) !== thread.threadId ||
+            nativeThreadId(hostId, row) !== thread.threadId ||
+            !hosts.get(hostId)?.resumeEnabled ||
             hosts.get(hostId)?.runningThreadIds.has(thread.threadId) === true
           )
             return;
@@ -226,17 +226,25 @@ export function installSidebarContinuation(options: {
         mounted.set(row, entry);
       }
       const busy = pending.has(key);
-      const label = busy
+      const statusLabel = busy
         ? chinese()
           ? "正在恢复会话…"
           : "Resuming conversation…"
         : chinese()
-          ? "会话已中断，点击恢复"
-          : "Conversation interrupted. Click to resume";
+          ? thread.status === "failed"
+            ? "会话执行失败，点击恢复"
+            : thread.status === "cancelled"
+              ? "会话已取消，点击恢复"
+              : "会话已中断，点击恢复"
+          : thread.status === "failed"
+            ? "Conversation failed. Click to resume"
+            : thread.status === "cancelled"
+              ? "Conversation cancelled. Click to resume"
+              : "Conversation interrupted. Click to resume";
       entry.button.disabled = busy;
-      if (entry.button.title !== label) {
-        entry.button.title = label;
-        entry.button.setAttribute("aria-label", label);
+      if (entry.button.title !== statusLabel) {
+        entry.button.title = statusLabel;
+        entry.button.setAttribute("aria-label", statusLabel);
       }
     }
     for (const hostId of hosts.keys()) {

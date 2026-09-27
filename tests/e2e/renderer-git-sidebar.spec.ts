@@ -50,6 +50,13 @@ const { outputFiles } = await build({
             { path: "vendor/lib", indexStatus:" ", workTreeStatus:"M", staged:false, unstaged:true, untracked:false, conflicted:false, submodule:{ path:"vendor/lib", status:"uninitialized" } },
           ],
         };
+        const submoduleStatus = {
+          workspace: "/repo/vendor/lib", branch: "main", detached: false, head: "def456", upstream: "origin/main", ahead: 0, behind: 0,
+          operation: null, conflicts: [], submodules: [],
+          changes: [
+            { path: "child.txt", indexStatus:" ", workTreeStatus:"M", staged:false, unstaged:true, untracked:false, conflicted:false, submodule:null },
+          ],
+        };
         const calls = [];
         const officialCalls = [];
         const addOfficialButton = (label, panel) => {
@@ -66,16 +73,16 @@ const { outputFiles } = await build({
         addOfficialButton("显示/隐藏侧边面板", "files");
         addOfficialButton("切换底部面板显示", "terminal");
         const client = {
-          inspectGitStatus: async () => { calls.push(["status"]); return structuredClone(status); },
-          inspectGitDiff: async (input) => { calls.push(["diff", input]); return { path:input.path, diff:input.path === "vendor/lib" ? "-Subproject commit abc123\\n+Subproject commit abc123-dirty" : "+changed", truncated:false }; },
+          inspectGitStatus: async (input) => { calls.push(["status", input]); return structuredClone(input.repository ? submoduleStatus : status); },
+          inspectGitDiff: async (input) => { calls.push(["diff", input]); return { path:input.path, diff:input.repository ? "+child changed" : input.path === "vendor/lib" ? "-Subproject commit abc123\\n+Subproject commit abc123-dirty" : "+changed", truncated:false }; },
           inspectGitContent: async (input) => {
             calls.push(["content", input]);
             return {
               path: input.path,
-              kind: input.path === "vendor/lib" ? "submodule" : "file",
+              kind: input.path === "vendor/lib" && !input.repository ? "submodule" : "file",
               baseLabel: "HEAD",
               base: "export const app = false;\\n",
-              working: "export const app = true;\\n",
+              working: input.repository ? "child changed\\n" : "export const app = true;\\n",
               revision: "a".repeat(64),
               conflicted: false,
               ours: null,
@@ -86,19 +93,21 @@ const { outputFiles } = await build({
           },
           stageGitPaths: async (input) => {
             calls.push(["stage", input]);
-            status.changes[0].staged = true;
-            status.changes[0].unstaged = false;
-            status.changes[0].indexStatus = "M";
-            status.changes[0].workTreeStatus = " ";
-            return structuredClone(status);
+            const target = input.repository ? submoduleStatus : status;
+            target.changes[0].staged = true;
+            target.changes[0].unstaged = false;
+            target.changes[0].indexStatus = "M";
+            target.changes[0].workTreeStatus = " ";
+            return structuredClone(target);
           },
-          unstageGitPaths: async () => structuredClone(status),
+          unstageGitPaths: async (input) => structuredClone(input.repository ? submoduleStatus : status),
           commitGit: async (input) => {
             calls.push(["commit", input]);
-            status.changes = [];
-            return { commit: "def4567", pushed: input.push, output: "", status: structuredClone(status) };
+            const target = input.repository ? submoduleStatus : status;
+            target.changes = [];
+            return { commit: "def4567", pushed: input.push, output: "", status: structuredClone(target) };
           },
-          pushGit: async () => structuredClone(status),
+          pushGit: async (input) => structuredClone(input.repository ? submoduleStatus : status),
           syncGit: async (input) => {
             calls.push(["sync", input]);
             status.behind = 0;
@@ -439,6 +448,20 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
     "false",
   );
   await expect(root.locator(".codexhost-git-change")).toHaveCount(3);
+  const unstagedRow = root.locator('.codexhost-git-change[title="src/app.ts"]');
+  await expect(unstagedRow.locator("[data-codexhost-git-sidebar-stage]")).toHaveAttribute(
+    "data-action",
+    "stage",
+  );
+  await expect(unstagedRow.locator("[data-codexhost-git-sidebar-stage]")).toHaveAttribute(
+    "aria-label",
+    "暂存",
+  );
+  await expect(unstagedRow.locator(".codexhost-git-status")).toHaveAttribute(
+    "aria-label",
+    "已修改",
+  );
+  await expect(unstagedRow.locator(".codexhost-git-status")).toHaveText("M");
   await expect(root.locator("[data-codexhost-git-sidebar-tree]")).toHaveAttribute(
     "aria-pressed",
     "false",
@@ -494,7 +517,7 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
   await expect(gitContent).toHaveCount(0);
   await expect(root.locator(".codexhost-git-change")).toHaveCount(0);
   await expect(root.getByText("vendor/lib · uninitialized")).toBeVisible();
-  const initialize = root.getByRole("button", { name: "初始化" });
+  const initialize = root.getByRole("button", { name: "初始化", exact: true });
   await expect(initialize).toBeEnabled();
   await initialize.click();
   await expect
@@ -542,7 +565,9 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
     });
   });
   await root.getByRole("button", { name: "刷新" }).click();
-  await root.locator('.codexhost-git-directory[title="src"]').click();
+  const srcDirectory = root.locator(".codexhost-git-directory").filter({ hasText: "src" });
+  await srcDirectory.click();
+  await expect(srcDirectory).toHaveAttribute("aria-expanded", "true");
   await root.locator('.codexhost-git-change[title="src/conflict.ts"]').click();
   await expect(gitContent.getByText("冲突：需要合并")).toBeVisible();
   await expect(gitContent.getByRole("button", { name: "暂存" })).toBeDisabled();
@@ -777,6 +802,7 @@ test("shows pending actions, ignores repeated clicks and permits retry after fai
   await setup(page);
   const root = page.locator("[data-codexhost-git-sidebar]");
   await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.locator('.codexhost-git-directory[title="src"]').click();
   await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
   await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: single request");
   await page.evaluate(() => {
@@ -1256,4 +1282,108 @@ test("ignores a linked repository diff that arrives after switching back to the 
     "title",
     "/repo",
   );
+});
+
+test("uses IDEA-style stage and unstage actions without showing a misleading plus", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.locator("[data-codexhost-git-sidebar-tree]").click();
+
+  const unstagedRow = root.locator('.codexhost-git-change[title="src/app.ts"]');
+  await expect(unstagedRow.locator("[data-codexhost-git-sidebar-stage]")).toHaveAttribute(
+    "data-action",
+    "stage",
+  );
+  await expect(unstagedRow.locator("[data-codexhost-git-sidebar-stage]")).toHaveAttribute(
+    "aria-label",
+    "暂存",
+  );
+  await expect(unstagedRow.locator(".codexhost-git-status")).toHaveAttribute(
+    "aria-label",
+    "已修改",
+  );
+  await expect(unstagedRow.locator(".codexhost-git-status")).toHaveText("M");
+  await expect(
+    root.locator("[data-codexhost-git-sidebar-staged-tab] .codexhost-git-change-action"),
+  ).toHaveCount(0);
+
+  await unstagedRow.locator("[data-codexhost-git-sidebar-stage]").click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual(["stage", { threadId: "thread-1", paths: ["src/app.ts"] }]);
+
+  await root.locator("[data-codexhost-git-sidebar-staged-tab]").click();
+  const stagedRow = root.locator('.codexhost-git-change[title="src/app.ts"]');
+  await expect(stagedRow.locator("[data-codexhost-git-sidebar-unstage]")).toHaveAttribute(
+    "data-action",
+    "unstage",
+  );
+  await expect(stagedRow.locator("[data-codexhost-git-sidebar-unstage]")).toHaveAttribute(
+    "aria-label",
+    "取消暂存",
+  );
+  await expect(stagedRow.locator(".codexhost-git-status")).toHaveAttribute("aria-label", "已暂存");
+  await expect(stagedRow.locator(".codexhost-git-status")).toHaveText("S");
+});
+
+test("shows initialized submodules as separate actionable repositories", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.submodules[0].status = "modified";
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+
+  const group = root.locator('.codexhost-git-repository-group[data-repository="/repo/vendor/lib"]');
+  await expect(group.locator(".codexhost-git-repository-name")).toHaveText("lib");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual(["status", { threadId: "thread-1", repository: "/repo/vendor/lib" }]);
+  await group.locator(".codexhost-git-repository-header").click();
+  const change = group.locator('.codexhost-git-repository-change[title="child.txt"]');
+  await expect(change).toBeVisible();
+  await change.click();
+  const content = page.locator("[data-codexhost-git-content]");
+  await expect(content.locator(".codexhost-git-diff")).toHaveText("+child changed");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual([
+      "diff",
+      { threadId: "thread-1", repository: "/repo/vendor/lib", path: "child.txt" },
+    ]);
+
+  await change.locator(".codexhost-git-change-action").click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual([
+      "stage",
+      { threadId: "thread-1", repository: "/repo/vendor/lib", paths: ["child.txt"] },
+    ]);
+  await group.getByRole("textbox", { name: "lib 提交消息" }).fill("fix: submodule child");
+  await group.getByRole("button", { name: "提交", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual([
+      "commit",
+      {
+        threadId: "thread-1",
+        repository: "/repo/vendor/lib",
+        message: "fix: submodule child",
+        paths: [],
+        push: false,
+      },
+    ]);
+  expect(errors).toEqual([]);
 });

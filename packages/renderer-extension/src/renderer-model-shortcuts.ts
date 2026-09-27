@@ -20,6 +20,8 @@ export interface ModelShortcutView {
   models: { id: string; label: string; disabled?: boolean }[];
   selected?: string | undefined;
   disabled?: boolean;
+  supportsCustomModel?: boolean;
+  unavailableModelIds?: readonly string[];
   refreshing?: boolean;
   error?: string | undefined;
 }
@@ -47,6 +49,11 @@ export function mountModelShortcuts(
       [data-model-favorites-options] button:hover { background:rgba(127,127,127,.12); }
       [data-model-favorites-options] button[aria-pressed=true] svg { color:#f59e0b; }
       [data-model-favorites-options] span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      [data-model-missing-hint] { margin-left:6px; font:11px/16px system-ui,sans-serif; color:var(--color-text-secondary,inherit); }
+      [data-model-custom-actions] { display:flex; gap:6px; margin-bottom:6px; }
+      [data-model-custom-actions][hidden] { display:none; }
+      [data-model-custom-actions] button { padding:5px 9px; border:1px solid var(--color-border,#8886); border-radius:6px; background:transparent; color:inherit; cursor:pointer; font:inherit; }
+      [data-model-favorites-menu] button:disabled { opacity:.5; cursor:default; }
       [data-model-favorites-header] { display:flex; align-items:center; gap:6px; }
       [data-model-favorites-header] input { flex:1; min-width:0; }
       [data-model-shortcuts-refresh] { display:inline-flex; align-items:center; justify-content:center; flex:none; color:inherit; background:transparent; border:1px solid var(--color-border,rgba(127,127,127,.22)); border-radius:6px; width:28px; height:28px; cursor:pointer; }
@@ -102,7 +109,14 @@ export function mountModelShortcuts(
   header.append(search, menuRefresh);
   const menuError = error.cloneNode() as HTMLSpanElement;
   const menuStatus = successStatus.cloneNode() as HTMLSpanElement;
-  menu.append(header, menuError, menuStatus, options);
+  const customActions = document.createElement("div");
+  customActions.dataset.modelCustomActions = "true";
+  const useId = document.createElement("button");
+  useId.type = "button";
+  const pinId = document.createElement("button");
+  pinId.type = "button";
+  customActions.append(useId, pinId);
+  menu.append(header, customActions, menuError, menuStatus, options);
   document.body.append(menu);
   let view: ModelShortcutView = { models: [] };
   let harness = "";
@@ -115,6 +129,24 @@ export function mountModelShortcuts(
   let success: string | undefined;
   let generation = 0;
   let context = "";
+
+  const isDisabled = (): boolean =>
+    selecting || refreshing || view.refreshing === true || view.disabled === true;
+  const canSelect = (id: string): boolean => {
+    const model = view.models.find((entry) => entry.id === id);
+    return (
+      !!id &&
+      !isDisabled() &&
+      !view.unavailableModelIds?.includes(id) &&
+      (model ? !model.disabled : view.supportsCustomModel === true)
+    );
+  };
+  const missingHint = (): HTMLElement => {
+    const hint = document.createElement("small");
+    hint.dataset.modelMissingHint = "true";
+    hint.textContent = chinese ? "目录未列出" : "Not in catalog";
+    return hint;
+  };
 
   const render = (): void => {
     const busy = refreshing || view.refreshing === true;
@@ -140,9 +172,9 @@ export function mountModelShortcuts(
       statusElement.hidden = !statusElement.textContent;
     }
     const favorites = readModelFavorites(harness);
+    const catalog = new Map(view.models.map((model) => [model.id, model]));
     const visibleModels = [...favorites]
-      .map((id) => view.models.find((model) => model.id === id))
-      .filter((model) => model !== undefined)
+      .map((id) => catalog.get(id) ?? { id, label: id })
       .sort((a, b) =>
         a.label.localeCompare(b.label, chinese ? "zh-CN" : "en", {
           numeric: true,
@@ -150,9 +182,11 @@ export function mountModelShortcuts(
         }),
       );
     const nextSignature = JSON.stringify([
-      visibleModels,
+      visibleModels.map((model) => [model, catalog.has(model.id)]),
       view.selected,
       view.disabled,
+      view.supportsCustomModel,
+      view.unavailableModelIds,
       chinese,
       selecting,
       busy,
@@ -167,23 +201,47 @@ export function mountModelShortcuts(
           button.dataset.modelShortcut = model.id;
           button.textContent = model.label;
           button.title = model.id;
+          button.setAttribute("aria-label", model.label);
+          if (!catalog.has(model.id)) {
+            button.append(missingHint());
+          }
           button.setAttribute("aria-pressed", String(view.selected === model.id));
-          button.disabled = selecting || busy || view.disabled === true || model.disabled === true;
+          button.disabled = !canSelect(model.id);
           return button;
         }),
       );
     }
-    if (!menu.matches(":popover-open")) return;
-    const query = search.value.trim().toLowerCase();
-    const nextMenuSignature = JSON.stringify([view.models, [...favorites], query, chinese]);
-    if (nextMenuSignature === menuSignature) return;
+    const disabled = isDisabled();
+    manage.disabled =
+      disabled || (!view.models.length && !favorites.size && !view.supportsCustomModel);
+    search.disabled = disabled;
+    customActions.hidden = view.supportsCustomModel !== true;
+    const id = search.value.trim();
+    useId.textContent = chinese ? "使用此 ID" : "Use this ID";
+    pinId.textContent = chinese ? "Pin 此 ID" : "Pin this ID";
+    useId.disabled = !canSelect(id);
+    pinId.disabled = disabled || !id || favorites.has(id);
+    if (!menu.matches(":popover-open")) {
+      return;
+    }
+    const query = id.toLowerCase();
+    const nextMenuSignature = JSON.stringify([
+      view.models,
+      [...favorites],
+      query,
+      chinese,
+      disabled,
+    ]);
+    if (nextMenuSignature === menuSignature) {
+      return;
+    }
     menuSignature = nextMenuSignature;
     const focusId =
       document.activeElement instanceof HTMLElement
         ? document.activeElement.dataset.favoriteModelId
         : undefined;
     options.replaceChildren(
-      ...view.models
+      ...[...view.models, ...visibleModels.filter((model) => !catalog.has(model.id))]
         .filter((model) => `${model.id} ${model.label}`.toLowerCase().includes(query))
         .map((model) => {
           const button = document.createElement("button");
@@ -195,9 +253,13 @@ export function mountModelShortcuts(
             `${chinese ? (favorites.has(model.id) ? "取消收藏" : "收藏") : favorites.has(model.id) ? "Unfavorite" : "Favorite"} ${model.label}`,
           );
           button.title = model.id;
+          button.disabled = disabled;
           const label = document.createElement("span");
           label.textContent = model.label;
           button.append(createModelFavoriteIcon(document), label);
+          if (!catalog.has(model.id)) {
+            button.append(missingHint());
+          }
           return button;
         }),
     );
@@ -207,6 +269,9 @@ export function mountModelShortcuts(
         ?.focus({ preventScroll: true });
   };
   manage.addEventListener("click", () => {
+    if (manage.disabled) {
+      return;
+    }
     if (menu.matches(":popover-open")) {
       menu.hidePopover();
       return;
@@ -229,33 +294,42 @@ export function mountModelShortcuts(
   );
   search.addEventListener("input", render);
   for (const type of ["keydown", "keyup", "keypress", "beforeinput", "input"]) {
-    search.addEventListener(type, (event) => event.stopPropagation());
+    menu.addEventListener(type, (event) => event.stopPropagation());
   }
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+    }
+  });
   options.addEventListener("click", (event) => {
     const button =
       event.target instanceof Element
         ? event.target.closest<HTMLButtonElement>("button[data-favorite-model-id]")
         : null;
     const id = button?.dataset.favoriteModelId;
-    if (!id) return;
+    if (!id || button.disabled || isDisabled()) {
+      return;
+    }
     const favorites = readModelFavorites(harness);
     if (favorites.has(id)) favorites.delete(id);
     else favorites.add(id);
     writeModelFavorites(harness, favorites);
     render();
   });
-  list.addEventListener("click", async (event) => {
-    const button =
-      event.target instanceof Element
-        ? event.target.closest<HTMLButtonElement>("button[data-model-shortcut]")
-        : null;
-    if (!button?.dataset.modelShortcut || button.disabled) return;
+  const select = async (id: string): Promise<void> => {
+    if (!canSelect(id)) {
+      return;
+    }
     const request = generation;
     try {
       selecting = true;
       failure = undefined;
+      success = undefined;
       render();
-      await onSelect(button.dataset.modelShortcut);
+      await onSelect(id);
+      if (request === generation && view.selected === id && !view.error) {
+        success = chinese ? `已选择 ${id}，下次发送生效` : `Selected ${id} for the next message`;
+      }
     } catch (cause) {
       if (request === generation) failure = cause instanceof Error ? cause.message : String(cause);
     } finally {
@@ -264,6 +338,30 @@ export function mountModelShortcuts(
         render();
       }
     }
+  };
+  list.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>("button[data-model-shortcut]")
+        : null;
+    if (button?.dataset.modelShortcut && !button.disabled) {
+      void select(button.dataset.modelShortcut);
+    }
+  });
+  useId.addEventListener("click", () => {
+    if (view.supportsCustomModel && !useId.disabled) {
+      void select(search.value.trim());
+    }
+  });
+  pinId.addEventListener("click", () => {
+    const id = search.value.trim();
+    if (!view.supportsCustomModel || !id || isDisabled() || pinId.disabled) {
+      return;
+    }
+    const favorites = readModelFavorites(harness);
+    favorites.add(id);
+    writeModelFavorites(harness, favorites);
+    render();
   });
   for (const button of refreshButtons) {
     button.addEventListener("click", async () => {
@@ -307,15 +405,22 @@ export function mountModelShortcuts(
         harness = harnessId;
         context = contextId;
         signature = "";
+        menuSignature = "";
+        search.value = "";
       }
       view = next;
       chinese = locale === "zh-CN";
       const label = chinese ? "收藏模型" : "Favorite models";
       if (manage.textContent !== label) manage.textContent = label;
       menu.setAttribute("aria-label", label);
-      search.placeholder = chinese ? "搜索模型…" : "Search models…";
+      search.placeholder = next.supportsCustomModel
+        ? chinese
+          ? "搜索或输入模型 ID…"
+          : "Search or enter a model ID…"
+        : chinese
+          ? "搜索模型…"
+          : "Search models…";
       search.setAttribute("aria-label", search.placeholder);
-      manage.disabled = next.models.length === 0;
       render();
     },
     dispose() {

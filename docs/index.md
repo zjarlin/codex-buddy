@@ -97,7 +97,7 @@
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | q3 隐私输入区、复用网关目录、发送阻断与保护范围；处理敏感文本前阅读。 |
-| [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 模型收藏与固定执行、双栏规划配置、结合历史的评级及自动续接边界。 |
+| [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 模型目录热更新、手填 ID、持久 Pin、运行时固定模型与自动规划边界。 |
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
 | [`product/codex-accounts.md`](product/codex-accounts.md) | 设置页中的原生账号与额度、外部 Harness 不受 Codex 额度门限制、手动导入 Pi 及导入记录管理；修改账号 UI、发送额度门、查询或凭证导入链路时阅读。 |
 | [`product/codex-native-account-switching-design.md`](product/codex-native-account-switching-design.md) | 移除 Codex 多账号切换后的只读边界；修改 Codex 认证或账号路由时阅读。 |

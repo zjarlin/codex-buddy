@@ -5,6 +5,13 @@ import { ProjectGitWorkflow, ProjectGitWorkflowGroup } from "../src/project-git-
 function fixture(group?: ProjectGitWorkflowGroup) {
   vi.useFakeTimers();
   const active = new Set<string>();
+  const projects = new Map([
+    ["a", "/repo"],
+    ["b", "/repo"],
+    ["c", "/repo"],
+    ["d", "/repo"],
+    ["other", "/other"],
+  ]);
   let status = gitWorkspaceStatusSchema.parse({
     workspace: "/repo",
     branch: "main",
@@ -24,7 +31,7 @@ function fixture(group?: ProjectGitWorkflowGroup) {
   const changed = vi.fn();
   const workflow = new ProjectGitWorkflow({
     ...(group ? { group } : {}),
-    project: async (id) => (id === "other" ? "/other" : "/repo"),
+    project: async (id) => projects.get(id) ?? null,
     activeThreads: async () => [...active],
     status: read,
     start,
@@ -37,6 +44,7 @@ function fixture(group?: ProjectGitWorkflowGroup) {
     start,
     read,
     changed,
+    projects,
     clean() {
       status = { ...status, ahead: 0 };
     },
@@ -107,6 +115,29 @@ describe("Project Git workflow", () => {
     expect(f.start).not.toHaveBeenCalled();
     expect(f.read).toHaveBeenCalledTimes(1);
     expect((await f.workflow.inspect("a")).phase).toBe("skipped");
+  });
+
+  it("identifies a missing Git project as the task project, not the terminal directory", async () => {
+    const f = fixture();
+    f.projects.delete("a");
+    f.workflow.forget("a");
+
+    expect(await f.workflow.inspect("a")).toMatchObject({
+      workspace: null,
+      message: "当前任务的项目不是 Git 仓库",
+    });
+    expect(await f.workflow.run("a")).toMatchObject({
+      workspace: null,
+      message: "当前任务的项目不是 Git 仓库",
+    });
+  });
+
+  it("re-resolves a changed project for the same task", async () => {
+    const f = fixture();
+    expect(await f.workflow.inspect("a")).toMatchObject({ workspace: "/repo" });
+    f.projects.set("a", "/other");
+    f.workflow.forget("a");
+    expect(await f.workflow.inspect("a")).toMatchObject({ workspace: "/other" });
   });
 
   it("checks again after preparation when another task starts and resumes after it completes", async () => {

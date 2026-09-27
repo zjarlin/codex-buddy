@@ -628,37 +628,33 @@ fn macos_browser_sandbox_fallback_rejects_unrelated_commands() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_native_helpers_do_not_become_host_runtime_owners() {
-    assert_macos_native_helper_routing(false);
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn macos_nested_cli_native_helpers_do_not_become_host_runtime_owners() {
-    assert_macos_native_helper_routing(true);
-}
-
-#[cfg(target_os = "macos")]
-fn assert_macos_native_helper_routing(nested_cli: bool) {
-    for (depth, detached) in [
-        (0, false),
-        (1, false),
-        (2, false),
-        (0, true),
-        (1, true),
-        (2, true),
+fn macos_native_helpers_do_not_become_host_runtime_owners() -> Result<(), Box<dyn std::error::Error>>
+{
+    for (depth, detached, nested_cli) in [
+        (0, false, false),
+        (1, false, false),
+        (2, false, false),
+        (0, true, false),
+        (1, true, false),
+        (2, true, false),
+        (0, false, true),
+        (1, false, true),
+        (2, false, true),
+        (0, true, true),
+        (1, true, true),
+        (2, true, true),
     ] {
         let directory = temporary_directory();
         let bundle = macos_fixture_bundle(&directory);
-        let mut cli = bundle.join("Contents/Resources/codex");
-        if nested_cli {
-            let nested =
-                bundle.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
-            fs::create_dir_all(nested.parent().unwrap()).unwrap();
-            fs::rename(&cli, &nested).unwrap();
-            cli = nested;
-        }
         let desktop = bundle.join("Contents/MacOS/ChatGPT");
+        let mut stock_cli = bundle.join("Contents/Resources/codex");
+        if nested_cli {
+            let directory = bundle.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS");
+            fs::create_dir_all(&directory)?;
+            let nested = directory.join("codex");
+            fs::rename(&stock_cli, &nested)?;
+            stock_cli = nested;
+        }
         let mut command = Command::new(if detached {
             fake_codex_path()
         } else {
@@ -683,7 +679,7 @@ fn assert_macos_native_helper_routing(nested_cli: bool) {
             .env_remove("CODEXHOST_NPM_NODE_PATH")
             .env_remove("CODEXHOST_NPM_PACKAGE_ROOT")
             .env_remove(REMOTE_SSH_MANAGED_ENV)
-            .env(STOCK_CODEX_PATH_ENV, &cli)
+            .env(STOCK_CODEX_PATH_ENV, stock_cli)
             .env(CODEX_CLI_PATH_ENV, shim_path())
             .env(HOST_NODE_PATH_ENV, fake_codex_path())
             .env(HOST_RUNTIME_PATH_ENV, fake_codex_path())
@@ -711,13 +707,14 @@ fn assert_macos_native_helper_routing(nested_cli: bool) {
         assert_eq!(
             stderr.contains("args=app-server|--listen|stdio://"),
             depth > 0,
-            "only auxiliary helpers may use stock CLI: depth={depth}, {stderr}"
+            "only auxiliary helpers may use stock CLI: depth={depth}, nested={nested_cli}, {stderr}"
         );
         if depth > 0 {
             assert!(!directory.join("local-host-runtime-owner.lock").exists());
         }
         fs::remove_dir_all(directory).unwrap();
     }
+    Ok(())
 }
 
 #[test]

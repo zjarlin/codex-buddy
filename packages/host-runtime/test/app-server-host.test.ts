@@ -965,34 +965,135 @@ describe("Buddy completed conversations", () => {
 });
 
 describe("Buddy catalog synchronization boundary", () => {
-  it("returns the synchronized provider catalog through the Host request", async () => {
+  it("hot updates model/list without restarting, preserves a good catalog on failure and accepts zero models", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "buddy-catalog-host-"));
     const directory = path.join(home, "model-sync");
     mkdirSync(directory);
     writeFileSync(
       path.join(directory, "runtime.mjs"),
       `
-      import { writeFileSync } from "node:fs";
+      import { readFileSync, writeFileSync } from "node:fs";
       import { join } from "node:path";
       const home = process.argv[process.argv.indexOf("--home") + 1];
+      const source = JSON.parse(readFileSync(join(home, "fixture.json"), "utf8"));
       const catalogPath = join(home, "model-sync", "catalog.json");
-      writeFileSync(catalogPath, JSON.stringify({models:[{slug:"gpt-a"},{slug:"deepseek-b"}]}));
-      console.log(JSON.stringify({ok:true,provider:"fixture",visibleCount:2,catalogPath}));
+      writeFileSync(catalogPath, JSON.stringify({models:source.ids.map((slug, priority) => ({
+        slug, display_name: slug, description: "fixture", priority,
+        visibility: "list", supported_in_api: true, input_modalities: ["text"],
+        default_reasoning_level: "low",
+        supported_reasoning_levels: [{effort: "low", description: "Low"}]
+      }))}));
+      console.log(JSON.stringify({ok:true,provider:"fixture",visibleCount:source.ids.length,catalogPath}));
     `,
     );
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
     await fixture.ready;
-    try {
+    const answerNativeModels = async () => {
+      const request = await readJsonLine(fixture.official.stdin);
+      expect(request.method).toBe("model/list");
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(request),
+        result: { data: [{ model: "stale" }], nextCursor: null },
+      });
+    };
+    const refresh = async (id: number, ids: string[], provider = "fixture") => {
+      writeFileSync(path.join(home, "fixture.json"), JSON.stringify({ ids }));
       writeRequest(fixture.desktopInput, {
-        id: 7000,
+        id,
         method: "codexhost/buddy/catalog-sync",
         params: {},
       });
-      await expect(
-        fixture.collector.waitFor((message) => message.id === 7000),
-      ).resolves.toMatchObject({
-        result: { provider: "fixture", returned: 2, ids: ["gpt-a", "deepseek-b"] },
+      const configRead = await readJsonLine(fixture.official.stdin);
+      expect(configRead.method).toBe("config/read");
+      if (id === 7001) {
+        writeRequest(fixture.desktopInput, {
+          id: 70011,
+          method: "codexhost/buddy/catalog-sync",
+          params: {},
+        });
+        writeRequest(fixture.desktopInput, { id: 70012, method: "model/list", params: {} });
+        await answerNativeModels();
+        expect(await fixture.collector.waitFor((message) => message.id === 70012)).toMatchObject({
+          result: { data: [{ model: "stale" }] },
+        });
+      }
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(configRead),
+        result: { config: { model_provider: provider } },
       });
+      if (provider === "fixture") await answerNativeModels();
+      return fixture.collector.waitFor((message) => message.id === id);
+    };
+    const models = async (id: number) => {
+      writeRequest(fixture.desktopInput, { id, method: "model/list", params: {} });
+      await answerNativeModels();
+      const reply = await fixture.collector.waitFor((message) => message.id === id);
+      return (reply.result as JsonObject).data as JsonObject[];
+    };
+    try {
+      writeRequest(fixture.desktopInput, { id: 7000, method: "model/list", params: {} });
+      const original = await readJsonLine(fixture.official.stdin);
+      expect(original.method).toBe("model/list");
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(original),
+        result: { data: [{ model: "stale" }], nextCursor: null },
+      });
+      await fixture.collector.waitFor((message) => message.id === 7000);
+      const ids = Array.from({ length: 26 }, (_, index) => `recovered-${index}`);
+      expect(await refresh(7001, ids)).toMatchObject({
+        result: { provider: "fixture", returned: 26, ids },
+      });
+      expect(await fixture.collector.waitFor((message) => message.id === 70011)).toMatchObject({
+        result: { provider: "fixture", returned: 26, ids },
+      });
+      expect((await models(7002)).map((model) => model.model)).toEqual(ids);
+      expect(await refresh(7003, ["wrong-provider"], "another-provider")).toMatchObject({
+        error: { code: -32602 },
+      });
+      expect((await models(7004)).map((model) => model.model)).toEqual(ids);
+      writeFileSync(
+        path.join(home, "fixture.json"),
+        JSON.stringify({ ids: ["duplicate", "duplicate"] }),
+      );
+      writeRequest(fixture.desktopInput, {
+        id: 7005,
+        method: "codexhost/buddy/catalog-sync",
+        params: {},
+      });
+      expect(await fixture.collector.waitFor((message) => message.id === 7005)).toMatchObject({
+        error: { code: -32602 },
+      });
+      expect((await models(7006)).map((model) => model.model)).toEqual(ids);
+      expect(await refresh(7007, ["recovered-0"])).toMatchObject({ result: { returned: 1 } });
+      expect((await models(7008)).map((model) => model.model)).toEqual(["recovered-0"]);
+      expect(await refresh(7009, [])).toMatchObject({ result: { returned: 0, ids: [] } });
+      expect(await models(7010)).toEqual([]);
+      writeRequest(fixture.desktopInput, { id: 7011, method: "model/list", params: {} });
+      const blocked = await readJsonLine(fixture.official.stdin);
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(blocked),
+        error: { code: -32099, message: "Provider restricted" },
+      });
+      expect(await fixture.collector.waitFor((message) => message.id === 7011)).toMatchObject({
+        error: { code: -32099, message: "Provider restricted" },
+      });
+      for (const [id, keyPath] of [
+        [7012, "model"],
+        [7014, "model_provider"],
+      ] as const) {
+        writeRequest(fixture.desktopInput, {
+          id,
+          method: "config/value/write",
+          params: { keyPath, value: "fixture", mergeStrategy: "replace" },
+        });
+        const update = await readJsonLine(fixture.official.stdin);
+        expect(update.method).toBe("config/value/write");
+        writeRequest(fixture.official.stdout, { id: requiredMessageId(update), result: {} });
+        await fixture.collector.waitFor((message) => message.id === id);
+        expect(await models(id + 1)).toEqual(keyPath === "model" ? [] : [{ model: "stale" }]);
+      }
+      expect(fixture.spawnOfficial).toHaveBeenCalledTimes(1);
+      expect(fixture.adapter.sessions).toHaveLength(0);
     } finally {
       await stopFixture(fixture);
       rmSync(home, { recursive: true, force: true });
@@ -1399,6 +1500,31 @@ describe("AppServerHost linked Git repositories", () => {
 });
 
 describe("AppServerHost project Git workflow", () => {
+  it("resolves the repository root from a task cwd inside the worktree", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "codexhost-project-workflow-subdir-"));
+    execFileSync("git", ["init", "-q", directory]);
+    const subdirectory = path.join(directory, "packages", "host-runtime");
+    mkdirSync(subdirectory, { recursive: true });
+    writeFileSync(path.join(directory, "work.txt"), "pending change\n");
+    const fixture = createFixture({ environment: { CODEXHOST_GIT_AUTO_PUSH: "1" } });
+    try {
+      const threadId = await startExternalThread(fixture, "codexhost/pi-native", 1, {
+        cwd: subdirectory,
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 2,
+        method: "codexhost/git/workflow/status",
+        params: { threadId },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 2)),
+      ).resolves.toMatchObject({ result: { workspace: realpathSync(directory), phase: "idle" } });
+    } finally {
+      await stopFixture(fixture);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it.each(["native", "external"])(
     "waits for project tasks and shares automatic/manual execution through %s",
     async (executor) => {

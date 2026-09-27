@@ -102,7 +102,7 @@ export class ProjectGitWorkflow {
             ? { message: "自动推送已关闭，可手动触发" }
             : {}),
         }
-      : { ...initial(null), message: "当前项目不是 Git 仓库" };
+      : { ...initial(null), message: "当前任务的项目不是 Git 仓库" };
   }
 
   async completed(threadId: string, turnId: string, status: string): Promise<void> {
@@ -207,7 +207,7 @@ export class ProjectGitWorkflow {
   async run(threadId: string): Promise<GitWorkflowSnapshot> {
     if (this.#closed) throw new Error("推送工作流已关闭。");
     const workspace = await this.#project(threadId);
-    if (!workspace) return { ...initial(null), message: "当前项目不是 Git 仓库" };
+    if (!workspace) return { ...initial(null), message: "当前任务的项目不是 Git 仓库" };
     const project = this.#state(workspace);
     clearTimeout(project.timer);
     if (project.pending || project.snapshot.phase === "running") return { ...project.snapshot };

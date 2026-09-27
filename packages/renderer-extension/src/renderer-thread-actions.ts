@@ -1,5 +1,6 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Archive from "lucide/dist/esm/icons/archive.mjs";
+import Copy from "lucide/dist/esm/icons/copy.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import { hostThreadIdSchema, type ThreadTerminalDescriptor } from "@codexhost/shared-contracts";
@@ -19,13 +20,16 @@ import {
 const TRIGGER_ATTRIBUTE = "data-codexhost-thread-actions-trigger";
 const MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const OPEN_TERMINAL_ATTRIBUTE = "data-codexhost-thread-actions-open-terminal";
+const COPY_THREAD_ID_ATTRIBUTE = "data-codexhost-thread-actions-copy-thread-id";
 const ARCHIVE_COMPLETED_ATTRIBUTE = "data-codexhost-thread-actions-archive-completed";
 const MENU_WIDTH = 216;
 const VIEWPORT_MARGIN = 8;
 const MENU_GAP = 6;
 
 const style = `
-[${TRIGGER_ATTRIBUTE}]{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;cursor:pointer}
+[${TRIGGER_ATTRIBUTE}]{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:inherit;cursor:pointer;opacity:0;pointer-events:none}
+${SIDEBAR_THREAD_ROW_SELECTOR}:hover [${TRIGGER_ATTRIBUTE}],${SIDEBAR_THREAD_ROW_SELECTOR}:focus-within [${TRIGGER_ATTRIBUTE}],[${TRIGGER_ATTRIBUTE}][data-state="open"]{opacity:1;pointer-events:auto}
+@media (hover:none){[${TRIGGER_ATTRIBUTE}]{opacity:1;pointer-events:auto}}
 [${TRIGGER_ATTRIBUTE}]:hover,[${TRIGGER_ATTRIBUTE}][data-state="open"]{background:color-mix(in srgb,currentColor 12%,transparent)}
 [${TRIGGER_ATTRIBUTE}]:focus-visible{outline:2px solid #508df2;outline-offset:1px}
 [${TRIGGER_ATTRIBUTE}]:disabled{opacity:.55;cursor:wait}
@@ -56,6 +60,18 @@ function menuLabel(locale: Locale): string {
 
 function openTerminalLabel(locale: Locale): string {
   return locale === "zh-CN" ? "从终端打开" : "Open in Terminal";
+}
+
+function copyThreadIdLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "复制会话 ID" : "Copy conversation ID";
+}
+
+function copiedThreadIdLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "已复制会话 ID" : "Conversation ID copied";
+}
+
+function copyThreadIdFailedLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "复制会话 ID 失败" : "Could not copy conversation ID";
 }
 
 function archiveCompletedLabel(locale: Locale): string {
@@ -243,6 +259,44 @@ export function installRendererThreadActions(options: {
       event.stopPropagation();
       void openTerminal(row, hostId, threadId, menu, item);
     });
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.setAttribute("role", "menuitem");
+    copy.setAttribute(COPY_THREAD_ID_ATTRIBUTE, "");
+    const copyLabel = copyThreadIdLabel(options.getLocale());
+    copy.title = copyLabel;
+    copy.setAttribute("aria-label", copyLabel);
+    const copyIcon = document.createElement("span");
+    copyIcon.style.display = "inline-flex";
+    copyIcon.style.alignItems = "center";
+    copyIcon.append(createElement(Copy, { width: 15, height: 15, "aria-hidden": "true" }));
+    const copyText = document.createElement("span");
+    copyText.textContent = copyLabel;
+    copy.append(copyIcon, copyText);
+    copy.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (copy.disabled) return;
+      const error = menu.querySelector<HTMLElement>("[data-codexhost-thread-actions-error]");
+      copy.disabled = true;
+      copyText.textContent = copyLabel;
+      if (error) error.textContent = "";
+      try {
+        const clipboard = document.defaultView?.navigator.clipboard;
+        if (typeof clipboard?.writeText !== "function") {
+          throw new Error("Clipboard API is unavailable");
+        }
+        await clipboard.writeText(threadId);
+        if (disposed || openMenu !== menu) return;
+        copyText.textContent = copiedThreadIdLabel(options.getLocale());
+        schedule();
+      } catch {
+        if (disposed || openMenu !== menu) return;
+        if (error) error.textContent = copyThreadIdFailedLabel(options.getLocale());
+      } finally {
+        copy.disabled = false;
+      }
+    });
     const archive = document.createElement("button");
     archive.type = "button";
     archive.setAttribute("role", "menuitem");
@@ -290,7 +344,7 @@ export function installRendererThreadActions(options: {
     const error = document.createElement("div");
     error.setAttribute("data-codexhost-thread-actions-error", "");
     error.setAttribute("role", "alert");
-    menu.append(item);
+    menu.append(item, copy);
     if (options.getClient(hostId)?.archiveCompletedThreads) menu.append(archive);
     menu.append(error);
     return menu;

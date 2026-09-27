@@ -92,6 +92,8 @@ describe("terminal settings control", () => {
           { id: "warp" as const, name: "Warp", installed: false, default: false },
         ],
       })),
+      getThreadTerminalSettings: vi.fn(async () => ({ terminalId: null })),
+      setThreadTerminalSettings: vi.fn(async (settings) => settings),
     };
     const scope = new RendererSettingsPageScope();
 
@@ -106,7 +108,9 @@ describe("terminal settings control", () => {
       preference,
     );
     await vi.waitFor(() => expect(client.listThreadTerminals).toHaveBeenCalledOnce());
-    await Promise.resolve();
+    await vi.waitFor(() =>
+      expect(content.children[0]?.children[1]?.children[0]?.children[1]?.children).toHaveLength(4),
+    );
 
     const select = content.children[0]?.children[1]?.children[0]?.children[1];
     if (!select) throw new Error("terminal select was not rendered");

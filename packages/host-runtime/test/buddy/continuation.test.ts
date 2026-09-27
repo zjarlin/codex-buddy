@@ -83,7 +83,13 @@ describe("interrupted conversations", () => {
 
     await expect(service.list()).resolves.toEqual({
       threads: [
-        { threadId: "older-failed", turnId: "old-turn", title: "older-failed", status: "failed" },
+        {
+          threadId: "older-failed",
+          turnId: "old-turn",
+          title: "older-failed",
+          status: "failed",
+          owner: "codex",
+        },
       ],
       runningThreadIds: [],
       unreadable: 0,
@@ -216,7 +222,13 @@ describe("interrupted conversations", () => {
   it("discovers persisted failed turns and continues without replaying original input or overriding configuration", async () => {
     const f = fixture();
     expect((await f.service.list()).threads).toEqual([
-      { threadId: "thread", turnId: "turn", title: "Network failure", status: "failed" },
+      {
+        threadId: "thread",
+        turnId: "turn",
+        title: "Network failure",
+        status: "failed",
+        owner: "codex",
+      },
     ]);
     await f.service.continue("thread", "turn");
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
@@ -245,9 +257,13 @@ describe("interrupted conversations", () => {
     await expect(f.service.continue("thread", "old")).rejects.toThrow("状态已改变");
     f.active();
     await expect(f.service.continue("thread", "turn")).rejects.toThrow("仍在运行");
-    f.private();
-    await expect(f.service.list()).rejects.toThrow("隐私");
-    await expect(f.service.continue("thread", "turn")).rejects.toThrow("隐私");
+    const priv = fixture();
+    priv.private();
+    // 原生状态列表是只读的，隐私模式仍可展示；只有续接动作被拦截。
+    expect((await priv.service.list()).threads.map((thread) => thread.threadId)).toEqual([
+      "thread",
+    ]);
+    await expect(priv.service.continue("thread", "turn")).rejects.toThrow("隐私");
   });
   it("serializes duplicate clicks", async () => {
     const f = fixture();

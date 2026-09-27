@@ -14,6 +14,7 @@ import {
 } from "./project-git-workflow.js";
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
+import { LiveModelCatalog } from "./buddy/live-model-catalog.js";
 import { InterruptedConversations } from "./buddy/continuation.js";
 import {
   BUDDY_INTERRUPTED_METHOD,
@@ -35,6 +36,7 @@ import {
   BUDDY_ANSWER_METHOD,
   buddyAnswerSchema,
   buddyJevKeySchema,
+  type BuddyCatalogSync,
 } from "@codexhost/shared-contracts";
 import {
   GIT_WORKFLOW_STATUS_METHOD,
@@ -75,9 +77,12 @@ import {
   workspaceFileWriteParamsSchema,
   THREAD_TERMINAL_OPEN_METHOD,
   THREAD_TERMINAL_LIST_METHOD,
+  THREAD_TERMINAL_SETTINGS_GET_METHOD,
+  THREAD_TERMINAL_SETTINGS_SET_METHOD,
   threadTerminalListParamsSchema,
   threadTerminalOpenParamsSchema,
   DELEGATION_MENTION_PATH_PREFIX,
+  threadTerminalSettingsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
@@ -95,6 +100,7 @@ import {
 import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { listThreadTerminals, openThreadTerminal } from "./thread-terminal.js";
+import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import { ProjectSyncPeer } from "./project-sync-peer.js";
@@ -683,6 +689,10 @@ export class AppServerHost {
   readonly #desktopRequests = new DesktopRequestQueue();
   #drainActiveWorkOnInputEnd = false;
   #desktopInputEnded = false;
+  readonly #threadTerminalSettings: ThreadTerminalSettingsStore;
+  #liveCodexModels: LiveModelCatalog | undefined;
+  #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
+  #modelCatalogGeneration = 0;
 
   constructor(options: AppServerHostOptions) {
     this.#options = {
@@ -705,13 +715,16 @@ export class AppServerHost {
     });
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
+    this.#threadTerminalSettings = new ThreadTerminalSettingsStore(environment);
     this.#projectSync = new ProjectSyncPeer(environment);
     this.#launchSettings = new HarnessLaunchSettingsStore(
       this.#options.pluginContext?.environment ?? environment,
     );
     const permanentHome = path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
-    this.#gitRepositoryLinks = new GitRepositoryLinks(permanentHome, (cwd) =>
-      this.#gitWorkspace.root(cwd),
+    this.#gitRepositoryLinks = new GitRepositoryLinks(
+      permanentHome,
+      (cwd) => this.#gitWorkspace.root(cwd),
+      (cwd, submodule) => this.#gitWorkspace.submoduleRoot(cwd, submodule),
     );
     this.#ownsOfficialRuntimeScope = options.officialRuntimeScope === undefined;
     this.#officialRuntimeScope =
@@ -756,6 +769,8 @@ export class AppServerHost {
     this.#officialRuntime = new OfficialRuntimeClient({
       scope: this.#officialRuntimeScope,
       onBackendStopped: () => {
+        this.#liveCodexModels = undefined;
+        this.#modelCatalogGeneration++;
         this.#pendingOfficialTurnStarts.clear();
         this.#activeOfficialTurns.clear();
         this.#signalActiveWorkChanged();
@@ -1228,15 +1243,25 @@ export class AppServerHost {
       return;
     }
     if (request.method === BUDDY_CATALOG_SYNC_METHOD) {
-      try {
-        if (!this.#buddy || (await this.#buddy.privateMode())) {
-          throw new Error("隐私模式或未启用 Buddy 时不刷新在线模型目录。");
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          if (!this.#buddy || (await this.#buddy.privateMode())) {
+            throw new Error("隐私模式或未启用 Buddy 时不刷新在线模型目录。");
+          }
+          const pending = this.#catalogRefresh ?? this.#syncLiveModelCatalog();
+          this.#catalogRefresh = pending;
+          try {
+            const result = await pending;
+            await this.#writer.json(
+              rpcEnvelope(request, { result: jsonValueSchema.parse(result) }),
+            );
+          } finally {
+            if (this.#catalogRefresh === pending) this.#catalogRefresh = undefined;
+          }
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
         }
-        const result = await syncCodexCatalog(this.#options.environment ?? process.env);
-        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
-      } catch (error) {
-        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
-      }
+      });
       return;
     }
     if (
@@ -1307,6 +1332,22 @@ export class AppServerHost {
         await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
         return;
       }
+    }
+    if (request.method === "model/list" && this.#liveCodexModels) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const params = request.params == null ? {} : requestObject(request);
+          const response = await this.#requestOfficial(request.method, params);
+          const envelope =
+            response.error === undefined
+              ? { result: response.result ?? null }
+              : { error: response.error };
+          await this.#writer.json(rpcEnvelope(request, envelope));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
+      return;
     }
     if (
       request.method === GIT_WORKFLOW_STATUS_METHOD ||
@@ -1392,6 +1433,13 @@ export class AppServerHost {
     }
     if (request.method === THREAD_TERMINAL_LIST_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleThreadTerminalListRequest(request));
+      return;
+    }
+    if (
+      request.method === THREAD_TERMINAL_SETTINGS_GET_METHOD ||
+      request.method === THREAD_TERMINAL_SETTINGS_SET_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleThreadTerminalSettingsRequest(request));
       return;
     }
     if (
@@ -2075,6 +2123,23 @@ export class AppServerHost {
       ) {
         throw new Error("隐私模式禁止普通发送。");
       }
+      if (request.method === "config/value/write" || request.method === "config/batchWrite") {
+        const params = isRecord(request.params) ? request.params : {};
+        const edits = Array.isArray(params.edits) ? params.edits : [params];
+        if (
+          edits.some(
+            (edit) =>
+              isRecord(edit) &&
+              typeof edit.keyPath === "string" &&
+              /^(?:model_provider|model_providers|model_catalog_json|profile|profiles)(?:\.|$)/u.test(
+                edit.keyPath,
+              ),
+          )
+        ) {
+          this.#liveCodexModels = undefined;
+          this.#modelCatalogGeneration++;
+        }
+      }
       this.#buddy?.track(request);
       await this.#officialRuntime.sendFrame(frame);
     } catch {
@@ -2113,7 +2178,11 @@ export class AppServerHost {
       typeof parsed.method === "string" &&
       (parsed.method === "account/updated" || parsed.method.startsWith("account/rateLimits/"));
     if (accountScopedNotification) {
-      if (parsed.method === "account/updated") this.#officialRateLimits.reset(input.accountId);
+      if (parsed.method === "account/updated") {
+        this.#officialRateLimits.reset(input.accountId);
+        this.#liveCodexModels = undefined;
+        this.#modelCatalogGeneration++;
+      }
     }
     const tokenUsage = observeCodexTokenUsage(parsed);
     if (tokenUsage) {
@@ -2141,9 +2210,44 @@ export class AppServerHost {
     this.#nativeAccountObserver?.observe(parsed);
   }
 
+  async #syncLiveModelCatalog(): Promise<BuddyCatalogSync> {
+    const generation = this.#modelCatalogGeneration;
+    const synced = await syncCodexCatalog(this.#options.environment ?? process.env);
+    const configuration = await this.#requestOfficial("config/read", { includeLayers: false });
+    const configResult = isRecord(configuration.result) ? configuration.result : null;
+    const config = configResult && isRecord(configResult.config) ? configResult.config : null;
+    const provider = config?.model_provider ?? "openai";
+    if (!config || provider === "openai" || provider !== synced.report.provider) {
+      throw new Error("模型目录已同步，但与当前运行的自定义 Provider 不一致，未应用热更新。");
+    }
+    // 原生检查管理策略、Provider 和认证状态；热目录不能绕过这些检查。
+    const native = await this.#officialRuntime.request("model/list", { limit: 1 });
+    if (native.error !== undefined) {
+      throw new Error("原生模型目录校验失败，未应用热更新；请检查 Provider 或认证状态。");
+    }
+    const catalog = new LiveModelCatalog(synced.catalog);
+    const privateMode = await this.#buddy?.privateMode();
+    if (generation !== this.#modelCatalogGeneration || privateMode) {
+      throw new Error("刷新期间 Provider、认证或隐私设置已改变，请重新刷新模型。");
+    }
+    // 只在同步、Provider 校验和目录解析全部成功后替换；失败保留上一份可用目录。
+    this.#liveCodexModels = catalog;
+    return { ...synced.report, ids: catalog.visibleIds };
+  }
+
   async #requestOfficial(method: string, params: JsonObject): Promise<JsonObject> {
     if ((await this.#buddy?.privateMode()) && !privacySafeRequest(method, params)) {
       throw new Error("隐私模式禁止后台模型任务。");
+    }
+    if (method === "model/list" && this.#liveCodexModels) {
+      const catalog = this.#liveCodexModels;
+      // 仅目录数据来自同步快照；每次查询仍保留原生的可用性和管理策略检查。
+      const response = await this.#officialRuntime.request(method, { limit: 1 });
+      if (response.error !== undefined) return response;
+      if (catalog !== this.#liveCodexModels) {
+        throw new Error("模型目录或 Provider 已变化，请重新读取模型列表。");
+      }
+      return { ...response, result: catalog.list(params) };
     }
     return this.#officialRuntime.request(method, params);
   }
@@ -2962,6 +3066,20 @@ export class AppServerHost {
     }
   }
 
+  async #handleThreadTerminalSettingsRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const result =
+        request.method === THREAD_TERMINAL_SETTINGS_GET_METHOD
+          ? await this.#threadTerminalSettings.load()
+          : await this.#threadTerminalSettings.set(
+              threadTerminalSettingsSchema.parse(request.params),
+            );
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32097, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
   async #handleThreadTerminalRequest(request: JsonRpcRequest): Promise<void> {
     try {
       const params = threadTerminalOpenParamsSchema.safeParse(request.params);
@@ -2969,11 +3087,12 @@ export class AppServerHost {
       const resolution = await this.#locateExternalThread(params.data.threadId);
       if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以从终端续接。");
       const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+      const settings = await this.#threadTerminalSettings.load();
       const result = await openThreadTerminal(
         cwd,
         params.data.threadId,
         this.#options.stockCodexPath,
-        params.data.terminalId,
+        params.data.terminalId ?? settings.terminalId ?? "system-default",
       );
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {

@@ -1,21 +1,27 @@
 # Renderer brand assets
 
-`codex-logo.png` is the Codex X mark
-source and `codex-logo-transparent.png` is its white-background-free square
-variant. `codex-logo-bright.png` recolors that mark in the official bright
-Codex blue so it stays visible on dark surfaces.
+`codexhost-mark.svg` is the editable source for the CodexBuddy product mark:
+a monochrome **B** formed from two rounded compartments. The settings header
+and navigation-rail settings trigger use it as a CSS mask with `currentColor`,
+so it follows the actual host theme in both light and dark mode.
 
-`codexhost-app-icon.svg` is the vector master of the codexhost brand icon: a
-light gray rounded tile with a charcoal C and central rounded square, padded to
-the macOS icon grid. It is the Renderer settings brand icon (settings header
-mark and the application-header settings trigger button).
-`crates/launcher/assets/codexhost.png` is a 1024px render of this SVG for macOS
-application and DMG icons. Windows application and installer icons use the
-multi-size `crates/launcher/assets/codexhost.ico` generated from that PNG.
+Regenerate the raster assets from the repository root with:
 
-`codex-logo-monochrome.png` is the Codex mark rendered in neutral black for the
-current product branding. It replaces the earlier blue-forward product mark in
-the settings header and application-header trigger.
+```sh
+npm run generate:brand --workspace=@codexhost/renderer-extension
+```
+
+The generator uses the existing Playwright Chromium installation (install with
+`npx playwright install chromium` if needed). It produces:
+
+- `codexhost-icon.png`: a 1024px app icon with a white rounded tile and transparent corners.
+- `codexhost-logo.png` / `codexhost-logo-transparent.png`: the 1024px black mark on white / transparent backgrounds.
+- `crates/launcher/assets/codexhost.png`: the same app icon used by macOS packaging to generate `CodexBuddy.icns`.
+- `crates/launcher/assets/codexhost.ico`: independently rendered 16, 24, 32, 48, 64, 128, and 256px frames embedded in the Windows launcher.
+
+Update the SVG and regenerate these assets together. Product branding does not
+use the official Codex mark. The existing `codex-logo*.png` files are legacy
+Codex artwork, separate from the Buddy product mark and the Harness icons below.
 
 `codex-agent.png` is the Codex App GA mark distributed with OpenAI's official
 `openai.chatgpt` VS Code extension. It is bundled as a data URL so the Renderer

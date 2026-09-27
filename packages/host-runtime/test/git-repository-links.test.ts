@@ -32,8 +32,56 @@ async function fixture() {
   };
   const workspace = new GitWorkspace();
   const home = path.join(directory, "home");
-  const create = () => new GitRepositoryLinks(home, (cwd) => workspace.root(cwd));
+  const create = () =>
+    new GitRepositoryLinks(
+      home,
+      (cwd) => workspace.root(cwd),
+      (cwd, submodule) => workspace.submoduleRoot(cwd, submodule),
+    );
   return { directory, repository, create, links: create() };
+}
+
+async function submoduleFixture() {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "codexhost-git-submodule-")));
+  directories.push(directory);
+  const child = path.join(directory, "child");
+  const parent = path.join(directory, "parent");
+  const commit = (repository: string, message: string) => {
+    execFileSync("git", ["-C", repository, "add", "."]);
+    execFileSync("git", ["-C", repository, "commit", "-qm", message]);
+  };
+  for (const repository of [child, parent]) {
+    execFileSync("git", ["init", "-q", repository]);
+    execFileSync("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    execFileSync("git", ["-C", repository, "config", "user.name", "Test"]);
+  }
+  await writeFile(path.join(child, "child.txt"), "child\n");
+  commit(child, "child");
+  await writeFile(path.join(parent, "parent.txt"), "parent\n");
+  commit(parent, "parent");
+  execFileSync("git", [
+    "-C",
+    parent,
+    "-c",
+    "protocol.file.allow=always",
+    "submodule",
+    "add",
+    child,
+    "vendor/child",
+  ]);
+  commit(parent, "submodule");
+  const workspace = new GitWorkspace({
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "protocol.file.allow",
+    GIT_CONFIG_VALUE_0: "always",
+  });
+  const home = path.join(directory, "home");
+  const links = new GitRepositoryLinks(
+    home,
+    async (cwd) => workspace.root(cwd),
+    async (cwd, submodule) => workspace.submoduleRoot(cwd, submodule),
+  );
+  return { directory, parent, child, links };
 }
 
 test("persists links across sessions, canonicalizes subdirectories and aliases, and isolates projects", async () => {
@@ -88,4 +136,16 @@ test("rejects invalid targets and does not authorize a linked path retargeted to
   await symlink(other, frontend, "dir");
   await expect(links.resolve(backend, frontend)).rejects.toThrow("位置已变化");
   expect((await links.unlink(backend, frontend)).repositories).toHaveLength(1);
+});
+
+test("authorizes declared submodule roots without linking them into the project list", async () => {
+  const { directory, parent, links } = await submoduleFixture();
+  const nested = path.join(parent, "vendor/child");
+  expect(await links.resolve(parent, nested)).toBe(await realpath(nested));
+  expect((await links.list(parent)).repositories).toEqual([{ path: parent, primary: true }]);
+
+  const unrelated = path.join(parent, "unrelated");
+  execFileSync("git", ["init", "-q", unrelated]);
+  await expect(links.resolve(parent, unrelated)).rejects.toThrow("尚未关联");
+  await expect(links.resolve(parent, directory)).rejects.toThrow("尚未关联");
 });

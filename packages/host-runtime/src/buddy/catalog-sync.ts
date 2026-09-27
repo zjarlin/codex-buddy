@@ -7,11 +7,16 @@ import { buddyCatalogSyncSchema, type BuddyCatalogSync } from "@codexhost/shared
 
 const execute = promisify(execFile);
 
+export interface SynchronizedCodexCatalog {
+  report: BuddyCatalogSync;
+  catalog: unknown;
+}
+
 // 使用现有同步器的锁、目录验证和原子写入，不在 Host 中重复生成 Codex 模型元数据。
 export async function syncCodexCatalog(
   environment: NodeJS.ProcessEnv,
   run: typeof execute = execute,
-): Promise<BuddyCatalogSync> {
+): Promise<SynchronizedCodexCatalog> {
   const home = homePath(environment.CODEX_HOME);
   const script = join(home, "model-sync", "runtime.mjs");
   try {
@@ -72,5 +77,5 @@ export async function syncCodexCatalog(
   });
   if (parsed.returned !== parsed.ids.length)
     throw new Error("同步后的模型目录与供应商数量不一致。");
-  return parsed;
+  return { report: parsed, catalog };
 }

@@ -77,6 +77,10 @@ class FakeElement {
     return this.attributes.has(name);
   }
 
+  getAttributeNames(): string[] {
+    return [...this.attributes.keys()];
+  }
+
   addEventListener(name: string, listener: (event: FakeEvent) => void): void {
     const bucket = this.listeners.get(name) ?? new Set();
     bucket.add(listener);
@@ -163,6 +167,14 @@ class FakeEvent {
 }
 
 class FakeDocument {
+  readonly clipboardWriteText = vi.fn(async () => undefined);
+  readonly defaultView = {
+    navigator: {
+      clipboard: {
+        writeText: this.clipboardWriteText,
+      },
+    },
+  };
   readonly head = new FakeElement("head", this);
   readonly body = new FakeElement("body", this);
   readonly documentElement = new FakeElement("html", this);
@@ -393,7 +405,7 @@ describe("renderer thread actions", () => {
 
     const portal = await openRowMenu(row, document_);
     const item = required(portal.querySelector("button"), "menu item was not rendered");
-    expect(portal.querySelectorAll("button")).toHaveLength(1);
+    expect(portal.querySelectorAll("button")).toHaveLength(2);
     item.dispatch("click");
     await settle();
 
@@ -452,6 +464,98 @@ describe("renderer thread actions", () => {
     expect(archive.children.some((child) => child.textContent.includes("已归档 2 个"))).toBe(true);
     installed.dispose();
   });
+
+  it("copies the native thread id from the row menu", async () => {
+    const document_ = installFakeBrowser();
+    const write = Promise.withResolvers<undefined>();
+    document_.clipboardWriteText.mockReturnValueOnce(write.promise);
+    const row = sidebarRow(document_, "local", "thread-a");
+    const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+    const installed = installRendererThreadActions({
+      getClient: () => client,
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+
+    const portal = await openRowMenu(row, document_);
+    const copy = required(
+      portal.querySelector("[data-codexhost-thread-actions-copy-thread-id]"),
+      "copy item was not rendered",
+    );
+    copy.dispatch("click");
+    await settle();
+
+    expect(document_.clipboardWriteText).toHaveBeenCalledWith("thread-a");
+    expect(copy.disabled).toBe(true);
+    expect(copy.children.some((child) => child.textContent.includes("已复制会话 ID"))).toBe(false);
+    copy.dispatch("click");
+    expect(document_.clipboardWriteText).toHaveBeenCalledTimes(1);
+
+    write.resolve(undefined);
+    await settle();
+    expect(copy.children.some((child) => child.textContent.includes("已复制会话 ID"))).toBe(true);
+    expect(copy.disabled).toBe(false);
+    installed.dispose();
+  });
+
+  it.each(["unavailable", "missing-write", "throws", "rejects"])(
+    "clears stale copy success and allows retry when the clipboard %s",
+    async (failure) => {
+      const document_ = installFakeBrowser();
+      const row = sidebarRow(document_, "local", "thread-a");
+      const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+      const installed = installRendererThreadActions({
+        getClient: () => client,
+        getLocale: () => "zh-CN",
+      });
+      installed.refresh();
+      const portal = await openRowMenu(row, document_);
+      const copy = required(
+        portal.querySelector("[data-codexhost-thread-actions-copy-thread-id]"),
+        "copy item was not rendered",
+      );
+      const error = required(
+        portal.querySelector("[data-codexhost-thread-actions-error]"),
+        "error element was not rendered",
+      );
+      copy.dispatch("click");
+      await settle();
+      expect(copy.children.some((child) => child.textContent.includes("已复制会话 ID"))).toBe(true);
+
+      const navigator = document_.defaultView.navigator;
+      const clipboard = navigator.clipboard;
+      switch (failure) {
+        case "unavailable":
+          Reflect.deleteProperty(navigator, "clipboard");
+          break;
+        case "missing-write":
+          Reflect.set(navigator, "clipboard", {});
+          break;
+        case "throws":
+          document_.clipboardWriteText.mockImplementationOnce(() => {
+            throw new Error("Clipboard write failed");
+          });
+          break;
+        case "rejects":
+          document_.clipboardWriteText.mockRejectedValueOnce(new Error("Clipboard write denied"));
+          break;
+      }
+      copy.dispatch("click");
+      await settle();
+      expect(copy.children.some((child) => child.textContent.includes("已复制会话 ID"))).toBe(
+        false,
+      );
+      expect(error.textContent).toBe("复制会话 ID 失败");
+      expect(copy.disabled).toBe(false);
+
+      navigator.clipboard = clipboard;
+      copy.dispatch("click");
+      expect(error.textContent).toBe("");
+      await settle();
+      expect(copy.children.some((child) => child.textContent.includes("已复制会话 ID"))).toBe(true);
+      installed.dispose();
+    },
+  );
 
   it("drops a row that loses its thread id and cleans up on dispose", () => {
     const document_ = installFakeBrowser();

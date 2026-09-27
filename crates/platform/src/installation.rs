@@ -939,14 +939,15 @@ fn inspect_bundle(bundle: &Path) -> Result<DesktopInstallation, PlatformError> {
         &bundle.join("Contents/MacOS").join(executable_name),
         "Desktop executable",
     )?;
-    // Desktop 26.924+ packages the CLI in its own app bundle and only launches
-    // that copy; older builds ship the flat legacy CLI.
-    let mut cli_path =
-        bundle.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
-    if matches!(cli_path.symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-    {
-        cli_path = bundle.join("Contents/Resources/codex");
-    }
+    // 新版将 CLI 放进独立签名的子应用；仍验证真实 Mach-O，避免执行外层 shell 包装器。
+    let nested_cli = bundle.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex");
+    let cli_path = match nested_cli.symlink_metadata() {
+        Ok(_) => nested_cli,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bundle.join("Contents/Resources/codex")
+        }
+        Err(error) => return Err(PlatformError::Io(error)),
+    };
     let packaged_codex_cli = canonical_macho_executable(&cli_path, "Codex CLI")?;
     if !desktop_executable.starts_with(&bundle) || !packaged_codex_cli.starts_with(&bundle) {
         return Err(PlatformError::Invalid(format!(
@@ -1145,6 +1146,30 @@ mod tests {
             discover_from_candidates([missing]),
             Err(PlatformError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn rejects_invalid_nested_cli_without_using_the_legacy_cli()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let bundle = temporary_bundle("ChatGPT.app", "com.openai.codex", true);
+        let cli_directory = bundle.join("Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS");
+        fs::create_dir_all(&cli_directory)?;
+        let cli = cli_directory.join("codex");
+        fs::write(&cli, b"#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755))?;
+
+        assert!(matches!(
+            discover_from_candidates([bundle.clone()]),
+            Err(PlatformError::Invalid(message)) if message.contains("not a Mach-O executable")
+        ));
+
+        fs::remove_file(&cli)?;
+        symlink(bundle.join("Contents/Resources/codex"), &cli)?;
+        assert!(matches!(
+            discover_from_candidates([bundle]),
+            Err(PlatformError::Invalid(message)) if message.contains("not an executable regular file")
+        ));
+        Ok(())
     }
 
     #[test]

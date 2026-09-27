@@ -3,8 +3,8 @@ import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
-import { refreshNativeModels } from "./renderer-native-model-refresh.js";
-import type { ModelRefreshReport } from "./renderer-model-refresh-summary.js";
+import { refreshNativeModelCatalog } from "./renderer-native-model-refresh.js";
+import type { ModelRefreshOutcome, ModelRefreshReport } from "./renderer-model-refresh-summary.js";
 import {
   decodeHarnessPluginRoute,
   harnessIdSchema,
@@ -835,7 +835,15 @@ export function installRendererBindingProbe(
     getThreadTerminalClient: () => {
       const client = modelClientForHost("local");
       const listThreadTerminals = client?.listThreadTerminals;
-      return listThreadTerminals ? { listThreadTerminals: () => listThreadTerminals() } : null;
+      const getThreadTerminalSettings = client?.getThreadTerminalSettings;
+      const setThreadTerminalSettings = client?.setThreadTerminalSettings;
+      return listThreadTerminals && getThreadTerminalSettings && setThreadTerminalSettings
+        ? {
+            listThreadTerminals: () => listThreadTerminals(),
+            getThreadTerminalSettings: () => getThreadTerminalSettings(),
+            setThreadTerminalSettings: (settings) => setThreadTerminalSettings(settings),
+          }
+        : null;
     },
     getSessionImportClient: () => {
       const client = modelClientForHost("local");
@@ -1747,8 +1755,9 @@ export function installRendererBindingProbe(
     const binding = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null);
     if (
       !binding ||
+      !modelId.trim() ||
       binding.view.disabled ||
-      !binding.view.models.some((model) => model.id === modelId && !model.disabled)
+      binding.view.unavailableModelIds?.includes(modelId)
     )
       throw new Error("Model selection is unavailable");
     mounted.shortcutSelectionPending = true;
@@ -2626,6 +2635,49 @@ export function installRendererBindingProbe(
       modelTarget?.[0] === "default" ? readNewThreadAgentPreference(enabledAgentSet) : undefined,
     );
     const inherited = pendingReplacements.get(composer)?.source;
+    let modelRefreshGeneration = 0;
+    const refreshModels = async (reportToPicker: boolean): Promise<ModelRefreshOutcome> => {
+      const mounted = mountedByComposer.get(composer);
+      if (!composer.isConnected || !mounted) return undefined;
+      const generation = ++modelRefreshGeneration;
+      const agent = controller.get(composer).agent;
+      const hostId = mounted.hostId ?? activeModelHostId();
+      const target = JSON.stringify(mounted.modelTarget);
+      const isCurrent = (): boolean =>
+        composer.isConnected &&
+        mountedByComposer.get(composer) === mounted &&
+        modelRefreshGeneration === generation &&
+        controller.get(composer).agent === agent &&
+        activeModelHostId() === hostId &&
+        (mounted.hostId ?? activeModelHostId()) === hostId &&
+        JSON.stringify(mounted.modelTarget) === target;
+      const before =
+        (agent === "codex"
+          ? nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view.models
+          : undefined) ??
+        (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({ id: ref.id }));
+      let summary: ModelRefreshOutcome;
+      if (agent === "codex") {
+        const client = hostId ? modelClientForHost(hostId) : null;
+        if (!hostId || !client) throw new Error("Model refresh connection is unavailable");
+        summary = await refreshNativeModelCatalog({
+          client,
+          hostId,
+          trigger: () => mounted.control.nativeModelControl?.element ?? null,
+          isCurrent,
+        });
+      } else {
+        await loadExternalCatalog(mounted, true);
+        if (!isCurrent()) return undefined;
+        summary = { synchronized: mounted.modelView.catalog?.models.length ?? 0 };
+      }
+      if (!isCurrent() || !summary) return undefined;
+      if (reportToPicker || agent !== "codex") {
+        mounted.shortcutRefreshReport = { before, summary };
+      }
+      renderMounted(mounted);
+      return reportToPicker || agent !== "codex" ? undefined : summary;
+    };
     const control = mountComposerAgentControl(
       composer,
       state.composerId,
@@ -2660,119 +2712,12 @@ export function installRendererBindingProbe(
         const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
         if (editor) delegationMention?.openFor(editor);
       },
-      async () => {
-        const mounted = mountedByComposer.get(composer);
-        if (!composer.isConnected || !mounted) return undefined;
-        const before =
-          (controller.get(composer).agent === "codex"
-            ? nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view.models
-            : undefined) ??
-          (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({ id: ref.id }));
-        if (controller.get(composer).agent !== "codex") {
-          await loadExternalCatalog(mounted, true);
-          const after = (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({
-            id: ref.id,
-          }));
-          mounted.shortcutRefreshReport = { before, summary: { synchronized: after.length } };
-          renderMounted(mounted);
-          return undefined;
-        }
-        const hostId = mounted.hostId ?? activeModelHostId();
-        const client = hostId ? modelClientForHost(hostId) : null;
-        const target = JSON.stringify(mounted.modelTarget);
-        if (!hostId || !client?.buddyStatus)
-          throw new Error("Model refresh connection is unavailable");
-        const snapshot = await client.buddyStatus();
-        if (snapshot.settings.privateMode) throw new Error("隐私模式下不刷新在线模型目录。");
-        if (
-          !composer.isConnected ||
-          mountedByComposer.get(composer) !== mounted ||
-          controller.get(composer).agent !== "codex" ||
-          activeModelHostId() !== hostId ||
-          JSON.stringify(mounted.modelTarget) !== target
-        )
-          return undefined;
-        if (!client.syncCodexCatalog) throw new Error("供应商模型同步不可用。");
-        const synced = await client.syncCodexCatalog();
-        if (
-          !composer.isConnected ||
-          mountedByComposer.get(composer) !== mounted ||
-          controller.get(composer).agent !== "codex" ||
-          activeModelHostId() !== hostId ||
-          JSON.stringify(mounted.modelTarget) !== target
-        )
-          return undefined;
-        await refreshNativeModels(mounted.control.nativeModelControl?.element ?? null, hostId);
-        const after = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view
-          .models;
-        if (!after || synced.ids.some((id) => !after.some((model) => model.id === id))) {
-          throw new Error(
-            `供应商返回 ${synced.returned} 个模型，但原生目录尚未载入全部模型；请重启 CodexBuddy 后重试。`,
-          );
-        }
-        mounted.shortcutRefreshReport = {
-          before,
-          summary: { returned: synced.returned, synchronized: after.length },
-        };
-        if (composer.isConnected) renderMounted(mounted);
-      },
+      () => refreshModels(true),
       async (modelId) => {
         const mounted = mountedByComposer.get(composer);
         if (composer.isConnected && mounted) await selectShortcut(mounted, modelId);
       },
-      async () => {
-        const mounted = mountedByComposer.get(composer);
-        if (!composer.isConnected || !mounted) return undefined;
-        const before =
-          (controller.get(composer).agent === "codex"
-            ? nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view.models
-            : undefined) ??
-          (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({ id: ref.id }));
-        if (controller.get(composer).agent !== "codex") {
-          await loadExternalCatalog(mounted, true);
-          const after = (mounted.modelView.catalog?.models ?? []).map(({ ref }) => ({
-            id: ref.id,
-          }));
-          mounted.shortcutRefreshReport = { before, summary: { synchronized: after.length } };
-          renderMounted(mounted);
-          return undefined;
-        }
-        const hostId = mounted.hostId ?? activeModelHostId();
-        const client = hostId ? modelClientForHost(hostId) : null;
-        const target = JSON.stringify(mounted.modelTarget);
-        if (!hostId || !client?.buddyStatus)
-          throw new Error("Model refresh connection is unavailable");
-        const snapshot = await client.buddyStatus();
-        if (snapshot.settings.privateMode) throw new Error("隐私模式下不刷新在线模型目录。");
-        if (
-          !composer.isConnected ||
-          mountedByComposer.get(composer) !== mounted ||
-          controller.get(composer).agent !== "codex" ||
-          activeModelHostId() !== hostId ||
-          JSON.stringify(mounted.modelTarget) !== target
-        )
-          return undefined;
-        if (!client.syncCodexCatalog) throw new Error("供应商模型同步不可用。");
-        const synced = await client.syncCodexCatalog();
-        if (
-          !composer.isConnected ||
-          mountedByComposer.get(composer) !== mounted ||
-          controller.get(composer).agent !== "codex" ||
-          activeModelHostId() !== hostId ||
-          JSON.stringify(mounted.modelTarget) !== target
-        )
-          return undefined;
-        await refreshNativeModels(mounted.control.nativeModelControl?.element ?? null, hostId);
-        const after = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null)?.view
-          .models;
-        if (!after || synced.ids.some((id) => !after.some((model) => model.id === id))) {
-          throw new Error(
-            `供应商返回 ${synced.returned} 个模型，但原生目录尚未载入全部模型；请重启 CodexBuddy 后重试。`,
-          );
-        }
-        if (composer.isConnected) renderMounted(mounted);
-        return { returned: synced.returned, synchronized: after.length };
-      },
+      () => refreshModels(false),
     );
     const mounted: MountedComposer = {
       composer,

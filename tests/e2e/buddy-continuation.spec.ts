@@ -27,6 +27,7 @@ const bundle = await build({
     globalThis.privateMode = false;
     globalThis.enabled = true;
     globalThis.owner = "codex";
+    globalThis.threadStatus = "failed";
     globalThis.activeHost = 'local';
     globalThis.mountSidebar = () => {
       const row = document.createElement('div');
@@ -50,10 +51,9 @@ const bundle = await build({
     globalThis.row = globalThis.mountSidebar();
     const client = {
       buddyStatus: async () => ({settings:{enabled:globalThis.enabled,privateMode:globalThis.privateMode}}),
-      listThreadOwnership:async()=>({threads:[{threadId:'thread',owner:globalThis.owner}]}),
       buddyInterrupted: async () => {
         if (globalThis.discoveryFail) throw new Error('列表读取失败');
-        return {threads:[{threadId:'thread',turnId:'failed',title:'网络中断的会话',status:'failed'}],runningThreadIds:globalThis.running?['thread']:[],unreadable:0};
+        return {threads:[{threadId:'thread',turnId:'failed',title:'网络中断的会话',status:globalThis.threadStatus,owner:globalThis.owner}],runningThreadIds:globalThis.running?['thread']:[],unreadable:0};
       },
       buddyContinue: async (...args) => {
         globalThis.calls.push(args);
@@ -100,7 +100,7 @@ for (const width of [390, 1200]) {
     );
     await page.addScriptTag({ content: browserBundle });
     const resume = page.locator("[data-buddy-resume]");
-    await expect(resume).toHaveAccessibleName("会话已中断，点击恢复");
+    await expect(resume).toHaveAccessibleName("会话执行失败，点击恢复");
     await expect(page.locator("[data-native-status]")).toBeHidden();
     await page.screenshot({ path: `test-results/buddy-continuation-ready-${width}.png` });
     await resume.click();
@@ -153,6 +153,8 @@ test("sidebar recovery follows privacy, running state, row replacement and dispo
     Reflect.get(globalThis, "sidebar").refresh();
   });
   await expect(resume).toHaveCount(0);
+  // 隐私模式只关闭续接动作，原生状态色仍保留。
+  await expect(page.locator('[data-buddy-sidebar-state="failed"]')).toHaveCount(1);
   await page.evaluate(() => {
     Reflect.set(globalThis, "privateMode", false);
     Reflect.get(globalThis, "sidebar").refresh();
@@ -246,6 +248,17 @@ test("sidebar recovery matches native thread ids inside host-prefixed rows", asy
   const resume = page.locator("[data-buddy-resume]");
   await expect(resume).toHaveCount(1);
   await expect(page.locator("[data-buddy-sidebar-recovery]")).toHaveCount(1);
+  await resume.click();
+  await expect(resume).toBeDisabled();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
+    ["thread", "failed"],
+  ]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "opened"))).toBe(0);
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "fail", false);
+    Reflect.get(globalThis, "finishResume")();
+  });
+  await expect(resume).toHaveCount(0);
 });
 
 test("sidebar state colors remain distinct in light and dark themes", async ({ page }) => {
@@ -254,6 +267,21 @@ test("sidebar state colors remain distinct in light and dark themes", async ({ p
   const row = page.locator("[data-app-action-sidebar-thread-row]");
   await expect(row).toHaveAttribute("data-buddy-sidebar-recoverable", "");
   const recoverable = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "failed");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "threadStatus", "cancelled");
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "cancelled");
+  const cancelled = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(cancelled).not.toBe(recoverable);
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "threadStatus", "interrupted");
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "interrupted");
+  const interrupted = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
+  expect(interrupted).not.toBe(cancelled);
   await row.evaluate((element) =>
     element.setAttribute("data-app-action-sidebar-thread-active", "true"),
   );
@@ -292,7 +320,9 @@ test("host changes ignore an in-flight continuation response", async ({ page }) 
   await expect(page.locator("[data-buddy-recovery-error]")).toBeEmpty();
 });
 
-test("external Harness and disabled routing do not expose recovery", async ({ page }) => {
+test("fixed-model recovery remains available while external Harness recovery stays hidden", async ({
+  page,
+}) => {
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });
   const resume = page.locator("[data-buddy-resume]");
@@ -307,7 +337,11 @@ test("external Harness and disabled routing do not expose recovery", async ({ pa
     Reflect.set(globalThis, "enabled", false);
     Reflect.get(globalThis, "sidebar").refresh();
   });
-  await expect(resume).toHaveCount(0);
+  await expect(resume).toHaveCount(1);
+  await resume.click();
+  await expect(resume).toBeDisabled();
+  await page.evaluate(() => Reflect.get(globalThis, "finishResume")());
+  await expect(page.locator("[data-buddy-recovery-error]")).toContainText("网络不可用");
   await page.evaluate(() => {
     Reflect.set(globalThis, "enabled", true);
     Reflect.get(globalThis, "sidebar").refresh();
@@ -315,5 +349,7 @@ test("external Harness and disabled routing do not expose recovery", async ({ pa
   await expect(resume).toHaveCount(1);
   await page.locator("[data-thread-title]").click();
   expect(await page.evaluate(() => Reflect.get(globalThis, "opened"))).toBe(1);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
+    ["thread", "failed"],
+  ]);
 });

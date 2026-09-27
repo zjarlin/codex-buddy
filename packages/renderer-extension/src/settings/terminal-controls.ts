@@ -1,9 +1,8 @@
-import type { ThreadTerminalDescriptor } from "@codexhost/shared-contracts";
+import type { ThreadTerminalDescriptor, ThreadTerminalSettings } from "@codexhost/shared-contracts";
 
 import {
   getSharedThreadTerminalPreferenceStore,
   type ThreadTerminalPreferenceStore,
-  watchThreadTerminalPreference,
 } from "../thread-terminal-preference.js";
 import type { RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
@@ -11,6 +10,8 @@ import { createPreferenceGroup, createPreferenceItem, preferenceId } from "./pre
 
 export interface RendererThreadTerminalClient {
   listThreadTerminals(): Promise<{ terminals: readonly ThreadTerminalDescriptor[] }>;
+  getThreadTerminalSettings(): Promise<ThreadTerminalSettings>;
+  setThreadTerminalSettings(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
 }
 
 function createSelect(document: Document, id: string, describedBy: string): HTMLSelectElement {
@@ -29,8 +30,7 @@ export function mountTerminalControls(
   preference: ThreadTerminalPreferenceStore = getSharedThreadTerminalPreferenceStore(),
 ): () => void {
   const document = context.content.ownerDocument;
-  const ownerWindow = document.defaultView;
-  if (!ownerWindow) return () => undefined;
+  if (!document.defaultView) return () => undefined;
   const { group, card } = createPreferenceGroup(document, messages.terminalSection);
   const id = preferenceId("thread-terminal");
   const row = createPreferenceItem(document, {
@@ -44,6 +44,7 @@ export function mountTerminalControls(
   context.content.append(group);
 
   let descriptors: ThreadTerminalDescriptor[] = [];
+  const client = getClient();
   const render = (): void => {
     select.replaceChildren();
     if (descriptors.length === 0) {
@@ -76,35 +77,52 @@ export function mountTerminalControls(
   };
 
   const changed = (): void => {
-    preference.set(select.value ? (select.value as ThreadTerminalDescriptor["id"]) : null);
+    const terminalId = select.value ? (select.value as ThreadTerminalDescriptor["id"]) : null;
+    preference.set(terminalId);
+    if (!client) return;
+    void context.runLatest(() => client.setThreadTerminalSettings({ terminalId }), {
+      success(settings) {
+        preference.set(settings.terminalId);
+      },
+      failure(error) {
+        select.title = error instanceof Error ? error.message : String(error);
+      },
+    });
   };
-  const unwatch = watchThreadTerminalPreference(ownerWindow, render);
   const unsubscribe = preference.subscribe(render);
   select.addEventListener("change", changed);
   render();
 
-  const client = getClient();
   if (client) {
-    void context.runLatest(() => client.listThreadTerminals(), {
-      success(result) {
-        descriptors = [...result.terminals];
-        render();
+    void context.runLatest(
+      async () => {
+        const [terminals, settings] = await Promise.all([
+          client.listThreadTerminals(),
+          client.getThreadTerminalSettings(),
+        ]);
+        preference.set(settings.terminalId);
+        return terminals;
       },
-      failure(error) {
-        select.replaceChildren();
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = `${messages.terminalLoadFailed} ${
-          error instanceof Error ? error.message : String(error)
-        }`;
-        select.append(option);
-        select.disabled = true;
+      {
+        success(result) {
+          descriptors = [...result.terminals];
+          render();
+        },
+        failure(error) {
+          select.replaceChildren();
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = `${messages.terminalLoadFailed} ${
+            error instanceof Error ? error.message : String(error)
+          }`;
+          select.append(option);
+          select.disabled = true;
+        },
       },
-    });
+    );
   }
 
   return () => {
-    unwatch();
     select.removeEventListener("change", changed);
     unsubscribe();
   };

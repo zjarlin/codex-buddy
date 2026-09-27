@@ -1,6 +1,6 @@
 import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
-import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { createInterruptedPanel } from "./interrupted-panel.js";
 import { plannerInputControl } from "./planner-input.js";
 
 const messages = {
@@ -70,13 +70,6 @@ const messages = {
     cancel: "取消规划",
     cancelRecovery: "取消自动续接",
     retrying: "等待自动续接",
-    interruptedGroup: "最近中断会话",
-    interruptedHint: "点击会话可手动恢复最近中断的请求。",
-    interruptedEmpty: "暂无最近中断会话。",
-    interruptedLoading: "正在读取最近中断会话…",
-    resume: "恢复",
-    resuming: "正在恢复…",
-    resumeFailed: "恢复失败",
     roleLabel: "执行角色",
     reason: "路由依据",
     jev: "JEV 判断",
@@ -174,13 +167,6 @@ const messages = {
     cancel: "Cancel planning",
     cancelRecovery: "Cancel recovery",
     retrying: "Waiting to continue",
-    interruptedGroup: "Recent interrupted conversations",
-    interruptedHint: "Click a conversation to resume its interrupted request.",
-    interruptedEmpty: "No recently interrupted conversations.",
-    interruptedLoading: "Loading recently interrupted conversations…",
-    resume: "Resume",
-    resuming: "Resuming…",
-    resumeFailed: "Resume failed",
     roleLabel: "Execution role",
     reason: "Routing reason",
     jev: "JEV judgment",
@@ -246,6 +232,10 @@ const style = `
 [data-buddy-router] .buddy-key-state[data-configured=true]{color:#3fa96a;opacity:1}
 [data-buddy-router] .buddy-interrupted{grid-column:1/-1;display:flex;flex-direction:column;gap:5px;margin:5px 0}
 [data-buddy-router] .buddy-interrupted-heading{font-size:11px;font-weight:500}
+[data-buddy-router] .buddy-interrupted-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+[data-buddy-router] .buddy-interrupted-toolbar b{flex:1;min-width:0}
+[data-buddy-router] .buddy-interrupted-toolbar button{border-radius:6px}
+[data-buddy-router] .buddy-interrupted button:disabled{opacity:.55;cursor:default}
 [data-buddy-router] .buddy-interrupted-note{font-size:11px;opacity:.65}
 [data-buddy-router] .buddy-interrupted-list{display:flex;flex-direction:column;gap:4px;min-width:0}
 [data-buddy-router] .buddy-interrupted-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:7px;padding:6px 7px}
@@ -253,7 +243,7 @@ const style = `
 [data-buddy-router] .buddy-interrupted-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 [data-buddy-router] .buddy-interrupted-status{display:block;margin-top:2px;font-size:10px;opacity:.65}
 [data-buddy-router] .buddy-interrupted-item button{padding:3px 8px;font-size:10px}
-[data-buddy-router] .buddy-interrupted-error{color:#d65f55}
+[data-buddy-router] .buddy-interrupted-error{color:#d65f55;overflow-wrap:anywhere}
 [data-buddy-router] .buddy-footer{display:flex;align-items:center;justify-content:flex-end;gap:6px}
 [data-buddy-router] :is(dl,p):empty{display:none}
 [data-buddy-router] button{display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:999px;padding:4px 10px}
@@ -301,9 +291,8 @@ export function installBuddyControl(
   const routingPanel = document.createElement("div");
   routingPanel.className = "buddy-tab-panel";
   routingPanel.dataset.buddyTabPanel = "routing";
-  const interruptedPanel = document.createElement("div");
-  interruptedPanel.className = "buddy-tab-panel";
-  interruptedPanel.dataset.buddyTabPanel = "interrupted";
+  const interruptedControl = createInterruptedPanel(getLocale);
+  const interruptedPanel = interruptedControl.root;
   const taskPanel = document.createElement("div");
   taskPanel.className = "buddy-tab-panel";
   taskPanel.dataset.buddyTabPanel = "task";
@@ -332,12 +321,6 @@ export function installBuddyControl(
   let disposed = false;
   let busy = false;
   let snapshot: BuddySnapshot | null = null;
-  let interrupted: BuddyInterrupted["threads"] = [];
-  let interruptedClient: RendererModelClient | null = null;
-  let interruptedLoading = false;
-  let interruptedError = "";
-  let interruptedUpdatedAt = 0;
-  const resumePending = new Set<string>();
   let context: BuddyControlContext | null = null;
   let fingerprint = "";
   let activeTab: "routing" | "interrupted" | "task" = "routing";
@@ -355,57 +338,6 @@ export function installBuddyControl(
       render();
     } catch (failure) {
       report(failure);
-    }
-  };
-  const interruptedKey = (thread: BuddyInterrupted["threads"][number]): string =>
-    JSON.stringify([thread.threadId, thread.turnId]);
-  const refreshInterrupted = async (client: RendererModelClient, force = false): Promise<void> => {
-    if (
-      !client.buddyInterrupted ||
-      (interruptedClient === client && !force && Date.now() - interruptedUpdatedAt < 15_000)
-    ) {
-      return;
-    }
-    interruptedClient = client;
-    interruptedLoading = true;
-    interruptedError = "";
-    try {
-      const result = await client.buddyInterrupted();
-      if (disposed || context?.client !== client) return;
-      interrupted = result.threads;
-      interruptedUpdatedAt = Date.now();
-    } catch (failure) {
-      if (disposed || context?.client !== client) return;
-      interrupted = [];
-      interruptedError = failure instanceof Error ? failure.message : String(failure);
-    } finally {
-      if (context?.client === client) {
-        interruptedLoading = false;
-        render();
-      }
-    }
-  };
-  const resumeInterrupted = async (
-    client: RendererModelClient,
-    thread: BuddyInterrupted["threads"][number],
-  ): Promise<void> => {
-    const key = interruptedKey(thread);
-    if (!client.buddyContinue || resumePending.has(key)) return;
-    resumePending.add(key);
-    interruptedError = "";
-    render();
-    try {
-      await client.buddyContinue(thread.threadId, thread.turnId);
-      if (disposed || context?.client !== client) return;
-      interrupted = interrupted.filter((candidate) => interruptedKey(candidate) !== key);
-      snapshot = (await client.buddyStatus?.()) ?? snapshot;
-      render();
-    } catch (failure) {
-      if (disposed || context?.client !== client) return;
-      interruptedError = `${t().resumeFailed}: ${failure instanceof Error ? failure.message : String(failure)}`;
-    } finally {
-      resumePending.delete(key);
-      if (context?.client === client) render();
     }
   };
   const row = (label: string, value: string, parent: HTMLElement = fields): void => {
@@ -606,70 +538,13 @@ export function installBuddyControl(
     wrapper.append(keyInput, urlInput, status);
     parent.append(wrapper);
   };
-  const interruptedRow = (parent: HTMLElement): void => {
-    const client = context?.client;
-    if (!client?.buddyInterrupted || !client.buddyContinue) {
-      return;
-    }
-    const wrapper = document.createElement("div");
-    wrapper.className = "buddy-interrupted";
-    const heading = document.createElement("b");
-    heading.className = "buddy-interrupted-heading";
-    heading.textContent = t().interruptedGroup;
-    const note = document.createElement("div");
-    note.className = "buddy-interrupted-note";
-    note.textContent = interruptedLoading ? t().interruptedLoading : t().interruptedHint;
-    wrapper.append(heading, note);
-    if (interruptedError) {
-      const failure = document.createElement("div");
-      failure.className = "buddy-interrupted-note buddy-interrupted-error";
-      failure.setAttribute("role", "status");
-      failure.textContent = interruptedError;
-      wrapper.append(failure);
-    }
-    if (!interruptedLoading && interrupted.length === 0 && !interruptedError) {
-      const empty = document.createElement("div");
-      empty.className = "buddy-interrupted-note";
-      empty.textContent = t().interruptedEmpty;
-      wrapper.append(empty);
-    }
-    if (interrupted.length > 0) {
-      const list = document.createElement("div");
-      list.className = "buddy-interrupted-list";
-      for (const thread of interrupted) {
-        const item = document.createElement("div");
-        item.className = "buddy-interrupted-item";
-        const copy = document.createElement("span");
-        copy.className = "buddy-interrupted-copy";
-        const title = document.createElement("b");
-        title.className = "buddy-interrupted-title";
-        title.title = thread.title;
-        title.textContent = thread.title;
-        const state = document.createElement("small");
-        state.className = "buddy-interrupted-status";
-        state.textContent = t()[thread.status];
-        copy.append(title, state);
-        const resume = document.createElement("button");
-        resume.type = "button";
-        resume.textContent = resumePending.has(interruptedKey(thread)) ? t().resuming : t().resume;
-        resume.disabled = resumePending.has(interruptedKey(thread));
-        resume.addEventListener("click", () => {
-          void resumeInterrupted(client, thread);
-        });
-        item.append(copy, resume);
-        list.append(item);
-      }
-      wrapper.append(list);
-    }
-    wrapper.title = t().interruptedHint;
-    parent.append(wrapper);
-  };
   const render = (): void => {
     const m = t();
     if (!snapshot) {
       status.textContent = m.disconnected;
       return;
     }
+    interruptedControl.update(context?.client ?? null, snapshot.settings.privateMode);
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
     const pending =
       snapshot.settings.enabled && !snapshot.settings.privateMode ? decision?.pendingInput : null;
@@ -748,15 +623,7 @@ export function installBuddyControl(
     if (bypass) {
       status.textContent += ` · ${m.skipPlanner} · ${m.bypassScore} ${bypassScore}`;
     }
-    const signature = JSON.stringify([
-      snapshot,
-      context?.threadId,
-      getLocale(),
-      interrupted,
-      interruptedLoading,
-      interruptedError,
-      [...resumePending],
-    ]);
+    const signature = JSON.stringify([snapshot, context?.threadId, getLocale()]);
     if (signature === fingerprint) {
       return;
     }
@@ -829,10 +696,6 @@ export function installBuddyControl(
         routingDisabled || (key === "plannerModel" && !snapshot.settings.planning),
       );
     }
-    interruptedPanel.replaceChildren();
-    if (snapshot.settings.enabled && !snapshot.settings.privateMode) {
-      interruptedRow(interruptedPanel);
-    }
     if (decision && snapshot.settings.enabled && !snapshot.settings.privateMode) {
       if (bypass) {
         row(m.bypassScore, bypassScore);
@@ -902,12 +765,7 @@ export function installBuddyControl(
       inputKey = "";
       inputClient = null;
       if (context?.client !== next?.client) {
-        interrupted = [];
-        interruptedClient = null;
-        interruptedLoading = false;
-        interruptedError = "";
-        interruptedUpdatedAt = 0;
-        resumePending.clear();
+        interruptedControl.update(null, false);
       }
     }
     context = next;
@@ -936,14 +794,6 @@ export function installBuddyControl(
         return;
       }
       snapshot = value;
-      if (
-        value.settings.enabled &&
-        !value.settings.privateMode &&
-        next.client.buddyInterrupted &&
-        next.client.buddyContinue
-      ) {
-        void refreshInterrupted(next.client);
-      }
       render();
     } catch (failure) {
       status.textContent = t().disconnected;
@@ -962,6 +812,7 @@ export function installBuddyControl(
     dispose() {
       disposed = true;
       window.clearInterval(timer);
+      interruptedControl.dispose();
       root.remove();
     },
   };

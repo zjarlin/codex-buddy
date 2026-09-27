@@ -126,6 +126,10 @@ import {
   threadTerminalListResultSchema,
   threadTerminalOpenParamsSchema,
   threadTerminalOpenResultSchema,
+  THREAD_TERMINAL_SETTINGS_GET_METHOD,
+  THREAD_TERMINAL_SETTINGS_SET_METHOD,
+  threadTerminalSettingsSchema,
+  type ThreadTerminalSettings,
   type ThreadTerminalListResult,
   type ThreadTerminalOpenParams,
   type ThreadTerminalOpenResult,
@@ -373,6 +377,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   writeWorkspaceFile?(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult>;
   listThreadTerminals?(): Promise<ThreadTerminalListResult>;
   openThreadTerminal?(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult>;
+  getThreadTerminalSettings?(): Promise<ThreadTerminalSettings>;
+  setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
@@ -809,6 +815,19 @@ export function createRendererModelClient(
       const params = threadTerminalOpenParamsSchema.parse(input);
       return threadTerminalOpenResultSchema.parse(
         await manager.sendRequest(THREAD_TERMINAL_OPEN_METHOD, params),
+      );
+    },
+    async getThreadTerminalSettings(): Promise<ThreadTerminalSettings> {
+      return threadTerminalSettingsSchema.parse(
+        await manager.sendRequest(THREAD_TERMINAL_SETTINGS_GET_METHOD, {}),
+      );
+    },
+    async setThreadTerminalSettings(
+      settings: ThreadTerminalSettings,
+    ): Promise<ThreadTerminalSettings> {
+      const params = threadTerminalSettingsSchema.parse(settings);
+      return threadTerminalSettingsSchema.parse(
+        await manager.sendRequest(THREAD_TERMINAL_SETTINGS_SET_METHOD, params),
       );
     },
     buddyPrivate: async (input: BuddyPrivateRequest) => {

@@ -38,14 +38,17 @@ export const buddyContinueSchema = z
   .object({ threadId: z.string().min(1), turnId: z.string().min(1) })
   .strict();
 export const buddyInterruptedSchema = z.object({
-  threads: z.array(
-    z.object({
-      threadId: z.string(),
-      turnId: z.string(),
-      title: z.string(),
-      status: z.enum(["failed", "interrupted", "cancelled"]),
-    }),
-  ),
+  threads: z
+    .array(
+      z.object({
+        threadId: z.string(),
+        turnId: z.string(),
+        title: z.string(),
+        status: z.enum(["failed", "interrupted", "cancelled"]),
+        owner: z.enum(["codex", "external"]).default("codex"),
+      }),
+    )
+    .default([]),
   runningThreadIds: z.array(z.string()).default([]),
   unreadable: z.number(),
 });

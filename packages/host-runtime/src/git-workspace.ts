@@ -443,6 +443,21 @@ export class GitWorkspace {
     }
   }
 
+  async submoduleRoot(cwd: string, pathValue: string): Promise<string | null> {
+    const workspace = absoluteWorkspace(cwd);
+    const parsedPath = gitFilePathSchema.parse(pathValue);
+    const candidate = absoluteGitPath(workspace, parsedPath);
+    const known = await submodules(workspace, (worktree, arguments_) =>
+      this.#run(worktree, arguments_),
+    );
+    if (!known.submodules.some((entry) => entry.path === parsedPath)) return null;
+    try {
+      return await realpath(candidate);
+    } catch {
+      return null;
+    }
+  }
+
   async diff(cwd: string, filePath: string): Promise<GitDiffResult> {
     return this.#serial(async () => {
       const pathValue = gitFilePathSchema.parse(filePath);

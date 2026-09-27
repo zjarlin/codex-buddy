@@ -13,6 +13,10 @@ export class GitRepositoryLinks {
   constructor(
     private readonly home: string,
     private readonly root: (cwd: string) => Promise<string | null>,
+    private readonly submoduleRoot: (
+      cwd: string,
+      path: string,
+    ) => Promise<string | null> = async () => null,
   ) {}
 
   async #project(cwd: string): Promise<string> {
@@ -105,12 +109,30 @@ export class GitRepositoryLinks {
       return project;
     }
     const known = await this.list(cwd);
-    if (!known.repositories.some((entry) => entry.path === repository)) {
-      throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");
+    if (known.repositories.some((entry) => entry.path === repository)) {
+      // 仓库路径后来被替换为指向其他位置的符号链接时，不沿用旧关联授权。
+      if ((await this.root(repository)) !== repository) {
+        throw new GitWorkspaceError("关联仓库的位置已变化，请重新关联。");
+      }
+      return repository;
     }
-    // 仓库路径后来被替换为指向其他位置的符号链接时，不沿用旧关联授权。
-    if ((await this.root(repository)) !== repository) {
-      throw new GitWorkspaceError("关联仓库的位置已变化，请重新关联。");
+
+    const relative = path.relative(project, repository);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      const submodulePath = relative.split(path.sep).join("/");
+      const submoduleRoot = await this.submoduleRoot(project, submodulePath);
+      if (!submoduleRoot) {
+        throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");
+      }
+      const submodule = await this.root(repository);
+      if (!submodule) {
+        throw new GitWorkspaceError("该子模块目录不是 Git 仓库，请先初始化或更新子模块。");
+      }
+      if (submodule !== repository || submodule !== submoduleRoot) {
+        throw new GitWorkspaceError("子模块的位置已变化，请重新更新子模块。");
+      }
+    } else {
+      throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");
     }
     return repository;
   }

@@ -1,4 +1,4 @@
-import { createRendererSettingsBrandGlyph } from "./icons.js";
+import { createRendererSettingsBrandIcon } from "./icons.js";
 import {
   DEFAULT_RENDERER_SETTINGS_MESSAGES,
   type RendererSettingsMessages,
@@ -409,7 +409,7 @@ export function mountRendererSettingsTrigger(
   button.style.cursor = available ? "pointer" : "not-allowed";
   button.style.opacity = available ? "1" : "0.5";
   button.style.outlineOffset = "2px";
-  button.append(createRendererSettingsBrandGlyph(20));
+  button.append(createRendererSettingsBrandIcon(20));
 
   const updateBadge = ownerDocument.createElement("span");
   updateBadge.setAttribute("aria-hidden", "true");

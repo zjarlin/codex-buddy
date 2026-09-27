@@ -58,6 +58,13 @@ export {
   threadTerminalOpenResultSchema,
 } from "./thread-terminal.js";
 export {
+  THREAD_TERMINAL_SETTINGS_GET_METHOD,
+  THREAD_TERMINAL_SETTINGS_SET_METHOD,
+  DEFAULT_THREAD_TERMINAL_SETTINGS,
+  threadTerminalSettingsSchema,
+  type ThreadTerminalSettings,
+} from "./thread-terminal-settings.js";
+export {
   THREAD_ARCHIVE_COMPLETED_METHOD,
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,

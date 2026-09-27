@@ -35,9 +35,8 @@ it("returns validated provider IDs after the installed synchronizer writes its c
     };
   });
   await expect(syncCodexCatalog({ CODEX_HOME: home }, run as never)).resolves.toEqual({
-    provider: "fixture",
-    returned: 2,
-    ids: ["gpt-a", "deepseek-b"],
+    report: { provider: "fixture", returned: 2, ids: ["gpt-a", "deepseek-b"] },
+    catalog: { models: [{ slug: "gpt-a" }, { slug: "deepseek-b" }] },
   });
   expect(run).toHaveBeenCalledWith(
     process.execPath,

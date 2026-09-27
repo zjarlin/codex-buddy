@@ -130,7 +130,6 @@ export class InterruptedConversations {
   }
 
   async list(): Promise<BuddyInterrupted> {
-    await this.#checkAllowed();
     const candidates = (await this.#listThreads()).filter((metadata) => !this.busy(metadata.id));
     const entries = await mapWithConcurrency(candidates, READ_CONCURRENCY, async (metadata) => {
       try {
@@ -138,9 +137,7 @@ export class InterruptedConversations {
         if (object(thread.status).type === "active") {
           return { kind: "running" as const, threadId: metadata.id };
         }
-        if (typeof turn.id !== "string") {
-          return { kind: "done" as const };
-        }
+        if (typeof turn.id !== "string") return { kind: "done" as const };
         if (
           turn.status !== "failed" &&
           turn.status !== "interrupted" &&
@@ -154,6 +151,7 @@ export class InterruptedConversations {
             turnId: turn.id,
             title: String(thread.name || thread.preview || metadata.id).slice(0, 160),
             status: turn.status,
+            owner: "codex" as const,
           } satisfies BuddyInterrupted["threads"][number],
         };
       } catch {

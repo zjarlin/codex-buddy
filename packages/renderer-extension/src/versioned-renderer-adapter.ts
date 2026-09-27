@@ -931,8 +931,11 @@ export function installCurrentRendererAdapter(): {
     );
     return route;
   };
+  const currentModelClientOrNull = (): RendererModelClient | null => {
+    return clients.forRoute(currentRequestRoute());
+  };
   const currentModelClient = (): RendererModelClient => {
-    const client = clients.forRoute(currentRequestRoute());
+    const client = currentModelClientOrNull();
     if (!client) throw new Error("Renderer Model request manager is unavailable");
     return client;
   };
@@ -1039,15 +1042,17 @@ export function installCurrentRendererAdapter(): {
       return client.buddyPrivate(input);
     },
     buddyStatus: () => {
-      const client = currentModelClient();
-      if (!client.buddyStatus) {
-        throw new Error("Buddy Router unavailable");
+      const client = currentModelClientOrNull();
+      if (!client?.buddyStatus) {
+        return Promise.reject(new Error("Buddy Router unavailable"));
       }
       return client.buddyStatus();
     },
     buddyInterrupted: () => {
-      const client = currentModelClient();
-      if (!client.buddyInterrupted) throw new Error("Continuation unavailable");
+      const client = currentModelClientOrNull();
+      if (!client?.buddyInterrupted) {
+        return Promise.reject(new Error("Continuation unavailable"));
+      }
       return client.buddyInterrupted();
     },
     buddyContinue: (threadId: string, turnId: string) => {

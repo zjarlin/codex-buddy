@@ -4,6 +4,13 @@ codexhost keeps the Desktop's main app-server on the Host Runtime while routing
 private native-tool app-servers to the official CLI. Tool policy, authentication,
 and approvals remain owned by the official CLI and Desktop.
 
+The official CLI may use the legacy `Contents/Resources/codex` layout or the
+new `Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex` layout
+(Desktop 26.924). Discovery prefers the nested Mach-O executable when present;
+it does not execute the `codex-cli/bin/codex` shell wrapper. An invalid nested
+executable is an error, not a reason to fall back to a legacy copy. Both layouts
+retain executable-file, Mach-O, and bundle-containment validation.
+
 Three independent macOS helper paths need different handling:
 
 - Browser helpers may preserve only `CODEX_CLI_PATH`. When that path resolves to
@@ -20,6 +27,8 @@ Three independent macOS helper paths need different handling:
   to the Launcher cannot identify these helpers. On macOS the Shim verifies the
   live Launcher executable, then walks a bounded, start-time-checked ancestry to
   the exact Desktop executable in the resolved official CLI's validated bundle.
+  Bundle lookup walks `.app` ancestors and verifies the official bundle identity
+  and exact CLI path, so a nested `CodexCLI.app` is not mistaken for the Desktop.
   A direct Desktop child retains Host routing; only a deeper descendant uses the
   stock CLI with `CODEXHOST_*` bootstrap state removed. Missing or stale identity
   evidence retains existing explicit Host/SSH routing.

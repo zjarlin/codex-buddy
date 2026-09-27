@@ -39,15 +39,17 @@ fn is_macos_desktop_helper(stock_codex_path: &std::path::Path) -> Option<bool> {
     if launcher.executable != expected_launcher {
         return None;
     }
-    // LaunchServices reparents Desktop to launchd, so the launcher cannot be an
-    // ancestor. Find the validated Desktop among the CLI's enclosing app bundles;
-    // newer layouts nest the CLI in its own app. Direct Desktop -> shim stays Host.
+    // CLI 可以位于嵌套子应用中；逐层验证官方外壳身份与 CLI 路径，不能固定向上三级。
+    // LaunchServices 会改变父进程，后续仍按外壳可执行文件区分主服务与工具助手。
     let installation = stock_codex_path
         .ancestors()
         .filter(|path| path.extension().is_some_and(|extension| extension == "app"))
         .find_map(|bundle| {
             let installation = discover_codex_desktop_from_root(bundle).ok()?;
-            (installation.executable_codex_cli == stock_codex_path).then_some(installation)
+            if installation.executable_codex_cli != stock_codex_path {
+                return None;
+            }
+            Some(installation)
         })?;
     let mut child = process_snapshot(std::process::id()).ok()?;
     for depth in 1..=32 {

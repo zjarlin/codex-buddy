@@ -81,6 +81,8 @@ import {
   THREAD_TERMINAL_SETTINGS_SET_METHOD,
   threadTerminalListParamsSchema,
   threadTerminalOpenParamsSchema,
+  THREAD_WORKSPACE_OPEN_METHOD,
+  threadWorkspaceOpenParamsSchema,
   DELEGATION_MENTION_PATH_PREFIX,
   threadTerminalSettingsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
@@ -100,6 +102,7 @@ import {
 import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { listThreadTerminals, openThreadTerminal } from "./thread-terminal.js";
+import { openThreadWorkspace } from "./thread-workspace.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
@@ -1433,6 +1436,10 @@ export class AppServerHost {
     }
     if (request.method === THREAD_TERMINAL_LIST_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleThreadTerminalListRequest(request));
+      return;
+    }
+    if (request.method === THREAD_WORKSPACE_OPEN_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleThreadWorkspaceOpenRequest(request));
       return;
     }
     if (
@@ -3097,6 +3104,20 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32095, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleThreadWorkspaceOpenRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = threadWorkspaceOpenParamsSchema.safeParse(request.params);
+      if (!params.success) throw new Error("打开工作区参数无效。");
+      const resolution = await this.#locateExternalThread(params.data.threadId);
+      if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以打开工作区。");
+      const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+      const result = await openThreadWorkspace(cwd);
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32098, errorMessage(error).slice(0, 20_000)));
     }
   }
 

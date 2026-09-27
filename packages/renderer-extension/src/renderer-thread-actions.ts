@@ -1,5 +1,6 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Archive from "lucide/dist/esm/icons/archive.mjs";
+import Code from "lucide/dist/esm/icons/code.mjs";
 import Copy from "lucide/dist/esm/icons/copy.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Terminal from "lucide/dist/esm/icons/terminal.mjs";
@@ -20,6 +21,7 @@ import {
 const TRIGGER_ATTRIBUTE = "data-codexhost-thread-actions-trigger";
 const MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const OPEN_TERMINAL_ATTRIBUTE = "data-codexhost-thread-actions-open-terminal";
+const OPEN_VSCODE_ATTRIBUTE = "data-codexhost-thread-actions-open-vscode";
 const COPY_THREAD_ID_ATTRIBUTE = "data-codexhost-thread-actions-copy-thread-id";
 const ARCHIVE_COMPLETED_ATTRIBUTE = "data-codexhost-thread-actions-archive-completed";
 const MENU_WIDTH = 216;
@@ -60,6 +62,10 @@ function menuLabel(locale: Locale): string {
 
 function openTerminalLabel(locale: Locale): string {
   return locale === "zh-CN" ? "从终端打开" : "Open in Terminal";
+}
+
+function openVscodeLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "用 VS Code 打开" : "Open in VS Code";
 }
 
 function copyThreadIdLabel(locale: Locale): string {
@@ -236,29 +242,82 @@ export function installRendererThreadActions(options: {
     }
   };
 
+  const openVscode = async (
+    row: HTMLElement,
+    hostId: string,
+    threadId: string,
+    menu: HTMLElement,
+    item: HTMLButtonElement,
+  ): Promise<void> => {
+    const client = options.getClient(hostId);
+    if (!client?.openThreadWorkspace) {
+      item.disabled = true;
+      return;
+    }
+    const error = menu.querySelector<HTMLElement>("[data-codexhost-thread-actions-error]");
+    item.disabled = true;
+    if (error) error.textContent = "";
+    try {
+      await client.openThreadWorkspace({ threadId: hostThreadIdSchema.parse(threadId) });
+      if (openRow === row) closeMenu();
+    } catch (failure) {
+      if (disposed || openRow !== row) return;
+      item.disabled = false;
+      if (error) {
+        error.textContent = `${openVscodeLabel(options.getLocale())}: ${
+          failure instanceof Error ? failure.message : String(failure)
+        }`;
+      }
+    }
+  };
+
   const buildMenu = (row: HTMLElement, hostId: string, threadId: string): HTMLElement => {
+    const client = options.getClient(hostId);
     const menu = document.createElement("div");
     menu.setAttribute(MENU_ATTRIBUTE, "");
     menu.setAttribute("role", "menu");
-    const item = document.createElement("button");
-    item.type = "button";
-    item.setAttribute("role", "menuitem");
-    item.setAttribute(OPEN_TERMINAL_ATTRIBUTE, "");
-    const label = openTerminalLabel(options.getLocale());
-    item.title = label;
-    item.setAttribute("aria-label", label);
-    const icon = document.createElement("span");
-    icon.style.display = "inline-flex";
-    icon.style.alignItems = "center";
-    icon.append(createElement(Terminal, { width: 15, height: 15, "aria-hidden": "true" }));
-    const text = document.createElement("span");
-    text.textContent = label;
-    item.append(icon, text);
-    item.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void openTerminal(row, hostId, threadId, menu, item);
-    });
+    const actionItem = (
+      attribute: string,
+      label: string,
+      iconComponent: typeof Terminal,
+      onClick: (item: HTMLButtonElement) => void,
+    ): HTMLButtonElement => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.setAttribute(attribute, "");
+      button.title = label;
+      button.setAttribute("aria-label", label);
+      const icon = document.createElement("span");
+      icon.style.display = "inline-flex";
+      icon.style.alignItems = "center";
+      icon.append(createElement(iconComponent, { width: 15, height: 15, "aria-hidden": "true" }));
+      const text = document.createElement("span");
+      text.textContent = label;
+      button.append(icon, text);
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick(button);
+      });
+      return button;
+    };
+    const terminal = client?.openThreadTerminal
+      ? actionItem(
+          OPEN_TERMINAL_ATTRIBUTE,
+          openTerminalLabel(options.getLocale()),
+          Terminal,
+          (button) => void openTerminal(row, hostId, threadId, menu, button),
+        )
+      : null;
+    const vscode = client?.openThreadWorkspace
+      ? actionItem(
+          OPEN_VSCODE_ATTRIBUTE,
+          openVscodeLabel(options.getLocale()),
+          Code,
+          (button) => void openVscode(row, hostId, threadId, menu, button),
+        )
+      : null;
     const copy = document.createElement("button");
     copy.type = "button";
     copy.setAttribute("role", "menuitem");
@@ -344,7 +403,9 @@ export function installRendererThreadActions(options: {
     const error = document.createElement("div");
     error.setAttribute("data-codexhost-thread-actions-error", "");
     error.setAttribute("role", "alert");
-    menu.append(item, copy);
+    if (terminal) menu.append(terminal);
+    if (vscode) menu.append(vscode);
+    menu.append(copy);
     if (options.getClient(hostId)?.archiveCompletedThreads) menu.append(archive);
     menu.append(error);
     return menu;
@@ -373,7 +434,7 @@ export function installRendererThreadActions(options: {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const threadId = hostId ? nativeThreadId(hostId, row) : null;
       const client = hostId ? options.getClient(hostId) : null;
-      if (!hostId || !threadId || !client?.openThreadTerminal) {
+      if (!hostId || !threadId || (!client?.openThreadTerminal && !client?.openThreadWorkspace)) {
         clear(row);
         continue;
       }

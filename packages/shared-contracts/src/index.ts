@@ -65,6 +65,12 @@ export {
   type ThreadTerminalSettings,
 } from "./thread-terminal-settings.js";
 export {
+  THREAD_WORKSPACE_OPEN_METHOD,
+  threadWorkspaceOpenParamsSchema,
+  threadWorkspaceOpenResultSchema,
+} from "./thread-workspace.js";
+export type { ThreadWorkspaceOpenParams, ThreadWorkspaceOpenResult } from "./thread-workspace.js";
+export {
   THREAD_ARCHIVE_COMPLETED_METHOD,
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,

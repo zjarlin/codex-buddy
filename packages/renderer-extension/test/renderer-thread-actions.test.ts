@@ -295,9 +295,11 @@ function clientWith(openThreadTerminal: (input: { threadId: string }) => Promise
     refreshCodexAccounts: vi.fn(),
     listThreadTerminals,
     openThreadTerminal: vi.fn(openThreadTerminal),
+    openThreadWorkspace: vi.fn(async () => ({ workspace: "/tmp/repo", application: "vscode" })),
   } as unknown as RendererModelClient & {
     listThreadTerminals: ReturnType<typeof vi.fn>;
     openThreadTerminal: ReturnType<typeof vi.fn>;
+    openThreadWorkspace: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -405,7 +407,7 @@ describe("renderer thread actions", () => {
 
     const portal = await openRowMenu(row, document_);
     const item = required(portal.querySelector("button"), "menu item was not rendered");
-    expect(portal.querySelectorAll("button")).toHaveLength(2);
+    expect(portal.querySelectorAll("button")).toHaveLength(3);
     item.dispatch("click");
     await settle();
 
@@ -413,6 +415,64 @@ describe("renderer thread actions", () => {
       threadId: "thread-a",
       terminalId: "ghostty",
     });
+    installed.dispose();
+  });
+
+  it("opens the resolved thread workspace in VS Code", async () => {
+    const document_ = installFakeBrowser();
+    const row = sidebarRow(document_, "local", "thread-a");
+    const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+    const installed = installRendererThreadActions({
+      getClient: () => client,
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+
+    const portal = await openRowMenu(row, document_);
+    const vscode = required(
+      portal.querySelector("[data-codexhost-thread-actions-open-vscode]"),
+      "VS Code item was not rendered",
+    );
+    expect(vscode.children.some((child) => child.textContent.includes("用 VS Code 打开"))).toBe(
+      true,
+    );
+    vscode.dispatch("click");
+    await settle();
+
+    expect(client.openThreadWorkspace).toHaveBeenCalledWith({ threadId: "thread-a" });
+    installed.dispose();
+  });
+
+  it("reports VS Code open failures and allows retry", async () => {
+    const document_ = installFakeBrowser();
+    const row = sidebarRow(document_, "local", "thread-a");
+    const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+    client.openThreadWorkspace
+      .mockRejectedValueOnce(new Error("未安装 Visual Studio Code"))
+      .mockResolvedValueOnce({ workspace: "/tmp/repo", application: "vscode" });
+    const installed = installRendererThreadActions({
+      getClient: () => client,
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+
+    const portal = await openRowMenu(row, document_);
+    const vscode = required(
+      portal.querySelector("[data-codexhost-thread-actions-open-vscode]"),
+      "VS Code item was not rendered",
+    );
+    const error = required(
+      portal.querySelector("[data-codexhost-thread-actions-error]"),
+      "error element was not rendered",
+    );
+    vscode.dispatch("click");
+    await settle();
+
+    expect(error.textContent).toBe("用 VS Code 打开: 未安装 Visual Studio Code");
+    expect(vscode.disabled).toBe(false);
+    vscode.dispatch("click");
+    await settle();
+    expect(client.openThreadWorkspace).toHaveBeenCalledTimes(2);
     installed.dispose();
   });
 

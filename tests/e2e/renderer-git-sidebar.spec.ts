@@ -393,6 +393,14 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
   expect(panelBox?.y).toBe(sidebarBox?.y);
   expect(panelBox?.height).toBe(sidebarBox?.height);
   const gitContent = page.locator("[data-codexhost-git-content]");
+  await expect(gitContent.getByRole("button", { name: "并排" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(gitContent.locator(".split-wrap")).toBeVisible();
+  await expect(gitContent.locator(".codexhost-git-diff")).toBeHidden();
+  await gitContent.getByRole("button", { name: "统一" }).click();
+  await expect(gitContent.locator(".codexhost-git-diff")).toBeVisible();
   await expect(gitContent.locator(".codexhost-git-diff")).toHaveText("+changed");
   await expect(gitContent.getByRole("button", { name: "统一" })).toHaveAttribute(
     "aria-pressed",
@@ -438,7 +446,11 @@ test("commits unstaged changes from the commit sidebar", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(gitContent).toHaveCount(0);
   await root.locator(".codexhost-git-change").first().click();
-  await expect(gitContent.locator(".codexhost-git-diff")).toHaveText("+changed");
+  await expect(gitContent.getByRole("button", { name: "并排" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(gitContent.locator(".split-wrap")).toBeVisible();
   await expect(root.locator("[data-codexhost-git-sidebar-changes-tab]")).toHaveAttribute(
     "aria-selected",
     "true",
@@ -640,6 +652,29 @@ test("follows the active chat project and ignores stale status across hosts", as
   await expect(page.locator("[data-codexhost-git-content]")).toHaveCount(0);
 });
 
+test("stops loading when the active project is not inside a Git repository", async ({ page }) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.client.inspectGitStatus = () =>
+      new Promise((_resolve, reject) => {
+        fixture.rejectWorkspace = () => reject(new Error("当前目录不是 Git 仓库。"));
+      });
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  const project = root.locator("[data-codexhost-git-sidebar-project]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(project).toHaveText("正在读取项目…");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").rejectWorkspace());
+  await expect(project).toHaveText("未检测到工作区");
+  await expect(root.locator(".codexhost-git-empty")).toHaveText("没有待提交的变更");
+  await expect(root.getByText("当前目录不是 Git 仓库。")).toBeVisible();
+  await expect(root.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
+});
+
 test("opens a file preview when an older Host omits the revision", async ({ page }) => {
   await page.route("http://localhost/git-sidebar-test", (route) =>
     route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
@@ -760,14 +795,12 @@ test("keeps large projects collapsed, reuses reads, and clears diff cache after 
   const file = root.locator('.codexhost-git-change[title="dir-0/file-0.ts"]');
   const originalRow = await file.elementHandle();
   await file.click();
-  await expect(content.getByRole("button", { name: "统一" })).toHaveAttribute(
+  await expect(content.getByRole("button", { name: "并排" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await expect(content.locator(".codexhost-git-diff")).toHaveText("+changed");
-  await expect(content.locator(".split-row")).toHaveCount(0);
+  await expect(content.locator(".codexhost-git-diff")).toBeHidden();
   expect(await originalRow?.evaluate((element) => element.isConnected)).toBe(true);
-  await content.getByRole("button", { name: "并排" }).click();
   await expect(content.locator(".split-row")).toHaveCount(100);
   await content.locator(".body").evaluate((element) => {
     element.scrollTop = element.scrollHeight;
@@ -1014,6 +1047,7 @@ test("previews a submodule as a read-only Git diff and restores the file editor 
   await root.locator('.codexhost-git-directory[title="vendor"]').click();
   await root.locator('.codexhost-git-change[title="vendor/lib"]').click();
   const content = page.locator("[data-codexhost-git-content]");
+  await expect(content.locator(".codexhost-git-diff")).toBeVisible();
   await expect(content.locator(".codexhost-git-diff")).toContainText(
     "+Subproject commit abc123-dirty",
   );
@@ -1032,6 +1066,11 @@ test("previews a submodule as a read-only Git diff and restores the file editor 
   ).toEqual([]);
   await root.locator('.codexhost-git-directory[title="src"]').click();
   await root.locator('.codexhost-git-change[title="src/app.ts"]').click();
+  await expect(content.getByRole("button", { name: "并排", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(content.locator(".split-wrap")).toBeVisible();
   await content.getByRole("button", { name: "结果", exact: true }).click();
   await expect(content.getByRole("textbox", { name: "合并结果" })).toHaveValue(
     "export const app = true;\n",

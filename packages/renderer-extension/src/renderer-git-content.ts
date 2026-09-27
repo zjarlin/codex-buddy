@@ -529,12 +529,12 @@ export function createRendererGitContent(options: {
       unified.textContent = work || result.diff ? unifiedText(result) : "正在加载差异…";
       setup.hidden = true;
       meta.hidden = false;
-      mode = "unified";
       splitRows = null;
       splitValue = null;
       splitStart = -1;
       body.scrollTop = 0;
       const textFile = !work?.kind || work.kind === "file";
+      mode = work && textFile && !work.binary && !work.truncated ? "split" : "unified";
       segmented.hidden = !work || !textFile;
       if (work) {
         original = work.working;

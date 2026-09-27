@@ -558,6 +558,7 @@ export function installRendererGitSidebar(options: {
   let anchor: SidebarAnchor | null = null;
   let view: "projects" | "commits" | "devices" | "files" = "projects";
   let current: GitWorkspaceStatus | null = null;
+  let workspaceRead = false;
   let repositoryGroups: RepositoryGroup[] = [];
   let selectedChange: string | null = null;
   let changeTab: "changes" | "staged" = "changes";
@@ -568,6 +569,7 @@ export function installRendererGitSidebar(options: {
   let expansionRevision = 0;
   let renderedList: {
     status: GitWorkspaceStatus | null;
+    workspaceRead: boolean;
     tab: string;
     tree: boolean;
     expansion: number;
@@ -701,6 +703,7 @@ export function installRendererGitSidebar(options: {
     contextGeneration += 1;
     generation += 1;
     contentView.close();
+    workspaceRead = false;
     current =
       activeContext.client && activeContext.threadId
         ? cache.peekStatus(activeContext.client, activeContext.threadId, selectedRepository)
@@ -980,9 +983,9 @@ export function installRendererGitSidebar(options: {
     projectName.textContent = workspacePath
       ? (workspacePath.split(/[/\\]/u).filter(Boolean).at(-1) ?? workspacePath)
       : context().threadId
-        ? isBusy()
-          ? "正在读取项目…"
-          : "未检测到工作区"
+        ? workspaceRead
+          ? "未检测到工作区"
+          : "正在读取项目…"
         : "未选择项目";
     projectName.title = workspacePath;
     workspace.hidden = false;
@@ -1009,6 +1012,7 @@ export function installRendererGitSidebar(options: {
     if (
       !repositoriesOnly &&
       renderedList?.status === current &&
+      renderedList.workspaceRead === workspaceRead &&
       renderedList.tab === changeTab &&
       renderedList.tree === treeView &&
       renderedList.expansion === expansionRevision
@@ -1019,6 +1023,7 @@ export function installRendererGitSidebar(options: {
     if (!repositoriesOnly) {
       renderedList = {
         status: current,
+        workspaceRead,
         tab: changeTab,
         tree: treeView,
         expansion: expansionRevision,
@@ -1132,7 +1137,7 @@ export function installRendererGitSidebar(options: {
         renderChange(change, container, action, displayPath);
       }
     };
-    if (!current && context().threadId) {
+    if (!workspaceRead && context().threadId) {
       const loading = document.createElement("p");
       loading.className = "codexhost-git-empty";
       loading.textContent = "正在读取项目…";
@@ -1413,12 +1418,14 @@ export function installRendererGitSidebar(options: {
     if (disposed || view === "files" || view === "devices" || isBusy()) return;
     const request = context();
     if (!request.threadId || !request.client) {
+      workspaceRead = false;
       current = null;
       repositoryGroups = [];
       render();
       return;
     }
     const requestGeneration = ++generation;
+    workspaceRead = false;
     if (force) cache.invalidate(request.client);
     current = cache.peekStatus(request.client, request.threadId, request.repository);
     repositoryGroups = [
@@ -1437,6 +1444,7 @@ export function installRendererGitSidebar(options: {
       const threadId = request.threadId;
       const status = await cache.status(client, threadId, request.repository);
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
+      workspaceRead = true;
       current = status;
       const submodules: RepositoryGroup[] = status.submodules.map((submodule) => {
         const child = pathJoin(status.workspace, submodule.path);
@@ -1475,6 +1483,7 @@ export function installRendererGitSidebar(options: {
       );
     } catch (error) {
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
+      workspaceRead = true;
       current = null;
       repositoryGroups = [];
       setNotice(error instanceof Error ? error.message : String(error));

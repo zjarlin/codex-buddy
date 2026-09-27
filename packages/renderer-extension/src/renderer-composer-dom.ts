@@ -662,6 +662,7 @@ export function mountComposerAgentControl(
   onRefreshModels?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
   onSelectShortcut?: (modelId: string) => void | Promise<void>,
   onRefreshShortcutModels?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
+  modelAvailability?: Parameters<typeof mountModelShortcuts>[2],
 ): ComposerAgentControl {
   // External Harnesses inject more footer chips than native Codex. Let the
   // thread column shrink under sidebar / narrow-window pressure so those chips
@@ -698,6 +699,7 @@ export function mountComposerAgentControl(
   const modelShortcuts = mountModelShortcuts(
     onSelectShortcut ?? onSelectModel,
     onRefreshShortcutModels ?? onRefreshModels,
+    modelAvailability,
   );
   composer.before(modelShortcuts.root);
 
@@ -838,6 +840,7 @@ export function renderComposerAgentControl(
         error: state.agent !== "codex" ? modelView.error : undefined,
       }),
       ...(switching || ownershipError ? { disabled: true } : {}),
+      supportsAvailabilityProbe: state.agent === "codex",
     },
     state.agent,
     locale,

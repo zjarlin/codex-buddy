@@ -260,6 +260,13 @@ import {
   type RendererRequestOptions,
 } from "./renderer-request-sender.js";
 import {
+  MODEL_AVAILABILITY_METHOD,
+  modelAvailabilityParamsSchema,
+  modelAvailabilitySnapshotSchema,
+  type ModelAvailabilityParams,
+  type ModelAvailabilitySnapshot,
+} from "@codexhost/shared-contracts";
+import {
   createRendererSessionImportClient,
   type RendererSessionImportClient,
 } from "./renderer-session-import-client.js";
@@ -391,6 +398,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
+  modelAvailability?(input: ModelAvailabilityParams): Promise<ModelAvailabilitySnapshot>;
   syncCodexCatalog?(): Promise<BuddyCatalogSync>;
   buddyConfigure?(settings: BuddySettings): Promise<BuddySnapshot>;
   buddyJevKey?(config: {
@@ -869,6 +877,13 @@ export function createRendererModelClient(
       ),
     buddyModels: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_MODELS_METHOD, {})),
+    async modelAvailability(input: ModelAvailabilityParams): Promise<ModelAvailabilitySnapshot> {
+      const params = modelAvailabilityParamsSchema.parse(input);
+      const result = await manager.sendRequest(MODEL_AVAILABILITY_METHOD, params, {
+        priority: "interactive",
+      });
+      return modelAvailabilitySnapshotSchema.parse(result);
+    },
     syncCodexCatalog: async () =>
       buddyCatalogSyncSchema.parse(await manager.sendRequest(BUDDY_CATALOG_SYNC_METHOD, {})),
     buddyConfigure: async (settings: BuddySettings) =>

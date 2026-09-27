@@ -12,6 +12,10 @@ import {
 } from "./renderer-model-refresh-summary.js";
 import { createModelFavoriteIcon, ensureModelOptionStyle } from "./renderer-model-option-style.js";
 import {
+  mountModelAvailability,
+  type ModelAvailabilityCallbacks,
+} from "./renderer-model-availability.js";
+import {
   ensureRendererTriggerChipStyle,
   TRIGGER_CHIP_CLASS,
 } from "./renderer-trigger-chip-style.js";
@@ -21,6 +25,7 @@ export interface ModelShortcutView {
   selected?: string | undefined;
   disabled?: boolean;
   supportsCustomModel?: boolean;
+  supportsAvailabilityProbe?: boolean;
   unavailableModelIds?: readonly string[];
   refreshing?: boolean;
   error?: string | undefined;
@@ -29,6 +34,7 @@ export interface ModelShortcutView {
 export function mountModelShortcuts(
   onSelect: (id: string) => void | Promise<void>,
   onRefresh?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
+  availability?: ModelAvailabilityCallbacks,
 ) {
   ensureRendererTriggerChipStyle(document);
   ensureModelOptionStyle(document);
@@ -43,8 +49,10 @@ export function mountModelShortcuts(
       [data-model-shortcut][aria-pressed=true] { background:var(--color-token-list-hover-background,rgba(127,127,127,.16)); color:var(--color-text-primary,inherit); border-color:var(--color-text-secondary,#85858f); }
       [data-codexhost-model-shortcuts] button:focus-visible { outline:2px solid var(--color-text-primary,#85858f); outline-offset:2px; }
       [data-model-favorites-menu] { box-sizing:border-box; margin:0; padding:10px; border:1px solid var(--color-border,rgba(127,127,127,.25)); border-radius:12px; background:var(--color-token-dropdown-background,var(--color-background-elevated,light-dark(#fff,#282828))); color:var(--color-text-primary,CanvasText); color-scheme:inherit; box-shadow:0 8px 24px #0003; font:13px system-ui,sans-serif; }
+      [data-model-favorites-menu]:popover-open { display:flex; flex-direction:column; overflow-y:auto; }
+      [data-model-favorites-menu] > :not([data-model-favorites-options]) { flex-shrink:0; }
       [data-model-favorites-menu] input { box-sizing:border-box; width:100%; background:transparent; color:inherit; border:1px solid var(--color-border,#8886); border-radius:7px; padding:7px 9px; margin-bottom:6px; outline-offset:2px; }
-      [data-model-favorites-options] { max-height:300px; overflow-y:auto; scrollbar-width:thin; }
+      [data-model-favorites-options] { flex:1 1 auto; min-height:0; max-height:300px; overflow-y:auto; scrollbar-width:thin; }
       [data-model-favorites-options] button { display:flex; align-items:center; gap:8px; width:100%; padding:7px; background:transparent; color:inherit; border:0; border-radius:6px; text-align:left; cursor:pointer; font:inherit; }
       [data-model-favorites-options] button:hover { background:rgba(127,127,127,.12); }
       [data-model-favorites-options] button[aria-pressed=true] svg { color:#f59e0b; }
@@ -64,6 +72,17 @@ export function mountModelShortcuts(
       [data-model-shortcuts-status] { color:var(--color-text-secondary,inherit); font:12px/18px system-ui,sans-serif; overflow-wrap:anywhere; }
       [data-codexhost-model-shortcuts] [data-model-shortcuts-error] { min-width:0; }
       [data-codexhost-model-shortcuts] [data-model-shortcuts-status] { min-width:0; }
+      [data-model-availability] { display:grid; gap:6px; margin-bottom:8px; }
+      [data-model-availability][hidden] { display:none; }
+      [data-model-availability] button { padding:5px 8px; border:1px solid var(--color-border,#8886); border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
+      [data-model-availability] [role=tablist] { display:flex; gap:4px; }
+      [data-model-availability] [role=tab] { flex:1; padding-inline:3px; font-size:12px; }
+      [data-model-availability] [aria-selected=true] { background:var(--color-token-list-hover-background,rgba(127,127,127,.16)); }
+      [data-model-availability-summary] { color:var(--color-text-secondary,inherit); font-size:11px; }
+      [data-model-availability-error], [data-model-availability-reason] { color:var(--color-text-danger,#e47777); font-size:11px; overflow-wrap:anywhere; }
+      [data-model-favorites-options] [data-model-availability-reason] { display:block; margin-top:3px; white-space:normal; }
+      [data-model-favorites-options] [data-model-option-label] { flex:1; min-width:0; }
+      [data-model-favorites-menu] button:focus-visible, [data-model-favorites-options]:focus-visible { outline:2px solid var(--color-text-primary,#85858f); outline-offset:2px; }
     `;
     document.head.append(style);
   }
@@ -129,6 +148,13 @@ export function mountModelShortcuts(
   let success: string | undefined;
   let generation = 0;
   let context = "";
+  const probeState = mountModelAvailability(
+    availability,
+    options,
+    () => render(),
+    () => [...view.models.map((model) => model.id), ...readModelFavorites(harness)],
+  );
+  customActions.after(probeState.root);
 
   const isDisabled = (): boolean =>
     selecting || refreshing || view.refreshing === true || view.disabled === true;
@@ -150,6 +176,17 @@ export function mountModelShortcuts(
 
   const render = (): void => {
     const busy = refreshing || view.refreshing === true;
+    const favorites = readModelFavorites(harness);
+    probeState.update({
+      enabled: view.supportsAvailabilityProbe === true,
+      chinese,
+      disabled: isDisabled(),
+      modelIds: [
+        ...view.models.map((model) => model.id),
+        ...favorites,
+        ...(probeState.snapshot?.results.map((result) => result.id) ?? []),
+      ],
+    });
     const refreshLabel = chinese
       ? busy
         ? "正在刷新模型…"
@@ -161,7 +198,7 @@ export function mountModelShortcuts(
       button.title = refreshLabel;
       button.setAttribute("aria-label", refreshLabel);
       button.setAttribute("aria-busy", String(busy));
-      button.disabled = busy || selecting || view.disabled === true;
+      button.disabled = busy || probeState.probing || selecting || view.disabled === true;
     }
     for (const status of [error, menuError]) {
       status.textContent = failure ?? view.error ?? "";
@@ -171,7 +208,6 @@ export function mountModelShortcuts(
       statusElement.textContent = success ?? "";
       statusElement.hidden = !statusElement.textContent;
     }
-    const favorites = readModelFavorites(harness);
     const catalog = new Map(view.models.map((model) => [model.id, model]));
     const visibleModels = [...favorites]
       .map((id) => catalog.get(id) ?? { id, label: id })
@@ -213,7 +249,8 @@ export function mountModelShortcuts(
     }
     const disabled = isDisabled();
     manage.disabled =
-      disabled || (!view.models.length && !favorites.size && !view.supportsCustomModel);
+      disabled ||
+      (!view.models.length && !favorites.size && !view.supportsCustomModel && !probeState.enabled);
     search.disabled = disabled;
     customActions.hidden = view.supportsCustomModel !== true;
     const id = search.value.trim();
@@ -231,6 +268,9 @@ export function mountModelShortcuts(
       query,
       chinese,
       disabled,
+      probeState.enabled,
+      probeState.snapshot,
+      probeState.activeTab,
     ]);
     if (nextMenuSignature === menuSignature) {
       return;
@@ -240,8 +280,22 @@ export function mountModelShortcuts(
       document.activeElement instanceof HTMLElement
         ? document.activeElement.dataset.favoriteModelId
         : undefined;
+    const menuModels = new Map([
+      ...view.models.map((model) => [model.id, model] as const),
+      ...visibleModels
+        .filter((model) => !catalog.has(model.id))
+        .map((model) => [model.id, model] as const),
+    ]);
+    if (probeState.enabled) {
+      for (const result of probeState.snapshot?.results ?? []) {
+        if (!menuModels.has(result.id)) {
+          menuModels.set(result.id, { id: result.id, label: result.id });
+        }
+      }
+    }
     options.replaceChildren(
-      ...[...view.models, ...visibleModels.filter((model) => !catalog.has(model.id))]
+      ...[...menuModels.values()]
+        .filter((model) => probeState.matches(model.id))
         .filter((model) => `${model.id} ${model.label}`.toLowerCase().includes(query))
         .map((model) => {
           const button = document.createElement("button");
@@ -255,8 +309,17 @@ export function mountModelShortcuts(
           button.title = model.id;
           button.disabled = disabled;
           const label = document.createElement("span");
+          label.dataset.modelOptionLabel = "true";
           label.textContent = model.label;
           button.append(createModelFavoriteIcon(document), label);
+          const reason = probeState.failureReason(model.id);
+          if (reason) {
+            const hint = document.createElement("small");
+            hint.dataset.modelAvailabilityReason = "true";
+            hint.textContent = reason;
+            label.append(hint);
+            button.title = `${model.id}\n${reason}`;
+          }
           if (!catalog.has(model.id)) {
             button.append(missingHint());
           }
@@ -288,6 +351,7 @@ export function mountModelShortcuts(
     menu.showPopover();
     render();
     search.focus();
+    void probeState.read();
   });
   menu.addEventListener("toggle", () =>
     manage.setAttribute("aria-expanded", String(menu.matches(":popover-open"))),
@@ -397,6 +461,7 @@ export function mountModelShortcuts(
     update(next: ModelShortcutView, harnessId: string, locale: string, contextId = harnessId) {
       if (harness !== harnessId || context !== contextId) {
         generation++;
+        probeState.reset();
         menu.hidePopover();
         failure = undefined;
         success = undefined;
@@ -425,6 +490,7 @@ export function mountModelShortcuts(
     },
     dispose() {
       generation++;
+      probeState.reset();
       window.removeEventListener(MODEL_FAVORITES_CHANGED, render);
       window.removeEventListener("storage", render);
       menu.remove();

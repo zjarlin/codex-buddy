@@ -1,4 +1,13 @@
 export {
+  MODEL_AVAILABILITY_METHOD,
+  modelAvailabilityParamsSchema,
+  modelAvailabilityResultSchema,
+  modelAvailabilitySnapshotSchema,
+  type ModelAvailabilityParams,
+  type ModelAvailabilityResult,
+  type ModelAvailabilitySnapshot,
+} from "./model-availability.js";
+export {
   BUDDY_MODELS_METHOD,
   BUDDY_CATALOG_SYNC_METHOD,
   buddyCatalogSyncSchema,

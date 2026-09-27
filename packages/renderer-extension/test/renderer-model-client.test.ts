@@ -437,6 +437,7 @@ describe("Renderer fixed Model request client", () => {
       "listThreadOwnership",
       "listThreadTerminals",
       "listWorkspaceFiles",
+      "modelAvailability",
       "openHarnessWebUi",
       "openThreadTerminal",
       "openThreadWorkspace",

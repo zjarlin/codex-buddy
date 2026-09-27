@@ -22,6 +22,8 @@ import {
   type ThreadUsageInspection,
   type ThreadUsageSnapshot,
   type CodexhostError,
+  type ModelAvailabilityParams,
+  type ModelAvailabilitySnapshot,
 } from "@codexhost/shared-contracts";
 
 import {
@@ -2678,6 +2680,22 @@ export function installRendererBindingProbe(
       renderMounted(mounted);
       return reportToPicker || agent !== "codex" ? undefined : summary;
     };
+    const modelAvailability = async (
+      params: ModelAvailabilityParams,
+    ): Promise<ModelAvailabilitySnapshot> => {
+      const mounted = mountedByComposer.get(composer);
+      const hostId = mounted?.hostId ?? activeModelHostId();
+      const client = hostId ? modelClientForHost(hostId) : null;
+      if (
+        !composer.isConnected ||
+        !mounted ||
+        controller.get(composer).agent !== "codex" ||
+        !client?.modelAvailability
+      ) {
+        throw new Error("Model availability probing is unavailable on this connection");
+      }
+      return client.modelAvailability(params);
+    };
     const control = mountComposerAgentControl(
       composer,
       state.composerId,
@@ -2718,6 +2736,10 @@ export function installRendererBindingProbe(
         if (composer.isConnected && mounted) await selectShortcut(mounted, modelId);
       },
       () => refreshModels(false),
+      {
+        read: () => modelAvailability({ action: "read" }),
+        probe: (modelIds) => modelAvailability({ action: "probe", modelIds }),
+      },
     );
     const mounted: MountedComposer = {
       composer,

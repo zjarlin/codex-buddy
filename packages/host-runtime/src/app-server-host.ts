@@ -15,6 +15,8 @@ import {
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { LiveModelCatalog } from "./buddy/live-model-catalog.js";
+import { ModelAvailability } from "./model-availability.js";
+import { MODEL_AVAILABILITY_METHOD } from "@codexhost/shared-contracts";
 import { InterruptedConversations } from "./buddy/continuation.js";
 import {
   BUDDY_INTERRUPTED_METHOD,
@@ -695,6 +697,7 @@ export class AppServerHost {
   readonly #threadTerminalSettings: ThreadTerminalSettingsStore;
   #liveCodexModels: LiveModelCatalog | undefined;
   #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
+  readonly #modelAvailability: ModelAvailability;
   #modelCatalogGeneration = 0;
 
   constructor(options: AppServerHostOptions) {
@@ -724,6 +727,11 @@ export class AppServerHost {
       this.#options.pluginContext?.environment ?? environment,
     );
     const permanentHome = path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
+    this.#modelAvailability = new ModelAvailability({
+      home: permanentHome,
+      environment,
+      privateMode: async () => (await this.#buddy?.privateMode()) ?? false,
+    });
     this.#gitRepositoryLinks = new GitRepositoryLinks(
       permanentHome,
       (cwd) => this.#gitWorkspace.root(cwd),
@@ -941,6 +949,7 @@ export class AppServerHost {
     this.#closeRequested = true;
     this.#gitWorkflow.close();
     this.#buddy?.close();
+    this.#modelAvailability.close();
     this.#privateChat?.close();
     this.#externalRuntime.idleRelease.disable();
     this.#pluginLoadAbort.abort();
@@ -1187,6 +1196,7 @@ export class AppServerHost {
       );
     }
     this.#desktopInputEnded = true;
+    this.#modelAvailability.close();
     this.#externalRuntime.idleRelease.disable();
     // Cancel loading before draining requests that may be waiting for it.
     this.#pluginLoadAbort.abort();
@@ -1243,6 +1253,19 @@ export class AppServerHost {
       } catch (error) {
         await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
       }
+      return;
+    }
+    if (request.method === MODEL_AVAILABILITY_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const snapshot = await this.#modelAvailability.handle(request.params);
+          await this.#writer.json(
+            rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }),
+          );
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
       return;
     }
     if (request.method === BUDDY_CATALOG_SYNC_METHOD) {
@@ -1307,6 +1330,9 @@ export class AppServerHost {
                 : await this.#buddy.snapshot();
         if (request.method === BUDDY_SETTINGS_METHOD && !snapshot.settings.privateMode) {
           this.#privateChat?.close();
+        }
+        if (request.method === BUDDY_SETTINGS_METHOD && snapshot.settings.privateMode) {
+          this.#modelAvailability.close();
         }
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }));
       } catch (error) {

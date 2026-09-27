@@ -35,6 +35,10 @@ async function macTerminalEnvironment(): Promise<NodeJS.ProcessEnv> {
   return { HOME: home };
 }
 
+async function emptyMacTerminalEnvironment(): Promise<NodeJS.ProcessEnv> {
+  return { HOME: await workspace() };
+}
+
 type SpawnedChild = {
   once: (event: "error", listener: (error: Error) => void) => void;
   unref: () => void;
@@ -103,13 +107,14 @@ describe("thread terminal", () => {
   it("resolves symlinked workspaces before launching a terminal", async () => {
     const directory = await workspace();
     const spawnTerminal = fakeSpawn();
+    const environment = await macTerminalEnvironment();
 
     await openThreadTerminal(
       path.join(directory, "."),
       "session-id",
       "/bin/codex",
       "apple-terminal",
-      { platform: "darwin", spawnTerminal },
+      { platform: "darwin", environment, spawnTerminal },
     );
 
     const [, arguments_] = spawnTerminal.mock.calls[0] as unknown as [string, string[], unknown];
@@ -187,7 +192,9 @@ describe("thread terminal", () => {
       unknown,
     ];
     expect(command).toBe("/usr/bin/open");
-    expect(arguments_.slice(0, 3)).toEqual(["-na", "/Applications/Ghostty.app", "--args"]);
+    expect(arguments_[0]).toBe("-na");
+    expect(arguments_[1]).toMatch(/\/Ghostty\.app$/u);
+    expect(arguments_[2]).toBe("--args");
     expect(arguments_.slice(3)).toEqual([
       "-e",
       "sh",
@@ -257,6 +264,7 @@ describe("thread terminal", () => {
     await expect(
       openThreadTerminal(directory, "session-id", "/opt/codex", "wezterm", {
         platform: "darwin",
+        environment: await emptyMacTerminalEnvironment(),
         spawnTerminal,
       }),
     ).rejects.toThrow("未找到 WezTerm");
@@ -320,6 +328,7 @@ describe("thread terminal", () => {
     await expect(
       openThreadTerminal(directory, "session-id", "/bin/codex", "apple-terminal", {
         platform: "darwin",
+        environment: await macTerminalEnvironment(),
         spawnTerminal,
       }),
     ).rejects.toThrow("无法打开系统终端");

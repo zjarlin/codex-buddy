@@ -73,6 +73,15 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("opens Doubao using the fixed local method and validates the application result", async () => {
+    const sendRequest = vi.fn().mockResolvedValue({ application: "doubao" });
+    const client = createRendererModelClient([{ sendRequest }]);
+    await expect(client?.openDoubao?.()).resolves.toEqual({ application: "doubao" });
+    expect(sendRequest).toHaveBeenCalledExactlyOnceWith("codexhost/doubao/open", {});
+    sendRequest.mockResolvedValueOnce({ application: "other" });
+    await expect(client?.openDoubao?.()).rejects.toThrow();
+  });
+
   it("validates repository links and preserves the selected repository in Git and file-write requests", async () => {
     const threadId = hostThreadIdSchema.parse("backend-chat");
     const target = { threadId, repository: "/frontend" };
@@ -438,6 +447,7 @@ describe("Renderer fixed Model request client", () => {
       "listThreadTerminals",
       "listWorkspaceFiles",
       "modelAvailability",
+      "openDoubao",
       "openHarnessWebUi",
       "openThreadTerminal",
       "openThreadWorkspace",

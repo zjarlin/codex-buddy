@@ -3025,6 +3025,7 @@ export function installRendererBindingProbe(
   const onHostRouteChange = (): void => {
     sidebarContinuation.refresh();
     threadActions.refresh();
+    projectActions.refresh();
     const hostId = activeModelHostId();
     // Reapply the visible draft's selection after its native connection changes.
     // Do this before rebinding Hosts: an old local draft is not a remote choice.

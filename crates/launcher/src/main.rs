@@ -1318,8 +1318,8 @@ mod tests {
         ResolvedLaunchOptions, RuntimeControl, STARTUP_TRACE_ENV, absolute_directory,
         allocate_runtime_control, desktop_controller_command, desktop_environment, emit_ready_line,
         managed_desktop_data_directory, npm_update_runtime_environment, parse_inspect_options,
-        parse_launch_options, read_bounded_controller_line, read_bounded_loopback_url,
-        run, validate_loopback_root_url,
+        parse_launch_options, read_bounded_controller_line, read_bounded_loopback_url, run,
+        validate_loopback_root_url,
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{DESKTOP_TREE_REFRESH_INTERVAL, desktop_tree_refresh_due};

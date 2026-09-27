@@ -19,7 +19,7 @@ const execFileAsync = promisify(execFile);
 const cleanup: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(cleanup.splice(0).map(removeDirectory));
+  for (const directory of cleanup.splice(0)) await removeDirectory(directory);
 });
 
 async function removeDirectory(directory: string): Promise<void> {
@@ -28,8 +28,8 @@ async function removeDirectory(directory: string): Promise<void> {
       await rm(directory, { recursive: true, force: true });
       return;
     } catch (error) {
-      if (attempt >= 3 || (error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (attempt >= 10 || (error as NodeJS.ErrnoException).code !== "EBUSY") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
     }
   }
 }

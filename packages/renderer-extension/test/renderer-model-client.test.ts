@@ -137,6 +137,72 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest).not.toHaveBeenCalled();
   });
 
+  it("falls back to the native remote Thread for Git workflow commit and push", async () => {
+    const threadId = hostThreadIdSchema.parse("remote-chat");
+    let active = true;
+    let currentTurnVisible = true;
+    const unsupported = Object.assign(new Error("method not found"), { code: -32601 });
+    const sendRequest = vi.fn(async (method: string) => {
+      if (method === "codexhost/git/workflow/status" || method === "codexhost/git/workflow/run") {
+        throw unsupported;
+      }
+      if (method === "turn/start") return { turn: { id: "remote-turn" } };
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: threadId,
+            cwd: "/remote/project",
+            status: { type: currentTurnVisible && active ? "active" : "idle" },
+            turns: [
+              {
+                id: currentTurnVisible ? "remote-turn" : "previous-turn",
+                status: currentTurnVisible && active ? "inProgress" : "completed",
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Expected a model client");
+
+    currentTurnVisible = false;
+    await expect(client.runGitWorkflow?.({ threadId })).resolves.toMatchObject({
+      workspace: "/remote/project",
+      phase: "running",
+      threadId,
+      turnId: "remote-turn",
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(1, "codexhost/git/workflow/run", { threadId });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, "turn/start", {
+      threadId,
+      input: [{ type: "text", text: expect.stringContaining("Git") }],
+    });
+
+    currentTurnVisible = true;
+    active = false;
+    await expect(client.inspectGitWorkflow?.({ threadId })).resolves.toMatchObject({
+      workspace: "/remote/project",
+      phase: "completed",
+      turnId: "remote-turn",
+    });
+    expect(sendRequest).toHaveBeenLastCalledWith("thread/read", {
+      threadId,
+      includeTurns: true,
+    });
+  });
+
+  it("does not fall back to a native Git turn for transient workflow errors", async () => {
+    const threadId = hostThreadIdSchema.parse("remote-chat-transient");
+    const sendRequest = vi.fn().mockRejectedValue(new Error("connection reset"));
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Expected a model client");
+
+    await expect(client.runGitWorkflow?.({ threadId })).rejects.toThrow("connection reset");
+    expect(sendRequest).toHaveBeenCalledExactlyOnceWith("codexhost/git/workflow/run", { threadId });
+  });
+
   it("validates launch setting requests and responses on the selected request client", async () => {
     const harnessId = harnessIdSchema.parse("workbuddy");
     const result = { path: "D:\\Apps\\WorkBuddy", restartRequired: true };

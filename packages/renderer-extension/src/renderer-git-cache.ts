@@ -15,7 +15,7 @@ interface Entry {
   bytes: number;
 }
 
-// 只缓存只读快照；并发读取共用请求，写入后失效，限制正文占用的内存。
+// 只缓存状态与模型目录；并发读取共用请求，写入后失效。
 export class RendererGitCache {
   readonly #entries: Entry[] = [];
 
@@ -101,16 +101,6 @@ export class RendererGitCache {
     return this.#read(client, threadId, JSON.stringify([repository, "models"]), () =>
       client.listGitMessageModels({ threadId, ...(repository ? { repository } : {}) }),
     );
-  }
-
-  diff(client: RendererGitClient, threadId: HostThreadId, path: string, repository?: string) {
-    return this.#read(client, threadId, JSON.stringify([repository, "diff", path]), async () => {
-      const [diff, content] = await Promise.all([
-        client.inspectGitDiff({ threadId, path, ...(repository ? { repository } : {}) }),
-        client.inspectGitContent({ threadId, path, ...(repository ? { repository } : {}) }),
-      ]);
-      return { diff, content };
-    });
   }
 
   update(

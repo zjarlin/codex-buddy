@@ -1,0 +1,48 @@
+const zh = {
+  all: "所有项目",
+  configure: "配置项目 Tab",
+  title: "项目 Tab 配置",
+  name: "Tab 名称",
+  prefixes: "项目名前缀",
+  hint: "每行一个前缀，匹配任意一行即可；留空可仅手动分类。区分大小写，按 Tab 顺序匹配，手动分类优先。",
+  add: "添加 Tab",
+  remove: "删除",
+  up: "上移",
+  down: "下移",
+  save: "保存",
+  cancel: "取消",
+  move: "移动到 Tab…",
+  moveTitle: "移动项目到 Tab",
+  automatic: "按规则自动分类",
+  empty: "当前分类下没有项目",
+  failed: "项目 Tab 配置读写失败：",
+  duplicate: "Tab 名称不能重复",
+  noTabs: "还没有自定义 Tab，可在配置中添加。",
+  savedHere: "配置保存在当前客户端。",
+};
+const en: typeof zh = {
+  all: "All projects",
+  configure: "Configure project tabs",
+  title: "Project tab settings",
+  name: "Tab name",
+  prefixes: "Project name prefixes",
+  hint: "One prefix per line; any match applies. Leave empty for manual assignment. Case-sensitive; first matching tab wins. Manual assignments take priority.",
+  add: "Add tab",
+  remove: "Delete",
+  up: "Move up",
+  down: "Move down",
+  save: "Save",
+  cancel: "Cancel",
+  move: "Move to tab…",
+  moveTitle: "Move project to tab",
+  automatic: "Classify automatically",
+  empty: "No projects in this category",
+  failed: "Project tab settings could not be read or saved: ",
+  duplicate: "Tab names must be unique",
+  noTabs: "No custom tabs yet. Add one in settings.",
+  savedHere: "Settings are saved on this client.",
+};
+export function projectTabsMessages(locale: string): typeof zh {
+  return locale === "zh-CN" ? zh : en;
+}
+export type ProjectTabsMessages = typeof zh;

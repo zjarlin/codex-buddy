@@ -97,6 +97,7 @@ import {
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
 import { installRendererThreadActions } from "./renderer-thread-actions.js";
 import { installRendererProjectActions } from "./renderer-project-actions.js";
+import { installProjectTabs } from "./project-tabs/index.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import {
   rendererHarnessCommandExecutesDirectly,
@@ -787,6 +788,9 @@ export function installRendererBindingProbe(
     getClient: () => modelClientForHost("local"),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const projectTabs = installProjectTabs({
+    getLocale: () => settingsLifecycle.locale,
+  });
   const activeGitContext = () => {
     const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
     for (const mounted of mountedByComposer.values()) {
@@ -800,15 +804,8 @@ export function installRendererBindingProbe(
       if (!threadId) continue;
       const hostId = activeModelHostId() ?? mounted.hostId;
       const client = hostId ? modelClientForHost(hostId) : null;
-      if (
-        !client?.inspectGitStatus ||
-        !client.inspectGitDiff ||
-        !client.listWorkspaceFiles ||
-        !client.readWorkspaceFile ||
-        !client.writeWorkspaceFile
-      )
-        continue;
-      return { anchor: mounted.composer, threadId, client };
+      if (!client?.inspectGitStatus) continue;
+      return { anchor: mounted.composer, threadId, hostId, client };
     }
     return null;
   };
@@ -817,8 +814,12 @@ export function installRendererBindingProbe(
     getContext: () => {
       const current = activeGitContext();
       return current
-        ? { threadId: current.threadId, client: current.client as RendererGitClient }
-        : { threadId: null, client: null };
+        ? {
+            threadId: current.threadId,
+            hostId: current.hostId,
+            client: current.client as RendererGitClient,
+          }
+        : { threadId: null, hostId: null, client: null };
     },
   });
   const gitWorkflowControl = installRendererGitWorkflowControl(() => {
@@ -3026,6 +3027,7 @@ export function installRendererBindingProbe(
     sidebarContinuation.refresh();
     threadActions.refresh();
     projectActions.refresh();
+    projectTabs.refresh();
     const hostId = activeModelHostId();
     // Reapply the visible draft's selection after its native connection changes.
     // Do this before rebinding Hosts: an old local draft is not a remote choice.
@@ -3329,6 +3331,7 @@ export function installRendererBindingProbe(
       sidebarContinuation.dispose();
       threadActions.dispose();
       projectActions.dispose();
+      projectTabs.dispose();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();

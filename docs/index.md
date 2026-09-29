@@ -28,8 +28,8 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
-| [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏、关联仓库切换、聊天区域差异与项目空闲推送工作流；维护 Git 界面时阅读。 |
-| [`product/workspace-files.md`](product/workspace-files.md) | 左侧工作区文件树、CodeMirror 编辑与保存契约、revision 冲突保护和路径安全限制；维护文件浏览器时阅读。 |
+| [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏、关联仓库切换、官方审查转发与项目空闲推送工作流；维护 Git 界面时阅读。 |
+| [`product/workspace-files.md`](product/workspace-files.md) | 官方文件树与编辑器转发、保留的 Host 文件接口及其安全约束；维护文件浏览器时阅读。 |
 
 ## Harness 专项
 
@@ -99,7 +99,7 @@
 | [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | q3 隐私输入区、复用网关目录、发送阻断与保护范围；处理敏感文本前阅读。 |
 | [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 模型目录热更新、手填 ID、持久 Pin、运行时固定模型与自动规划边界。 |
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
-| [`product/project-actions.md`](product/project-actions.md) | 项目下拉菜单中的 Doubao 桌面客户端入口及目录关联限制。 |
+| [`product/project-actions.md`](product/project-actions.md) | 项目分类 Tab、前缀规则、手动归属，以及 Doubao 桌面客户端入口。 |
 | [`product/codex-accounts.md`](product/codex-accounts.md) | 设置页中的原生账号与额度、外部 Harness 不受 Codex 额度门限制、手动导入 Pi 及导入记录管理；修改账号 UI、发送额度门、查询或凭证导入链路时阅读。 |
 | [`product/codex-native-account-switching-design.md`](product/codex-native-account-switching-design.md) | 移除 Codex 多账号切换后的只读边界；修改 Codex 认证或账号路由时阅读。 |
 | [`architecture/renderer-settings-styling.md`](architecture/renderer-settings-styling.md) | 设置页 Tailwind CSS 使用边界、构建方式与编写规则；新增或改版设置页界面时阅读。 |

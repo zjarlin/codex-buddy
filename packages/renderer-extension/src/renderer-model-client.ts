@@ -273,6 +273,7 @@ import {
   createRendererSessionImportClient,
   type RendererSessionImportClient,
 } from "./renderer-session-import-client.js";
+import { createNativeModelAvailability } from "./renderer-native-model-availability.js";
 
 export const HARNESS_INSPECT_METHOD = "codexhost/harness/inspect";
 export const HARNESS_PLUGIN_LIST_METHOD = "codexhost/harness/plugins/list";
@@ -311,6 +312,41 @@ const THREAD_USAGE_REFRESH_METHODS = [
   THREAD_USAGE_UPDATED_METHOD,
   TURN_COMPLETED_METHOD,
 ] as const;
+
+const NATIVE_GIT_WORKFLOW_PROMPT = [
+  "处理当前项目的 Git 提交和推送。",
+  "先确认当前工作区、分支和远程，只提交用户授权的改动。",
+  "有未提交改动时生成简洁的 Conventional Commit 消息并提交，然后推送当前分支；没有改动但有未推送提交时只推送；已经同步时不要创建空提交。",
+  "遇到 non-fast-forward 时先拉取并用 merge 同步，不要强制推送；遇到冲突、权限或其他错误时停止并报告真实结果。",
+].join("\n");
+
+const NATIVE_THREAD_READ_METHOD = "thread/read";
+const NATIVE_TURN_START_METHOD = "turn/start";
+
+type NativeGitWorkflowState = {
+  turnId: string;
+};
+
+function nativeThreadStatus(value: unknown): "active" | "completed" | "failed" | "idle" {
+  const thread = isRecord(value) ? value : null;
+  const status = isRecord(thread?.status) ? thread.status.type : undefined;
+  if (status === "active") return "active";
+  const turns = Array.isArray(thread?.turns) ? thread.turns : [];
+  const latest = isRecord(turns.at(-1)) ? turns.at(-1) : null;
+  const latestStatus = latest?.status;
+  if (latestStatus === "inProgress" || latestStatus === "running") return "active";
+  if (latestStatus === "failed" || latestStatus === "interrupted" || latestStatus === "cancelled") {
+    return "failed";
+  }
+  if (latestStatus === "completed") return "completed";
+  return "idle";
+}
+
+function nativeLatestTurnId(value: unknown): string | null {
+  if (!isRecord(value) || !Array.isArray(value.turns)) return null;
+  const latest = value.turns.at(-1);
+  return isRecord(latest) && typeof latest.id === "string" ? latest.id : null;
+}
 export const UPDATE_CHECK_METHOD = "codexhost/update/check";
 export const UPDATE_START_METHOD = "codexhost/update/start";
 export const UPDATE_STATUS_METHOD = "codexhost/update/status";
@@ -518,6 +554,80 @@ export function createRendererModelClient(
         : source.sendRequest(method, params, options),
     ),
   };
+  const nativeGitWorkflows = new Map<string, NativeGitWorkflowState>();
+  const notifications = notificationTarget(source);
+  const subscribe = notifications?.addNotificationCallback?.bind(notifications);
+  const nativeModelAvailability = createNativeModelAvailability({
+    sendRequest: (method, params) => manager.sendRequest(method, params, { priority: "interactive" }),
+    ...(subscribe ? { subscribe } : {}),
+  });
+
+  const inspectNativeGitWorkflow = async (
+    input: GitWorkflowParams,
+  ): Promise<GitWorkflowSnapshot> => {
+    const response = await manager.sendRequest(NATIVE_THREAD_READ_METHOD, {
+      threadId: input.threadId,
+      includeTurns: true,
+    });
+    const thread = isRecord(response) && isRecord(response.thread) ? response.thread : null;
+    if (!thread) throw new Error("远程原生 Thread 状态无效，无法执行 Git 工作流。");
+    const workspace = typeof thread.cwd === "string" && thread.cwd.trim() ? thread.cwd : null;
+    const state = nativeGitWorkflows.get(input.threadId);
+    const observedStatus = nativeThreadStatus(thread);
+    const status =
+      state && observedStatus !== "active" && nativeLatestTurnId(thread) !== state.turnId
+        ? "active"
+        : observedStatus;
+    if (status === "active") {
+      return {
+        workspace,
+        phase: "running",
+        threadId: input.threadId,
+        turnId: state?.turnId ?? null,
+        message: "远程 Git 工作流正在运行…",
+      };
+    }
+    if (state) {
+      return {
+        workspace,
+        phase: status === "failed" ? "failed" : "completed",
+        threadId: input.threadId,
+        turnId: state.turnId,
+        message:
+          status === "failed"
+            ? "远程 Git 工作流失败，请查看当前回合结果。"
+            : "远程 Git 工作流已完成，请查看当前回合结果。",
+      };
+    }
+    return {
+      workspace,
+      phase: "idle",
+      threadId: null,
+      turnId: null,
+      message: "远程 Git 工作流待执行",
+    };
+  };
+
+  const runNativeGitWorkflow = async (input: GitWorkflowParams): Promise<GitWorkflowSnapshot> => {
+    const response = await manager.sendRequest(NATIVE_TURN_START_METHOD, {
+      threadId: input.threadId,
+      input: [{ type: "text", text: NATIVE_GIT_WORKFLOW_PROMPT }],
+    });
+    const turn = isRecord(response) && isRecord(response.turn) ? response.turn : null;
+    const turnId = typeof turn?.id === "string" && turn.id.trim() ? turn.id : null;
+    if (!turnId) throw new Error("远程原生 Git 回合未返回有效的 Turn ID。");
+    nativeGitWorkflows.set(input.threadId, { turnId });
+    const state = await inspectNativeGitWorkflow(input).catch(() => null);
+    return (
+      state ?? {
+        workspace: null,
+        phase: "running",
+        threadId: input.threadId,
+        turnId,
+        message: "远程 Git 工作流正在运行…",
+      }
+    );
+  };
 
   const inspectHarness = async (
     input: HarnessInspectParams,
@@ -694,14 +804,26 @@ export function createRendererModelClient(
       );
     },
     async inspectGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot> {
-      return gitWorkflowSnapshotSchema.parse(
-        await manager.sendRequest(GIT_WORKFLOW_STATUS_METHOD, gitWorkflowParamsSchema.parse(input)),
-      );
+      const params = gitWorkflowParamsSchema.parse(input);
+      try {
+        return gitWorkflowSnapshotSchema.parse(
+          await manager.sendRequest(GIT_WORKFLOW_STATUS_METHOD, params),
+        );
+      } catch (error) {
+        if (!(error instanceof RendererMethodUnavailableError)) throw error;
+        return inspectNativeGitWorkflow(params);
+      }
     },
     async runGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot> {
-      return gitWorkflowSnapshotSchema.parse(
-        await manager.sendRequest(GIT_WORKFLOW_RUN_METHOD, gitWorkflowParamsSchema.parse(input)),
-      );
+      const params = gitWorkflowParamsSchema.parse(input);
+      try {
+        return gitWorkflowSnapshotSchema.parse(
+          await manager.sendRequest(GIT_WORKFLOW_RUN_METHOD, params),
+        );
+      } catch (error) {
+        if (!(error instanceof RendererMethodUnavailableError)) throw error;
+        return runNativeGitWorkflow(params);
+      }
     },
     async inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
       const params = gitWorkspaceParamsSchema.parse(input);
@@ -886,10 +1008,15 @@ export function createRendererModelClient(
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_MODELS_METHOD, {})),
     async modelAvailability(input: ModelAvailabilityParams): Promise<ModelAvailabilitySnapshot> {
       const params = modelAvailabilityParamsSchema.parse(input);
-      const result = await manager.sendRequest(MODEL_AVAILABILITY_METHOD, params, {
-        priority: "interactive",
-      });
-      return modelAvailabilitySnapshotSchema.parse(result);
+      try {
+        const result = await manager.sendRequest(MODEL_AVAILABILITY_METHOD, params, {
+          priority: "interactive",
+        });
+        return modelAvailabilitySnapshotSchema.parse(result);
+      } catch (error) {
+        if (!(error instanceof RendererMethodUnavailableError)) throw error;
+        return nativeModelAvailability(params);
+      }
     },
     syncCodexCatalog: async () =>
       buddyCatalogSyncSchema.parse(await manager.sendRequest(BUDDY_CATALOG_SYNC_METHOD, {})),

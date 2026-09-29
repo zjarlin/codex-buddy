@@ -5,5 +5,8 @@ export default defineConfig({
   reporter: "list",
   use: {
     trace: "retain-on-failure",
+    launchOptions: {
+      executablePath: process.env.CODEXHOST_PLAYWRIGHT_EXECUTABLE_PATH,
+    },
   },
 });

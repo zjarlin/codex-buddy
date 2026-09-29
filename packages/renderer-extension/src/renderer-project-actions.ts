@@ -4,6 +4,7 @@ import X from "lucide/dist/esm/icons/x.mjs";
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 
 const ERROR_ATTRIBUTE = "data-codexhost-project-actions-error";
 const ACTION_ATTRIBUTE = "data-codexhost-project-actions-open-doubao";
@@ -300,8 +301,12 @@ export function installRendererProjectActions(options: {
     }
   };
 
-  const observer = new MutationObserver(() => {
-    if (scheduled || disposed) {
+  const observer = new MutationObserver((records) => {
+    if (
+      scheduled ||
+      disposed ||
+      !records.some((record) => mutationAffectsElements(record, '[role="menu"]'))
+    ) {
       return;
     }
     scheduled = true;

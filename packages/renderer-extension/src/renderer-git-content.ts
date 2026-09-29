@@ -1,4 +1,5 @@
 import { diffArrays } from "diff";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 
 import type { GitContentResult, GitDiffResult } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
@@ -245,7 +246,15 @@ export function createRendererGitContent(options: {
   let busy = false;
   let stageHandler: (() => void | Promise<void>) | null = null;
   const resizeObserver = new ResizeObserver(() => schedulePosition());
-  const mutationObserver = new MutationObserver(() => schedulePosition());
+  const mutationObserver = new MutationObserver((records) => {
+    if (
+      records.some((record) =>
+        mutationAffectsElements(record, `${MAIN_SURFACE_SELECTOR},${APP_HEADER_SELECTOR}`, false),
+      )
+    ) {
+      schedulePosition();
+    }
+  });
 
   const position = (): void => {
     frame = 0;

@@ -501,3 +501,33 @@ test("favorite chips persist and select the exact native model with planning dis
   await page.setViewportSize({ width: 390, height: 800 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+test("favorite chip remove button unpins without selecting and persists after reload", async ({
+  page,
+}) => {
+  await openShortcuts(page);
+  const manage = page.getByRole("button", { name: "收藏模型", exact: true });
+  await manage.click();
+  const menu = page.getByRole("dialog", { name: "收藏模型", exact: true });
+  await menu.getByRole("button", { name: "收藏 GPT Alpha", exact: true }).click();
+  await menu.getByRole("button", { name: "收藏 DeepSeek Beta", exact: true }).click();
+  await page.keyboard.press("Escape");
+
+  const remove = page.locator('[data-model-shortcut-remove="deepseek-b"]');
+  await expect(remove).toHaveAccessibleName("取消收藏 DeepSeek Beta");
+  await remove.click();
+  await expect(page.locator('[data-model-shortcut="deepseek-b"]')).toHaveCount(0);
+  await expect(page.locator('[data-model-shortcut="gpt-a"]')).toBeVisible();
+  await expect(page.locator("#native")).toHaveText("gpt-a");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("codexhost.model-favorites.v1:codex") ?? "[]"),
+    ),
+  ).toEqual(["gpt-a"]);
+
+  await page.reload();
+  await page.addScriptTag({ content: bundle });
+  await expect(page.locator('[data-model-shortcut="deepseek-b"]')).toHaveCount(0);
+  await expect(page.locator('[data-model-shortcut="gpt-a"]')).toBeVisible();
+});

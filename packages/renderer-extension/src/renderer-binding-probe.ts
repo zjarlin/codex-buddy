@@ -59,6 +59,7 @@ import {
 } from "./renderer-harness-localization.js";
 import { installReasoningTranscriptSoftWrap } from "./renderer-transcript-dom.js";
 import { installTranscriptAutoScroll } from "./renderer-transcript-scroll.js";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { RendererCodexAccountState } from "./renderer-codex-account-state.js";
 import {
   createRendererCodexUsageGate,
@@ -95,7 +96,12 @@ import {
   writeNewThreadExternalConfigurationPreference,
 } from "./renderer-new-thread-preference.js";
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
+import { installRendererSidebarStatusFilter } from "./renderer-sidebar-status-filter.js";
 import { installRendererThreadActions } from "./renderer-thread-actions.js";
+import {
+  installRendererQueuedTransfer,
+  isQueuedTransferManager,
+} from "./renderer-queued-transfer.js";
 import { installRendererProjectActions } from "./renderer-project-actions.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import {
@@ -689,6 +695,14 @@ function mutationMayChangeComposerTarget(mutation: MutationRecord): boolean {
   return !target || editorForElement(target) === null;
 }
 
+const BINDING_SURFACE_SELECTOR = [
+  CODEX_COMPOSER_SELECTOR,
+  EDITOR_SELECTOR,
+  "[data-above-composer-conversation-id]",
+  'header[data-pip-obstacle="app-shell-header"]',
+  "nav[data-app-navigation-rail]",
+].join(",");
+
 function catalogWithConfigurationState(
   catalog: HarnessModelCatalog,
   model: HarnessModelRef,
@@ -737,6 +751,7 @@ export function installRendererBindingProbe(
   const disposeReasoningSoftWrap = installReasoningTranscriptSoftWrap(document);
   const disposeTranscriptAutoScroll = installTranscriptAutoScroll(document);
   let scanScheduled = false;
+  let scanFrame: number | null = null;
   let refreshTargetsOnNextScan = false;
   let adapterDispose: (() => void) | null = null;
   let applyAdapterAgent: ApplyAdapterAgent | null = null;
@@ -779,8 +794,20 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const sidebarStatusFilter = installRendererSidebarStatusFilter({
+    getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
   const threadActions = installRendererThreadActions({
     getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
+  const queuedTransfer = installRendererQueuedTransfer({
+    getManager: (hostId) => {
+      if (!modelClientForHost(hostId)) return null;
+      const manager: unknown = window.__codexhostHostRoutingV1?.forHost(hostId)?.manager;
+      return isQueuedTransferManager(manager) ? manager : null;
+    },
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
   const projectActions = installRendererProjectActions({
@@ -2792,6 +2819,7 @@ export function installRendererBindingProbe(
 
   const scan = (): void => {
     scanScheduled = false;
+    scanFrame = null;
     const refreshTargets = refreshTargetsOnNextScan;
     refreshTargetsOnNextScan = false;
     if (disposed) return;
@@ -2865,7 +2893,7 @@ export function installRendererBindingProbe(
     refreshTargetsOnNextScan ||= refreshTargets;
     if (scanScheduled || disposed) return;
     scanScheduled = true;
-    queueMicrotask(scan);
+    scanFrame = window.requestAnimationFrame(scan);
   };
 
   const composerRootsWithin = (node: Node): Element[] => {
@@ -3012,19 +3040,27 @@ export function installRendererBindingProbe(
   };
 
   const mutationObserver = new MutationObserver((mutations) => {
-    transferReplacedComposers(mutations);
+    const structural = mutations.filter((mutation) =>
+      mutationAffectsElements(mutation, BINDING_SURFACE_SELECTOR),
+    );
+    if (structural.length === 0) return;
+    transferReplacedComposers(structural);
     // 忽略 codexhost 自身注入控件产生的 DOM 变更：它们由 scan 触发的
     // reposition 写入，如果反过来再驱动 scan 就会形成 CPU 满载的自激循环。
-    const relevant = mutations.filter((mutation) => {
+    const relevant = structural.filter((mutation) => {
       const target =
         mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
       return target?.closest(RENDERER_INJECTED_CONTROL_SELECTOR) === null;
     });
+    if (relevant.length === 0) return;
     scheduleScan(relevant.some(mutationMayChangeComposerTarget));
   });
   const onHostRouteChange = (): void => {
+    scheduleScan(true);
     sidebarContinuation.refresh();
+    sidebarStatusFilter.refresh();
     threadActions.refresh();
+    queuedTransfer.refresh();
     projectActions.refresh();
     const hostId = activeModelHostId();
     // Reapply the visible draft's selection after its native connection changes.
@@ -3082,7 +3118,6 @@ export function installRendererBindingProbe(
       "data-codex-composer-root",
       "data-above-composer-conversation-id",
     ],
-    characterData: true,
     childList: true,
     subtree: true,
   });
@@ -3259,6 +3294,7 @@ export function installRendererBindingProbe(
       adapterDispose = dispose ?? null;
       applyAdapterAgent = applyAgent ?? null;
       modelControl = nextModelControl ?? null;
+      queuedTransfer.refresh();
       try {
         usageNotificationDispose =
           modelControl?.subscribeThreadUsage?.(applyThreadUsageUpdate) ?? null;
@@ -3324,10 +3360,13 @@ export function installRendererBindingProbe(
       applyAdapterAgent = null;
       modelControl = null;
       mutationObserver.disconnect();
+      if (scanFrame !== null) window.cancelAnimationFrame(scanFrame);
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
       sidebarContinuation.dispose();
+      sidebarStatusFilter.dispose();
       threadActions.dispose();
+      queuedTransfer.dispose();
       projectActions.dispose();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();

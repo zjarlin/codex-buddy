@@ -14,6 +14,8 @@ import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { GitRepositoryLinks } from "../src/git-repository-links.js";
 import { GitWorkspace } from "../src/git-workspace.js";
+import { readProjectGitRepositories } from "../src/project-git-repositories.js";
+import { ProjectGitWorkflow } from "../src/project-git-workflow.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -38,7 +40,7 @@ async function fixture() {
       (cwd) => workspace.root(cwd),
       (cwd, submodule) => workspace.submoduleRoot(cwd, submodule),
     );
-  return { directory, repository, create, links: create() };
+  return { directory, repository, create, links: create(), workspace };
 }
 
 async function submoduleFixture() {
@@ -81,7 +83,7 @@ async function submoduleFixture() {
     async (cwd) => workspace.root(cwd),
     async (cwd, submodule) => workspace.submoduleRoot(cwd, submodule),
   );
-  return { directory, parent, child, links };
+  return { directory, parent, child, links, workspace };
 }
 
 test("persists links across sessions, canonicalizes subdirectories and aliases, and isolates projects", async () => {
@@ -148,4 +150,122 @@ test("authorizes declared submodule roots without linking them into the project 
   execFileSync("git", ["init", "-q", unrelated]);
   await expect(links.resolve(parent, unrelated)).rejects.toThrow("尚未关联");
   await expect(links.resolve(parent, directory)).rejects.toThrow("尚未关联");
+});
+
+test("collects real linked worktrees and initialized submodules once and excludes unrelated repositories", async () => {
+  const { directory, parent, links, workspace } = await submoduleFixture();
+  const nested = await realpath(path.join(parent, "vendor/child"));
+  const frontend = path.join(directory, "frontend");
+  execFileSync("git", ["init", "-q", frontend]);
+  await writeFile(path.join(frontend, "app.txt"), "frontend change\n");
+  await links.link(parent, frontend);
+  await links.link(parent, nested);
+  const unrelated = path.join(parent, "unrelated");
+  execFileSync("git", ["init", "-q", unrelated]);
+  const repositories = await readProjectGitRepositories(parent, links, workspace);
+  expect(repositories.map(({ kind, status }) => ({ kind, path: status.workspace }))).toEqual([
+    { kind: "primary", path: parent },
+    { kind: "submodule", path: nested },
+    { kind: "linked", path: frontend },
+  ]);
+  expect(
+    repositories.find(({ status }) => status.workspace === frontend)?.status.changes,
+  ).toMatchObject([{ path: "app.txt" }]);
+  execFileSync("git", ["-C", nested, "checkout", "-q", "--detach"]);
+  execFileSync("git", [
+    "-C",
+    nested,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "feat: detached child",
+    "--allow-empty",
+  ]);
+  expect(
+    (await readProjectGitRepositories(parent, links, workspace)).find(
+      ({ status }) => status.workspace === nested,
+    ),
+  ).toMatchObject({
+    gitlinkChanged: true,
+    status: { detached: true, changes: [] },
+  });
+  await links.unlink(parent, nested);
+  execFileSync("git", ["-C", parent, "submodule", "deinit", "-f", "--", "vendor/child"]);
+  expect(
+    (await readProjectGitRepositories(parent, links, workspace)).map(
+      ({ status }) => status.workspace,
+    ),
+  ).toEqual([parent, frontend]);
+});
+
+test("fails discovery when a linked path has been replaced", async () => {
+  const { directory, repository, links, workspace } = await fixture();
+  const backend = await repository("backend");
+  const frontend = await repository("frontend");
+  const other = await repository("other");
+  await links.link(backend, frontend);
+  await rename(frontend, path.join(directory, "frontend-moved"));
+  await symlink(other, frontend, "dir");
+  await expect(readProjectGitRepositories(backend, links, workspace)).rejects.toThrow("位置已变化");
+});
+
+test("verifies a real push when only the linked worktree has an unpushed commit", async () => {
+  const { directory, repository, links, workspace } = await fixture();
+  const backend = await repository("backend");
+  const frontend = await repository("frontend");
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  for (const cwd of [backend, frontend]) {
+    git(cwd, "checkout", "-qb", "main");
+    git(cwd, "config", "user.name", "Test");
+    git(cwd, "config", "user.email", "test@example.com");
+    git(cwd, "config", "commit.gpgsign", "false");
+    git(cwd, "add", ".");
+    git(cwd, "commit", "-qm", "initial");
+    const remote = path.join(directory, `${path.basename(cwd)}.git`);
+    execFileSync("git", ["init", "-q", "--bare", remote]);
+    git(cwd, "remote", "add", "origin", remote);
+    git(cwd, "push", "-qu", "origin", "main");
+  }
+  await links.link(backend, frontend);
+  await writeFile(path.join(frontend, "src", "app.txt"), "frontend update\n");
+  git(frontend, "commit", "-qam", "feat: frontend update");
+  const pushed: string[] = [];
+  const workflow = new ProjectGitWorkflow({
+    project: async () => backend,
+    activeThreads: async () => [],
+    repositories: (cwd) => readProjectGitRepositories(cwd, links, workspace),
+    linkedRepositories: async (cwd) => (await links.list(cwd)).repositories.map(({ path }) => path),
+    start: async (_thread, _cwd, check, repositories) => {
+      await check();
+      for (const { status } of repositories) {
+        if (status.ahead === 0) continue;
+        git(status.workspace, "push", "-q");
+        pushed.push(status.workspace);
+      }
+      return "push-turn";
+    },
+    diagnose: (error) => {
+      throw error;
+    },
+  });
+  try {
+    expect((await workflow.run("thread")).phase).toBe("running");
+    expect(pushed).toEqual([frontend]);
+    await workflow.completed("thread", "push-turn", "completed");
+    expect((await workflow.inspect("thread")).phase).toBe("completed");
+    expect(git(path.join(directory, "frontend.git"), "rev-parse", "main")).toBe(
+      git(frontend, "rev-parse", "HEAD"),
+    );
+  } finally {
+    workflow.close();
+  }
 });

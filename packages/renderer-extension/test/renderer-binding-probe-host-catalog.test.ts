@@ -38,6 +38,10 @@ vi.mock("../src/renderer-thread-actions.js", () => ({
   installRendererThreadActions: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
+vi.mock("../src/renderer-project-actions.js", () => ({
+  installRendererProjectActions: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
 vi.mock("../src/renderer-git-sidebar.js", () => ({
   installRendererGitSidebar: () => ({ syncContext: vi.fn(), dispose: vi.fn() }),
 }));
@@ -219,6 +223,8 @@ function installFakeBrowser(): void {
     dispatchEvent: listeners.dispatchEvent.bind(listeners),
     setTimeout,
     clearTimeout,
+    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0),
+    cancelAnimationFrame: clearTimeout,
     open: vi.fn(),
   };
   const document_ = {

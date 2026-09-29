@@ -1,4 +1,4 @@
-import { createElement, RefreshCw } from "lucide";
+import { createElement, RefreshCw, X } from "lucide";
 import {
   MODEL_FAVORITES_CHANGED,
   readModelFavorites,
@@ -45,8 +45,15 @@ export function mountModelShortcuts(
       [data-codexhost-model-shortcuts] { display:flex; flex-wrap:wrap; align-items:center; gap:6px; box-sizing:border-box; width:100%; min-width:0; max-width:100%; align-self:stretch; padding:6px 0; color:var(--color-text-secondary, inherit); }
       [data-model-shortcut-list] { display:contents; }
       [data-codexhost-model-shortcuts] button { flex:none; height:28px; padding:0 9px; font:400 12px/18px system-ui,sans-serif; border:1px solid var(--color-border,rgba(127,127,127,.22)); }
-      [data-codexhost-model-shortcuts] [data-model-shortcut] { min-width:0; max-width:100%; height:auto; min-height:28px; padding-block:4px; white-space:normal; overflow-wrap:anywhere; }
-      [data-model-shortcut][aria-pressed=true] { background:var(--color-token-list-hover-background,rgba(127,127,127,.16)); color:var(--color-text-primary,inherit); border-color:var(--color-text-secondary,#85858f); }
+      [data-model-shortcut-item] { display:inline-flex; align-items:stretch; box-sizing:border-box; min-width:0; max-width:100%; border:1px solid var(--color-border,rgba(127,127,127,.22)); border-radius:9999px; overflow:hidden; }
+      [data-model-shortcut-item][data-selected=true] { background:var(--color-token-list-hover-background,rgba(127,127,127,.16)); color:var(--color-text-primary,inherit); border-color:var(--color-text-secondary,#85858f); }
+      [data-model-shortcut-item]:focus-within { outline:2px solid var(--color-text-primary,#85858f); outline-offset:2px; }
+      [data-codexhost-model-shortcuts] [data-model-shortcut-item] button { border:0; border-radius:0; background:transparent; }
+      [data-codexhost-model-shortcuts] [data-model-shortcut] { flex:0 1 auto; min-width:0; max-width:100%; height:auto; min-height:26px; padding-block:4px; white-space:normal; overflow-wrap:anywhere; }
+      [data-codexhost-model-shortcuts] [data-model-shortcut-remove] { display:inline-flex; align-items:center; justify-content:center; flex:none; width:26px; height:auto; padding:0 6px 0 2px; cursor:pointer; }
+      [data-codexhost-model-shortcuts] [data-model-shortcut-remove]:hover:not(:disabled) { background:rgba(127,127,127,.12); }
+      [data-model-shortcut-remove] svg { pointer-events:none; }
+      [data-model-shortcut-remove]:disabled { opacity:.5; cursor:default; }
       [data-codexhost-model-shortcuts] button:focus-visible { outline:2px solid var(--color-text-primary,#85858f); outline-offset:2px; }
       [data-model-favorites-menu] { box-sizing:border-box; margin:0; padding:10px; border:1px solid var(--color-border,rgba(127,127,127,.25)); border-radius:12px; background:var(--color-token-dropdown-background,var(--color-background-elevated,light-dark(#fff,#282828))); color:var(--color-text-primary,CanvasText); color-scheme:inherit; box-shadow:0 8px 24px #0003; font:13px system-ui,sans-serif; }
       [data-model-favorites-menu]:popover-open { display:flex; flex-direction:column; overflow-y:auto; }
@@ -231,6 +238,9 @@ export function mountModelShortcuts(
       signature = nextSignature;
       list.replaceChildren(
         ...visibleModels.map((model) => {
+          const item = document.createElement("span");
+          item.dataset.modelShortcutItem = model.id;
+          item.dataset.selected = String(view.selected === model.id);
           const button = document.createElement("button");
           button.type = "button";
           button.className = TRIGGER_CHIP_CLASS;
@@ -243,7 +253,15 @@ export function mountModelShortcuts(
           }
           button.setAttribute("aria-pressed", String(view.selected === model.id));
           button.disabled = !canSelect(model.id);
-          return button;
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.dataset.modelShortcutRemove = model.id;
+          remove.setAttribute("aria-label", `${chinese ? "取消收藏" : "Unfavorite"} ${model.label}`);
+          remove.title = remove.getAttribute("aria-label") ?? "";
+          remove.disabled = isDisabled();
+          remove.append(createElement(X, { width: 13, height: 13, "aria-hidden": "true" }));
+          item.append(button, remove);
+          return item;
         }),
       );
     }
@@ -404,6 +422,20 @@ export function mountModelShortcuts(
     }
   };
   list.addEventListener("click", (event) => {
+    const remove =
+      event.target instanceof Element
+        ? event.target.closest<HTMLButtonElement>("button[data-model-shortcut-remove]")
+        : null;
+    const removeId = remove?.dataset.modelShortcutRemove;
+    if (removeId) {
+      if (!remove.disabled && !isDisabled()) {
+        const favorites = readModelFavorites(harness);
+        favorites.delete(removeId);
+        writeModelFavorites(harness, favorites);
+        render();
+      }
+      return;
+    }
     const button =
       event.target instanceof Element
         ? event.target.closest<HTMLButtonElement>("button[data-model-shortcut]")

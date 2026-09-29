@@ -1488,7 +1488,7 @@ describe("AppServerHost linked Git repositories", () => {
       expect(git(backend, "diff", "--cached", "--name-only")).toBe("");
       expect(readFileSync(path.join(backend, "app.txt"), "utf8")).toBe("backend draft\n");
       expect(await ok("codexhost/git/status")).toMatchObject({ workspace: backend });
-      // 自动工作流不接受手动面板选择的关联仓库。
+      // 项目工作流使用整个关联清单，不接受手动面板的单仓库选择参数。
       expect(await rpc("codexhost/git/workflow/run", { repository: frontend })).toHaveProperty(
         "error",
       );
@@ -1538,7 +1538,12 @@ describe("AppServerHost project Git workflow", () => {
       );
       execFileSync("git", ["init", "-q", directory]);
       writeFileSync(path.join(directory, "work.txt"), "pending change\n");
-      const fixture = createFixture({ environment: { CODEXHOST_GIT_AUTO_PUSH: "1" } });
+      const frontend = path.join(directory, "frontend");
+      execFileSync("git", ["init", "-q", frontend]);
+      writeFileSync(path.join(frontend, "app.txt"), "frontend change\n");
+      const fixture = createFixture({
+        environment: { CODEXHOST_GIT_AUTO_PUSH: "1", CODEX_HOME: path.join(directory, "home") },
+      });
       let nativeActive = true;
       const nativeRequests: JsonObject[] = [];
       const answer = (chunk: Buffer) => {
@@ -1591,6 +1596,14 @@ describe("AppServerHost project Git workflow", () => {
         const session = fixture.adapter.sessions[0];
         if (!session) throw new Error("外部 Harness 会话未创建");
         const execute = vi.spyOn(session, "execute");
+        writeRequest(fixture.desktopInput, {
+          id: 100,
+          method: "codexhost/git/repository/link",
+          params: { threadId, repository: frontend },
+        });
+        expect(
+          await fixture.collector.waitFor((message) => requestId(message, 100)),
+        ).not.toHaveProperty("error");
         await completePiTurn(fixture, threadId, 2);
         await vi.waitFor(
           () => expect(nativeRequests.some((entry) => entry.method === "thread/list")).toBe(true),
@@ -1614,6 +1627,12 @@ describe("AppServerHost project Git workflow", () => {
             ? nativeRequests.filter((entry) => entry.method === "turn/start").length
             : execute.mock.calls.length - 2;
         await vi.waitFor(() => expect(starts()).toBe(1), { timeout: 3000 });
+        const workflowRequest =
+          executor === "native"
+            ? nativeRequests.find((entry) => entry.method === "turn/start")
+            : execute.mock.calls.at(-1)?.[0];
+        expect(JSON.stringify(workflowRequest)).toContain(frontend);
+        expect(JSON.stringify(workflowRequest)).toContain("先提交并推送最深层子模块");
         writeRequest(fixture.desktopInput, {
           id: 10,
           method: "codexhost/git/workflow/run",

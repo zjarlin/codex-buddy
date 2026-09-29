@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gitWorkspaceStatusSchema } from "@codexhost/shared-contracts";
-import { ProjectGitWorkflow, ProjectGitWorkflowGroup } from "../src/project-git-workflow.js";
+import {
+  ProjectGitWorkflow,
+  ProjectGitWorkflowGroup,
+  projectGitWorkflowInput,
+} from "../src/project-git-workflow.js";
+import type { ProjectGitRepository } from "../src/project-git-repositories.js";
 
 function fixture(group?: ProjectGitWorkflowGroup) {
   vi.useFakeTimers();
@@ -23,17 +28,32 @@ function fixture(group?: ProjectGitWorkflowGroup) {
     changes: [],
     submodules: [],
   });
-  const start = vi.fn(async (_id: string, _cwd: string, check: () => Promise<void>) => {
+  const linked = new Map<string, ProjectGitRepository>();
+  const start = vi.fn<
+    (
+      id: string,
+      cwd: string,
+      check: () => Promise<void>,
+      repositories: readonly ProjectGitRepository[],
+    ) => Promise<string>
+  >(async (_id, _cwd, check) => {
     await check();
     return "workflow-turn";
   });
-  const read = vi.fn(async () => status);
+  const read = vi.fn(async (workspace: string): Promise<ProjectGitRepository[]> => [
+    { kind: "primary", status: { ...status, workspace } },
+    ...[...linked.values()].map((repository) => ({
+      ...repository,
+      status: { ...repository.status },
+    })),
+  ]);
   const changed = vi.fn();
   const workflow = new ProjectGitWorkflow({
     ...(group ? { group } : {}),
     project: async (id) => projects.get(id) ?? null,
     activeThreads: async () => [...active],
-    status: read,
+    repositories: read,
+    linkedRepositories: async () => [...linked.keys()],
     start,
     diagnose: vi.fn(),
     changed,
@@ -45,6 +65,13 @@ function fixture(group?: ProjectGitWorkflowGroup) {
     read,
     changed,
     projects,
+    linked,
+    status() {
+      return { ...status };
+    },
+    setStatus(value: Partial<typeof status>) {
+      status = { ...status, ...value };
+    },
     clean() {
       status = { ...status, ahead: 0 };
     },
@@ -68,7 +95,12 @@ describe("Project Git workflow", () => {
     f.active.delete("b");
     await f.workflow.completed("b", "b-turn", "completed");
     await vi.advanceTimersByTimeAsync(750);
-    expect(f.start).toHaveBeenCalledExactlyOnceWith("b", "/repo", expect.any(Function));
+    expect(f.start).toHaveBeenCalledExactlyOnceWith(
+      "b",
+      "/repo",
+      expect.any(Function),
+      expect.any(Array),
+    );
     expect((await f.workflow.inspect("a")).phase).toBe("running");
     await Promise.all([f.workflow.run("a"), f.workflow.run("b")]);
     expect(f.start).toHaveBeenCalledTimes(1);
@@ -192,7 +224,7 @@ describe("Project Git workflow", () => {
     f.workflow.activityChanged();
     await vi.advanceTimersByTimeAsync(750);
     expect(f.start).toHaveBeenCalledTimes(2);
-    expect(f.start).toHaveBeenLastCalledWith("c", "/repo", expect.any(Function));
+    expect(f.start).toHaveBeenLastCalledWith("c", "/repo", expect.any(Function), expect.any(Array));
     f.clean();
     await f.workflow.completed("c", "workflow-turn", "completed");
     await vi.advanceTimersByTimeAsync(5000);
@@ -209,8 +241,150 @@ describe("Project Git workflow", () => {
     expect((await f.workflow.run("a")).phase).toBe("waiting");
     await vi.advanceTimersByTimeAsync(750);
     expect(f.start).toHaveBeenCalledTimes(2);
-    expect(f.start).toHaveBeenLastCalledWith("b", "/repo", expect.any(Function));
+    expect(f.start).toHaveBeenLastCalledWith("b", "/repo", expect.any(Function), expect.any(Array));
   });
+
+  it("runs when only a linked repository has work and verifies every repository", async () => {
+    const f = fixture();
+    f.clean();
+    const frontend: ProjectGitRepository = {
+      kind: "linked",
+      status: { ...f.status(), workspace: "/frontend", ahead: 1 },
+    };
+    f.linked.set("/frontend", frontend);
+    expect((await f.workflow.run("a")).phase).toBe("running");
+    const repositories = f.start.mock.calls[0]?.[3];
+    if (!repositories) throw new Error("Missing workflow repositories");
+    const prompt = projectGitWorkflowInput(repositories);
+    expect(prompt).toContain('"path":"/frontend"');
+    expect(prompt).toContain("先提交并推送最深层子模块");
+    await f.workflow.completed("a", "workflow-turn", "completed");
+    expect(await f.workflow.inspect("a")).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("/frontend"),
+    });
+    frontend.status = { ...frontend.status, ahead: 0 };
+    expect((await f.workflow.run("a")).phase).toBe("skipped");
+  });
+
+  it("does not claim success when a repository is unlinked during execution", async () => {
+    const f = fixture();
+    f.linked.set("/frontend", {
+      kind: "linked",
+      status: { ...f.status(), workspace: "/frontend" },
+    });
+    await f.workflow.run("a");
+    f.clean();
+    f.linked.clear();
+    await f.workflow.completed("a", "workflow-turn", "completed");
+    expect(await f.workflow.inspect("a")).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("/frontend"),
+    });
+  });
+
+  it("waits for a task whose primary repository is linked to the project", async () => {
+    const f = fixture();
+    f.projects.set("frontend-task", "/frontend");
+    f.linked.set("/frontend", {
+      kind: "linked",
+      status: { ...f.status(), workspace: "/frontend" },
+    });
+    f.active.add("frontend-task");
+    expect((await f.workflow.run("a")).phase).toBe("waiting");
+    expect(f.start).not.toHaveBeenCalled();
+    f.active.clear();
+    f.workflow.activityChanged();
+    await vi.advanceTimersByTimeAsync(750);
+    expect((await f.workflow.inspect("a")).phase).toBe("running");
+  });
+
+  it("does not read Git state in unrelated active projects", async () => {
+    const f = fixture();
+    f.active.add("other");
+    expect((await f.workflow.run("a")).phase).toBe("running");
+    expect(f.read).toHaveBeenCalledExactlyOnceWith("/repo");
+  });
+
+  it.each([{ behind: 1 }, { operation: "merge" as const }, { detached: true }, { upstream: null }])(
+    "does not skip an unsynchronized primary repository: %j",
+    async (value) => {
+      const f = fixture();
+      f.clean();
+      f.setStatus(value);
+      expect((await f.workflow.run("a")).phase).toBe("running");
+      await f.workflow.completed("a", "workflow-turn", "completed");
+      expect((await f.workflow.inspect("a")).phase).toBe("failed");
+    },
+  );
+
+  it("accepts unchanged detached submodules but rejects detached commits changed during execution", async () => {
+    const f = fixture();
+    f.clean();
+    const submodule: ProjectGitRepository = {
+      kind: "submodule",
+      status: {
+        ...f.status(),
+        workspace: "/repo/lib",
+        detached: true,
+        upstream: null,
+      },
+    };
+    f.linked.set("/repo/lib", submodule);
+    expect((await f.workflow.run("a")).phase).toBe("skipped");
+    f.setStatus({ ahead: 1 });
+    await f.workflow.run("a");
+    f.clean();
+    submodule.status = { ...submodule.status, head: "new-detached" };
+    await f.workflow.completed("a", "workflow-turn", "completed");
+    expect(await f.workflow.inspect("a")).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("/repo/lib"),
+    });
+  });
+
+  it("does not accept a clean detached submodule whose gitlink was already changed", async () => {
+    const f = fixture();
+    f.clean();
+    const submodule: ProjectGitRepository = {
+      kind: "submodule",
+      gitlinkChanged: true,
+      status: { ...f.status(), workspace: "/repo/lib", detached: true, upstream: null },
+    };
+    f.linked.set("/repo/lib", submodule);
+    expect((await f.workflow.run("a")).phase).toBe("running");
+    submodule.gitlinkChanged = false;
+    await f.workflow.completed("a", "workflow-turn", "completed");
+    expect(await f.workflow.inspect("a")).toMatchObject({
+      phase: "failed",
+      message: expect.stringContaining("/repo/lib"),
+    });
+  });
+});
+
+it("serializes workflows sharing a linked repository and wakes the waiting project after release", async () => {
+  const group = new ProjectGitWorkflowGroup();
+  const first = fixture(group);
+  const second = fixture(group);
+  const shared: ProjectGitRepository = {
+    kind: "linked",
+    status: { ...first.status(), workspace: "/shared" },
+  };
+  first.linked.set("/shared", shared);
+  second.linked.set("/shared", shared);
+  await Promise.all([first.workflow.run("a"), second.workflow.run("other")]);
+  expect(first.start.mock.calls.length + second.start.mock.calls.length).toBe(1);
+  const running = first.start.mock.calls.length ? first : second;
+  const waiting = running === first ? second : first;
+  const runningId = running === first ? "a" : "other";
+  const waitingId = running === first ? "other" : "a";
+  expect((await waiting.workflow.inspect(waitingId)).phase).toBe("waiting");
+  await running.workflow.completed(runningId, "workflow-turn", "completed");
+  await vi.advanceTimersByTimeAsync(750);
+  expect(waiting.start).toHaveBeenCalledTimes(1);
+  expect((await waiting.workflow.inspect(waitingId)).phase).toBe("running");
+  first.workflow.close();
+  second.workflow.close();
 });
 
 it("shares project activity and execution between Desktop and remote clients", async () => {

@@ -125,6 +125,7 @@ export function installRendererSettingsLifecycle(
     locale = nextLocale;
     trigger?.dispose();
     shell?.dispose();
+    systemOneModel?.dispose();
     trigger = null;
     shell = null;
     const mounted = mount();

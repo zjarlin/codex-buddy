@@ -1,4 +1,5 @@
 import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
+import { createVisiblePoll } from "../renderer-visible-poll.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { createInterruptedPanel } from "./interrupted-panel.js";
 import { plannerInputControl } from "./planner-input.js";
@@ -546,6 +547,18 @@ export function installBuddyControl(
     }
     interruptedControl.update(context?.client ?? null, snapshot.settings.privateMode);
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
+    // 其他会话的决策不会改变当前控件，也不能打断正在编辑的设置。
+    const signature = JSON.stringify([
+      snapshot.settings,
+      snapshot.models,
+      snapshot.jevKeyConfigured,
+      snapshot.jevBaseUrl,
+      decision,
+      context?.threadId,
+      getLocale(),
+    ]);
+    if (signature === fingerprint) return;
+    fingerprint = signature;
     const pending =
       snapshot.settings.enabled && !snapshot.settings.privateMode ? decision?.pendingInput : null;
     if (
@@ -623,11 +636,6 @@ export function installBuddyControl(
     if (bypass) {
       status.textContent += ` · ${m.skipPlanner} · ${m.bypassScore} ${bypassScore}`;
     }
-    const signature = JSON.stringify([snapshot, context?.threadId, getLocale()]);
-    if (signature === fingerprint) {
-      return;
-    }
-    fingerprint = signature;
     controls.replaceChildren();
     routingFields.replaceChildren();
     actions.replaceChildren();
@@ -761,6 +769,7 @@ export function installBuddyControl(
   const refreshContext = (): void => {
     const next = disposed ? null : getContext();
     if (context?.client !== next?.client || context?.threadId !== next?.threadId) {
+      fingerprint = "";
       inputArea.replaceChildren();
       inputKey = "";
       inputClient = null;
@@ -769,6 +778,7 @@ export function installBuddyControl(
       }
     }
     context = next;
+    poll.setActive(Boolean(next));
     if (!next) {
       root.remove();
       return;
@@ -778,12 +788,15 @@ export function installBuddyControl(
     }
   };
   const refresh = async (): Promise<void> => {
+    if (disposed) return;
     refreshContext();
+    if (document.hidden) return;
     const next = context;
     if (!next || busy) {
       return;
     }
     if (!next.client.buddyStatus) {
+      fingerprint = "";
       status.textContent = t().disconnected;
       return;
     }
@@ -796,22 +809,22 @@ export function installBuddyControl(
       snapshot = value;
       render();
     } catch (failure) {
+      if (disposed || context?.client !== next.client || context.threadId !== next.threadId) return;
+      fingerprint = "";
       status.textContent = t().disconnected;
       report(failure);
     } finally {
       busy = false;
     }
   };
-  const timer = window.setInterval(() => {
-    void refresh();
-  }, 1200);
+  const poll = createVisiblePoll(document, 1200, () => void refresh());
   void refresh();
   return {
     refresh,
     refreshContext,
     dispose() {
       disposed = true;
-      window.clearInterval(timer);
+      poll.dispose();
       interruptedControl.dispose();
       root.remove();
     },

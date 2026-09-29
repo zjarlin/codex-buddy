@@ -397,6 +397,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   getThreadTerminalSettings?(): Promise<ThreadTerminalSettings>;
   setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
+  readThreadActivity?(threadId: string): Promise<boolean>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -872,6 +873,15 @@ export function createRendererModelClient(
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
     buddyInterrupted: async () =>
       buddyInterruptedSchema.parse(await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {})),
+    readThreadActivity: async (threadId: string) => {
+      const response = await manager.sendRequest("thread/read", { threadId, includeTurns: false });
+      const thread = isRecord(response) ? response.thread : null;
+      const status = isRecord(thread) && isRecord(thread.status) ? thread.status : null;
+      if (!status || typeof status.type !== "string") {
+        throw new Error("Thread activity is unavailable");
+      }
+      return status.type === "active";
+    },
     buddyContinue: async (threadId: string, turnId: string) => {
       await manager.sendRequest(BUDDY_CONTINUE_METHOD, { threadId, turnId });
     },

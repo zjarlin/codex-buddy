@@ -112,25 +112,34 @@ async function windowsCode(
 
 async function vscodeInvocation(
   workspace: string,
-  options: { platform: NodeJS.Platform; environment: NodeJS.ProcessEnv },
+  options: { platform: NodeJS.Platform; environment: NodeJS.ProcessEnv; sshAuthority?: string },
 ): Promise<{ command: string; arguments_: string[] }> {
+  const uri = options.sshAuthority
+    ? `vscode-remote://ssh-remote+${encodeURIComponent(options.sshAuthority)}${workspace.split("/").map(encodeURIComponent).join("/")}`
+    : null;
+  const arguments_ = uri ? ["--reuse-window", "--folder-uri", uri] : ["--reuse-window", workspace];
   const code =
     options.platform === "win32"
       ? await windowsCode(options.environment, options.platform)
       : await pathExecutable("code", options.environment, options.platform);
-  if (code) return { command: code, arguments_: ["--reuse-window", workspace] };
+  if (code) return { command: code, arguments_ };
 
   if (options.platform === "darwin") {
     const application = await macApplication("Visual Studio Code", options.environment);
     if (application)
-      return { command: "/usr/bin/open", arguments_: ["-a", application, workspace] };
+      return {
+        command: "/usr/bin/open",
+        arguments_: uri
+          ? ["-a", application, "--args", ...arguments_]
+          : ["-a", application, workspace],
+      };
   }
   if (options.platform === "win32") {
     const application = await windowsApplication(
       "Programs\\Microsoft VS Code\\Code.exe",
       options.environment,
     );
-    if (application) return { command: application, arguments_: ["--reuse-window", workspace] };
+    if (application) return { command: application, arguments_ };
   }
   throw new ThreadWorkspaceError("未安装 Visual Studio Code。");
 }
@@ -141,25 +150,31 @@ export async function openThreadWorkspace(
     platform?: NodeJS.Platform;
     spawnApplication?: SpawnWorkspaceApplication;
     environment?: NodeJS.ProcessEnv;
+    sshAuthority?: string;
   } = {},
 ): Promise<ThreadWorkspaceOpenResult> {
   let workspace: string;
   try {
-    workspace = await realpath(cwd);
+    workspace = options.sshAuthority ? cwd : await realpath(cwd);
   } catch (error) {
     throw new ThreadWorkspaceError("会话工作区路径不可用。", { cause: error });
   }
   let information;
   try {
-    information = await stat(workspace);
+    information = options.sshAuthority ? null : await stat(workspace);
   } catch (error) {
     throw new ThreadWorkspaceError("会话工作区路径不可用。", { cause: error });
   }
-  if (!information.isDirectory()) throw new ThreadWorkspaceError("会话工作区不是目录。");
+  if (information && !information.isDirectory())
+    throw new ThreadWorkspaceError("会话工作区不是目录。");
 
   const platform = options.platform ?? process.platform;
   const environment = options.environment ?? process.env;
-  const invocation = await vscodeInvocation(workspace, { platform, environment });
+  const invocation = await vscodeInvocation(workspace, {
+    platform,
+    environment,
+    ...(options.sshAuthority ? { sshAuthority: options.sshAuthority } : {}),
+  });
   const spawnApplication: SpawnWorkspaceApplication =
     options.spawnApplication ??
     ((command, arguments_, spawnOptions) => spawn(command, arguments_, spawnOptions));

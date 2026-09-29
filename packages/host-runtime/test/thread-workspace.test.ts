@@ -37,6 +37,25 @@ function fakeSpawn(child?: Partial<SpawnedChild>) {
 }
 
 describe("thread workspace", () => {
+  it("opens an SSH folder URI locally without looking up the remote path on disk", async () => {
+    const bin = await workspace();
+    const code = path.join(bin, "code");
+    await writeFile(code, "#!/bin/sh\n");
+    await chmod(code, 0o755);
+    const spawnApplication = fakeSpawn();
+    await openThreadWorkspace("/remote-only/project #1", {
+      platform: "linux",
+      environment: { PATH: bin },
+      spawnApplication,
+      sshAuthority: "okm252",
+    });
+    expect(spawnApplication.mock.calls[0]?.[1]).toEqual([
+      "--reuse-window",
+      "--folder-uri",
+      "vscode-remote://ssh-remote+okm252/remote-only/project%20%231",
+    ]);
+  });
+
   it("opens the resolved workspace with the code CLI", async () => {
     const directory = await workspace();
     const bin = await workspace();

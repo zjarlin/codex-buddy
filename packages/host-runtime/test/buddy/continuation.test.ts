@@ -4,6 +4,7 @@ import type { NativeRequest } from "../../src/buddy/planner.js";
 
 function fixture() {
   let status = "failed";
+  let threadStatus: string | null = "idle";
   let active = false;
   let allowed = true;
   const request = vi.fn<NativeRequest>(async (method) => {
@@ -13,13 +14,14 @@ function fixture() {
         result: {
           thread: {
             name: "Network failure",
-            status: { type: "idle" },
+            status: threadStatus === null ? null : { type: threadStatus },
             turns: [{ id: "turn", status }],
           },
         },
       };
     if (method === "turn/start") {
       status = "inProgress";
+      threadStatus = "active";
       return { result: { turn: { id: "continued" } } };
     }
     return { result: {} };
@@ -34,6 +36,9 @@ function fixture() {
     request,
     status: (value: string) => {
       status = value;
+    },
+    threadStatus: (value: string | null) => {
+      threadStatus = value;
     },
     active: () => {
       active = true;
@@ -243,15 +248,93 @@ describe("interrupted conversations", () => {
       threadId: "thread",
       input: [{ type: "text", text: expect.stringContaining("不要盲目重放") }],
     });
-    await expect(f.service.continue("thread", "turn")).rejects.toThrow("状态已改变");
+    await expect(f.service.continue("thread", "turn")).rejects.toThrow("仍在运行");
   });
-  it.each(["completed", "inProgress"])("excludes and rejects %s", async (status) => {
+  it.each(["completed", "succeeded", "unknown"])("excludes and rejects %s", async (status) => {
     const f = fixture();
     f.status(status);
     expect((await f.service.list()).threads).toEqual([]);
     await expect(f.service.continue("thread", "turn")).rejects.toThrow();
     expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
   });
+  it.each(["idle", "notLoaded"])(
+    "marks an unfinished turn in a %s thread as interrupted and allows recovery",
+    async (threadStatus) => {
+      const f = fixture();
+      f.status("inProgress");
+      f.threadStatus(threadStatus);
+      await expect(f.service.list()).resolves.toEqual({
+        threads: [
+          {
+            threadId: "thread",
+            turnId: "turn",
+            title: "Network failure",
+            status: "interrupted",
+            owner: "codex",
+          },
+        ],
+        runningThreadIds: [],
+        unreadable: 0,
+      });
+      await expect(f.service.continue("thread", "turn")).resolves.toBe("continued");
+      expect(f.request.mock.calls.filter(([method]) => method === "turn/start")).toHaveLength(1);
+    },
+  );
+  it.each([null, "systemError", "unknown"])(
+    "does not infer an interruption from an unfinished turn with thread status %s",
+    async (threadStatus) => {
+      const f = fixture();
+      f.status("inProgress");
+      f.threadStatus(threadStatus);
+      expect((await f.service.list()).threads).toEqual([]);
+      await expect(f.service.continue("thread", "turn")).rejects.toThrow("状态已改变");
+      expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    },
+  );
+  it.each(["native", "host"])(
+    "keeps %s running threads green and rejects recovery",
+    async (source) => {
+      const f = fixture();
+      f.status("inProgress");
+      if (source === "native") f.threadStatus("active");
+      else f.active();
+      await expect(f.service.list()).resolves.toEqual({
+        threads: [],
+        runningThreadIds: ["thread"],
+        unreadable: 0,
+      });
+      await expect(f.service.continue("thread", "turn")).rejects.toThrow("仍在运行");
+      expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    },
+  );
+  it.each(["running", "completed", "new-turn"])(
+    "does not continue if an unfinished turn becomes %s during native resume",
+    async (change) => {
+      const f = fixture();
+      f.status("inProgress");
+      const original = f.request.getMockImplementation();
+      if (!original) throw new Error("Native request fixture missing");
+      f.request.mockImplementation(async (method, params) => {
+        if (method === "thread/resume") {
+          if (change === "running") f.threadStatus("active");
+          if (change === "completed") f.status("completed");
+          if (change === "new-turn") {
+            f.request.mockResolvedValue({
+              result: {
+                thread: {
+                  status: { type: "idle" },
+                  turns: [{ id: "new-turn", status: "inProgress" }],
+                },
+              },
+            });
+          }
+        }
+        return original(method, params);
+      });
+      await expect(f.service.continue("thread", "turn")).rejects.toThrow();
+      expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+    },
+  );
   it("rejects active, stale and private requests", async () => {
     const f = fixture();
     await expect(f.service.continue("thread", "old")).rejects.toThrow("状态已改变");

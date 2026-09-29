@@ -6,10 +6,12 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installRendererGitSidebar } from "./packages/renderer-extension/src/renderer-git-sidebar.ts";
+      import { RendererMethodUnavailableError } from "./packages/renderer-extension/src/renderer-request-sender.ts";
       import { hostThreadIdSchema } from "./packages/shared-contracts/src/index.ts";
 
+      globalThis.RendererMethodUnavailableError = RendererMethodUnavailableError;
       globalThis.setupGitSidebar = () => {
-        document.body.innerHTML = "";
+        document.body.innerHTML = "<style>[hidden] { display: none !important; }</style>";
         const sidebar = document.createElement("aside");
         sidebar.id = "app-shell-sidebar";
         sidebar.style.cssText = "box-sizing:border-box;position:relative;display:flex;flex-direction:column;width:260px;height:700px;overflow:hidden";
@@ -253,8 +255,8 @@ const { outputFiles } = await build({
         globalThis.gitSidebarFixture = {
           client,
           status,
-          setContext(threadId, nextClient = client, hostId = "local") {
-            activeContext = { threadId, hostId, client: threadId ? nextClient : null };
+          setContext(threadId, nextClient = client, hostId = "local", cwd) {
+            activeContext = { threadId, cwd, hostId, client: threadId || cwd ? nextClient : null };
             control.syncContext();
           },
           calls,
@@ -614,9 +616,59 @@ test("stops loading when the active project is not inside a Git repository", asy
   await expect(project).toHaveText("正在读取项目…");
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").rejectWorkspace());
   await expect(project).toHaveText("未检测到工作区");
-  await expect(root.locator(".codexhost-git-empty")).toHaveText("没有待提交的变更");
+  await expect(root.locator(".codexhost-git-empty")).toHaveText("无法读取 Git 状态");
   await expect(root.getByText("当前目录不是 Git 仓库。")).toBeVisible();
   await expect(root.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
+});
+
+test("explains a missing remote Git service without loading models and recovers on reconnection", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const Unavailable = Reflect.get(globalThis, "RendererMethodUnavailableError");
+    fixture.setContext(
+      "remote-thread",
+      {
+        ...fixture.client,
+        inspectGitStatus: async () => {
+          throw new Unavailable("codexhost/git/status", { code: -32601 });
+        },
+        listGitMessageModels: async () => {
+          fixture.calls.push(["unsupported-models"]);
+          throw new Unavailable("codexhost/git/message-models", { code: -32601 });
+        },
+      },
+      "remote-host",
+    );
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText(
+    "当前连接未启用 Git 服务",
+  );
+  await expect(
+    root.locator(".codexhost-git-notice").filter({ hasText: "此连接未提供 Git 服务" }),
+  ).toBeVisible();
+  await expect(root.locator(".codexhost-git-empty")).toHaveText("无法读取 Git 状态");
+  await expect(root.locator("[data-codexhost-git-sidebar-push]")).toBeDisabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-sync]")).toBeDisabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeDisabled();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls),
+  ).not.toContainEqual(["unsupported-models"]);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.setContext("remote-thread", { ...fixture.client }, "remote-host");
+  });
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText("repo");
+  await expect(root.locator("[data-codexhost-git-sidebar-push]")).toBeEnabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await expect(root.getByText("此连接未提供 Git 服务", { exact: false })).toHaveCount(0);
 });
 
 test("keeps generated messages and commit operations bound to their original project", async ({
@@ -1107,4 +1159,115 @@ test("shows initialized submodules as separate actionable repositories", async (
       },
     ]);
   expect(errors).toEqual([]);
+});
+
+test("remote draft shows its project name and supports commit without a thread", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.workspace = "/remote/remote_codex-host";
+    fixture.setContext(
+      null,
+      fixture.client,
+      "remote-ssh-discovered:okm252",
+      fixture.status.workspace,
+    );
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText(
+    "remote_codex-host",
+  );
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveAttribute(
+    "title",
+    "/remote/remote_codex-host",
+  );
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await page.screenshot({ path: "test-results/remote-draft-git-before.png" });
+  await root.locator("[data-codexhost-git-sidebar-generate]").click();
+  await expect(root.locator("[data-codexhost-git-sidebar-message]")).toHaveValue(
+    "feat: generated commit",
+  );
+  await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
+  await expect(root.locator(".codexhost-git-empty")).toHaveText("没有待提交的变更");
+  await page.screenshot({ path: "test-results/remote-draft-git-after.png" });
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  for (const method of ["status", "generate", "stage", "commit"]) {
+    expect(calls.find(([name]: [string]) => name === method)).toEqual([
+      method,
+      expect.objectContaining({ cwd: "/remote/remote_codex-host" }),
+    ]);
+  }
+  expect(calls.every(([, input]: [string, object]) => !("threadId" in input))).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("switching draft projects ignores stale status and preserves the name on remote errors", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const Unavailable = Reflect.get(globalThis, "RendererMethodUnavailableError");
+    let finish: () => void;
+    const client = {
+      ...fixture.client,
+      inspectGitStatus: async ({ cwd }: { cwd: string }) => {
+        if (cwd === "/remote/first") {
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+        }
+        if (cwd === "/remote/unavailable")
+          throw new Unavailable("codexhost/git/status", { code: -32601 });
+        return { ...fixture.status, workspace: cwd };
+      },
+    };
+    for (const [name, action] of [
+      ["Second project", () => fixture.setContext(null, client, "remote", "/remote/second")],
+      ["Complete first read", () => finish()],
+      [
+        "Unavailable project",
+        () => fixture.setContext(null, client, "remote", "/remote/unavailable"),
+      ],
+      ["Clear project", () => fixture.setContext(null)],
+    ] as const) {
+      const button = document.createElement("button");
+      button.textContent = name;
+      button.addEventListener("click", action);
+      document.querySelector("main")?.append(button);
+    }
+    fixture.setContext(null, client, "remote", "/remote/first");
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  const project = root.locator("[data-codexhost-git-sidebar-project]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(project).toHaveText("first");
+  await expect(root.locator(".codexhost-git-empty")).toHaveText("正在读取项目…");
+  await page.screenshot({ path: "test-results/remote-draft-git-loading.png" });
+  await page.getByRole("button", { name: "Second project", exact: true }).click();
+  await expect(project).toHaveText("second");
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await page.getByRole("button", { name: "Complete first read", exact: true }).click();
+  await expect(project).toHaveText("second");
+  await page.screenshot({ path: "test-results/remote-draft-git-switched.png" });
+  await page.getByRole("button", { name: "Unavailable project", exact: true }).click();
+  await expect(project).toHaveText("unavailable");
+  await expect(
+    root.locator(".codexhost-git-notice").filter({ hasText: "此连接未提供 Git 服务" }),
+  ).toBeVisible();
+  await expect(root.locator("[data-codexhost-git-sidebar-push]")).toBeDisabled();
+  await page.screenshot({ path: "test-results/remote-draft-git-unavailable.png" });
+  await page.getByRole("button", { name: "Clear project", exact: true }).click();
+  await expect(project).toHaveText("未选择项目");
 });

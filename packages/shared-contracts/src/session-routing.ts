@@ -11,15 +11,19 @@ export const sessionRouteParamsSchema = z
 
 export const sessionRouteResultSchema = z
   .object({
-    candidates: z.array(
-      z.object({
-        threadId: z.string().min(1),
-        title: z.string().nullable(),
-        cwd: z.string().min(1),
-        confidence: z.number().min(0).max(1),
-        preview: z.string().max(4_000),
-      }).strict(),
-    ).max(32),
+    candidates: z
+      .array(
+        z
+          .object({
+            threadId: z.string().min(1),
+            title: z.string().nullable(),
+            cwd: z.string().min(1),
+            confidence: z.number().min(0).max(1).nullable(),
+            preview: z.string().max(4_000),
+          })
+          .strict(),
+      )
+      .max(32),
     reason: z.string().min(1),
   })
   .strict();

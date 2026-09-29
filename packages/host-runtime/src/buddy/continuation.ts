@@ -13,6 +13,25 @@ interface ThreadMetadata {
   id: string;
 }
 
+function recoverableStatus(
+  thread: Record<string, unknown>,
+  turn: Record<string, unknown>,
+): BuddyInterrupted["threads"][number]["status"] | null {
+  switch (turn.status) {
+    case "failed":
+    case "interrupted":
+    case "cancelled":
+      return turn.status;
+    case "inProgress": {
+      // 进程退出等情况可能只留下未结束回合；须由原生会话状态确认已经停下。
+      const state = object(thread.status).type;
+      return state === "idle" || state === "notLoaded" ? "interrupted" : null;
+    }
+    default:
+      return null;
+  }
+}
+
 async function mapWithConcurrency<T, R>(
   values: readonly T[],
   concurrency: number,
@@ -130,27 +149,26 @@ export class InterruptedConversations {
   }
 
   async list(): Promise<BuddyInterrupted> {
-    const candidates = (await this.#listThreads()).filter((metadata) => !this.busy(metadata.id));
+    const candidates = await this.#listThreads();
     const entries = await mapWithConcurrency(candidates, READ_CONCURRENCY, async (metadata) => {
+      if (this.busy(metadata.id)) {
+        return { kind: "running" as const, threadId: metadata.id };
+      }
       try {
         const { thread, turn } = await this.#read(metadata.id);
-        if (object(thread.status).type === "active") {
+        if (this.busy(metadata.id) || object(thread.status).type === "active") {
           return { kind: "running" as const, threadId: metadata.id };
         }
         if (typeof turn.id !== "string") return { kind: "done" as const };
-        if (
-          turn.status !== "failed" &&
-          turn.status !== "interrupted" &&
-          turn.status !== "cancelled"
-        )
-          return { kind: "done" as const };
+        const status = recoverableStatus(thread, turn);
+        if (status === null) return { kind: "done" as const };
         return {
           kind: "interrupted" as const,
           thread: {
             threadId: metadata.id,
             turnId: turn.id,
             title: String(thread.name || thread.preview || metadata.id).slice(0, 160),
-            status: turn.status,
+            status,
             owner: "codex" as const,
           } satisfies BuddyInterrupted["threads"][number],
         };
@@ -187,10 +205,7 @@ export class InterruptedConversations {
         const { thread, turn } = await this.#read(threadId);
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
-        if (
-          turn.id !== turnId ||
-          !["failed", "interrupted", "cancelled"].includes(String(turn.status))
-        ) {
+        if (turn.id !== turnId || recoverableStatus(thread, turn) === null) {
           throw new Error("会话状态已改变，请刷新列表。");
         }
       };

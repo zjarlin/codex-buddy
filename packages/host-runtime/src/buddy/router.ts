@@ -39,11 +39,6 @@ import { InterruptedConversations } from "./continuation.js";
 import { formatExecutionTopology } from "./plan-graph.js";
 import { GitPushBypassScores, gitPushSkills, gitWorkflowGuidance } from "./git-push-bypass.js";
 import { createJevClient, type SystemOneCommand } from "./judgment.js";
-import {
-  chooseSessionWithSystemOne,
-  type SessionRouteCandidate,
-  type SessionRouteResult,
-} from "./session-routing.js";
 import type { TypeSafeClient } from "@codexhost/jev";
 import {
   executePlanWaves,
@@ -340,20 +335,6 @@ export class BuddyRouter {
   async privateMode(): Promise<boolean> {
     await this.#loadSettings();
     return this.#settings.privateMode;
-  }
-
-  async chooseSession(
-    input: { message: string; candidates: readonly SessionRouteCandidate[] },
-  ): Promise<SessionRouteResult> {
-    await this.#loadSettings();
-    await this.#loadJevKey();
-    if (this.#settings.privateMode || !this.#settings.enabled || !this.#settings.jev || !this.#jev) {
-      return { candidates: [], reason: "System One 未启用。" };
-    }
-    return chooseSessionWithSystemOne(this.#jev, {
-      ...input,
-      model: this.#settings.systemOneModel,
-    });
   }
 
   get hasActiveWork(): boolean {

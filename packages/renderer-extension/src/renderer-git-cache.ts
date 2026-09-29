@@ -1,5 +1,6 @@
-import type { GitWorkspaceStatus, HostThreadId } from "@codexhost/shared-contracts";
+import type { GitWorkspaceStatus } from "@codexhost/shared-contracts";
 import type { RendererGitClient } from "./renderer-git-sidebar.js";
+import { gitTargetKey, gitTargetParams, type RendererGitTarget } from "./renderer-git-target.js";
 
 const FRESH_MS = 30_000;
 const MAX_ENTRIES = 48;
@@ -7,7 +8,7 @@ const MAX_BYTES = 16 * 1024 * 1024;
 
 interface Entry {
   client: RendererGitClient;
-  threadId: HostThreadId;
+  targetKey: string;
   key: string;
   value?: unknown;
   request?: Promise<unknown>;
@@ -19,9 +20,10 @@ interface Entry {
 export class RendererGitCache {
   readonly #entries: Entry[] = [];
 
-  #find(client: RendererGitClient, threadId: HostThreadId, key: string): Entry | undefined {
+  #find(client: RendererGitClient, target: RendererGitTarget, key: string): Entry | undefined {
     return this.#entries.find(
-      (entry) => entry.client === client && entry.threadId === threadId && entry.key === key,
+      (entry) =>
+        entry.client === client && entry.targetKey === gitTargetKey(target) && entry.key === key,
     );
   }
 
@@ -45,11 +47,11 @@ export class RendererGitCache {
 
   #read<T>(
     client: RendererGitClient,
-    threadId: HostThreadId,
+    target: RendererGitTarget,
     key: string,
     read: () => Promise<T>,
   ): Promise<T> {
-    let entry = this.#find(client, threadId, key);
+    let entry = this.#find(client, target, key);
     if (entry?.request) return entry.request as Promise<T>;
     if (entry?.value !== undefined && entry.expiresAt > Date.now()) {
       this.#remove(entry);
@@ -57,7 +59,7 @@ export class RendererGitCache {
       return Promise.resolve(entry.value as T);
     }
     if (!entry) {
-      entry = { client, threadId, key, expiresAt: 0, bytes: 0 };
+      entry = { client, targetKey: gitTargetKey(target), key, expiresAt: 0, bytes: 0 };
       this.#entries.push(entry);
       if (this.#entries.length > MAX_ENTRIES) this.#entries.shift();
     }
@@ -78,40 +80,52 @@ export class RendererGitCache {
 
   peekStatus(
     client: RendererGitClient,
-    threadId: HostThreadId,
+    target: RendererGitTarget,
     repository?: string,
   ): GitWorkspaceStatus | null {
     return (
-      (this.#find(client, threadId, JSON.stringify([repository, "status"]))?.value as
+      (this.#find(client, target, JSON.stringify([repository, "status"]))?.value as
         GitWorkspaceStatus | undefined) ?? null
     );
   }
 
   status(
     client: RendererGitClient,
-    threadId: HostThreadId,
+    target: RendererGitTarget,
     repository?: string,
   ): Promise<GitWorkspaceStatus> {
-    return this.#read(client, threadId, JSON.stringify([repository, "status"]), () =>
-      client.inspectGitStatus({ threadId, ...(repository ? { repository } : {}) }),
+    return this.#read(client, target, JSON.stringify([repository, "status"]), () =>
+      client.inspectGitStatus({
+        ...gitTargetParams(target),
+        ...(repository ? { repository } : {}),
+      }),
     );
   }
 
-  models(client: RendererGitClient, threadId: HostThreadId, repository?: string) {
-    return this.#read(client, threadId, JSON.stringify([repository, "models"]), () =>
-      client.listGitMessageModels({ threadId, ...(repository ? { repository } : {}) }),
+  models(client: RendererGitClient, target: RendererGitTarget, repository?: string) {
+    return this.#read(client, target, JSON.stringify([repository, "models"]), () =>
+      client.listGitMessageModels({
+        ...gitTargetParams(target),
+        ...(repository ? { repository } : {}),
+      }),
     );
   }
 
   update(
     client: RendererGitClient,
-    threadId: HostThreadId,
+    target: RendererGitTarget,
     status: GitWorkspaceStatus,
     repository?: string,
   ): void {
     this.invalidate(client);
     this.#store(
-      { client, threadId, key: JSON.stringify([repository, "status"]), expiresAt: 0, bytes: 0 },
+      {
+        client,
+        targetKey: gitTargetKey(target),
+        key: JSON.stringify([repository, "status"]),
+        expiresAt: 0,
+        bytes: 0,
+      },
       status,
     );
   }

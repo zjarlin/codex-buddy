@@ -1,17 +1,8 @@
+import type { ProjectTab, ProjectTabsConfig } from "@codexhost/shared-contracts";
+
+export type { ProjectTab, ProjectTabsConfig } from "@codexhost/shared-contracts";
+
 export const PROJECT_TABS_STORAGE_KEY = "codexhost.project-tabs.v1";
-
-export interface ProjectTab {
-  id: string;
-  name: string;
-  prefixes: string[];
-}
-
-export interface ProjectTabsConfig {
-  version: 2;
-  tabs: ProjectTab[];
-  assignments: Record<string, string>;
-  selected: string | null;
-}
 
 export interface SidebarProject {
   projectId: string;

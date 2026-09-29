@@ -1395,6 +1395,93 @@ describe("Buddy privacy send boundary", () => {
   });
 });
 
+describe("AppServerHost draft Git projects", () => {
+  it("stages, commits and pushes a selected project without creating a thread", async () => {
+    const directory = realpathSync.native(mkdtempSync(path.join(tmpdir(), "codexhost-draft-git-")));
+    const project = path.join(directory, "project");
+    const other = path.join(directory, "other");
+    const remote = path.join(directory, "remote.git");
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-C", cwd, ...args], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    for (const cwd of [project, other]) {
+      execFileSync("git", ["init", "-q", "-b", "main", cwd]);
+      git(cwd, "config", "user.name", "Test");
+      git(cwd, "config", "user.email", "test@example.com");
+      git(cwd, "config", "commit.gpgsign", "false");
+      writeFileSync(path.join(cwd, "app.txt"), "original\n");
+      git(cwd, "add", "app.txt");
+      git(cwd, "commit", "-qm", "init");
+      writeFileSync(path.join(cwd, "app.txt"), "draft\n");
+    }
+    execFileSync("git", ["init", "-q", "--bare", remote]);
+    git(project, "remote", "add", "origin", remote);
+    git(project, "push", "-qu", "origin", "main");
+    const fixture = createFixture({ environment: { CODEX_HOME: path.join(directory, "home") } });
+    const native = new JsonLineCollector(fixture.official.stdin);
+    await fixture.ready;
+    let id = 200;
+    const rpc = async (method: string, params: JsonObject) => {
+      const request = ++id;
+      writeRequest(fixture.desktopInput, { id: request, method, params });
+      return fixture.collector.waitFor((message) => requestId(message, request));
+    };
+    const ok = async (method: string, params: JsonObject = {}) => {
+      const response = await rpc(method, { cwd: project, ...params });
+      expect(response).not.toHaveProperty("error");
+      return response.result as JsonObject;
+    };
+    try {
+      for (const params of [
+        {},
+        { repository: project },
+        { cwd: "relative" },
+        { cwd: project, threadId: "thread" },
+      ]) {
+        expect(await rpc("codexhost/git/status", params)).toHaveProperty("error");
+      }
+      expect(await ok("codexhost/git/status")).toMatchObject({
+        workspace: project,
+        branch: "main",
+      });
+      expect(
+        await rpc("codexhost/git/stage", { cwd: project, repository: other, paths: ["app.txt"] }),
+      ).toHaveProperty("error");
+      await ok("codexhost/git/stage", { paths: ["app.txt"] });
+      expect(git(project, "diff", "--cached", "--name-only")).toBe("app.txt");
+      await ok("codexhost/git/unstage", { paths: ["app.txt"] });
+      expect(git(project, "diff", "--cached", "--name-only")).toBe("");
+      await ok("codexhost/git/stage", { paths: ["app.txt"] });
+      expect(
+        await ok("codexhost/git/commit", { message: "feat: draft project", push: true }),
+      ).toMatchObject({
+        pushed: true,
+        status: { workspace: project, changes: [], ahead: 0 },
+      });
+      expect(git(remote, "show", "main:app.txt")).toBe("draft");
+      expect(git(other, "diff", "--cached", "--name-only")).toBe("");
+      await ok("codexhost/git/repository/link", { repository: other });
+      expect(await ok("codexhost/git/status", { repository: other })).toMatchObject({
+        workspace: other,
+      });
+      await ok("codexhost/git/repository/unlink", { repository: other });
+      expect(await rpc("codexhost/git/status", { cwd: project, repository: other })).toHaveProperty(
+        "error",
+      );
+      expect(
+        native.messages.filter(
+          (message) => message.method === "thread/start" || message.method === "thread/read",
+        ),
+      ).toEqual([]);
+    } finally {
+      await stopFixture(fixture);
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+});
+
 describe("AppServerHost linked Git repositories", () => {
   it("edits, commits and pushes the linked frontend while preserving the backend", async () => {
     const directory = realpathSync.native(

@@ -379,3 +379,34 @@ jobs:
             fi
             gh release create "$TAG" "${files[@]}" "${flags[@]}"
           fi
+
+  deliver-macbook:
+    name: Deliver latest installer to MacBook Downloads
+    if: >-
+      !cancelled() && needs.publish-release.result == 'success' &&
+      needs.prepare.outputs.prerelease == 'false'
+    needs: [prepare, publish-release]
+    runs-on: [self-hosted, macbook-delivery]
+    timeout-minutes: 10
+    concurrency:
+      group: macbook-installer-downloads
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout pinned delivery automation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.automation_sha }}
+          persist-credentials: false
+          sparse-checkout: packages/repository-automation
+
+      - name: Download, verify, and replace MacBook installer over SSH
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url');
+            const { resolve } = await import('node:path');
+            const { deliverLatestMacbookInstaller } = await import(pathToFileURL(resolve('packages/repository-automation/index.mjs')).href);
+            const result = await deliverLatestMacbookInstaller({ github, repo: context.repo });
+            await core.summary.addRaw(`MacBook: ${result.destination}\n\nRelease: ${result.tag}\n\n${result.digest}\n`).write();

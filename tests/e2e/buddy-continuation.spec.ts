@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 import path from "node:path";
+import { InterruptedConversations } from "../../packages/host-runtime/src/buddy/continuation.js";
 
 const browserExecutable = process.env.CODEXHOST_PLAYWRIGHT_EXECUTABLE_PATH;
 if (browserExecutable) test.use({ launchOptions: { executablePath: browserExecutable } });
@@ -53,6 +54,7 @@ const bundle = await build({
       buddyStatus: async () => ({settings:{enabled:globalThis.enabled,privateMode:globalThis.privateMode}}),
       buddyInterrupted: async () => {
         if (globalThis.discoveryFail) throw new Error('列表读取失败');
+        if (globalThis.interrupted) return globalThis.interrupted;
         return {threads:[{threadId:'thread',turnId:'failed',title:'网络中断的会话',status:globalThis.threadStatus,owner:globalThis.owner}],runningThreadIds:globalThis.running?['thread']:[],unreadable:0};
       },
       buddyContinue: async (...args) => {
@@ -75,6 +77,47 @@ const bundle = await build({
 });
 const browserBundle = bundle.outputFiles[0]?.text;
 if (!browserBundle) throw new Error("Continuation test bundle missing");
+
+for (const theme of ["light", "dark"] as const) {
+  test(`unfinished native turn renders amber in the selected sidebar row (${theme})`, async ({
+    page,
+  }) => {
+    const service = new InterruptedConversations(
+      async (method) =>
+        method === "thread/list"
+          ? { result: { data: [{ id: "thread" }] } }
+          : {
+              result: {
+                thread: {
+                  status: { type: "idle" },
+                  turns: [{ id: "unfinished", status: "inProgress" }],
+                },
+              },
+            },
+      () => false,
+      async () => true,
+    );
+    const interrupted = await service.list();
+    await page.setViewportSize({ width: 620, height: 240 });
+    await page.setContent(
+      `<body style="color-scheme:${theme};background:${theme === "dark" ? "#191b20" : "#fff"};color:${theme === "dark" ? "#e5e7ec" : "#222"};font:14px system-ui"></body>`,
+    );
+    await page.evaluate((state) => Reflect.set(globalThis, "interrupted", state), interrupted);
+    await page.addScriptTag({ content: browserBundle });
+    const row = page.locator("[data-app-action-sidebar-thread-row]");
+    await row.evaluate((element) => {
+      element.setAttribute("data-app-action-sidebar-thread-active", "true");
+      element.style.backgroundColor = "#8882";
+    });
+    await expect(row).toHaveAttribute("data-buddy-sidebar-state", "interrupted");
+    await expect(row).toHaveCSS("box-shadow", "rgb(217, 144, 0) 3px 0px 0px 0px inset");
+    await expect(row).not.toHaveAttribute("data-buddy-sidebar-running", "");
+    await expect(
+      page.getByRole("button", { name: "会话已中断，点击恢复", exact: true }),
+    ).toBeVisible();
+    await page.screenshot({ path: `test-results/buddy-unfinished-amber-${theme}.png` });
+  });
+}
 
 test("recovery waiting state exposes a working cancel control", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });

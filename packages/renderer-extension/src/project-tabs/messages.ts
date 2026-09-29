@@ -1,5 +1,5 @@
 const zh = {
-  all: "所有项目",
+  all: "项目",
   configure: "配置项目 Tab",
   title: "项目 Tab 配置",
   name: "Tab 名称",
@@ -21,7 +21,7 @@ const zh = {
   savedHere: "配置保存在当前客户端。",
 };
 const en: typeof zh = {
-  all: "All projects",
+  all: "Projects",
   configure: "Configure project tabs",
   title: "Project tab settings",
   name: "Tab name",

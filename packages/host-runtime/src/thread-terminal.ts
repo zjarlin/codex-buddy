@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { access, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { homedir } from "node:os";
 
 import type {
   ThreadTerminalDescriptor,
@@ -36,6 +37,24 @@ interface TerminalInvocation {
   command: string;
   arguments_: string[];
   terminal: ThreadTerminalId;
+}
+
+interface SshResume {
+  arguments: string[];
+  codexHome: string;
+  workspace: string;
+}
+
+export function sshThreadResumeCommand(
+  ssh: SshResume,
+  codexPath: string,
+  sessionId: string,
+  shell: "posix" | "powershell" = "posix",
+): string {
+  const remoteCommand = `cd ${shellQuote(ssh.workspace)} && exec env ${shellQuote(`CODEX_HOME=${ssh.codexHome}`)} ${threadTerminalResumeCommand(codexPath, sessionId, ssh.workspace)}`;
+  const quote = shell === "powershell" ? powerShellQuote : shellQuote;
+  const arguments_ = ["-t", ...ssh.arguments, remoteCommand].map(quote).join(" ");
+  return `${shell === "powershell" ? "& " : ""}ssh ${arguments_}`;
 }
 
 interface TerminalCandidate {
@@ -279,11 +298,9 @@ export async function listThreadTerminals(
 async function macInvocation(
   terminal: ThreadTerminalId,
   cwd: string,
-  codexPath: string,
-  sessionId: string,
+  command: string,
   environment: NodeJS.ProcessEnv,
 ): Promise<TerminalInvocation> {
-  const command = `cd ${shellQuote(cwd)} && ${threadTerminalResumeCommand(codexPath, sessionId, cwd)}`;
   if (terminal === "system-default") {
     terminal = "apple-terminal";
   }
@@ -352,6 +369,7 @@ async function windowsInvocation(
   codexPath: string,
   sessionId: string,
   environment: NodeJS.ProcessEnv,
+  ssh?: SshResume,
 ): Promise<TerminalInvocation> {
   const candidates = WINDOWS_TERMINALS;
   let selected =
@@ -369,7 +387,7 @@ async function windowsInvocation(
   if (!selected) throw new ThreadTerminalError("未找到可用的系统终端。");
   const resolved = await selected.resolve({ platform: "win32", environment });
   if (!resolved) throw new ThreadTerminalError(`未找到 ${selected.name}。`);
-  return windowsTerminalInvocation(selected.id, resolved.path, cwd, codexPath, sessionId);
+  return windowsTerminalInvocation(selected.id, resolved.path, cwd, codexPath, sessionId, ssh);
 }
 
 export function windowsTerminalInvocation(
@@ -378,8 +396,11 @@ export function windowsTerminalInvocation(
   cwd: string,
   codexPath: string,
   sessionId: string,
+  ssh?: SshResume,
 ): TerminalInvocation {
-  const command = `& ${powerShellQuote(codexPath)} resume ${powerShellQuote(sessionId)} -C ${powerShellQuote(cwd)}`;
+  const command = ssh
+    ? sshThreadResumeCommand(ssh, codexPath, sessionId, "powershell")
+    : `& ${powerShellQuote(codexPath)} resume ${powerShellQuote(sessionId)} -C ${powerShellQuote(cwd)}`;
   if (terminal === "windows-terminal") {
     return {
       command: executablePath,
@@ -393,7 +414,9 @@ export function windowsTerminalInvocation(
       arguments_: [
         "--login",
         "-c",
-        `cd ${shellQuote(cwd)} && ${threadTerminalResumeCommand(codexPath, sessionId, cwd)}`,
+        ssh
+          ? sshThreadResumeCommand(ssh, codexPath, sessionId)
+          : `cd ${shellQuote(cwd)} && ${threadTerminalResumeCommand(codexPath, sessionId, cwd)}`,
       ],
       terminal,
     };
@@ -401,7 +424,13 @@ export function windowsTerminalInvocation(
   if (terminal === "command-prompt") {
     return {
       command: executablePath,
-      arguments_: ["/d", "/k", `cd /d "${cwd}" && "${codexPath}" resume ${sessionId} -C "${cwd}"`],
+      arguments_: [
+        "/d",
+        "/k",
+        ssh
+          ? `powershell.exe -NoExit -EncodedCommand ${Buffer.from(command, "utf16le").toString("base64")}`
+          : `cd /d "${cwd}" && "${codexPath}" resume ${sessionId} -C "${cwd}"`,
+      ],
       terminal,
     };
   }
@@ -410,7 +439,9 @@ export function windowsTerminalInvocation(
       command: executablePath,
       arguments_: [
         "-c",
-        `cd ${powerShellQuote(cwd)}; ^${powerShellQuote(codexPath)} resume ${powerShellQuote(sessionId)} -C ${powerShellQuote(cwd)}`,
+        ssh
+          ? `^powershell.exe -NoExit -EncodedCommand ${Buffer.from(command, "utf16le").toString("base64")}`
+          : `cd ${powerShellQuote(cwd)}; ^${powerShellQuote(codexPath)} resume ${powerShellQuote(sessionId)} -C ${powerShellQuote(cwd)}`,
       ],
       terminal,
     };
@@ -435,6 +466,7 @@ export async function openThreadTerminal(
     platform?: NodeJS.Platform;
     spawnTerminal?: SpawnTerminal;
     environment?: NodeJS.ProcessEnv;
+    ssh?: SshResume;
   } = {},
 ): Promise<ThreadTerminalOpenResult> {
   if (!/^[A-Za-z0-9._:-]+$/.test(sessionId)) throw new ThreadTerminalError("会话 ID 无效。");
@@ -442,34 +474,48 @@ export async function openThreadTerminal(
     throw new ThreadTerminalError("Codex 路径无效。");
   let workspace: string;
   try {
-    workspace = await realpath(cwd);
+    workspace = options.ssh ? options.ssh.workspace : await realpath(cwd);
   } catch (error) {
     throw new ThreadTerminalError("会话工作区路径不可用。", { cause: error });
   }
   let information;
   try {
-    information = await stat(workspace);
+    information = options.ssh ? null : await stat(workspace);
   } catch (error) {
     throw new ThreadTerminalError("会话工作区路径不可用。", { cause: error });
   }
-  if (!information.isDirectory()) throw new ThreadTerminalError("会话工作区不是目录。");
+  if (information && !information.isDirectory())
+    throw new ThreadTerminalError("会话工作区不是目录。");
 
   const platform = options.platform ?? process.platform;
   const environment = options.environment ?? process.env;
+  const terminalCwd = options.ssh
+    ? (environment.HOME ?? environment.USERPROFILE ?? homedir())
+    : workspace;
+  const command = options.ssh
+    ? sshThreadResumeCommand(options.ssh, codexPath, sessionId)
+    : `cd ${shellQuote(workspace)} && ${threadTerminalResumeCommand(codexPath, sessionId, workspace)}`;
   const invocation =
     platform === "darwin"
-      ? await macInvocation(terminalId, workspace, codexPath, sessionId, environment)
+      ? await macInvocation(terminalId, terminalCwd, command, environment)
       : platform === "win32"
-        ? await windowsInvocation(terminalId, workspace, codexPath, sessionId, environment)
+        ? await windowsInvocation(
+            terminalId,
+            terminalCwd,
+            codexPath,
+            sessionId,
+            environment,
+            options.ssh,
+          )
         : {
             command: "x-terminal-emulator",
             arguments_: [
               "--working-directory",
-              workspace,
+              terminalCwd,
               "-e",
               "sh",
               "-lc",
-              threadTerminalResumeCommand(codexPath, sessionId, workspace),
+              options.ssh ? command : threadTerminalResumeCommand(codexPath, sessionId, workspace),
             ],
             terminal: "x-terminal-emulator" as const,
           };

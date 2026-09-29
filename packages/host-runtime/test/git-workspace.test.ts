@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { GitWorkspace } from "../src/git-workspace.js";
 
 const testGitEnvironment = {
+  PATH: process.env.PATH,
   GIT_CONFIG_COUNT: "1",
   GIT_CONFIG_KEY_0: "protocol.file.allow",
   GIT_CONFIG_VALUE_0: "always",

@@ -12,6 +12,7 @@ import {
 } from "@codexhost/shared-contracts";
 
 export interface RendererSessionImportClient {
+  readonly hostId?: string;
   listSessionImportSources(): Promise<HarnessSessionImportSourcesResult>;
   listHarnessSessions(input: HarnessSessionListParams): Promise<HarnessSessionListResult>;
   importHarnessSession(input: HarnessSessionImportParams): Promise<HarnessSessionImportResult>;

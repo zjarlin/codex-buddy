@@ -119,10 +119,23 @@ describe("workflow and form contracts", () => {
     );
     expect(
       workflow.match(/ref: \$\{\{ needs\.prepare\.outputs\.automation_sha \}\}/gu),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(workflow.match(/await verifyRelease\(/gu)).toHaveLength(2);
     expect(workflow).toContain("release-evidence.json");
     expect(workflow).toContain("timeout-minutes: 35");
     expect(workflow).toContain("waitForCi: true");
+  });
+
+  it("delivers only after a stable release succeeds using trusted code on the LAN runner", async () => {
+    const workflow = await read(".github/workflows/release-packages.yml");
+    const delivery = workflow.slice(workflow.indexOf("  deliver-macbook:"));
+    expect(delivery).toContain("needs: [prepare, publish-release]");
+    expect(delivery).toContain("needs.publish-release.result == 'success'");
+    expect(delivery).toContain("needs.prepare.outputs.prerelease == 'false'");
+    expect(delivery).toContain("runs-on: [self-hosted, macbook-delivery]");
+    expect(delivery).toContain("group: macbook-installer-downloads");
+    expect(delivery).toContain("ref: ${{ needs.prepare.outputs.automation_sha }}");
+    expect(delivery).toContain("deliverLatestMacbookInstaller({ github, repo: context.repo })");
+    expect(delivery).not.toContain("contents: write");
   });
 });

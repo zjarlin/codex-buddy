@@ -106,6 +106,18 @@ npm 发布受阻时，可从默认分支手动运行 `Release packages`，指定
 
 标签推送使用标签提交里的工作流定义，新校验不会追溯改写旧标签的发布逻辑。这不是不可绕过的权限控制；未设置分支、标签或发布环境保护。
 
+## 发布后投递到 MacBook
+
+`Release packages` 的正式 GitHub Release 发布成功后，`deliver-macbook` job 通过 `ssh macbook` 将 GitHub 当前 latest 的 Apple Silicon DMG 放到 `/Users/zjarlin/Downloads`。预发布和仅构建的 `Buddy macOS DMG` 不触发投递。旧流水线重跑时也读取当前 latest；下载过程中发布物被替换则报错，避免旧任务覆盖新版本。
+
+投递在带有 `self-hosted`、`macbook-delivery` 标签的内网 Runner 上执行，使用 prepare 阶段固定的可信自动化提交，仅需 GitHub `contents: read` 权限，无需安装项目依赖。Runner 运行账户必须能执行免交互的 `ssh macbook`，并预先配置该别名的地址、密钥和已验证的 `known_hosts`；GitHub 托管 Runner 无法直接访问 `192.168.31.75`。此专用 Runner 只用于投递，不用于 PR 构建。没有匹配的在线 Runner 时 job 会等待，不代表投递已成功。
+
+MacBook 需要允许远程登录访问 Downloads。在“系统设置 → 通用 → 共享 → 远程登录”的详情中允许远程用户完全磁盘访问；如果 SSH 返回 `Operation not permitted`，需要在 MacBook 上完成该授权后重跑失败的投递 job。
+
+下载后同时验证 GitHub 资产声明的字节数和 SHA-256；远端收到文件后再次验证，通过后原子替换最终文件，再清理 Downloads 顶层符合 `codex-buddy-<版本>-macos-<架构>.dmg` 命名的其他普通文件。其他下载、目录和符号链接保留。SSH、权限、空间或校验失败不会清理已有安装包；已有有效新包但旧包清理失败时 job 报错，可重跑。并行发布共用投递并发组，远端还通过目录锁防止同时写入。进程正常退出和中断都会清理临时文件与锁；若设备断电留下锁，确认没有进行中的投递后再删除 Downloads 下的 `.codex-buddy-delivery.lock`。
+
+该步骤仅投递安装包，不安装或重启应用。投递失败不会撤销已发布的 Release，可在 Actions 中选择重跑失败的 job。
+
 ## 验证
 
 ```bash

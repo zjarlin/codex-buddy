@@ -30,16 +30,27 @@ const nonBlankTextSchema = z.string().trim().min(1);
 export const gitFilePathSchema = nonBlankTextSchema.max(GIT_FILE_PATH_MAX_LENGTH);
 export const gitCommitMessageSchema = nonBlankTextSchema.max(GIT_COMMIT_MESSAGE_MAX_LENGTH);
 
-export const gitWorkspaceParamsSchema = z
+// 已有会话由 Host 解析目录；新聊天直接指定当前 Host 上的项目，二者不能混用。
+export const gitWorkspaceTargetSchema = z
   .object({
-    threadId: hostThreadIdSchema,
+    threadId: hostThreadIdSchema.optional(),
+    cwd: z.string().trim().min(1).max(GIT_FILE_PATH_MAX_LENGTH).optional(),
+  })
+  .strict()
+  .refine((input) => Boolean(input.threadId) !== Boolean(input.cwd), {
+    message: "Git 工作区必须指定 threadId 或 cwd，且不能同时指定。",
+  });
+export type GitWorkspaceTarget = z.infer<typeof gitWorkspaceTargetSchema>;
+
+export const gitWorkspaceParamsSchema = gitWorkspaceTargetSchema
+  .safeExtend({
     repository: z.string().trim().min(1).max(GIT_FILE_PATH_MAX_LENGTH).optional(),
   })
   .strict();
 export type GitWorkspaceParams = z.infer<typeof gitWorkspaceParamsSchema>;
 
 export const gitDiffParamsSchema = gitWorkspaceParamsSchema
-  .extend({ path: gitFilePathSchema })
+  .safeExtend({ path: gitFilePathSchema })
   .strict();
 export type GitDiffParams = z.infer<typeof gitDiffParamsSchema>;
 
@@ -47,12 +58,12 @@ export const gitContentParamsSchema = gitDiffParamsSchema;
 export type GitContentParams = z.infer<typeof gitContentParamsSchema>;
 
 export const gitStageParamsSchema = gitWorkspaceParamsSchema
-  .extend({ paths: z.array(gitFilePathSchema).max(10_000) })
+  .safeExtend({ paths: z.array(gitFilePathSchema).max(10_000) })
   .strict();
 export type GitStageParams = z.infer<typeof gitStageParamsSchema>;
 
 export const gitCommitParamsSchema = gitWorkspaceParamsSchema
-  .extend({
+  .safeExtend({
     message: gitCommitMessageSchema,
     paths: z.array(gitFilePathSchema).max(10_000).default([]),
     push: z.boolean().default(false),
@@ -61,7 +72,7 @@ export const gitCommitParamsSchema = gitWorkspaceParamsSchema
 export type GitCommitParams = z.infer<typeof gitCommitParamsSchema>;
 
 export const gitMessageGenerateParamsSchema = gitWorkspaceParamsSchema
-  .extend({
+  .safeExtend({
     model: z.string().trim().min(1).max(512),
     paths: z.array(gitFilePathSchema).max(10_000).default([]),
   })
@@ -69,7 +80,7 @@ export const gitMessageGenerateParamsSchema = gitWorkspaceParamsSchema
 export type GitMessageGenerateParams = z.infer<typeof gitMessageGenerateParamsSchema>;
 
 export const gitSubmoduleUpdateParamsSchema = gitWorkspaceParamsSchema
-  .extend({
+  .safeExtend({
     path: gitFilePathSchema,
     init: z.boolean().default(false),
   })
@@ -77,18 +88,18 @@ export const gitSubmoduleUpdateParamsSchema = gitWorkspaceParamsSchema
 export type GitSubmoduleUpdateParams = z.infer<typeof gitSubmoduleUpdateParamsSchema>;
 
 export const gitLogParamsSchema = gitWorkspaceParamsSchema
-  .extend({ limit: z.number().int().min(1).max(1000).default(200) })
+  .safeExtend({ limit: z.number().int().min(1).max(1000).default(200) })
   .strict();
 export type GitLogParams = z.infer<typeof gitLogParamsSchema>;
 
 const gitObjectIdSchema = z.string().regex(/^[0-9a-f]{7,64}$/iu);
 export const gitCommitDetailParamsSchema = gitWorkspaceParamsSchema
-  .extend({ commit: gitObjectIdSchema })
+  .safeExtend({ commit: gitObjectIdSchema })
   .strict();
 export type GitCommitDetailParams = z.infer<typeof gitCommitDetailParamsSchema>;
 
 export const gitCommitDiffParamsSchema = gitCommitDetailParamsSchema
-  .extend({ path: gitFilePathSchema })
+  .safeExtend({ path: gitFilePathSchema })
   .strict();
 export type GitCommitDiffParams = z.infer<typeof gitCommitDiffParamsSchema>;
 

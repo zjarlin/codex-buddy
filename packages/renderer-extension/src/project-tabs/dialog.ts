@@ -31,7 +31,7 @@ export function openProjectDialog(title: string, onClose: () => void): HTMLDialo
 export function configureProjectTabs(options: {
   config: ProjectTabsConfig;
   messages: ProjectTabsMessages;
-  save(tabs: ProjectTab[]): void;
+  save(tabs: ProjectTab[]): Promise<void>;
   onClose(): void;
 }): HTMLDialogElement {
   const { messages: m } = options;
@@ -132,13 +132,16 @@ export function configureProjectTabs(options: {
       }
       names.add(tab.name);
     }
-    try {
-      options.save(tabs);
-      dialog.close();
-    } catch (failure) {
-      error.textContent = m.failed + String(failure);
-      error.hidden = false;
-    }
+    save.disabled = true;
+    error.hidden = true;
+    void options.save(tabs).then(
+      () => dialog.close(),
+      (failure: unknown) => {
+        save.disabled = false;
+        error.textContent = m.failed + String(failure);
+        error.hidden = false;
+      },
+    );
   });
   renderRows();
   form.append(hint, rows, add, error, footer);

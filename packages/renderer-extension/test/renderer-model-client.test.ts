@@ -1,6 +1,8 @@
 import {
   HARNESS_LAUNCH_SETTINGS_GET_METHOD,
   HARNESS_LAUNCH_SETTINGS_SET_METHOD,
+  PROJECT_TABS_GET_METHOD,
+  PROJECT_TABS_SET_METHOD,
   harnessIdSchema,
   harnessModelRefSchema,
   harnessPermissionModeIdSchema,
@@ -73,6 +75,27 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("reads and writes project tabs through the local Host contract", async () => {
+    const config = {
+      version: 2 as const,
+      tabs: [{ id: "work", name: "Work", prefixes: ["remote_company"] }],
+      assignments: {},
+      selected: "work",
+    };
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ config: null })
+      .mockResolvedValueOnce({ config });
+    const client = createRendererModelClient([{ sendRequest }]);
+
+    await expect(client?.getProjectTabs?.()).resolves.toEqual({ config: null });
+    await expect(client?.setProjectTabs?.(config)).resolves.toEqual({ config });
+    expect(sendRequest.mock.calls).toEqual([
+      [PROJECT_TABS_GET_METHOD, {}],
+      [PROJECT_TABS_SET_METHOD, config],
+    ]);
+  });
+
   it("opens Doubao using the fixed local method and validates the application result", async () => {
     const sendRequest = vi.fn().mockResolvedValue({ application: "doubao" });
     const client = createRendererModelClient([{ sendRequest }]);
@@ -480,6 +503,7 @@ describe("Renderer fixed Model request client", () => {
       "forkThread",
       "generateGitMessage",
       "getHarnessLaunchSettings",
+      "getProjectTabs",
       "getThreadTerminalSettings",
       "importHarnessSession",
       "inspectCodexAccountUsage",
@@ -521,6 +545,7 @@ describe("Renderer fixed Model request client", () => {
       "pullProjectSyncGit",
       "pushGit",
       "pushProjectSyncGit",
+      "readAutoModelRoutes",
       "readThreadActivity",
       "readUpdateStatus",
       "readWorkspaceFile",
@@ -534,6 +559,7 @@ describe("Renderer fixed Model request client", () => {
       "selectThreadThinking",
       "setHarnessLaunchSettings",
       "setIdleReleaseSettings",
+      "setProjectTabs",
       "setThreadTerminalSettings",
       "stageGitPaths",
       "startUpdate",
@@ -542,6 +568,7 @@ describe("Renderer fixed Model request client", () => {
       "syncCodexCatalog",
       "syncGit",
       "syncProjectSync",
+      "threadOpenTarget",
       "unlinkGitRepository",
       "unstageGitPaths",
       "updateGitSubmodule",

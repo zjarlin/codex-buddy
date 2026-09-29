@@ -351,6 +351,32 @@ describe("Renderer draft prewarm policy", () => {
     expect(target.__codexhostDraftWorkspacesV1).toEqual({ local: "/tmp/project" });
   });
 
+  it("keeps the latest draft project when an older prewarm finishes and clears missing cwd", async () => {
+    const first = Promise.withResolvers<unknown>();
+    const bridge = requestBridgeFixture({
+      prewarmThreadStart: vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue({}),
+    });
+    const events: unknown[] = [];
+    const target: DraftPrewarmPolicyTarget = {
+      dispatchEvent: (event: Event) => {
+        if (event.type === "codexhost:draft-workspace") events.push((event as CustomEvent).detail);
+        return true;
+      },
+    };
+    installDraftPrewarmPolicyBridge(requestManagerFixture(), bridge, "remote", target, {
+      discardAllPrewarmedThreads: vi.fn(),
+    });
+    const pending = bridge.prewarmThreadStart?.({ cwd: "/remote/first" });
+    await bridge.prewarmThreadStart?.({ cwd: "/remote/second" });
+    first.resolve({});
+    await pending;
+    expect(target.__codexhostDraftWorkspacesV1).toEqual({ remote: "/remote/second" });
+    expect(events.at(-1)).toEqual({ hostId: "remote", cwd: "/remote/second" });
+    await bridge.prewarmThreadStart?.({});
+    expect(target.__codexhostDraftWorkspacesV1).toEqual({});
+    expect(events.at(-1)).toEqual({ hostId: "remote", cwd: null });
+  });
+
   it("rejects an in-flight prewarm after the selected Harness changes", async () => {
     const stalePrewarm = Promise.withResolvers<unknown>();
     const prewarmThreadStart = vi

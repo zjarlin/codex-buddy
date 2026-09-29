@@ -2,6 +2,7 @@ import { harnessIdSchema } from "@codexhost/shared-contracts";
 import { harnessModelRefSchema } from "@codexhost/shared-contracts";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
+import type { RendererGitContext } from "../src/renderer-git-sidebar.js";
 import type * as RendererComposerDom from "../src/renderer-composer-dom.js";
 import type { BuddyControlContext } from "../src/buddy/control.js";
 import {
@@ -27,7 +28,25 @@ const testState = vi.hoisted(() => ({
   sidebarOptions: null as null | Parameters<typeof installRendererSidebarAgentIcons>[0],
   documentListeners: new Map<string, EventListener>(),
   modelTarget: ["conversation", "thread-a"] as readonly unknown[],
+  gitContext: null as null | (() => RendererGitContext),
+  gitSync: vi.fn(),
   buddyContext: null as null | (() => BuddyControlContext | null),
+}));
+
+vi.mock("../src/auto-route-card/index.js", () => ({
+  installAutoRouteCards: () => ({ dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
+  installRendererSidebarStatusFilter: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-queued-transfer.js", () => ({
+  installRendererQueuedTransfer: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/project-tabs/index.js", () => ({
+  installProjectTabs: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
 vi.mock("../src/buddy/continuation.js", () => ({
@@ -43,7 +62,12 @@ vi.mock("../src/renderer-project-actions.js", () => ({
 }));
 
 vi.mock("../src/renderer-git-sidebar.js", () => ({
-  installRendererGitSidebar: () => ({ syncContext: vi.fn(), dispose: vi.fn() }),
+  installRendererGitSidebar: (options: {
+    getContext: NonNullable<typeof testState.gitContext>;
+  }) => {
+    testState.gitContext = options.getContext;
+    return { syncContext: testState.gitSync, dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-git-workflow-control.js", () => ({
@@ -196,6 +220,7 @@ function installFakeBrowser(): void {
   const listeners = new EventTarget();
   const composer = {
     isConnected: true,
+    getClientRects: () => [{}],
     matches: (selector: string) => selector === "[data-codex-composer-root]",
     querySelectorAll: (selector: string) => (selector === "button" ? [testState.sendButton] : []),
     querySelector: (selector: string) => (selector.includes("textarea") ? testState.editor : null),
@@ -617,7 +642,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     expect(applyAgent).not.toHaveBeenCalled();
   });
 
-  it("routes Session import to local while the current Composer Host is remote", async () => {
+  it("routes Session import to the current SSH Host", async () => {
     installFakeBrowser();
     const local = {
       inspectHarness: vi.fn(async () => readyInspection()),
@@ -661,7 +686,8 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     );
 
     const client = testState.getSessionImportClient?.();
-    if (!client) throw new Error("Local Session import client was not installed");
+    if (!client) throw new Error("SSH Session import client was not installed");
+    expect(client.hostId).toBe("remote-1");
     await client.listSessionImportSources();
     await client.listHarnessSessions({ harnessId: harnessIdSchema.parse("pi") });
     await client.importHarnessSession({
@@ -669,15 +695,15 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       nativeSessionId: "native-session",
     });
 
-    expect(modelControl.clientForHost).toHaveBeenCalledWith("local");
-    expect(local.listSessionImportSources).toHaveBeenCalledOnce();
-    expect(local.listHarnessSessions).toHaveBeenCalledWith({ harnessId: "pi" });
-    expect(local.importHarnessSession).toHaveBeenCalledWith({
+    expect(modelControl.clientForHost).toHaveBeenCalledWith("remote-1");
+    expect(remote.listSessionImportSources).toHaveBeenCalledOnce();
+    expect(remote.listHarnessSessions).toHaveBeenCalledWith({ harnessId: "pi" });
+    expect(remote.importHarnessSession).toHaveBeenCalledWith({
       harnessId: "pi",
       nativeSessionId: "native-session",
     });
-    expect(remote.listHarnessSessions).not.toHaveBeenCalled();
-    expect(remote.importHarnessSession).not.toHaveBeenCalled();
+    expect(local.listHarnessSessions).not.toHaveBeenCalled();
+    expect(local.importHarnessSession).not.toHaveBeenCalled();
   });
 
   it("invalidates and refreshes a stale managed Web capability after open fails", async () => {
@@ -1193,5 +1219,54 @@ describe("Buddy model controls", () => {
     );
     expect(testState.renderedModelViews.at(-1)?.selected).toEqual(selected);
     expect(host.selectThreadModel).not.toHaveBeenCalled();
+  });
+});
+
+it("binds draft Git to the selected Host project and refreshes when the directory changes", async () => {
+  installFakeBrowser();
+  testState.modelTarget = ["default"];
+  let hostId = "remote";
+  const local = { inspectGitStatus: vi.fn() };
+  const remote = { inspectGitStatus: vi.fn() };
+  Reflect.set(window, "__codexhostDraftWorkspacesV1", {
+    local: "/local/project",
+    remote: "/remote/project",
+  });
+  const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+  const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+  probe.setAdapter(
+    { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+    undefined,
+    () => true,
+    {
+      currentHostId: () => hostId,
+      clientForHost: (id: string) => (id === "local" ? local : remote),
+    } as never,
+  );
+  await vi.waitFor(() =>
+    expect(testState.gitContext?.()).toMatchObject({
+      threadId: null,
+      hostId: "remote",
+      cwd: "/remote/project",
+      client: remote,
+    }),
+  );
+  const event = new Event("codexhost:draft-workspace");
+  Reflect.set(event, "detail", { hostId: "remote", cwd: "/remote/next" });
+  testState.gitSync.mockClear();
+  window.dispatchEvent(event);
+  expect(testState.gitSync).toHaveBeenCalled();
+  expect(testState.gitContext?.()).toMatchObject({ cwd: "/remote/next", client: remote });
+  hostId = "local";
+  expect(testState.gitContext?.()).toMatchObject({ cwd: "/local/project", client: local });
+  const cleared = new Event("codexhost:draft-workspace");
+  Reflect.set(cleared, "detail", { hostId: "local", cwd: null });
+  window.dispatchEvent(cleared);
+  expect(testState.gitContext?.()).toMatchObject({ threadId: null, client: null });
+  testState.modelTarget = ["conversation", "thread-a"];
+  expect(testState.gitContext?.()).toMatchObject({
+    threadId: "thread-a",
+    cwd: undefined,
+    client: local,
   });
 });

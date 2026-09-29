@@ -1,5 +1,9 @@
+import { createSessionRouting } from "./renderer-session-routing.js";
+import { sessionDraftText } from "./renderer-session-targets.js";
+import { installAutoRouteCards } from "./auto-route-card/index.js";
 import { installRendererGitWorkflowControl } from "./renderer-git-workflow-control.js";
 import { installSidebarContinuation } from "./buddy/continuation.js";
+import { installRendererSidebarUnread } from "./renderer-sidebar-unread.js";
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
@@ -24,7 +28,6 @@ import {
   type CodexhostError,
   type ModelAvailabilityParams,
   type ModelAvailabilitySnapshot,
-  hostThreadIdSchema,
 } from "@codexhost/shared-contracts";
 
 import {
@@ -106,6 +109,8 @@ import {
 import { installRendererProjectActions } from "./renderer-project-actions.js";
 import { installProjectTabs } from "./project-tabs/index.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
+import { installRendererGitBranchControl } from "./renderer-git-branch-control.js";
+import { RendererGitCache } from "./renderer-git-cache.js";
 import {
   rendererHarnessCommandExecutesDirectly,
   routeRendererHarnessCommandSelection,
@@ -118,7 +123,6 @@ import {
 } from "./renderer-delegation-mention.js";
 import { RENDERER_AGENT_LABELS } from "./renderer-agent-icon.js";
 import { openRendererThread } from "./renderer-fork-control.js";
-import { insertNativeTextAtSelection } from "./renderer-native-composer-controller.js";
 import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
@@ -747,8 +751,6 @@ export function installRendererBindingProbe(
     ...(options.defaultAgent ? { defaultAgent: options.defaultAgent } : {}),
   });
   const mountedByComposer = new Map<Element, MountedComposer>();
-  const replayingSubmissions = new WeakSet<Element>();
-  const sessionRoutePending = new WeakMap<Element, Promise<void>>();
   let buddyControl: ReturnType<typeof installBuddyControl> | null = null;
   const catalogRequests = new WeakMap<MountedComposer, MountedCatalogRequest>();
   const pendingReplacements = new Map<Element, PendingComposerReplacement>();
@@ -799,6 +801,10 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const sidebarUnread = installRendererSidebarUnread({
+    getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
   const sidebarStatusFilter = installRendererSidebarStatusFilter({
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
@@ -819,6 +825,17 @@ export function installRendererBindingProbe(
     getClient: () => modelClientForHost("local"),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  // 原生预热发布各 Host 的当前草稿目录，供 Git 面板与命令目录共用。
+  const draftWorkspaces = new Map<string, string>();
+  {
+    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
+    if (typeof published === "object" && published !== null) {
+      for (const [hostId, cwd] of Object.entries(published)) {
+        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
+      }
+    }
+  }
+
   const activeGitContext = () => {
     const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
     for (const mounted of mountedByComposer.values()) {
@@ -829,32 +846,52 @@ export function installRendererBindingProbe(
       )
         continue;
       const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
-      if (!threadId) continue;
       const hostId = activeModelHostId() ?? mounted.hostId;
+      const cwd = !threadId && hostId ? draftWorkspaces.get(hostId) : undefined;
+      if (!threadId && !cwd) continue;
       const client = hostId ? modelClientForHost(hostId) : null;
-      if (!client?.inspectGitStatus) continue;
-      return { anchor: mounted.composer, threadId, hostId, client };
+      return { anchor: mounted.composer, threadId, cwd, hostId, client };
     }
     return null;
   };
+  const gitCache = new RendererGitCache();
   const gitSidebar = installRendererGitSidebar({
+    cache: gitCache,
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
     getContext: () => {
       const current = activeGitContext();
       return current
         ? {
             threadId: current.threadId,
+            cwd: current.cwd,
             hostId: current.hostId,
-            client: current.client as RendererGitClient,
+            client: current.client?.inspectGitStatus ? (current.client as RendererGitClient) : null,
           }
         : { threadId: null, hostId: null, client: null };
     },
   });
+  const gitBranchControl = installRendererGitBranchControl({
+    cache: gitCache,
+    getLocale: () => settingsLifecycle.locale,
+    getContext: () => {
+      const current = activeGitContext();
+      if (!current?.threadId || !current.client?.inspectGitStatus) {
+        return null;
+      }
+      return {
+        ...current,
+        threadId: current.threadId,
+        client: current.client as RendererGitClient,
+      };
+    },
+  });
   const gitWorkflowControl = installRendererGitWorkflowControl(() => {
     const current = activeGitContext();
-    if (!current?.client.inspectGitWorkflow || !current.client.runGitWorkflow) return null;
+    if (!current?.threadId || !current.client?.inspectGitWorkflow || !current.client.runGitWorkflow)
+      return null;
     return {
       ...current,
+      threadId: current.threadId,
       client: current.client as Required<
         Pick<RendererModelClient, "inspectGitWorkflow" | "runGitWorkflow">
       >,
@@ -867,7 +904,10 @@ export function installRendererBindingProbe(
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getBuddyClient: () => modelControl,
-    getLoadedSessionsClient: () => modelClientForHost("local"),
+    getLoadedSessionsClient: () => {
+      const hostId = activeModelHostId();
+      return hostId ? modelClientForHost(hostId) : null;
+    },
     getThreadTerminalClient: () => {
       const client = modelClientForHost("local");
       const listThreadTerminals = client?.listThreadTerminals;
@@ -882,19 +922,23 @@ export function installRendererBindingProbe(
         : null;
     },
     getSessionImportClient: () => {
-      const client = modelClientForHost("local");
+      const hostId = activeModelHostId();
+      const client = hostId ? modelClientForHost(hostId) : null;
       const sources = client?.listSessionImportSources;
       const list = client?.listHarnessSessions;
       const importSession = client?.importHarnessSession;
-      if (!sources || !list || !importSession) return null;
+      if (!hostId || !sources || !list || !importSession) return null;
       return {
+        hostId,
         listSessionImportSources: () => sources(),
         listHarnessSessions: (input) => list(input),
         importHarnessSession: (input) => importSession(input),
       };
     },
-    openImportedThread: (threadId, signal) =>
-      openRendererThread(threadId, { hostId: "local", signal }),
+    openImportedThread: (threadId, signal, hostId) => {
+      if (!hostId) throw new Error("无法确认导入会话所属 Host");
+      return openRendererThread(threadId, { hostId, signal });
+    },
     onLocaleChange() {
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
       gitSidebar.refresh();
@@ -902,6 +946,7 @@ export function installRendererBindingProbe(
   });
   const projectTabs = installProjectTabs({
     getLocale: () => settingsLifecycle.locale,
+    getClient: () => modelClientForHost("local"),
   });
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
@@ -1070,213 +1115,25 @@ export function installRendererBindingProbe(
   };
 
   let delegationMention: RendererDelegationMentionControl | null = null;
-  /**
-   * Workspace of each Host's current draft, published by the draft prewarm
-   * (the only place Desktop names it). A draft asks the Host for that
-   * workspace's live commands and skills.
-   */
-  const draftWorkspaces = new Map<string, string>();
-  const sessionPickerStyle = document.createElement("style");
-  sessionPickerStyle.textContent = `
-    .codexhost-session-picker { position: absolute; z-index: 10000; right: 8px; bottom: 58px; width: min(520px, calc(100vw - 32px)); max-height: min(520px, 70vh); overflow: auto; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; background: Canvas; box-shadow: 0 8px 30px rgb(0 0 0 / 18%); }
-    .codexhost-session-picker input { width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; background: Canvas; color: CanvasText; }
-    .codexhost-session-picker-list { display: grid; gap: 4px; }
-    .codexhost-session-picker-option, .codexhost-session-picker-new { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; padding: 8px; border: 0; border-radius: 6px; text-align: left; background: transparent; color: CanvasText; cursor: pointer; }
-    .codexhost-session-picker-option:hover, .codexhost-session-picker-new:hover { background: color-mix(in srgb, Highlight 14%, transparent); }
-    .codexhost-session-picker-title { font-weight: 650; }
-    .codexhost-session-picker-confidence { font-variant-numeric: tabular-nums; font-weight: 700; color: Highlight; }
-    .codexhost-session-picker-path, .codexhost-session-picker-preview, .codexhost-session-picker-empty { grid-column: 1 / -1; overflow: hidden; color: GrayText; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .codexhost-session-picker-new { display: block; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); color: Highlight; }
-  `;
-  document.head.append(sessionPickerStyle);
-  {
-    const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
-    if (typeof published === "object" && published !== null) {
-      for (const [hostId, cwd] of Object.entries(published)) {
-        if (typeof cwd === "string" && cwd.length > 0) draftWorkspaces.set(hostId, cwd);
-      }
-    }
-  }
 
-  const mountedConversation = (hostId: string, threadId: string): MountedComposer | null => {
-    for (const mounted of mountedByComposer.values()) {
-      if (
-        mounted.hostId === hostId &&
-        threadIdFromComposerModelTarget(mounted.modelTarget) === threadId &&
-        mounted.composer.isConnected
-      ) {
-        return mounted;
-      }
-    }
-    return null;
-  };
-
-  const waitForMountedConversation = (
-    hostId: string,
-    threadId: string,
-    timeoutMs = 5_000,
-  ): Promise<MountedComposer> =>
-    new Promise((resolve, reject) => {
-      const started = Date.now();
-      const poll = (): void => {
-        const mounted = mountedConversation(hostId, threadId);
-        if (mounted) {
-          resolve(mounted);
-          return;
-        }
-        if (Date.now() - started >= timeoutMs) {
-          reject(new Error("Target Codex Thread composer did not appear"));
-          return;
-        }
-        window.setTimeout(poll, 50);
-      };
-      poll();
-    });
-
-  const replayDraftSubmission = (mounted: MountedComposer): void => {
-    const button = refreshSendButton(mounted.control);
-    if (!button) return;
-    replayingSubmissions.add(mounted.composer);
-    try {
+  const sessionRouting = createSessionRouting({
+    mounted: mountedByComposer,
+    draftWorkspaces,
+    activeHostId: activeModelHostId,
+    client: modelClientForHost,
+    locale: () => settingsLifecycle.locale,
+    send: (mounted) => {
+      const button = refreshSendButton(mounted.control);
+      if (!button || button.disabled) throw new Error("原生发送按钮暂不可用");
       button.click();
-    } finally {
-      replayingSubmissions.delete(mounted.composer);
-    }
-  };
+    },
+    clearPending: (mounted) => controller.clearPendingSubmission(mounted.composer),
+  });
 
-  const chooseDraftSession = (
-    mounted: MountedComposer,
-    message: string,
-  ): Promise<void> => {
-    const existing = sessionRoutePending.get(mounted.composer);
-    if (existing) return existing;
-    const operation = (async (): Promise<void> => {
-      const hostId = mounted.hostId ?? activeModelHostId();
-      const client = hostId ? modelClientForHost(hostId) : null;
-      if (!hostId || !client?.routeSession) return;
-      try {
-        const result = await client.routeSession({
-          message,
-          ...(draftWorkspaces.get(hostId) ? { cwd: draftWorkspaces.get(hostId) } : {}),
-        });
-        await showSessionPicker({ mounted, hostId, message, candidates: result.candidates });
-      } catch (error) {
-        console.warn("codexhost could not rank recent sessions", error);
-        showSessionPicker({ mounted, hostId, message, candidates: [] });
-      }
-    })().finally(() => sessionRoutePending.delete(mounted.composer));
-    sessionRoutePending.set(mounted.composer, operation);
-    return operation;
-  };
-
-  const showSessionPicker = async (input: {
-    mounted: MountedComposer;
-    hostId: string;
-    message: string;
-    candidates: Array<{ threadId: string; title: string | null; cwd: string; confidence: number; preview: string }>;
-  }): Promise<void> => {
-    const { mounted, hostId, message } = input;
-    const picker = document.createElement("div");
-    picker.className = "codexhost-session-picker";
-    picker.setAttribute("role", "dialog");
-    picker.setAttribute("aria-label", "选择发送会话");
-    const search = document.createElement("input");
-    search.type = "search";
-    search.placeholder = "搜索会话或项目";
-    search.setAttribute("aria-label", "搜索会话或项目");
-    const list = document.createElement("div");
-    list.className = "codexhost-session-picker-list";
-    picker.append(search, list);
-    mounted.composer.append(picker);
-
-    let settled = false;
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      picker.remove();
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-    const dispatchTo = async (threadId: string): Promise<void> => {
-      finish();
-      try {
-        await openRendererThread(hostThreadIdSchema.parse(threadId), { hostId });
-        const target = await waitForMountedConversation(hostId, threadId);
-        const editor = target.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-        if (!editor || editor.textContent?.trim()) throw new Error("Target Thread composer is not empty");
-        if (!insertNativeTextAtSelection(editor, () => message)) throw new Error("Could not restore the message");
-        replayDraftSubmission(target);
-      } catch (error) {
-        console.warn("codexhost could not send to the selected session", error);
-        const originalEditor = mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-        if (originalEditor && !originalEditor.textContent?.trim()) {
-          insertNativeTextAtSelection(originalEditor, () => message);
-        }
-      }
-    };
-    const render = (): void => {
-      list.replaceChildren();
-      const query = search.value.trim().toLocaleLowerCase();
-      const candidates = input.candidates.filter((candidate) =>
-        `${candidate.title ?? ""} ${candidate.cwd} ${candidate.preview}`.toLocaleLowerCase().includes(query),
-      );
-      for (const candidate of candidates) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "codexhost-session-picker-option";
-        const title = document.createElement("span");
-        title.className = "codexhost-session-picker-title";
-        title.textContent = candidate.title ?? "未命名会话";
-        const confidence = document.createElement("span");
-        confidence.className = "codexhost-session-picker-confidence";
-        confidence.textContent = `${Math.round(candidate.confidence * 100)}%`;
-        const path = document.createElement("span");
-        path.className = "codexhost-session-picker-path";
-        path.textContent = candidate.cwd;
-        const preview = document.createElement("span");
-        preview.className = "codexhost-session-picker-preview";
-        preview.textContent = candidate.preview.slice(-220);
-        button.append(title, confidence, path, preview);
-        button.addEventListener("click", () => void dispatchTo(candidate.threadId));
-        list.append(button);
-      }
-      if (!candidates.length) {
-        const empty = document.createElement("div");
-        empty.className = "codexhost-session-picker-empty";
-        empty.textContent = "没有匹配的近期会话";
-        list.append(empty);
-      }
-      const newThread = document.createElement("button");
-      newThread.type = "button";
-      newThread.className = "codexhost-session-picker-new";
-      newThread.textContent = "在新会话发送";
-      newThread.addEventListener("click", () => {
-        finish();
-        insertNativeTextAtSelection(
-          mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR) ?? mounted.composer,
-          () => message,
-        );
-        replayDraftSubmission(mounted);
-      });
-      list.append(newThread);
-    };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        finish();
-      }
-    };
-    search.addEventListener("input", render);
-    window.addEventListener("keydown", onKeyDown, true);
-    render();
-    search.focus();
-  };
-
-  const shouldAutoRouteDraft = (mounted: MountedComposer): boolean => {
-    if (replayingSubmissions.has(mounted.composer)) return false;
-    if (controller.get(mounted.composer).agent !== "codex") return false;
-    return mounted.modelTarget?.[0] === "default" && !threadIdFromComposerModelTarget(mounted.modelTarget);
-  };
+  const shouldChooseSession = (mounted: MountedComposer): boolean =>
+    !sessionRouting.isReplaying(mounted.composer) &&
+    controller.get(mounted.composer).agent === "codex" &&
+    (mounted.modelTarget?.[0] === "default" || mounted.modelTarget?.[0] === "conversation");
   /**
    * `keepCurrent` refreshes in place (the `#` menu reopening) instead of
    * clearing first, so an open menu never flickers empty.
@@ -3084,6 +2941,7 @@ export function installRendererBindingProbe(
     }
     pendingReplacements.clear();
     gitSidebar.syncContext();
+    gitBranchControl.refreshContext();
     gitWorkflowControl.refreshContext();
   };
 
@@ -3200,15 +3058,16 @@ export function installRendererBindingProbe(
     }
     const mounted = mountedByComposer.get(composer);
     const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-    const message = editor?.textContent?.trim() ?? "";
-    if (mounted && message && shouldAutoRouteDraft(mounted)) {
+    const message = sessionDraftText(editor);
+    if (mounted && message.trim() && shouldChooseSession(mounted)) {
       blockEvent(event);
-      void chooseDraftSession(mounted, message);
+      void sessionRouting.choose(mounted, message);
       return;
     }
     notifySubmission(composer, "submit");
   };
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (eventElement(event.target)?.closest(".codexhost-session-picker")) return;
     const composer = isComposerInputIntent(event) ? composerForTarget(event.target) : null;
     const mounted = composer ? mountedByComposer.get(composer) : undefined;
     if (composer && controller.isSwitching(composer)) {
@@ -3224,15 +3083,19 @@ export function installRendererBindingProbe(
       return;
     }
     if (!isComposerSubmissionKey(event) || !composer) return;
+    if (event.repeat) {
+      blockEvent(event);
+      return;
+    }
     if (!prepareComposer(composer)) {
       blockEvent(event);
       return;
     }
     const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-    const message = editor?.textContent?.trim() ?? "";
-    if (mounted && message && shouldAutoRouteDraft(mounted)) {
+    const message = sessionDraftText(editor);
+    if (mounted && message.trim() && shouldChooseSession(mounted)) {
       blockEvent(event);
-      void chooseDraftSession(mounted, message);
+      void sessionRouting.choose(mounted, message);
       return;
     }
     notifySubmission(composer, "enter");
@@ -3250,10 +3113,10 @@ export function installRendererBindingProbe(
       return;
     }
     const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-    const message = editor?.textContent?.trim() ?? "";
-    if (message && shouldAutoRouteDraft(mounted)) {
+    const message = sessionDraftText(editor);
+    if (message.trim() && shouldChooseSession(mounted)) {
       blockEvent(event);
-      void chooseDraftSession(mounted, message);
+      void sessionRouting.choose(mounted, message);
       return;
     }
     notifySubmission(composer, "click");
@@ -3278,6 +3141,7 @@ export function installRendererBindingProbe(
   const onHostRouteChange = (): void => {
     scheduleScan(true);
     sidebarContinuation.refresh();
+    sidebarUnread.refresh();
     sidebarStatusFilter.refresh();
     threadActions.refresh();
     queuedTransfer.refresh();
@@ -3301,6 +3165,7 @@ export function installRendererBindingProbe(
     sidebarAgentIcons.refresh();
     reconcileHarnessAvailabilityHost();
     gitSidebar.syncContext();
+    gitBranchControl.refreshContext();
     gitWorkflowControl.refreshContext();
     void loadCodexAccounts();
     void refreshHarnessAvailability();
@@ -3349,6 +3214,7 @@ export function installRendererBindingProbe(
   const onWindowFocus = (): void => {
     reconcileHarnessAvailabilityHost();
     gitSidebar.syncContext();
+    gitBranchControl.refreshContext();
     gitWorkflowControl.refreshContext();
     void loadCodexAccounts();
     for (const mounted of mountedByComposer.values()) {
@@ -3369,8 +3235,10 @@ export function installRendererBindingProbe(
     const detail: unknown = (event as CustomEvent).detail;
     if (typeof detail !== "object" || detail === null) return;
     const { hostId, cwd } = detail as { hostId?: unknown; cwd?: unknown };
-    if (typeof hostId !== "string" || typeof cwd !== "string" || cwd.length === 0) return;
-    draftWorkspaces.set(hostId, cwd);
+    if (typeof hostId !== "string" || (cwd !== null && typeof cwd !== "string")) return;
+    if (cwd) draftWorkspaces.set(hostId, cwd);
+    else draftWorkspaces.delete(hostId);
+    gitSidebar.syncContext();
     for (const mounted of mountedByComposer.values()) {
       if (
         !threadIdFromComposerModelTarget(mounted.modelTarget) &&
@@ -3467,6 +3335,31 @@ export function installRendererBindingProbe(
     () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   );
 
+  const autoRouteCards = installAutoRouteCards({
+    getLocale: () => settingsLifecycle.locale,
+    getContext: () => {
+      for (const mounted of connectedComposers()) {
+        if (
+          mounted.ownershipStatus !== "ready" ||
+          controller.get(mounted.composer).agent !== "codex" ||
+          controller.isSwitching(mounted.composer) ||
+          !mounted.composer.getClientRects().length
+        )
+          continue;
+        const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
+        const hostId = mounted.hostId;
+        const client = modelClientForHostFrom(modelControl, hostId);
+        if (!threadId || !hostId || hostId !== activeModelHostId() || !client?.readAutoModelRoutes)
+          continue;
+        const root =
+          mounted.composer.closest<HTMLElement>('[data-app-shell-main-surface="default"]') ??
+          document.body;
+        return { threadId, hostId, client, root };
+      }
+      return null;
+    },
+  });
+
   const api: RendererBindingProbeApi = {
     status() {
       const selections = connectedComposers().map((mounted) => ({
@@ -3515,6 +3408,8 @@ export function installRendererBindingProbe(
       adapterDispose = dispose ?? null;
       applyAdapterAgent = applyAgent ?? null;
       modelControl = nextModelControl ?? null;
+      sidebarUnread.refresh();
+      gitBranchControl.refreshContext();
       queuedTransfer.refresh();
       try {
         usageNotificationDispose =
@@ -3584,7 +3479,9 @@ export function installRendererBindingProbe(
       if (scanFrame !== null) window.cancelAnimationFrame(scanFrame);
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
+      autoRouteCards.dispose();
       sidebarContinuation.dispose();
+      sidebarUnread.dispose();
       sidebarStatusFilter.dispose();
       threadActions.dispose();
       queuedTransfer.dispose();
@@ -3593,6 +3490,7 @@ export function installRendererBindingProbe(
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();
+      gitBranchControl.dispose();
       gitWorkflowControl.dispose();
       settingsLifecycle.dispose();
       document.removeEventListener("beforeinput", onBeforeInput, true);
@@ -3622,7 +3520,7 @@ export function installRendererBindingProbe(
       connectionListeners.clear();
       connectionDiagnostics = null;
       delete window.__codexhostRendererBindingProbeV1;
-      sessionPickerStyle.remove();
+      sessionRouting.dispose();
     },
   };
   window.__codexhostRendererBindingProbeV1 = api;

@@ -15,8 +15,11 @@ import type {
 } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { gitTargetKey, gitTargetParams, hasGitTarget } from "./renderer-git-target.js";
 import { RendererGitCache } from "./renderer-git-cache.js";
+import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 import { openNativeGitReview, runNativeWorkspaceCommand } from "./renderer-native-workspace.js";
+import { installNativeFileTreeLayout } from "./renderer-native-file-tree-layout.js";
 import {
   createRendererProjectSyncPanel,
   type RendererProjectSyncClient,
@@ -50,6 +53,7 @@ export interface RendererGitClient extends Partial<GitRepositoryClient> {
 
 export interface RendererGitContext {
   hostId: string | null;
+  cwd?: string | undefined;
   repository?: string | undefined;
   threadId: HostThreadId | null;
   client: RendererGitClient | null;
@@ -278,6 +282,7 @@ interface RepositoryGroup {
 
 export function installRendererGitSidebar(options: {
   getContext(): RendererGitContext;
+  cache?: RendererGitCache;
   getProjectSyncClient?(): RendererProjectSyncClient | null;
   ownerDocument?: Document;
   signal?: AbortSignal;
@@ -533,6 +538,7 @@ export function installRendererGitSidebar(options: {
   let view: "projects" | "commits" | "devices" = "projects";
   let current: GitWorkspaceStatus | null = null;
   let workspaceRead = false;
+  let workspaceError: Error | null = null;
   let repositoryGroups: RepositoryGroup[] = [];
   let selectedChange: string | null = null;
   let changeTab: "changes" | "staged" = "changes";
@@ -548,7 +554,7 @@ export function installRendererGitSidebar(options: {
     tree: boolean;
     expansion: number;
   } | null = null;
-  const cache = new RendererGitCache();
+  const cache = options.cache ?? new RendererGitCache();
   let warmTimer: ReturnType<typeof setTimeout> | undefined;
   refresh.dataset.gitAction = "refresh";
   stageAll.dataset.gitAction = "stage-all";
@@ -561,17 +567,17 @@ export function installRendererGitSidebar(options: {
   mergeAbort.dataset.gitAction = "merge-abort";
   let selectedRepository: string | undefined;
   const requestKey = (request: RendererGitContext): string =>
-    JSON.stringify([request.threadId, request.repository]);
+    JSON.stringify([gitTargetKey(request), request.repository]);
   const pending = new WeakMap<RendererGitClient, Map<string, string>>();
   const pendingAction = (): string | undefined => {
     const request = context();
-    return request.client && request.threadId
+    return request.client && hasGitTarget(request)
       ? pending.get(request.client)?.get(requestKey(request))
       : undefined;
   };
   const isBusy = (): boolean => pendingAction() !== undefined;
   const beginAction = (request: RendererGitContext, action: string): void => {
-    if (!request.client || !request.threadId) return;
+    if (!request.client || !hasGitTarget(request)) return;
     let actions = pending.get(request.client);
     if (!actions) {
       actions = new Map();
@@ -580,17 +586,17 @@ export function installRendererGitSidebar(options: {
     actions.set(requestKey(request), action);
   };
   const finishAction = (request: RendererGitContext, repositoriesOnly = false): void => {
-    if (!request.client || !request.threadId) return;
+    if (!request.client || !hasGitTarget(request)) return;
     pending.get(request.client)?.delete(requestKey(request));
     if (disposed) return;
     const active = context();
     if (
       active.client === request.client &&
-      active.threadId === request.threadId &&
+      gitTargetKey(active) === gitTargetKey(request) &&
       active.repository === request.repository
     ) {
-      current = cache.peekStatus(request.client, request.threadId, request.repository) ?? current;
-      if (!modelsLoaded) void loadModels();
+      current = cache.peekStatus(request.client, request, request.repository) ?? current;
+      if (current && !modelsLoaded) void loadModels();
       if (repositoriesOnly) {
         renderRepositoryCards(repositoryGroups.filter((group) => !group.primary));
         updateBusy();
@@ -616,7 +622,7 @@ export function installRendererGitSidebar(options: {
   const context = () => {
     const next = options.getContext();
     const matches =
-      next.threadId === activeContext.threadId &&
+      gitTargetKey(next) === gitTargetKey(activeContext) &&
       next.hostId === activeContext.hostId &&
       next.client === activeContext.client;
     return {
@@ -628,7 +634,7 @@ export function installRendererGitSidebar(options: {
   const contextFor = (repository: string | undefined) => {
     const next = options.getContext();
     const matches =
-      next.threadId === activeContext.threadId &&
+      gitTargetKey(next) === gitTargetKey(activeContext) &&
       next.hostId === activeContext.hostId &&
       next.client === activeContext.client;
     return {
@@ -642,7 +648,7 @@ export function installRendererGitSidebar(options: {
     return (
       !disposed &&
       request.generation === contextGeneration &&
-      request.threadId === active.threadId &&
+      gitTargetKey(request) === gitTargetKey(active) &&
       request.hostId === active.hostId &&
       request.client === active.client
     );
@@ -652,9 +658,10 @@ export function installRendererGitSidebar(options: {
     generation += 1;
     cancelReview();
     workspaceRead = false;
+    workspaceError = null;
     current =
-      activeContext.client && activeContext.threadId
-        ? cache.peekStatus(activeContext.client, activeContext.threadId, selectedRepository)
+      activeContext.client && hasGitTarget(activeContext)
+        ? cache.peekStatus(activeContext.client, activeContext, selectedRepository)
         : null;
     modelsLoaded = false;
     model.replaceChildren();
@@ -669,7 +676,7 @@ export function installRendererGitSidebar(options: {
     const next = options.getContext();
     repositorySelector.syncContext();
     if (
-      next.threadId === activeContext.threadId &&
+      gitTargetKey(next) === gitTargetKey(activeContext) &&
       next.hostId === activeContext.hostId &&
       next.client === activeContext.client
     )
@@ -681,6 +688,7 @@ export function installRendererGitSidebar(options: {
   };
 
   let nativeTerminal: HTMLButtonElement | null = null;
+  const nativeFileTreeLayout = installNativeFileTreeLayout(document);
   const syncOfficialPanelState = (): void => {
     for (const [panel, button] of [
       ["terminal", terminal],
@@ -691,9 +699,10 @@ export function installRendererGitSidebar(options: {
       const pressed = String(target?.getAttribute("aria-pressed") === "true");
       if (button.getAttribute("aria-pressed") !== pressed)
         button.setAttribute("aria-pressed", pressed);
-      const title = target || panel === "files"
-        ? (button.getAttribute("aria-label") ?? "")
-        : `${button.getAttribute("aria-label") ?? ""}（不可用）`;
+      const title =
+        target || panel === "files"
+          ? (button.getAttribute("aria-label") ?? "")
+          : `${button.getAttribute("aria-label") ?? ""}（不可用）`;
       if (button.title !== title) button.title = title;
     }
   };
@@ -845,18 +854,18 @@ export function installRendererGitSidebar(options: {
 
   const stagePaths = async (repository: string, paths: string[]): Promise<void> => {
     const request = contextFor(repository);
-    if (!request.threadId || !request.client || isBusy() || paths.length === 0) return;
+    if (!hasGitTarget(request) || !request.client || isBusy() || paths.length === 0) return;
     generation += 1;
     beginAction(request, "stage-all");
     setNotice("");
     render();
     try {
       const status = await request.client.stageGitPaths({
-        threadId: request.threadId,
+        ...gitTargetParams(request),
         ...(repository ? { repository } : {}),
         paths,
       });
-      cache.update(request.client, request.threadId, status, repository);
+      cache.update(request.client, request, status, repository);
       if (!isCurrentRequest(request)) return;
       const group = repositoryGroups.find((entry) => entry.path === repository);
       if (group) group.status = status;
@@ -871,17 +880,17 @@ export function installRendererGitSidebar(options: {
 
   const pushRepository = async (repository: string): Promise<void> => {
     const request = contextFor(repository);
-    if (!request.threadId || !request.client || isBusy()) return;
+    if (!hasGitTarget(request) || !request.client || isBusy()) return;
     generation += 1;
     beginAction(request, "push");
     setNotice("正在推送…");
     render();
     try {
       const status = await request.client.pushGit({
-        threadId: request.threadId,
+        ...gitTargetParams(request),
         ...(repository ? { repository } : {}),
       });
-      cache.update(request.client, request.threadId, status, repository);
+      cache.update(request.client, request, status, repository);
       if (!isCurrentRequest(request)) return;
       const group = repositoryGroups.find((entry) => entry.path === repository);
       if (group) group.status = status;
@@ -921,12 +930,14 @@ export function installRendererGitSidebar(options: {
     head.hidden = false;
     branch.hidden = false;
     headText.textContent = "提交";
-    const workspacePath = current?.workspace ?? "";
+    const workspacePath = current?.workspace ?? selectedRepository ?? context().cwd ?? "";
     projectName.textContent = workspacePath
       ? (workspacePath.split(/[/\\]/u).filter(Boolean).at(-1) ?? workspacePath)
-      : context().threadId
+      : hasGitTarget(context())
         ? workspaceRead
-          ? "未检测到工作区"
+          ? workspaceError instanceof RendererMethodUnavailableError
+            ? "当前连接未启用 Git 服务"
+            : "未检测到工作区"
           : "正在读取项目…"
         : "未选择项目";
     projectName.title = workspacePath;
@@ -934,8 +945,8 @@ export function installRendererGitSidebar(options: {
     commitBox.hidden = false;
     branch.textContent = current?.branch
       ? `${current.branch} · ${current.ahead}↑ ${current.behind}↓`
-      : context().threadId
-        ? "未检测到工作区"
+      : hasGitTarget(context())
+        ? projectName.textContent
         : "未选择项目";
     warnings.textContent = current?.warnings?.join("\n") ?? "";
     warnings.hidden = !warnings.textContent;
@@ -1079,11 +1090,16 @@ export function installRendererGitSidebar(options: {
         renderChange(change, container, action, displayPath);
       }
     };
-    if (!workspaceRead && context().threadId) {
+    if (!workspaceRead && hasGitTarget(context())) {
       const loading = document.createElement("p");
       loading.className = "codexhost-git-empty";
       loading.textContent = "正在读取项目…";
       list.append(loading);
+    } else if (!current) {
+      const empty = document.createElement("p");
+      empty.className = "codexhost-git-empty";
+      empty.textContent = hasGitTarget(context()) ? "无法读取 Git 状态" : "未选择项目";
+      list.append(empty);
     } else if (!activeChanges.length) {
       const empty = document.createElement("p");
       empty.className = "codexhost-git-empty";
@@ -1123,7 +1139,11 @@ export function installRendererGitSidebar(options: {
 
   const openDiff = async (pathValue: string, repository = selectedRepository): Promise<void> => {
     const request = contextFor(repository);
-    if (!request.threadId || !request.hostId) return;
+    if (!request.hostId) return;
+    if (!request.threadId) {
+      setNotice("创建聊天后可在官方审查中查看文件差异。");
+      return;
+    }
     const requestGeneration = ++reviewGeneration;
     const isCurrent = () => isCurrentRequest(request) && requestGeneration === reviewGeneration;
     selectedChange = pathValue;
@@ -1154,8 +1174,11 @@ export function installRendererGitSidebar(options: {
   };
 
   const setNotice = (value: string): void => {
-    notice.textContent = value;
-    notice.hidden = value.length === 0;
+    notice.textContent =
+      workspaceError instanceof RendererMethodUnavailableError
+        ? "此连接未提供 Git 服务。请在工作区所在设备安装并启动同版本的 codexhost 远程服务，然后重新连接。"
+        : (workspaceError?.message ?? value);
+    notice.hidden = !notice.textContent;
   };
 
   const repositorySelector = createGitRepositorySelector({
@@ -1188,17 +1211,17 @@ export function installRendererGitSidebar(options: {
     const hasCommittable = current?.changes.some((change) => !change.conflicted) ?? false;
     stageAll.disabled =
       isBusy() || !client || !(current?.changes.some((change) => !change.conflicted) ?? false);
-    generate.disabled = isBusy() || !client || !modelsLoaded || !model.value;
+    generate.disabled = isBusy() || !client || !current || !modelsLoaded || !model.value;
     commit.disabled = isBusy() || !client || !hasCommittable;
     commitPush.disabled = commit.disabled;
-    push.disabled = isBusy() || !client;
-    sync.disabled = isBusy() || !client?.syncGit;
-    model.disabled = isBusy() || !modelsLoaded;
+    push.disabled = isBusy() || !client || !current;
+    sync.disabled = isBusy() || !client?.syncGit || !current;
+    model.disabled = isBusy() || !current || !modelsLoaded;
     refresh.disabled = isBusy() || !client;
     mergeContinue.disabled =
       isBusy() || !client?.continueGitMerge || (current?.conflicts?.length ?? 0) > 0;
     mergeAbort.disabled = isBusy() || !client?.abortGitMerge;
-    repositorySelector.setBusy(isBusy());
+    repositorySelector.setBusy(isBusy() || !current);
     for (const button of shadow.querySelectorAll<HTMLButtonElement>("button[data-git-action]")) {
       button.setAttribute("aria-busy", String(button.dataset.gitAction === pendingAction()));
     }
@@ -1215,9 +1238,9 @@ export function installRendererGitSidebar(options: {
 
   const loadModels = async (): Promise<void> => {
     const request = context();
-    if (!request.threadId || !request.client) return;
+    if (!hasGitTarget(request) || !request.client) return;
     try {
-      const result = await cache.models(request.client, request.threadId, request.repository);
+      const result = await cache.models(request.client, request, request.repository);
       if (!isCurrentRequest(request)) return;
       model.replaceChildren();
       for (const item of result.models.filter((candidate) => candidate.eligible)) {
@@ -1244,18 +1267,18 @@ export function installRendererGitSidebar(options: {
     repository = selectedRepository,
   ): Promise<void> => {
     const request = contextFor(repository);
-    if (!request.threadId || !request.client || isBusy()) return;
+    if (!hasGitTarget(request) || !request.client || isBusy()) return;
     generation += 1;
     beginAction(request, stage ? `stage:${pathValue}` : `unstage:${pathValue}`);
     setNotice("");
     render();
     try {
       const status = await (stage ? request.client.stageGitPaths : request.client.unstageGitPaths)({
-        threadId: request.threadId,
+        ...gitTargetParams(request),
         ...(request.repository ? { repository: request.repository } : {}),
         paths: [pathValue],
       });
-      cache.update(request.client, request.threadId, status, request.repository);
+      cache.update(request.client, request, status, request.repository);
       if (!isCurrentRequest(request)) return;
       if (repository === selectedRepository) current = status;
       const group = repositoryGroups.find((entry) => entry.path === repository);
@@ -1276,7 +1299,7 @@ export function installRendererGitSidebar(options: {
   ): Promise<void> => {
     const request = contextFor(repository);
     if (isBusy()) return;
-    if (!request.threadId || !request.client) {
+    if (!hasGitTarget(request) || !request.client) {
       setNotice("未选择可用的 Git 工作区。");
       render();
       return;
@@ -1315,11 +1338,11 @@ export function installRendererGitSidebar(options: {
     try {
       if (stagedPaths.length === 0) {
         const staged = await request.client.stageGitPaths({
-          threadId: request.threadId,
+          ...gitTargetParams(request),
           ...(request.repository ? { repository: request.repository } : {}),
           paths,
         });
-        cache.update(request.client, request.threadId, staged, request.repository);
+        cache.update(request.client, request, staged, request.repository);
         if (isCurrentRequest(request)) {
           if (repository === selectedRepository) current = staged;
           const group = repositoryGroups.find((entry) => entry.path === repository);
@@ -1328,14 +1351,14 @@ export function installRendererGitSidebar(options: {
       }
       if (!isCurrentRequest(request)) return;
       const result = await request.client.commitGit({
-        threadId: request.threadId,
+        ...gitTargetParams(request),
         ...(request.repository ? { repository: request.repository } : {}),
         message: commitMessage,
         // 已显式暂存目标文件；提交索引，避免 pathspec 提交绕过暂存区语义。
         paths: [],
         push: pushAfterCommit,
       });
-      cache.update(request.client, request.threadId, result.status, request.repository);
+      cache.update(request.client, request, result.status, request.repository);
       if (!isCurrentRequest(request)) return;
       if (repository === selectedRepository) current = result.status;
       const group = repositoryGroups.find((entry) => entry.path === repository);
@@ -1360,7 +1383,7 @@ export function installRendererGitSidebar(options: {
     syncContext();
     if (disposed || view === "devices" || isBusy()) return;
     const request = context();
-    if (!request.threadId || !request.client) {
+    if (!hasGitTarget(request) || !request.client) {
       workspaceRead = false;
       current = null;
       repositoryGroups = [];
@@ -1369,8 +1392,11 @@ export function installRendererGitSidebar(options: {
     }
     const requestGeneration = ++generation;
     workspaceRead = false;
+    const hadWorkspaceError = workspaceError !== null;
+    workspaceError = null;
+    if (hadWorkspaceError) setNotice("");
     if (force) cache.invalidate(request.client);
-    current = cache.peekStatus(request.client, request.threadId, request.repository);
+    current = cache.peekStatus(request.client, request, request.repository);
     repositoryGroups = [
       {
         path: request.repository,
@@ -1384,8 +1410,7 @@ export function installRendererGitSidebar(options: {
     render();
     try {
       const client = request.client;
-      const threadId = request.threadId;
-      const status = await cache.status(client, threadId, request.repository);
+      const status = await cache.status(client, request, request.repository);
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       workspaceRead = true;
       current = status;
@@ -1394,7 +1419,7 @@ export function installRendererGitSidebar(options: {
         return {
           path: child,
           primary: false,
-          status: cache.peekStatus(client, threadId, child),
+          status: cache.peekStatus(client, request, child),
           loading: submodule.status !== "uninitialized",
           error: null,
         };
@@ -1408,7 +1433,7 @@ export function installRendererGitSidebar(options: {
         submodules.map(async (group) => {
           if (!group.loading || !group.path) return;
           try {
-            const childStatus = await cache.status(client, threadId, group.path);
+            const childStatus = await cache.status(client, request, group.path);
             if (isCurrentRequest(request) && requestGeneration === generation) {
               group.status = childStatus;
             }
@@ -1427,6 +1452,7 @@ export function installRendererGitSidebar(options: {
     } catch (error) {
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       workspaceRead = true;
+      workspaceError = error instanceof Error ? error : new Error(String(error));
       current = null;
       repositoryGroups = [];
       setNotice(error instanceof Error ? error.message : String(error));
@@ -1439,21 +1465,20 @@ export function installRendererGitSidebar(options: {
   const updateSubmodule = async (pathValue: string, initialize: boolean): Promise<void> => {
     const request = context();
     const client = request.client;
-    const threadId = request.threadId as HostThreadId | null;
     const update = client?.updateGitSubmodule;
-    if (!threadId || !update || isBusy()) return;
+    if (!hasGitTarget(request) || !update || isBusy()) return;
     generation += 1;
     beginAction(request, `submodule:${pathValue}`);
     updateBusy();
     render();
     try {
       const status = await update({
-        threadId,
+        ...gitTargetParams(request),
         path: pathValue,
         init: initialize,
         ...(request.repository ? { repository: request.repository } : {}),
       });
-      if (client) cache.update(client, threadId, status, request.repository);
+      if (client) cache.update(client, request, status, request.repository);
       if (!isCurrentRequest(request)) return;
       current = status;
     } catch (error) {
@@ -1563,7 +1588,7 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!request.threadId || !request.client || !current || isBusy()) return;
+      if (!hasGitTarget(request) || !request.client || !current || isBusy()) return;
       const paths = current.changes
         .filter((change) => !change.conflicted && (!change.staged || change.unstaged))
         .map((change) => change.path);
@@ -1574,13 +1599,13 @@ export function installRendererGitSidebar(options: {
       render();
       void request.client
         .stageGitPaths({
-          threadId: request.threadId,
+          ...gitTargetParams(request),
           ...(request.repository ? { repository: request.repository } : {}),
           paths,
         })
         .then((status) => {
-          if (request.client && request.threadId)
-            cache.update(request.client, request.threadId, status, request.repository);
+          if (request.client && hasGitTarget(request))
+            cache.update(request.client, request, status, request.repository);
           if (!isCurrentRequest(request)) return;
           current = status;
           setNotice("已暂存全部变更。");
@@ -1599,14 +1624,14 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!request.threadId || !request.client || !model.value || isBusy()) return;
+      if (!hasGitTarget(request) || !request.client || !model.value || isBusy()) return;
       generation += 1;
       beginAction(request, "generate");
       setNotice("正在生成提交消息…");
       render();
       void request.client
         .generateGitMessage({
-          threadId: request.threadId,
+          ...gitTargetParams(request),
           ...(request.repository ? { repository: request.repository } : {}),
           model: model.value,
           paths:
@@ -1633,19 +1658,19 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!request.threadId || !request.client || isBusy()) return;
+      if (!hasGitTarget(request) || !request.client || isBusy()) return;
       generation += 1;
       beginAction(request, "push");
       setNotice("正在推送…");
       render();
       void request.client
         .pushGit({
-          threadId: request.threadId,
+          ...gitTargetParams(request),
           ...(request.repository ? { repository: request.repository } : {}),
         })
         .then((status) => {
-          if (request.client && request.threadId)
-            cache.update(request.client, request.threadId, status, request.repository);
+          if (request.client && hasGitTarget(request))
+            cache.update(request.client, request, status, request.repository);
           if (!isCurrentRequest(request)) return;
           current = status;
           cancelReview();
@@ -1670,19 +1695,19 @@ export function installRendererGitSidebar(options: {
     () => {
       const request = context();
       const client = request.client;
-      if (!request.threadId || !client?.syncGit || isBusy()) return;
+      if (!hasGitTarget(request) || !client?.syncGit || isBusy()) return;
       generation += 1;
       beginAction(request, "sync");
       setNotice("正在拉取并同步…");
       render();
       void client
         .syncGit({
-          threadId: request.threadId,
+          ...gitTargetParams(request),
           ...(request.repository ? { repository: request.repository } : {}),
         })
         .then((result) => {
-          if (client && request.threadId)
-            cache.update(client, request.threadId, result.status, request.repository);
+          if (client && hasGitTarget(request))
+            cache.update(client, request, result.status, request.repository);
           if (!isCurrentRequest(request)) return;
           current = result.status;
           cancelReview();
@@ -1709,14 +1734,14 @@ export function installRendererGitSidebar(options: {
   ): Promise<void> => {
     const request = context();
     const client = request.client;
-    if (!request.threadId || !client || isBusy()) return;
+    if (!hasGitTarget(request) || !client || isBusy()) return;
     generation += 1;
     beginAction(request, action);
     setNotice(pending);
     render();
     try {
       const status = await run();
-      cache.update(client, request.threadId, status, request.repository);
+      cache.update(client, request, status, request.repository);
       if (!isCurrentRequest(request)) return;
       current = status;
       cancelReview();
@@ -1733,15 +1758,15 @@ export function installRendererGitSidebar(options: {
   mergeContinue.addEventListener(
     "click",
     () => {
-      const client = context().client;
-      const threadId = context().threadId;
+      const request = context();
+      const client = request.client;
       const continueMerge = client?.continueGitMerge;
-      if (!continueMerge || !threadId) return;
+      if (!continueMerge || !hasGitTarget(request)) return;
       void finishOperation(
         () =>
           continueMerge.call(client, {
-            threadId,
-            ...(selectedRepository ? { repository: selectedRepository } : {}),
+            ...gitTargetParams(request),
+            ...(request.repository ? { repository: request.repository } : {}),
           }),
         "正在完成合并…",
         "合并已完成。",
@@ -1753,15 +1778,15 @@ export function installRendererGitSidebar(options: {
   mergeAbort.addEventListener(
     "click",
     () => {
-      const client = context().client;
-      const threadId = context().threadId;
+      const request = context();
+      const client = request.client;
       const abortMerge = client?.abortGitMerge;
-      if (!abortMerge || !threadId) return;
+      if (!abortMerge || !hasGitTarget(request)) return;
       void finishOperation(
         () =>
           abortMerge.call(client, {
-            threadId,
-            ...(selectedRepository ? { repository: selectedRepository } : {}),
+            ...gitTargetParams(request),
+            ...(request.repository ? { repository: request.repository } : {}),
           }),
         "正在中止…",
         "已中止合并。",
@@ -1861,6 +1886,7 @@ export function installRendererGitSidebar(options: {
       clearTimeout(warmTimer);
       cache.clear();
       observer.disconnect();
+      nativeFileTreeLayout.dispose();
       projectSyncView.dispose();
       repositorySelector.dispose();
       if (anchor) restoreSidebarAnchor(anchor);

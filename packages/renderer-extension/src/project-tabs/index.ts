@@ -1,5 +1,6 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
+import type { ProjectTabsConfig, ProjectTabsState } from "@codexhost/shared-contracts";
 import { button, configureProjectTabs, openProjectDialog } from "./dialog.js";
 import { projectTabsMessages } from "./messages.js";
 import {
@@ -9,7 +10,6 @@ import {
   projectKey,
   projectTab,
   withProjectTabs,
-  type ProjectTabsConfig,
 } from "./model.js";
 import { PROJECT_ROW_SELECTOR, projectMenu, rowProject } from "./native-binding.js";
 import { projectTabsStyle } from "./styles.js";
@@ -18,7 +18,15 @@ const HIDDEN = "data-codexhost-project-tab-hidden";
 const MOVE = "data-codexhost-project-tab-move";
 const MENU_ITEMS = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]';
 
-export function installProjectTabs(options: { getLocale(): string }): {
+interface ProjectTabsPersistenceClient {
+  getProjectTabs?(): Promise<ProjectTabsState>;
+  setProjectTabs?(config: ProjectTabsConfig): Promise<ProjectTabsState>;
+}
+
+export function installProjectTabs(options: {
+  getLocale(): string;
+  getClient?(): ProjectTabsPersistenceClient | null;
+}): {
   refresh(): void;
   dispose(): void;
 } {
@@ -27,11 +35,19 @@ export function installProjectTabs(options: { getLocale(): string }): {
   document.head.append(styles);
   let config = defaultProjectTabs();
   let failure: unknown = null;
+  let localReadFailure: unknown = null;
+  let hasLocalConfig = false;
+  let revision = 0;
   const read = (): void => {
     try {
-      config = parseProjectTabs(window.localStorage.getItem(PROJECT_TABS_STORAGE_KEY));
+      const raw = window.localStorage.getItem(PROJECT_TABS_STORAGE_KEY);
+      config = parseProjectTabs(raw);
+      hasLocalConfig = raw !== null;
+      localReadFailure = null;
       failure = null;
     } catch (error) {
+      hasLocalConfig = false;
+      localReadFailure = error;
       failure = error;
     }
   };
@@ -52,12 +68,59 @@ export function installProjectTabs(options: { getLocale(): string }): {
   error.hidden = true;
   const hiddenRows = new Set<HTMLElement>();
   const menus = new Map<HTMLElement, { anchor: HTMLElement; item: HTMLElement }>();
+  let loadedClient: ProjectTabsPersistenceClient | null = null;
+  let loadingClient: ProjectTabsPersistenceClient | null = null;
+  let hostWrite = Promise.resolve();
 
-  const persist = (next: ProjectTabsConfig): void => {
-    window.localStorage.setItem(PROJECT_TABS_STORAGE_KEY, JSON.stringify(next));
+  const persistenceClient = (): Required<ProjectTabsPersistenceClient> | null => {
+    const client = options.getClient?.();
+    return client?.getProjectTabs && client.setProjectTabs
+      ? (client as Required<ProjectTabsPersistenceClient>)
+      : null;
+  };
+  const mirror = (next: ProjectTabsConfig, requireLocal = false): void => {
+    try {
+      window.localStorage.setItem(PROJECT_TABS_STORAGE_KEY, JSON.stringify(next));
+    } catch (error) {
+      if (requireLocal) throw error;
+      failure = error;
+    }
     config = next;
-    failure = null;
-    refresh();
+    hasLocalConfig = true;
+  };
+  const saveHost = (
+    client: Required<ProjectTabsPersistenceClient>,
+    next: ProjectTabsConfig,
+  ): Promise<ProjectTabsState> => {
+    const operation = hostWrite.then(() => client.setProjectTabs(next));
+    hostWrite = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  };
+  const persist = async (next: ProjectTabsConfig): Promise<void> => {
+    try {
+      if (!options.getClient) {
+        revision += 1;
+        mirror(next, true);
+        failure = null;
+        refresh();
+        return;
+      }
+      const client = persistenceClient();
+      if (!client) throw new Error("Local Host project-tab persistence is unavailable");
+      const requestedRevision = ++revision;
+      const saved = await saveHost(client, next);
+      if (!saved.config) throw new Error("Local Host returned an empty project-tab configuration");
+      if (revision === requestedRevision) mirror(saved.config);
+      failure = null;
+      refresh();
+    } catch (error) {
+      failure = error;
+      refresh();
+      throw error;
+    }
   };
   const configure = (): void => {
     if (dialog) {
@@ -76,12 +139,7 @@ export function installProjectTabs(options: { getLocale(): string }): {
     dialog = configuration;
   };
   const select = (selected: string | null): void => {
-    try {
-      persist({ ...config, selected });
-    } catch (error) {
-      failure = error;
-      refresh();
-    }
+    void persist({ ...config, selected }).catch(() => undefined);
   };
   const move = (anchor: HTMLElement): void => {
     const target = projectMenu(anchor);
@@ -109,7 +167,7 @@ export function installProjectTabs(options: { getLocale(): string }): {
       message.setAttribute("role", "alert");
       message.hidden = true;
       const key = projectKey(target.project);
-      const choose = (id: string | null): void => {
+      const choose = async (id: string | null): Promise<void> => {
         const assignments = { ...config.assignments };
         if (id) {
           assignments[key] = id;
@@ -117,18 +175,18 @@ export function installProjectTabs(options: { getLocale(): string }): {
           Reflect.deleteProperty(assignments, key);
         }
         try {
-          persist({ ...config, assignments });
+          await persist({ ...config, assignments });
           picker.close();
         } catch (error) {
           message.textContent = m.failed + String(error);
           message.hidden = false;
         }
       };
-      const auto = button(m.automatic, () => choose(null));
+      const auto = button(m.automatic, () => void choose(null));
       auto.setAttribute("aria-pressed", String(!config.assignments[key]));
       destinations.append(auto);
       for (const tab of config.tabs) {
-        const choice = button(tab.name, () => choose(tab.id));
+        const choice = button(tab.name, () => void choose(tab.id));
         choice.setAttribute("aria-pressed", String(config.assignments[key] === tab.id));
         destinations.append(choice);
       }
@@ -192,6 +250,35 @@ export function installProjectTabs(options: { getLocale(): string }): {
     if (disposed) {
       return;
     }
+    const client = persistenceClient();
+    if (client && client !== loadedClient && client !== loadingClient) {
+      loadingClient = client;
+      const startedRevision = revision;
+      const localSnapshot = hasLocalConfig ? config : null;
+      void (async () => {
+        try {
+          const state = await client.getProjectTabs();
+          if (disposed || loadingClient !== client) return;
+          if (revision === startedRevision) {
+            if (state.config) {
+              mirror(state.config);
+            } else if (localSnapshot) {
+              await saveHost(client, localSnapshot);
+            }
+          }
+          loadedClient = client;
+          loadingClient = null;
+          failure = state.config || localSnapshot ? null : localReadFailure;
+          refresh();
+        } catch (error) {
+          if (disposed || loadingClient !== client) return;
+          loadingClient = null;
+          loadedClient = client;
+          failure = error;
+          refresh();
+        }
+      })();
+    }
     const rows = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)];
     const firstRow = rows[0];
     if (!bar.isConnected && firstRow) {
@@ -251,10 +338,7 @@ export function installProjectTabs(options: { getLocale(): string }): {
     let matched = 0;
     for (const row of rows) {
       const project = rowProject(row);
-      const hidden =
-        config.selected !== null &&
-        project !== null &&
-        projectTab(config, project) !== config.selected;
+      const hidden = project !== null && projectTab(config, project) !== config.selected;
       if (hidden) {
         if (!row.hasAttribute(HIDDEN)) {
           row.setAttribute(HIDDEN, "");
@@ -269,7 +353,7 @@ export function installProjectTabs(options: { getLocale(): string }): {
     if (empty.textContent !== m.empty) {
       empty.textContent = m.empty;
     }
-    empty.hidden = config.selected === null || matched > 0;
+    empty.hidden = matched > 0;
     const detail = failure ? m.failed + String(failure) : "";
     if (error.textContent !== detail) {
       error.textContent = detail;
@@ -326,6 +410,7 @@ export function installProjectTabs(options: { getLocale(): string }): {
     }
     dialog?.close();
     read();
+    revision += 1;
     refresh();
   };
   const observer = new MutationObserver(() => {

@@ -5,11 +5,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function installRendererThreadArchive(target: unknown): (() => void) | null {
-  if (
-    !isRecord(target) ||
-    typeof target.getHostId !== "function" ||
-    target.getHostId() !== "local"
-  ) {
+  if (!isRecord(target) || typeof target.getHostId !== "function") {
+    return null;
+  }
+  const hostId = target.getHostId();
+  if (typeof hostId !== "string" || hostId.length === 0) {
     return null;
   }
   const pending = target.pendingThreadArchives;

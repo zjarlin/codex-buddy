@@ -47,6 +47,7 @@ export {
 } from "./buddy-router.js";
 import { z } from "zod";
 export * from "./credential-imports.js";
+export * from "./thread-open-target.js";
 import { WORKSPACE_CONTRACT_VERSION } from "./version.js";
 export {
   IDLE_RELEASE_SETTINGS_METHOD,
@@ -74,6 +75,17 @@ export {
   type ThreadTerminalSettings,
 } from "./thread-terminal-settings.js";
 export {
+  PROJECT_TABS_GET_METHOD,
+  PROJECT_TABS_SET_METHOD,
+  projectTabSchema,
+  projectTabsConfigSchema,
+  projectTabsGetParamsSchema,
+  projectTabsStateSchema,
+  type ProjectTab,
+  type ProjectTabsConfig,
+  type ProjectTabsState,
+} from "./project-tabs.js";
+export {
   THREAD_WORKSPACE_OPEN_METHOD,
   threadWorkspaceOpenParamsSchema,
   threadWorkspaceOpenResultSchema,
@@ -99,10 +111,7 @@ export {
   sessionRouteParamsSchema,
   sessionRouteResultSchema,
 } from "./session-routing.js";
-export type {
-  SessionRouteParams,
-  SessionRouteResult,
-} from "./session-routing.js";
+export type { SessionRouteParams, SessionRouteResult } from "./session-routing.js";
 export type {
   ThreadTerminalDescriptor,
   ThreadTerminalId,
@@ -430,6 +439,7 @@ export {
   gitFilePathSchema,
   gitCommitMessageSchema,
   gitWorkspaceParamsSchema,
+  gitWorkspaceTargetSchema,
   gitDiffParamsSchema,
   gitContentParamsSchema,
   gitStageParamsSchema,
@@ -459,6 +469,7 @@ export {
 } from "./git-workspace.js";
 export type {
   GitWorkspaceParams,
+  GitWorkspaceTarget,
   GitDiffParams,
   GitContentParams,
   GitStageParams,
@@ -578,6 +589,7 @@ export {
   type GitWorkflowSnapshot,
 } from "./git-workflow.js";
 export * from "./git-repositories.js";
+export * from "./auto-model-routes.js";
 
 export {
   DELEGATION_MENTION_PATH_PREFIX,

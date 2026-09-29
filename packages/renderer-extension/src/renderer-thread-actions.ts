@@ -4,7 +4,11 @@ import Code from "lucide/dist/esm/icons/code.mjs";
 import Copy from "lucide/dist/esm/icons/copy.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Terminal from "lucide/dist/esm/icons/terminal.mjs";
-import { hostThreadIdSchema, type ThreadTerminalDescriptor } from "@codexhost/shared-contracts";
+import {
+  hostThreadIdSchema,
+  type ThreadTerminalDescriptor,
+  type RemoteThreadOpenTarget,
+} from "@codexhost/shared-contracts";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
@@ -55,6 +59,7 @@ interface RowEntry {
 
 interface TerminalSelection {
   descriptors: ThreadTerminalDescriptor[];
+  client: RendererModelClient;
 }
 
 function menuLabel(locale: Locale): string {
@@ -142,31 +147,59 @@ export function installRendererThreadActions(options: {
   let disposed = false;
   let scheduled = false;
   const terminalSelections = new Map<string, TerminalSelection>();
-  const terminalLoads = new Map<string, Promise<TerminalSelection>>();
+  const terminalLoads = new Map<
+    string,
+    { client: RendererModelClient; promise: Promise<TerminalSelection> }
+  >();
   const terminalPreference = options.terminalPreference ?? getSharedThreadTerminalPreferenceStore();
 
   const terminalSelection = async (hostId: string): Promise<TerminalSelection | null> => {
     const client = options.getClient(hostId);
     if (!client?.listThreadTerminals) return null;
     const existing = terminalSelections.get(hostId);
-    if (existing) return existing;
-    let loading = terminalLoads.get(hostId);
+    if (existing?.client === client) return existing;
+    let loading =
+      terminalLoads.get(hostId)?.client === client ? terminalLoads.get(hostId)?.promise : undefined;
     if (!loading) {
       loading = client
         .listThreadTerminals()
         .then((result) => {
-          const selection = { descriptors: result.terminals };
+          const selection = { descriptors: result.terminals, client };
           terminalSelections.set(hostId, selection);
           return selection;
         })
-        .finally(() => terminalLoads.delete(hostId));
-      terminalLoads.set(hostId, loading);
+        .finally(() => {
+          if (terminalLoads.get(hostId)?.client === client) terminalLoads.delete(hostId);
+        });
+      terminalLoads.set(hostId, { client, promise: loading });
     }
     try {
       return await loading;
     } catch {
       return null;
     }
+  };
+
+  // 会话资料由所属 Host 确认；图形应用始终在 Desktop 所在机器启动。
+  const desktopTarget = async (
+    hostId: string,
+    threadId: string,
+  ): Promise<{
+    client: RendererModelClient;
+    remote?: RemoteThreadOpenTarget;
+    isCurrent(): boolean;
+  }> => {
+    const owner = options.getClient(hostId);
+    const local = options.getClient("local");
+    if (!owner || !local) throw new Error("会话或本机连接不可用，请重新连接后重试。");
+    const isCurrent = () =>
+      !disposed && options.getClient(hostId) === owner && options.getClient("local") === local;
+    if (hostId === "local") return { client: local, isCurrent };
+    if (!owner.threadOpenTarget)
+      throw new Error("远程 Host 尚不支持终端续接，请更新远程 Codex Buddy。");
+    const target = await owner.threadOpenTarget(threadId);
+    if (!isCurrent()) throw new Error("连接已变化，请重新打开会话菜单。");
+    return { client: local, remote: { ...target, hostId }, isCurrent };
   };
 
   const closeMenu = (): void => {
@@ -225,11 +258,15 @@ export function installRendererThreadActions(options: {
     item.disabled = true;
     if (error) error.textContent = "";
     try {
-      const selection = await terminalSelection(hostId);
+      const target = await desktopTarget(hostId, threadId);
+      const selection = await terminalSelection("local");
       const selectedTerminal = selection ? defaultTerminal(selection, terminalPreference) : null;
-      await client.openThreadTerminal({
+      if (!target.isCurrent()) throw new Error("连接已变化，请重新打开会话菜单。");
+      if (!target.client.openThreadTerminal) throw new Error("本机终端入口不可用。");
+      await target.client.openThreadTerminal({
         threadId: hostThreadIdSchema.parse(threadId),
         ...(selectedTerminal ? { terminalId: selectedTerminal.id } : {}),
+        ...(target.remote ? { remote: target.remote } : {}),
       });
       if (openRow === row) closeMenu();
     } catch (failure) {
@@ -259,7 +296,13 @@ export function installRendererThreadActions(options: {
     item.disabled = true;
     if (error) error.textContent = "";
     try {
-      await client.openThreadWorkspace({ threadId: hostThreadIdSchema.parse(threadId) });
+      const target = await desktopTarget(hostId, threadId);
+      if (!target.isCurrent()) throw new Error("连接已变化，请重新打开会话菜单。");
+      if (!target.client.openThreadWorkspace) throw new Error("本机 VS Code 入口不可用。");
+      await target.client.openThreadWorkspace({
+        threadId: hostThreadIdSchema.parse(threadId),
+        ...(target.remote ? { remote: target.remote } : {}),
+      });
       if (openRow === row) closeMenu();
     } catch (failure) {
       if (disposed || openRow !== row) return;

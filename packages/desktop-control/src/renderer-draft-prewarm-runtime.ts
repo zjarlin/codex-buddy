@@ -539,17 +539,17 @@ export function createDraftPrewarmPolicyBridge(
     }
     return shouldUseBridge(method, routedParameters) ? sendBridged() : sendDirect();
   };
-  // The draft's workspace reaches the Host only through this prewarm. Publish
-  // it so the Composer can ask for that workspace's live Harness commands;
-  // again once the prewarm settles, when a prewarmed Session may report them.
+  // 草稿目录由原生预热发布；旧项目预热完成后不能覆盖后来选择的项目。
+  let draftWorkspaceGeneration = 0;
   const publishDraftWorkspace = (parameters: unknown): void => {
     if (!isRecord(parameters) || parameters.ephemeral === true) return;
-    const cwd = parameters.cwd;
-    if (typeof cwd !== "string" || cwd.length === 0) return;
+    const cwd =
+      typeof parameters.cwd === "string" && parameters.cwd.length > 0 ? parameters.cwd : null;
     const drafts = isRecord(target.__codexhostDraftWorkspacesV1)
       ? target.__codexhostDraftWorkspacesV1
       : {};
-    drafts[hostId] = cwd;
+    if (cwd) drafts[hostId] = cwd;
+    else Reflect.deleteProperty(drafts, hostId);
     Object.defineProperty(target, "__codexhostDraftWorkspacesV1", {
       configurable: true,
       value: drafts,
@@ -563,6 +563,10 @@ export function createDraftPrewarmPolicyBridge(
   const routedPrewarm = (parameters: unknown, options?: unknown): unknown => {
     const routedParameters = routeThreadStart(parameters);
     const generation = prewarmGeneration;
+    const workspaceGeneration =
+      isRecord(parameters) && parameters.ephemeral !== true
+        ? ++draftWorkspaceGeneration
+        : draftWorkspaceGeneration;
     publishDraftWorkspace(routedParameters);
     const pending = shouldUseBridge("thread/start", routedParameters)
       ? routedSend("thread/start", routedParameters, options)
@@ -581,7 +585,9 @@ export function createDraftPrewarmPolicyBridge(
       if (disposed || generation !== prewarmGeneration) {
         throw new Error("Renderer draft prewarm was invalidated by a configuration change");
       }
-      publishDraftWorkspace(routedParameters);
+      if (workspaceGeneration === draftWorkspaceGeneration) {
+        publishDraftWorkspace(routedParameters);
+      }
       return result;
     });
   };

@@ -1932,15 +1932,15 @@ describe("Renderer Session Import page", () => {
     if (!refresh) throw new Error("Session Import Refresh is not rendered");
 
     expect(refresh.disabled).toBe(true);
-    expect(visibleNotesText(refresh)).toContain("Loading local sessions");
-    expect(visibleText(content)).toContain("Loading local sessions");
+    expect(visibleNotesText(refresh)).toContain("Loading sessions");
+    expect(visibleText(content)).toContain("Loading sessions");
 
     await vi.waitFor(() => expect(client.listHarnessSessions).toHaveBeenCalledOnce());
     // A synthetic second activation proves runLatest still rejects stale results even if
     // browser-level disabled handling is bypassed.
     refresh.dispatch("click");
     second.resolve({ candidates: [], total: 0 });
-    await vi.waitFor(() => expect(visibleText(content)).toContain("No local sessions"));
+    await vi.waitFor(() => expect(visibleText(content)).toContain("No sessions"));
     expect(refresh.disabled).toBe(false);
 
     first.resolve({
@@ -1949,7 +1949,7 @@ describe("Renderer Session Import page", () => {
     });
     await first.promise;
     await Promise.resolve();
-    expect(visibleText(content)).toContain("No local sessions");
+    expect(visibleText(content)).toContain("No sessions");
     expect(visibleText(content)).not.toContain("Ignored stale");
 
     refresh.dispatch("click");
@@ -1962,133 +1962,141 @@ describe("Renderer Session Import page", () => {
     scope.dispose();
   });
 
-  it("lists local DSH Modern sessions and imports only an idle row", async () => {
-    const client = {
-      listSessionImportSources: vi.fn(async () => ({
-        harnesses: [
-          { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
-        ],
-      })),
-      listHarnessSessions: vi.fn(async () => ({
-        total: 2,
-        candidates: [
-          {
-            nativeSessionId: "idle-session-identifier-that-is-long",
-            title: "既有会话",
-            updatedAt: 1_700_000_000_000,
-            cwd: "C:\\work\\idle",
-            running: false,
-          },
-          {
-            nativeSessionId: "running-session",
-            title: null,
-            updatedAt: 1_700_000_001_000,
-            cwd: "C:\\work\\running",
-            running: true,
-          },
-        ],
-      })),
-      importHarnessSession: vi.fn(async () => ({
-        threadId: hostThreadIdSchema.parse("imported-thread"),
-      })),
-    };
-    const openImportedThread = vi.fn(async () => undefined);
-    const page = createDefaultRendererSettingsPages(
-      rendererSettingsMessages("zh-CN"),
-      () => null,
-      () => null,
-      () => null,
-      () => client,
-      openImportedThread,
-    ).find(({ id }) => id === "session-import");
-    if (!page) throw new Error("Session Import page is not registered");
-    const document = new FakeDocument();
-    const content = document.createElement("main");
-    const scope = new RendererSettingsPageScope();
-    page.mount({
-      content: content as unknown as HTMLElement,
-      signal: scope.signal,
-      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
-    });
+  it.each([undefined, "remote-ssh-discovered:252"])(
+    "lists and imports only idle rows on %s",
+    async (hostId) => {
+      const client = {
+        ...(hostId ? { hostId } : {}),
+        listSessionImportSources: vi.fn(async () => ({
+          harnesses: [
+            { harnessId: harnessIdSchema.parse("deepseek-harness"), name: "DeepSeek Harness" },
+          ],
+        })),
+        listHarnessSessions: vi.fn(async () => ({
+          total: 2,
+          candidates: [
+            {
+              nativeSessionId: "idle-session-identifier-that-is-long",
+              title: "既有会话",
+              updatedAt: 1_700_000_000_000,
+              cwd: "C:\\work\\idle",
+              running: false,
+            },
+            {
+              nativeSessionId: "running-session",
+              title: null,
+              updatedAt: 1_700_000_001_000,
+              cwd: "C:\\work\\running",
+              running: true,
+            },
+          ],
+        })),
+        importHarnessSession: vi.fn(async () => ({
+          threadId: hostThreadIdSchema.parse("imported-thread"),
+        })),
+      };
+      const openImportedThread = vi.fn(async () => undefined);
+      const page = createDefaultRendererSettingsPages(
+        rendererSettingsMessages("zh-CN"),
+        () => null,
+        () => null,
+        () => null,
+        () => client,
+        openImportedThread,
+      ).find(({ id }) => id === "session-import");
+      if (!page) throw new Error("Session Import page is not registered");
+      const document = new FakeDocument();
+      const content = document.createElement("main");
+      const scope = new RendererSettingsPageScope();
+      page.mount({
+        content: content as unknown as HTMLElement,
+        signal: scope.signal,
+        runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+      });
 
-    await vi.waitFor(() =>
-      expect(client.listHarnessSessions).toHaveBeenCalledWith({
+      await vi.waitFor(() =>
+        expect(client.listHarnessSessions).toHaveBeenCalledWith({
+          harnessId: "deepseek-harness",
+          query: "",
+          offset: 0,
+          limit: 20,
+        }),
+      );
+      await vi.waitFor(() => expect(visibleText(content)).toContain("既有会话"));
+      expect(visibleText(content)).toContain("未命名会话");
+      expect(visibleText(content)).toContain("运行中");
+      const visualIdentity = descendants(content).find(
+        ({ attributes, textContent }) =>
+          attributes.get("aria-hidden") === "true" && textContent.startsWith("会话 ID:"),
+      );
+      expect(visualIdentity?.textContent).not.toContain("idle-session-identifier-that-is-long");
+      expect(visualIdentity?.title).toBe("idle-session-identifier-that-is-long");
+      expect(descendants(content).find(({ tagName }) => tagName === "h2")?.textContent).toBe(
+        "会话导入",
+      );
+      expect(visibleText(content)).toContain(
+        "可选 Harness 来自当前 Host。运行状态未知时，请先在原生客户端关闭该会话再导入，避免同时写入。",
+      );
+      const harnessSelector = descendants(content).find(
+        ({ dataset }) => dataset.sessionImportHarness === "selector",
+      );
+      if (!harnessSelector) throw new Error("Session Import Harness selector is not rendered");
+      const harnessOptions = descendants(harnessSelector).filter(
+        ({ dataset }) => dataset.sessionImportHarnessOption !== undefined,
+      );
+      expect(harnessOptions.map(({ textContent }) => textContent)).toEqual(["DeepSeek Harness"]);
+      expect(
+        harnessOptions.filter(({ disabled }) => !disabled).map(({ textContent }) => textContent),
+      ).toEqual(["DeepSeek Harness"]);
+      expect(
+        harnessOptions.find(({ attributes }) => attributes.get("aria-pressed") === "true")
+          ?.textContent,
+      ).toBe("DeepSeek Harness");
+      for (const option of harnessOptions) option.dispatch("click");
+      expect(client.listHarnessSessions).toHaveBeenCalledOnce();
+      expect(client.importHarnessSession).not.toHaveBeenCalled();
+      expect(
+        descendants(content).find(
+          ({ className, textContent }) =>
+            className === "settings-visually-hidden" &&
+            textContent.includes("idle-session-identifier-that-is-long"),
+        )?.textContent,
+      ).toContain("idle-session-identifier-that-is-long");
+      expect(
+        descendants(content).find(
+          ({ className, textContent }) =>
+            className === "settings-visually-hidden" && textContent.startsWith("运行中:"),
+        )?.textContent,
+      ).toBe("运行中: 请先在原生客户端关闭该会话，再刷新并导入。");
+
+      const actions = descendants(content).filter(
+        ({ dataset }) => dataset.sessionImportAction === "import",
+      );
+      expect(actions).toHaveLength(2);
+      expect(actions[0]?.disabled).toBe(false);
+      expect(actions[1]?.disabled).toBe(true);
+      actions[1]?.dispatch("click");
+      expect(client.importHarnessSession).not.toHaveBeenCalled();
+      actions[0]?.dispatch("click");
+      expect(descendants(content)).toContain(actions[0]);
+      expect(actions[0]?.getAttribute("aria-disabled")).toBe("true");
+      expect(actions[0]?.getAttribute("aria-busy")).toBe("true");
+      actions[0]?.dispatch("click");
+      await vi.waitFor(() => expect(client.importHarnessSession).toHaveBeenCalledOnce());
+      expect(client.importHarnessSession).toHaveBeenCalledWith({
         harnessId: "deepseek-harness",
-        query: "",
-        offset: 0,
-        limit: 20,
-      }),
-    );
-    await vi.waitFor(() => expect(visibleText(content)).toContain("既有会话"));
-    expect(visibleText(content)).toContain("未命名会话");
-    expect(visibleText(content)).toContain("运行中");
-    const visualIdentity = descendants(content).find(
-      ({ attributes, textContent }) =>
-        attributes.get("aria-hidden") === "true" && textContent.startsWith("会话 ID:"),
-    );
-    expect(visualIdentity?.textContent).not.toContain("idle-session-identifier-that-is-long");
-    expect(visualIdentity?.title).toBe("idle-session-identifier-that-is-long");
-    expect(descendants(content).find(({ tagName }) => tagName === "h2")?.textContent).toBe(
-      "会话导入",
-    );
-    expect(visibleText(content)).toContain(
-      "可选 Harness 来自本地 Host。运行状态未知时，请先在原生客户端关闭该会话再导入，避免同时写入。",
-    );
-    const harnessSelector = descendants(content).find(
-      ({ dataset }) => dataset.sessionImportHarness === "selector",
-    );
-    if (!harnessSelector) throw new Error("Session Import Harness selector is not rendered");
-    const harnessOptions = descendants(harnessSelector).filter(
-      ({ dataset }) => dataset.sessionImportHarnessOption !== undefined,
-    );
-    expect(harnessOptions.map(({ textContent }) => textContent)).toEqual(["DeepSeek Harness"]);
-    expect(
-      harnessOptions.filter(({ disabled }) => !disabled).map(({ textContent }) => textContent),
-    ).toEqual(["DeepSeek Harness"]);
-    expect(
-      harnessOptions.find(({ attributes }) => attributes.get("aria-pressed") === "true")
-        ?.textContent,
-    ).toBe("DeepSeek Harness");
-    for (const option of harnessOptions) option.dispatch("click");
-    expect(client.listHarnessSessions).toHaveBeenCalledOnce();
-    expect(client.importHarnessSession).not.toHaveBeenCalled();
-    expect(
-      descendants(content).find(
-        ({ className, textContent }) =>
-          className === "settings-visually-hidden" &&
-          textContent.includes("idle-session-identifier-that-is-long"),
-      )?.textContent,
-    ).toContain("idle-session-identifier-that-is-long");
-    expect(
-      descendants(content).find(
-        ({ className, textContent }) =>
-          className === "settings-visually-hidden" && textContent.startsWith("运行中:"),
-      )?.textContent,
-    ).toBe("运行中: 请先在原生客户端关闭该会话，再刷新并导入。");
-
-    const actions = descendants(content).filter(
-      ({ dataset }) => dataset.sessionImportAction === "import",
-    );
-    expect(actions).toHaveLength(2);
-    expect(actions[0]?.disabled).toBe(false);
-    expect(actions[1]?.disabled).toBe(true);
-    actions[1]?.dispatch("click");
-    expect(client.importHarnessSession).not.toHaveBeenCalled();
-    actions[0]?.dispatch("click");
-    expect(descendants(content)).toContain(actions[0]);
-    expect(actions[0]?.getAttribute("aria-disabled")).toBe("true");
-    expect(actions[0]?.getAttribute("aria-busy")).toBe("true");
-    actions[0]?.dispatch("click");
-    await vi.waitFor(() => expect(client.importHarnessSession).toHaveBeenCalledOnce());
-    expect(client.importHarnessSession).toHaveBeenCalledWith({
-      harnessId: "deepseek-harness",
-      nativeSessionId: "idle-session-identifier-that-is-long",
-    });
-    await vi.waitFor(() =>
-      expect(openImportedThread).toHaveBeenCalledWith("imported-thread", expect.any(AbortSignal)),
-    );
-    scope.dispose();
-  });
+        nativeSessionId: "idle-session-identifier-that-is-long",
+      });
+      await vi.waitFor(() =>
+        expect(openImportedThread).toHaveBeenCalledWith(
+          "imported-thread",
+          expect.any(AbortSignal),
+          ...(hostId ? [hostId] : []),
+        ),
+      );
+      scope.dispose();
+    },
+  );
 
   it("shows a localized focused error when import fails before commit", async () => {
     const client = {
@@ -2365,7 +2373,7 @@ describe("Renderer Session Import page", () => {
       runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
     });
 
-    expect(visibleText(content)).toContain("Session import is unavailable for this local Harness");
+    expect(visibleText(content)).toContain("Session import is unavailable for this Harness");
     expect(
       descendants(content).filter(({ dataset }) => dataset.sessionImportAction === "import"),
     ).toHaveLength(0);

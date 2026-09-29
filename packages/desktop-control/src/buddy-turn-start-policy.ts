@@ -8,7 +8,7 @@ export function buddyTurnStartOptions(
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     value !== null && typeof value === "object" && !Array.isArray(value);
   if (
-    hostId !== "local" ||
+    !hostId ||
     method !== "turn/start" ||
     !isRecord(parameters) ||
     !Array.isArray(parameters.input) ||

@@ -4,14 +4,20 @@ import type {
   GitRepositoryLinkParams,
 } from "@codexhost/shared-contracts";
 
+import {
+  gitTargetKey,
+  gitTargetParams,
+  hasGitTarget,
+  type RendererGitTarget,
+} from "./renderer-git-target.js";
+
 export interface GitRepositoryClient {
   listGitRepositories(input: GitRepositoriesParams): Promise<GitRepositories>;
   linkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories>;
   unlinkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories>;
 }
 
-interface Context {
-  threadId: GitRepositoriesParams["threadId"] | null;
+interface Context extends RendererGitTarget {
   client: Partial<GitRepositoryClient> | null;
 }
 
@@ -90,7 +96,10 @@ export function createGitRepositorySelector(options: {
 
   const syncContext = () => {
     const next = options.getContext();
-    if (disposed || (context.threadId === next.threadId && context.client === next.client)) {
+    if (
+      disposed ||
+      (gitTargetKey(context) === gitTargetKey(next) && context.client === next.client)
+    ) {
       return;
     }
     context = next;
@@ -100,16 +109,17 @@ export function createGitRepositorySelector(options: {
     busy = false;
     form.hidden = true;
     input.value = "";
-    const { client, threadId } = next;
+    const { client } = next;
     const list = client?.listGitRepositories;
-    root.hidden = !threadId || !list || !client?.linkGitRepository || !client.unlinkGitRepository;
-    if (root.hidden || !threadId || !list) {
+    root.hidden =
+      !hasGitTarget(next) || !list || !client?.linkGitRepository || !client.unlinkGitRepository;
+    if (root.hidden || !hasGitTarget(next) || !list) {
       return;
     }
     busy = true;
     render();
     void Promise.resolve()
-      .then(() => list.call(client, { threadId }))
+      .then(() => list.call(client, gitTargetParams(next)))
       .then((value) => {
         if (generation === version) {
           data = value;
@@ -135,7 +145,7 @@ export function createGitRepositorySelector(options: {
     }
     const request = context;
     const method = unlink ? request.client?.unlinkGitRepository : request.client?.linkGitRepository;
-    if (!request.threadId || !method) {
+    if (!hasGitTarget(request) || !method) {
       return;
     }
     const repository = unlink ? selected : input.value.trim();
@@ -147,7 +157,7 @@ export function createGitRepositorySelector(options: {
     busy = true;
     render();
     try {
-      const value = await method.call(request.client, { threadId: request.threadId, repository });
+      const value = await method.call(request.client, { ...gitTargetParams(request), repository });
       if (generation !== version) {
         return;
       }

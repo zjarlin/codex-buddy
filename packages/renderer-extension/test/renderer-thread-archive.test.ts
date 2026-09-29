@@ -9,30 +9,33 @@ function manager(add: (...args: unknown[]) => unknown, hostId = "local") {
 }
 
 describe("native thread archive compatibility", () => {
-  it("retains the directory when cleanup has no account and archives exactly once", async () => {
-    const prepare = vi.fn(async (_id: unknown, options: unknown) => {
-      if ((options as { cleanupWorktree: boolean }).cleanupWorktree) {
-        throw new Error(missingAccount);
-      }
-    });
-    const target = manager(prepare);
-    const archive = vi.fn();
-    const archiveConversation = async (threadId: string, options: unknown) => {
-      await target.pendingThreadArchives.add(threadId, options);
-      archive(threadId);
-    };
-    installRendererThreadArchive(target);
-    const options = { cwd: "/project", cleanupWorktree: true };
+  it.each(["local", "ssh:remote"])(
+    "retains the directory on %s when cleanup has no account and archives exactly once",
+    async (hostId) => {
+      const prepare = vi.fn(async (_id: unknown, options: unknown) => {
+        if ((options as { cleanupWorktree: boolean }).cleanupWorktree) {
+          throw new Error(missingAccount);
+        }
+      });
+      const target = manager(prepare, hostId);
+      const archive = vi.fn();
+      const archiveConversation = async (threadId: string, options: unknown) => {
+        await target.pendingThreadArchives.add(threadId, options);
+        archive(threadId);
+      };
+      installRendererThreadArchive(target);
+      const options = { cwd: "/project", cleanupWorktree: true };
 
-    await archiveConversation("thread", options);
+      await archiveConversation("thread", options);
 
-    expect(prepare.mock.calls).toEqual([
-      ["thread", options],
-      ["thread", { cwd: "/project", cleanupWorktree: false }],
-    ]);
-    expect(options.cleanupWorktree).toBe(true);
-    expect(archive.mock.calls).toEqual([["thread"]]);
-  });
+      expect(prepare.mock.calls).toEqual([
+        ["thread", options],
+        ["thread", { cwd: "/project", cleanupWorktree: false }],
+      ]);
+      expect(options.cleanupWorktree).toBe(true);
+      expect(archive.mock.calls).toEqual([["thread"]]);
+    },
+  );
 
   it("preserves successful native cleanup, its receiver, and result", async () => {
     const prepare = vi.fn(function (this: unknown) {
@@ -77,12 +80,13 @@ describe("native thread archive compatibility", () => {
     expect(prepare).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps remote managers and unsupported coordination objects unchanged", () => {
-    const remote = manager(vi.fn(), "ssh:remote");
+  it("keeps unsupported coordination objects unchanged", () => {
     const inherited = Object.create({ add: vi.fn() });
-    expect(installRendererThreadArchive(remote)).toBeNull();
     expect(
       installRendererThreadArchive({ getHostId: () => "local", pendingThreadArchives: inherited }),
+    ).toBeNull();
+    expect(
+      installRendererThreadArchive({ getHostId: () => null, pendingThreadArchives: { add: vi.fn() } }),
     ).toBeNull();
     expect(installRendererThreadArchive({})).toBeNull();
   });

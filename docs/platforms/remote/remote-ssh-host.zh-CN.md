@@ -49,3 +49,13 @@ codexhost remote uninstall  # 卸载，保留 Thread 映射数据
 - **`remote status` 提示 degraded 或需要重新安装**：重新执行 `codexhost remote install`，再执行 `codexhost remote start`。
 - **看不到某个 Harness**：在被控机器上检查该 Harness 是否已安装并登录，然后在设置中点击「重新诊断连接」。
 - **macOS 上安装失败，提示 launchd / `gui/$UID` 错误**：被控机器需要有已登录的图形会话，登录后重新执行 `codexhost remote install`。
+
+## SSH 功能归属
+
+模型目录和探测、Auto Router、自动会话推荐、中断会话恢复、Git 与文件操作、会话导入及已加载会话列表使用当前 SSH Host。远端 Provider、System One 和 Harness 的配置与登录留在远端；不会用本机凭据代替。会话导入后及打开已有推荐会话时保留原 Host，切换连接后不会把旧结果提交到另一台机器。
+
+官方 Codex 会话菜单的“从终端打开”在 Desktop 所在机器打开所选终端，使用 Desktop 已保存的 SSH 连接，再以远端工作目录、Codex 可执行文件和 CODEX_HOME 执行 `codex resume`。远端无需图形终端；本机需有 SSH 客户端。“在 VS Code 中打开”在本机使用 Remote SSH 打开远端目录；需要 VS Code Remote SSH 扩展。单独指定密钥文件的连接应先配置 SSH 别名，确保 VS Code 使用同一密钥。
+
+终端偏好、Desktop 更新和桌面应用入口属于本机。外部 Harness 保留自身原生能力，不能用 Codex CLI 恢复。远程 Windows 仍不受支持。
+
+`npx -y codex-buddy sync` 只同步模型配置，不会替换持续运行的原生服务。如果配置目录已有 `auto`，但菜单缺失或扩展接口不可用，需要在现有任务结束后启动远程 Buddy Host 并重新连接。运行中的任务应先完成，避免服务切换中断执行。

@@ -335,9 +335,12 @@ export function installBuddyControl(
       return;
     }
     try {
-      snapshot = await client.buddyConfigure({ ...snapshot.settings, ...patch });
+      const value = await client.buddyConfigure({ ...snapshot.settings, ...patch });
+      if (disposed || context?.client !== client) return;
+      snapshot = value;
       render();
     } catch (failure) {
+      if (disposed || context?.client !== client) return;
       report(failure);
     }
   };
@@ -774,6 +777,12 @@ export function installBuddyControl(
       inputKey = "";
       inputClient = null;
       if (context?.client !== next?.client) {
+        snapshot = null;
+        controls.replaceChildren();
+        fields.replaceChildren();
+        routingFields.replaceChildren();
+        error.textContent = "";
+        status.textContent = t().disconnected;
         interruptedControl.update(null, false);
       }
     }

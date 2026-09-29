@@ -390,6 +390,82 @@ describe("renderer thread actions", () => {
     installed.dispose();
   });
 
+  it("resolves an SSH session remotely and opens it with the local terminal preference", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({
+      workspace: "/remote/repo",
+      terminal: "ghostty",
+      mode: "resume",
+    }));
+    const remote = clientWith(async () => {
+      throw new Error("must not start a remote GUI");
+    });
+    const target = {
+      workspace: "/remote/repo",
+      codexPath: "/remote/bin/codex",
+      codexHome: "/remote/.codex",
+    };
+    remote.threadOpenTarget = vi.fn(async () => target);
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : id === hostId ? remote : null),
+      getLocale: () => "zh-CN",
+      terminalPreference: preference("ghostty"),
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(portal.querySelector("button"), "terminal action").dispatch("click");
+    await settle();
+    expect(remote.threadOpenTarget).toHaveBeenCalledWith("thread-a");
+    expect(remote.listThreadTerminals).not.toHaveBeenCalled();
+    expect(remote.openThreadTerminal).not.toHaveBeenCalled();
+    expect(local.openThreadTerminal).toHaveBeenCalledWith({
+      threadId: "thread-a",
+      terminalId: "ghostty",
+      remote: { ...target, hostId },
+    });
+    installed.dispose();
+  });
+
+  it("does not launch a terminal after the SSH connection changes while resolving the session", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({}));
+    const remote = clientWith(async () => ({}));
+    let connected = true;
+    let resolveTarget!: (value: {
+      workspace: string;
+      codexPath: string;
+      codexHome: string;
+    }) => void;
+    remote.threadOpenTarget = vi.fn(
+      () =>
+        new Promise<{ workspace: string; codexPath: string; codexHome: string }>((resolve) => {
+          resolveTarget = resolve;
+        }),
+    );
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : connected ? remote : null),
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(portal.querySelector("button"), "terminal action").dispatch("click");
+    await settle();
+    connected = false;
+    resolveTarget({
+      workspace: "/remote/repo",
+      codexPath: "/bin/codex",
+      codexHome: "/remote/.codex",
+    });
+    await settle();
+    expect(local.openThreadTerminal).not.toHaveBeenCalled();
+    expect(remote.openThreadTerminal).not.toHaveBeenCalled();
+    installed.dispose();
+  });
+
   it("opens with the installed default terminal selected in Settings", async () => {
     const document_ = installFakeBrowser();
     const row = sidebarRow(document_, "local", "thread-a");

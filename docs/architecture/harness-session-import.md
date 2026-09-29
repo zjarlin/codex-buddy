@@ -1,14 +1,14 @@
-# 本地 Harness 会话导入
+# Harness 会话导入
 
 ## 当前范围
 
 设置 → 会话导入可登记 **Claude Code、Pi、Hermes** 和 **DSH** 的原生 Session（已验证 `0.1.2-rc.1` / `0.1.5-rc.1` / `0.1.5-rc.2` / `0.1.5-rc.3` / `0.1.7-rc.1`；命令和限制见 [DSH 验证记录](../harnesses/deepseek/dsh-015rc1-validation.md)）。导入只建立 Host Thread 与原生 Session 的映射，不复制 Transcript、不转换 Harness、不发送用户 Turn；打开后仍通过对应 Adapter 的 `open({ kind: "resume" })` 恢复历史并继续会话。
 
-- 设置页始终使用本地 Host，即使 Composer 当前连接远程工作区。
+- 设置页跟随当前 Composer 的 Host；SSH 项目由远端 Host 发现、验证及登记原生 Session，凭据和历史留在所属机器。列表项绑定发现它的 Host，导入完成及重试打开都携带原 Host，不因用户切换连接而误开本机同 ID 会话。
 - 可选 Harness 来自该 Host 已加载、同时提供发现和解析能力的 Adapter，不使用 Renderer 内置 Harness 名单。
 - 目录表示“实现了导入接口”，不保证当前原生运行时可用。不兼容的 DSH 原生协议、旧 Host、缺失插件或不可用存储会明确失败，不伪装成无候选。
 - DSH 仅允许本机、codexhost 托管的 Web；`0.1.2-rc.1`、`0.1.5-rc.1`、`0.1.5-rc.2`、`0.1.5-rc.3` 和 `0.1.7-rc.1` 已验证。其他 SemVer 版本可尝试连接及导入，须通过原生 Web 与历史协议校验；Legacy 协议已移除。不把版本号当作兼容保证。
-- 本次没有增加远程扫描、Claude Code Broker 导入，也没有完成整个 Agent Picker 的动态插件化。
+- SSH 复用远端 Adapter 的原生导入能力；没有该能力的插件仍显示不可用。Claude Code Broker 导入与整个 Agent Picker 的动态插件化仍不在此契约范围内。
 
 ## Adapter 契约与职责
 
@@ -34,7 +34,7 @@ interface HarnessSessionImportSource {
 - `running: true` 表示已知忙碌，Host 拒绝；`false` 表示可可靠确认空闲；`null` 表示无法可靠确认。未知不能降为 false。
 - Adapter 关闭后不能启动新的发现；正在进行的本地扫描要取消并收尾。插件不得直接操作 Host 映射库。
 
-对于已经接入 Desktop 的 Harness，以后增加这两个方法、验证原生 resume 并补齐 Adapter 测试即可复用本地 Host/RPC/导入页面；无需再创建专属导入器或 Renderer 开关。新的插件整体产品接入仍受 [Renderer 边界](harness-plugin-runtime.md) 约束。
+对于已经接入 Desktop 的 Harness，以后增加这两个方法、验证原生 resume 并补齐 Adapter 测试即可复用所属 Host/RPC/导入页面；无需再创建专属导入器或 Renderer 开关。新的插件整体产品接入仍受 [Renderer 边界](harness-plugin-runtime.md) 约束。
 
 ## Host 与浏览器边界
 
@@ -48,7 +48,7 @@ interface HarnessSessionImportSource {
 
 列表默认每页 20 条；页面可选 20 / 50 / 100 条，显示总数和上一页/下一页。搜索按标题、会话 ID、项目路径进行不区分大小写的子串匹配，覆盖所有候选而非仅当前页；提交搜索或切换 Harness/每页数量后回到第一页。Host 先过滤已映射会话、搜索、按活动时间与稳定 ID 排序，再分页；`total` 是过滤后的总数。单次响应最多 1,000 条只是 wire page 保护，不限制存储总量或总候选数。
 
-旧 `codexhost/deepseek/modern-session/list` / `import` 作为兼容别名保留在 Host，复用同一个 DSH importer 和通知去重集合；旧 list 仍返回 `{ candidates }`，沿用同一 SemVer 探测与原生协议校验策略，不另设版本白名单。这些 Host RPC 别名不属于已移除的 DSH Legacy 协议。新 Renderer 只使用公共 RPC。旧 Host 未实现公共入口时显示不可用，不改走未经验证的原生桥接。存储读取失败显示“无法读取本地会话”，不再误报“不支持导入”。
+旧 `codexhost/deepseek/modern-session/list` / `import` 作为兼容别名保留在 Host，复用同一个 DSH importer 和通知去重集合；旧 list 仍返回 `{ candidates }`，沿用同一 SemVer 探测与原生协议校验策略，不另设版本白名单。这些 Host RPC 别名不属于已移除的 DSH Legacy 协议。新 Renderer 只使用公共 RPC。旧 Host 未实现公共入口时显示不可用，不改走未经验证的原生桥接。存储读取失败显示“无法读取会话”，不再误报“不支持导入”。
 
 `HarnessSessionImporter` 负责：
 

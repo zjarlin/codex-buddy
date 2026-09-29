@@ -1,0 +1,7 @@
+# Auto route cards
+
+Shows gateway-confirmed Auto routing records in native Codex turns. Host owns provider credentials and the authenticated metadata request; this module owns only presentation and visible-thread polling. It does not emit assistant messages or change native model selection.
+
+Cards require matching Host, Thread, turn and response DOM annotations. Late replies from another Host/Thread are discarded. One card groups requests within each turn, keeps attempt order in details, and distinguishes selected/responding/completed/failed/interrupted. Missing extensions remain unsupported; transient read failures preserve existing cards with an update warning. Background windows do not poll.
+
+The latest request can include the gateway's complete candidate plan. The card shows eligible/total route counts and a searchable table of model, platform, order and exclusion reason. Candidate eligibility is a request snapshot, not a success signal. Older gateways without candidate metadata remain supported. Records are persisted by the gateway in PostgreSQL, independently of the inference wire format. The Host accepts an optional runId filter and checks run_id/turn_id consistency. Its response-byte limit and the 128-record query limit do not cap model attempts per request or database retention.

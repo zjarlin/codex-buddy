@@ -289,16 +289,16 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sectionsLabel: "Settings sections",
   generalSection: "General",
   otherSection: "Other",
-  appearanceDescription: "Conversation display and local resource management.",
+  appearanceDescription: "Conversation display and current Host resource management.",
   appearanceGroup: "Appearance",
   loadedSessions: {
     title: "Loaded sessions",
     description:
-      "Local external Harnesses only. Refreshes every 10 seconds without waking sessions or resetting activity. Released sessions disappear from this list.",
+      "External Harnesses on the current Host only. Refreshes every 10 seconds without waking sessions or resetting activity. Released sessions disappear from this list.",
     columns: ["Session", "Harness", "State", "Since last activity", "Release constraint"],
     empty: "No loaded external sessions.",
     failed: "Could not load session status.",
-    unavailable: "Local Host does not support session status or is unavailable.",
+    unavailable: "Current Host does not support session status or is unavailable.",
     loading: "Loading session status…",
     minutes: "{minutes} min",
     states: {
@@ -353,12 +353,12 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sessionImportDescription:
     "Sessions keep their original project path. If a folder is not in the Codex sidebar, add it as a project first. Original history remains managed by the Harness.",
   sessionImportAvailabilityNote:
-    "Available Harnesses come from the local Host. If activity is unknown, close the session in its native client before importing to avoid concurrent writes.",
+    "Available Harnesses come from the current Host. If activity is unknown, close the session in its native client before importing to avoid concurrent writes.",
   sessionImportRefresh: "Refresh",
-  sessionImportRefreshing: "Loading local sessions...",
+  sessionImportRefreshing: "Loading sessions...",
   sessionImportUnavailable:
-    "Session import is unavailable for this local Harness or its current protocol. Update the Host/plugin or choose another Harness.",
-  sessionImportEmpty: "No local sessions are available to import.",
+    "Session import is unavailable for this Harness or its current protocol. Update the Host/plugin or choose another Harness.",
+  sessionImportEmpty: "No sessions are available to import on this Host.",
   sessionImportSearch: "Search",
   sessionImportSearchPlaceholder: "Search titles, session IDs or project paths",
   sessionImportNoMatches: "No sessions match your search.",
@@ -367,7 +367,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   sessionImportNext: "Next",
   sessionImportPageSummary: "Page {page} of {pages} · {total} sessions",
   sessionImportLoadFailed:
-    "Local sessions could not be loaded. Check directory access or duplicate session IDs, then retry.",
+    "Sessions could not be loaded. Check directory access or duplicate session IDs, then retry.",
   sessionImportFailed: "The session could not be imported.",
   sessionImportUntitled: "Untitled session",
   sessionImportUpdatedAt: "Updated",
@@ -592,16 +592,16 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sectionsLabel: "设置分类",
   generalSection: "通用",
   otherSection: "其他",
-  appearanceDescription: "会话显示与本地资源管理。",
+  appearanceDescription: "会话显示与当前 Host 资源管理。",
   appearanceGroup: "外观",
   loadedSessions: {
     title: "已加载会话",
     description:
-      "仅显示本地外部 Harness。每 10 秒刷新，不唤醒会话、不重置活动时间。释放后的会话从列表移除。",
+      "仅显示当前 Host 的外部 Harness。每 10 秒刷新，不唤醒会话、不重置活动时间。释放后的会话从列表移除。",
     columns: ["会话", "Harness", "状态", "距最后活动", "暂不能释放的原因"],
     empty: "暂无已加载的外部会话。",
     failed: "无法加载会话状态。",
-    unavailable: "本地 Host 不支持会话状态查询或当前不可用。",
+    unavailable: "当前 Host 不支持会话状态查询或当前不可用。",
     loading: "正在加载会话状态…",
     minutes: "{minutes} 分钟",
     states: {
@@ -655,12 +655,12 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sessionImportDescription:
     "会话将保留原始项目路径；若该文件夹尚未出现在 Codex 侧栏，请先将其添加为项目。原始历史仍由 Harness 管理。",
   sessionImportAvailabilityNote:
-    "可选 Harness 来自本地 Host。运行状态未知时，请先在原生客户端关闭该会话再导入，避免同时写入。",
+    "可选 Harness 来自当前 Host。运行状态未知时，请先在原生客户端关闭该会话再导入，避免同时写入。",
   sessionImportRefresh: "刷新",
-  sessionImportRefreshing: "正在读取本地会话……",
+  sessionImportRefreshing: "正在读取会话……",
   sessionImportUnavailable:
-    "本地 Harness 或当前协议暂不支持会话导入，请更新 Host/插件或选择其他 Harness。",
-  sessionImportEmpty: "没有可导入的本地会话。",
+    "当前 Host 的 Harness 或协议暂不支持会话导入，请更新 Host/插件或选择其他 Harness。",
+  sessionImportEmpty: "当前 Host 没有可导入的会话。",
   sessionImportSearch: "搜索",
   sessionImportSearchPlaceholder: "搜索标题、会话 ID 或项目路径",
   sessionImportNoMatches: "没有匹配的会话。",
@@ -668,7 +668,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   sessionImportPrevious: "上一页",
   sessionImportNext: "下一页",
   sessionImportPageSummary: "第 {page} / {pages} 页 · 共 {total} 条",
-  sessionImportLoadFailed: "无法读取本地会话，请检查目录访问权限或重复的会话 ID 后重试。",
+  sessionImportLoadFailed: "无法读取会话，请检查目录访问权限或重复的会话 ID 后重试。",
   sessionImportFailed: "无法导入该会话。",
   sessionImportUntitled: "未命名会话",
   sessionImportUpdatedAt: "更新时间",

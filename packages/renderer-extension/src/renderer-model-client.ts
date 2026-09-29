@@ -1,4 +1,8 @@
 import {
+  AUTO_MODEL_ROUTES_METHOD,
+  autoModelRoutesParamsSchema,
+  autoModelRoutesResultSchema,
+  type AutoModelRoutesResult,
   DOUBAO_OPEN_METHOD,
   doubaoOpenResultSchema,
   type DoubaoOpenResult,
@@ -124,6 +128,10 @@ import {
   type WorkspaceFileWriteParams,
   type WorkspaceFileWriteResult,
   THREAD_TERMINAL_OPEN_METHOD,
+  THREAD_OPEN_TARGET_METHOD,
+  threadOpenTargetParamsSchema,
+  threadOpenTargetSchema,
+  type ThreadOpenTarget,
   THREAD_TERMINAL_LIST_METHOD,
   threadTerminalListParamsSchema,
   threadTerminalListResultSchema,
@@ -141,6 +149,13 @@ import {
   type ThreadTerminalOpenResult,
   type ThreadWorkspaceOpenParams,
   type ThreadWorkspaceOpenResult,
+  PROJECT_TABS_GET_METHOD,
+  PROJECT_TABS_SET_METHOD,
+  projectTabsConfigSchema,
+  projectTabsGetParamsSchema,
+  projectTabsStateSchema,
+  type ProjectTabsConfig,
+  type ProjectTabsState,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   THREAD_ARCHIVE_COMPLETED_METHOD,
@@ -434,12 +449,16 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   writeWorkspaceFile?(input: WorkspaceFileWriteParams): Promise<WorkspaceFileWriteResult>;
   listThreadTerminals?(): Promise<ThreadTerminalListResult>;
   openThreadTerminal?(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult>;
+  threadOpenTarget?(threadId: string): Promise<ThreadOpenTarget>;
   openThreadWorkspace?(input: ThreadWorkspaceOpenParams): Promise<ThreadWorkspaceOpenResult>;
   openDoubao?(): Promise<DoubaoOpenResult>;
   getThreadTerminalSettings?(): Promise<ThreadTerminalSettings>;
   setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
+  getProjectTabs?(): Promise<ProjectTabsState>;
+  setProjectTabs?(config: ProjectTabsConfig): Promise<ProjectTabsState>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   readThreadActivity?(threadId: string): Promise<boolean>;
+  readAutoModelRoutes?(threadId: string, runId?: string): Promise<AutoModelRoutesResult>;
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -958,6 +977,14 @@ export function createRendererModelClient(
         await manager.sendRequest(THREAD_TERMINAL_LIST_METHOD, params),
       );
     },
+    async threadOpenTarget(threadId: string): Promise<ThreadOpenTarget> {
+      return threadOpenTargetSchema.parse(
+        await manager.sendRequest(
+          THREAD_OPEN_TARGET_METHOD,
+          threadOpenTargetParamsSchema.parse({ threadId }),
+        ),
+      );
+    },
     async openThreadTerminal(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult> {
       const params = threadTerminalOpenParamsSchema.parse(input);
       return threadTerminalOpenResultSchema.parse(
@@ -988,6 +1015,16 @@ export function createRendererModelClient(
         await manager.sendRequest(THREAD_TERMINAL_SETTINGS_SET_METHOD, params),
       );
     },
+    async getProjectTabs(): Promise<ProjectTabsState> {
+      return projectTabsStateSchema.parse(
+        await manager.sendRequest(PROJECT_TABS_GET_METHOD, projectTabsGetParamsSchema.parse({})),
+      );
+    },
+    async setProjectTabs(config: ProjectTabsConfig): Promise<ProjectTabsState> {
+      return projectTabsStateSchema.parse(
+        await manager.sendRequest(PROJECT_TABS_SET_METHOD, projectTabsConfigSchema.parse(config)),
+      );
+    },
     buddyPrivate: async (input: BuddyPrivateRequest) => {
       const params = buddyPrivateRequestSchema.safeParse(input);
       if (!params.success) {
@@ -1001,6 +1038,19 @@ export function createRendererModelClient(
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
     buddyInterrupted: async () =>
       buddyInterruptedSchema.parse(await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {})),
+    readAutoModelRoutes: async (threadId: string, runId?: string) => {
+      const params = autoModelRoutesParamsSchema.parse({ threadId, ...(runId ? { runId } : {}) });
+      try {
+        return autoModelRoutesResultSchema.parse(
+          await manager.sendRequest(AUTO_MODEL_ROUTES_METHOD, params),
+        );
+      } catch (error) {
+        if (error instanceof RendererMethodUnavailableError) {
+          return { supported: false, routes: [] };
+        }
+        throw error;
+      }
+    },
     readThreadActivity: async (threadId: string) => {
       const response = await manager.sendRequest("thread/read", { threadId, includeTurns: false });
       const thread = isRecord(response) ? response.thread : null;

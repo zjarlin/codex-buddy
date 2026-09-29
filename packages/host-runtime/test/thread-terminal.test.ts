@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -10,6 +11,7 @@ import {
   ThreadTerminalError,
   threadTerminalResumeCommand,
   windowsTerminalInvocation,
+  sshThreadResumeCommand,
 } from "../src/thread-terminal.js";
 
 const cleanup: string[] = [];
@@ -52,6 +54,49 @@ function fakeSpawn(child?: Partial<SpawnedChild>) {
 }
 
 describe("thread terminal", () => {
+  it("quotes both SSH shell boundaries and preserves the remote session and Codex home", () => {
+    const ssh = {
+      arguments: ["-p", "2222", "okm252"],
+      workspace: "/remote/project ' $(echo bad)",
+      codexHome: "/remote/codex home",
+    };
+    const command = sshThreadResumeCommand(ssh, "/remote/codex bin", "thread-a");
+    const parsed = JSON.parse(
+      execFileSync(
+        "sh",
+        [
+          "-c",
+          `ssh() { node -e 'console.log(JSON.stringify(process.argv.slice(1)))' -- "$@"; }; ${command}`,
+        ],
+        { encoding: "utf8" },
+      ),
+    );
+    expect(parsed.slice(0, 4)).toEqual(["-t", "-p", "2222", "okm252"]);
+    expect(parsed[4]).toContain(
+      "exec env 'CODEX_HOME=/remote/codex home' '/remote/codex bin' resume 'thread-a'",
+    );
+    expect(parsed[4]).toContain("$(echo bad)");
+  });
+
+  it("opens a local terminal for a remote path that does not exist locally", async () => {
+    const spawnTerminal = fakeSpawn();
+    const environment = await macTerminalEnvironment();
+    const ssh = {
+      arguments: ["okm252"],
+      workspace: "/remote-only/project",
+      codexHome: "/root/.codex",
+    };
+    await expect(
+      openThreadTerminal(ssh.workspace, "thread-a", "/remote/codex", "apple-terminal", {
+        platform: "darwin",
+        environment,
+        spawnTerminal,
+        ssh,
+      }),
+    ).resolves.toMatchObject({ workspace: ssh.workspace, terminal: "apple-terminal" });
+    expect(spawnTerminal.mock.calls[0]?.[1].join(" ")).toContain("ssh '-t' 'okm252'");
+  });
+
   it("builds the exact Codex resume command without shell interpolation", () => {
     expect(
       threadTerminalResumeCommand(

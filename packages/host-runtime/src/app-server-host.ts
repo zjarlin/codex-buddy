@@ -19,7 +19,7 @@ import {
   type ProjectGitRepository,
 } from "./project-git-repositories.js";
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
-import { recentMessages } from "./buddy/history.js";
+import { recentCompletedSessions } from "./recent-sessions.js";
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { LiveModelCatalog } from "./buddy/live-model-catalog.js";
 import { ModelAvailability } from "./model-availability.js";
@@ -34,7 +34,8 @@ import {
   threadArchiveCompletedResultSchema,
 } from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
-import { BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
+import { AUTO_MODEL_ROUTES_METHOD, BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
+import { readAutoModelRoutes } from "./auto-model-routes.js";
 import {
   BUDDY_MODELS_METHOD,
   BUDDY_CATALOG_SYNC_METHOD,
@@ -69,6 +70,7 @@ import {
   GIT_MERGE_CONTINUE_METHOD,
   GIT_MERGE_ABORT_METHOD,
   gitWorkspaceParamsSchema,
+  type GitWorkspaceTarget,
   gitDiffParamsSchema,
   gitContentParamsSchema,
   gitStageParamsSchema,
@@ -85,9 +87,17 @@ import {
   workspaceFileReadParamsSchema,
   workspaceFileWriteParamsSchema,
   THREAD_TERMINAL_OPEN_METHOD,
+  THREAD_OPEN_TARGET_METHOD,
+  threadOpenTargetParamsSchema,
+  threadOpenTargetSchema,
   THREAD_TERMINAL_LIST_METHOD,
   THREAD_TERMINAL_SETTINGS_GET_METHOD,
   THREAD_TERMINAL_SETTINGS_SET_METHOD,
+  PROJECT_TABS_GET_METHOD,
+  PROJECT_TABS_SET_METHOD,
+  projectTabsConfigSchema,
+  projectTabsGetParamsSchema,
+  type ProjectTabsState,
   threadTerminalListParamsSchema,
   threadTerminalOpenParamsSchema,
   THREAD_WORKSPACE_OPEN_METHOD,
@@ -114,9 +124,11 @@ import {
 import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { listThreadTerminals, openThreadTerminal } from "./thread-terminal.js";
+import { desktopSshConnection } from "./desktop-ssh-connection.js";
 import { openThreadWorkspace } from "./thread-workspace.js";
 import { createLauncherDoubaoOpener } from "./launcher-url-opener.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
+import { ProjectTabsSettingsStore } from "./project-tabs-settings.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import { ProjectSyncPeer } from "./project-sync-peer.js";
@@ -706,6 +718,7 @@ export class AppServerHost {
   #drainActiveWorkOnInputEnd = false;
   #desktopInputEnded = false;
   readonly #threadTerminalSettings: ThreadTerminalSettingsStore;
+  readonly #projectTabsSettings: ProjectTabsSettingsStore;
   #liveCodexModels: LiveModelCatalog | undefined;
   #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
   readonly #modelAvailability: ModelAvailability;
@@ -736,6 +749,7 @@ export class AppServerHost {
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
     this.#threadTerminalSettings = new ThreadTerminalSettingsStore(environment);
+    this.#projectTabsSettings = new ProjectTabsSettingsStore(environment);
     this.#projectSync = new ProjectSyncPeer(environment);
     this.#launchSettings = new HarnessLaunchSettingsStore(
       this.#options.pluginContext?.environment ?? environment,
@@ -1269,6 +1283,23 @@ export class AppServerHost {
       }
       return;
     }
+    if (request.method === AUTO_MODEL_ROUTES_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const result = await readAutoModelRoutes({
+            params: request.params,
+            environment: this.#options.environment ?? process.env,
+            privateMode: async () => this.#buddy?.privateMode(),
+            readThread: (threadId) =>
+              this.#requestOfficial("thread/read", { threadId, includeTurns: false }),
+          });
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
+      return;
+    }
     if (request.method === SESSION_ROUTE_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleSessionRoute(request));
       return;
@@ -1474,6 +1505,10 @@ export class AppServerHost {
       this.#dispatchDesktopRequest(() => this.#handleWorkspaceFilesRequest(request));
       return;
     }
+    if (request.method === THREAD_OPEN_TARGET_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleThreadOpenTargetRequest(request));
+      return;
+    }
     if (request.method === THREAD_TERMINAL_OPEN_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleThreadTerminalRequest(request));
       return;
@@ -1495,6 +1530,10 @@ export class AppServerHost {
       request.method === THREAD_TERMINAL_SETTINGS_SET_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleThreadTerminalSettingsRequest(request));
+      return;
+    }
+    if (request.method === PROJECT_TABS_GET_METHOD || request.method === PROJECT_TABS_SET_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleProjectTabsSettingsRequest(request));
       return;
     }
     if (
@@ -2309,52 +2348,11 @@ export class AppServerHost {
 
   async #handleSessionRoute(request: JsonRpcRequest): Promise<void> {
     try {
-      const params = sessionRouteParamsSchema.parse(request.params);
-      if (!this.#buddy || (await this.#buddy.privateMode())) {
-        throw new Error("Session routing requires Auto Router and is unavailable in privacy mode.");
-      }
-      const response = await this.#requestOfficial("thread/list", {
-        limit: 40,
-        archived: false,
-        sortKey: "updated_at",
-        sortDirection: "desc",
-      });
-      if (isRecord(response.error)) {
-        throw new Error(typeof response.error.message === "string" ? response.error.message : "Unable to list Codex Threads");
-      }
-      const page = isRecord(response.result) ? response.result : null;
-      const rows = page && Array.isArray(page.data) ? page.data : [];
-      const candidates = [];
-      for (const row of rows.slice(0, 32)) {
-        if (!isRecord(row) || typeof row.id !== "string" || typeof row.cwd !== "string") continue;
-        if (params.cwd && row.cwd !== params.cwd) continue;
-        const status = isRecord(row.status) ? row.status.type : null;
-        if (status === "active") continue;
-        const recent = await recentMessages(
-          (method, input) => this.#requestOfficial(method, input),
-          row.id,
-        ).catch(() => []);
-        const recentText = recent
-          .map((item) => (typeof item === "string" ? item : JSON.stringify(item)))
-          .join("\n")
-          .slice(-4_000);
-        candidates.push({
-          id: row.id,
-          title:
-            typeof row.title === "string"
-              ? row.title
-              : typeof row.name === "string"
-                ? row.name
-                : null,
-          cwd: row.cwd,
-          recent: recentText,
-        });
-      }
-      const decision = await this.#buddy.chooseSession({
-        message: params.message,
-        candidates,
-      });
-      const result = sessionRouteResultSchema.parse(decision);
+      sessionRouteParamsSchema.parse(request.params);
+      const sessions = await recentCompletedSessions((method, params) =>
+        this.#requestOfficial(method, params),
+      );
+      const result = sessionRouteResultSchema.parse(sessions);
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32090, errorMessage(error).slice(0, 20_000)));
@@ -3099,12 +3097,21 @@ export class AppServerHost {
     return result.turnId;
   }
 
-  async #resolveGitWorkspace(input: {
-    threadId: string;
-    repository?: string | undefined;
-  }): Promise<string> {
+  async #gitProjectWorkspace(input: GitWorkspaceTarget): Promise<string> {
+    if (input.threadId) return this.#gitWorkspaceForThread(input.threadId);
+    if (!input.cwd || !path.isAbsolute(input.cwd)) {
+      throw new GitWorkspaceError("请输入当前 Host 上项目的绝对路径。");
+    }
+    return input.cwd;
+  }
+
+  async #resolveGitWorkspace(
+    input: GitWorkspaceTarget & {
+      repository?: string | undefined;
+    },
+  ): Promise<string> {
     return this.#gitRepositoryLinks.resolve(
-      await this.#gitWorkspaceForThread(input.threadId),
+      await this.#gitProjectWorkspace(input),
       input.repository,
     );
   }
@@ -3190,19 +3197,69 @@ export class AppServerHost {
     }
   }
 
+  async #handleProjectTabsSettingsRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      let result: ProjectTabsState;
+      if (request.method === PROJECT_TABS_GET_METHOD) {
+        projectTabsGetParamsSchema.parse(request.params);
+        result = await this.#projectTabsSettings.load();
+      } else {
+        result = await this.#projectTabsSettings.set(projectTabsConfigSchema.parse(request.params));
+      }
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32100, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleThreadOpenTargetRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const { threadId } = threadOpenTargetParamsSchema.parse(request.params);
+      const resolution = await this.#locateExternalThread(threadId);
+      if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以从终端续接。");
+      const environment = this.#options.environment ?? process.env;
+      const workspace = await this.#gitWorkspaceForThread(threadId);
+      const result = threadOpenTargetSchema.parse({
+        workspace,
+        codexPath: this.#options.stockCodexPath,
+        codexHome: path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex")),
+      });
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32095, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
   async #handleThreadTerminalRequest(request: JsonRpcRequest): Promise<void> {
     try {
       const params = threadTerminalOpenParamsSchema.safeParse(request.params);
       if (!params.success) throw new Error("打开终端参数无效。");
-      const resolution = await this.#locateExternalThread(params.data.threadId);
-      if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以从终端续接。");
-      const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
+      const remote = params.data.remote;
+      const environment = this.#options.environment ?? process.env;
+      const ssh = remote ? await desktopSshConnection(remote.hostId, environment) : null;
+      if (!remote) {
+        const resolution = await this.#locateExternalThread(params.data.threadId);
+        if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以从终端续接。");
+      }
+      const cwd = remote?.workspace ?? (await this.#gitWorkspaceForThread(params.data.threadId));
       const settings = await this.#threadTerminalSettings.load();
       const result = await openThreadTerminal(
         cwd,
         params.data.threadId,
-        this.#options.stockCodexPath,
+        remote?.codexPath ?? this.#options.stockCodexPath,
         params.data.terminalId ?? settings.terminalId ?? "system-default",
+        {
+          environment,
+          ...(remote && ssh
+            ? {
+                ssh: {
+                  arguments: ssh.arguments,
+                  codexHome: remote.codexHome,
+                  workspace: remote.workspace,
+                },
+              }
+            : {}),
+        },
       );
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
@@ -3214,10 +3271,21 @@ export class AppServerHost {
     try {
       const params = threadWorkspaceOpenParamsSchema.safeParse(request.params);
       if (!params.success) throw new Error("打开工作区参数无效。");
-      const resolution = await this.#locateExternalThread(params.data.threadId);
-      if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以打开工作区。");
-      const cwd = await this.#gitWorkspaceForThread(params.data.threadId);
-      const result = await openThreadWorkspace(cwd);
+      const remote = params.data.remote;
+      const environment = this.#options.environment ?? process.env;
+      const ssh = remote ? await desktopSshConnection(remote.hostId, environment) : null;
+      if (ssh && !ssh.authority) {
+        throw new Error("VS Code 的此 SSH 连接需要使用配置了密钥文件的 SSH 别名。");
+      }
+      if (!remote) {
+        const resolution = await this.#locateExternalThread(params.data.threadId);
+        if (resolution.kind !== "official") throw new Error("只有官方 Codex 线程可以打开工作区。");
+      }
+      const cwd = remote?.workspace ?? (await this.#gitWorkspaceForThread(params.data.threadId));
+      const result = await openThreadWorkspace(cwd, {
+        environment,
+        ...(ssh?.authority ? { sshAuthority: ssh.authority } : {}),
+      });
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32098, errorMessage(error).slice(0, 20_000)));
@@ -3320,11 +3388,11 @@ export class AppServerHost {
         let result;
         if (request.method === GIT_REPOSITORIES_METHOD) {
           const params = gitRepositoriesParamsSchema.parse(request.params);
-          const cwd = await this.#gitWorkspaceForThread(params.threadId);
+          const cwd = await this.#gitProjectWorkspace(params);
           result = await this.#gitRepositoryLinks.list(cwd);
         } else {
           const params = gitRepositoryLinkParamsSchema.parse(request.params);
-          const cwd = await this.#gitWorkspaceForThread(params.threadId);
+          const cwd = await this.#gitProjectWorkspace(params);
           result =
             request.method === GIT_REPOSITORY_LINK_METHOD
               ? await this.#gitRepositoryLinks.link(cwd, params.repository)

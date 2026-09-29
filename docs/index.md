@@ -19,7 +19,7 @@
 | [`architecture/harness-plugin-architecture.md`](architecture/harness-plugin-architecture.md) | 插件化目标架构与未完成迁移方案；规划后续解耦时阅读，接口示例不代表当前 API。 |
 | [`architecture/harness-command-integration.md`](architecture/harness-command-integration.md) | Harness 原生命令的 Adapter、Host、Renderer 边界；新增命令能力时阅读。 |
 | [`architecture/harness-executable-discovery.md`](architecture/harness-executable-discovery.md) | Harness CLI 的跨平台发现、连接页安装指引和 DSH 特殊连接范围；修改安装指引、发现或启动逻辑时阅读。 |
-| [`architecture/harness-session-import.md`](architecture/harness-session-import.md) | Pi 与 DSH 本地会话导入契约和恢复边界；扩展导入能力时阅读。 |
+| [`architecture/harness-session-import.md`](architecture/harness-session-import.md) | 本机与 SSH Host 的 Harness 会话导入契约和恢复边界；扩展导入能力时阅读。 |
 | [`architecture/external-thread-steering.md`](architecture/external-thread-steering.md) | 外部 Thread 取消旧 Turn 后启动新 Turn 的“调整方向”语义；修改 steering 时阅读。 |
 | [`architecture/app-server-transport.md`](architecture/app-server-transport.md) | 原生大历史响应的 WebSocket 与 JSONL 传输边界；排查任务加载、消息大小和转发性能时阅读。 |
 | [`architecture/acp-layer-follow-up.md`](architecture/acp-layer-follow-up.md) | 共享 ACP 层的抽取条件与边界；出现第二个适合共享实现的生产 ACP Harness 时阅读。 |
@@ -29,7 +29,7 @@
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏、关联仓库切换、官方审查转发与项目空闲推送工作流；维护 Git 界面时阅读。 |
-| [`product/workspace-files.md`](product/workspace-files.md) | 官方文件树与编辑器转发、保留的 Host 文件接口及其安全约束；维护文件浏览器时阅读。 |
+| [`product/workspace-files.md`](product/workspace-files.md) | 官方文件树与编辑器转发、面板内文件树左侧布局，以及保留的 Host 文件接口；维护文件浏览器时阅读。 |
 
 ## Harness 专项
 
@@ -97,7 +97,7 @@
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | q3 隐私输入区、复用网关目录、发送阻断与保护范围；处理敏感文本前阅读。 |
-| [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 模型目录热更新、手填 ID、持久 Pin、运行时固定模型与自动规划边界。 |
+| [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 模型目录热更新、手填 ID、持久 Pin、固定模型、自动规划与会话内 Auto routed 卡片。 |
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
 | [`product/project-actions.md`](product/project-actions.md) | 项目分类 Tab、前缀规则、手动归属，以及 Doubao 桌面客户端入口。 |
 | [`product/codex-accounts.md`](product/codex-accounts.md) | 设置页中的原生账号与额度、外部 Harness 不受 Codex 额度门限制、手动导入 Pi 及导入记录管理；修改账号 UI、发送额度门、查询或凭证导入链路时阅读。 |
@@ -125,7 +125,7 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
-| [`operations/repository-maintenance.md`](operations/repository-maintenance.md) | PR 标签、CI 评论和发布前检查自动化；修改仓库自动化时阅读。 |
+| [`operations/repository-maintenance.md`](operations/repository-maintenance.md) | PR 标签、CI 评论、发布校验与 MacBook 安装包投递；修改仓库自动化时阅读。 |
 
 ## 待评估方案与问题调查
 

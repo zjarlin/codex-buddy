@@ -6,6 +6,7 @@
 - 不处理 Issue，不催补模板、不总结审查、不检查规范风险、不进行长期等待提醒。
 - `readReleaseMetadata` / `resolveRelease` / `verifyRelease`：保持发布版本、标签、提交和 CI 证据一致。
 - `validateReleaseVersion`：供发布准备脚本复用的版本校验器。
+- `deliverLatestMacbookInstaller`：正式版发布成功后，通过 `ssh macbook` 将最新 Apple Silicon DMG 校验并存入 Downloads，成功后只保留一份同产品安装包。
 
 维护入口默认实际写入，调用方应明确传入 `dryRun: true` 做只读预览；GitHub 手动入口默认开启预览。自动化不调用模型、不执行 PR 代码，也不自动合并或发布。
 

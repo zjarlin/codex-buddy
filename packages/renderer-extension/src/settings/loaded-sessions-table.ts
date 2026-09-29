@@ -53,8 +53,8 @@ export function mountLoadedSessionsTable(
   let timer: number | undefined;
   let requestTimer: number | undefined;
   const refresh = async (): Promise<void> => {
+    const client = getClient();
     try {
-      const client = getClient();
       if (!client?.listLoadedSessions) {
         status.textContent = text.unavailable;
         status.hidden = false;
@@ -70,7 +70,7 @@ export function mountLoadedSessionsTable(
           );
         }),
       ]);
-      if (disposed || context.signal.aborted) return;
+      if (disposed || context.signal.aborted || getClient() !== client) return;
       body.replaceChildren();
       for (const row of rows.toSorted(
         (a, b) =>
@@ -97,7 +97,7 @@ export function mountLoadedSessionsTable(
       status.hidden = rows.length > 0;
       scroll.hidden = rows.length === 0;
     } catch (error) {
-      if (disposed || context.signal.aborted) return;
+      if (disposed || context.signal.aborted || getClient() !== client) return;
       status.textContent =
         error instanceof RendererMethodUnavailableError ? text.unavailable : text.failed;
       status.hidden = false;

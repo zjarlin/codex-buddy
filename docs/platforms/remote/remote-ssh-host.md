@@ -49,3 +49,13 @@ Upgrade both machines to the same version using the same package manager. Then r
 - **`remote status` says degraded or asks you to reinstall**: run `codexhost remote install`, then `codexhost remote start`.
 - **A Harness is missing**: make sure it is installed and signed in on the remote machine, then click **Run connection diagnostics** in Settings.
 - **Install fails on macOS with a launchd / `gui/$UID` error**: the remote Mac needs someone logged in to the desktop. Log in, then run `codexhost remote install` again.
+
+## SSH feature ownership
+
+Model catalogs and probes, Auto Router, session recommendations, interrupted conversation recovery, Git and file operations, session imports, and loaded sessions use the current SSH Host. Provider, System One, and Harness configuration and authentication remain remote. Imported and recommended conversations retain their originating Host; switching connections cannot submit stale selections to another machine.
+
+For native Codex conversations, **Open in Terminal** launches the chosen terminal on the Desktop machine, uses its saved SSH connection, then runs `codex resume` with the remote workspace, executable and CODEX_HOME. The remote machine does not need a graphical terminal; the local machine needs an SSH client. **Open in VS Code** opens the remote directory through the local Remote SSH extension. Connections with an explicit identity file need an SSH alias so VS Code uses the same key.
+
+Terminal preferences, Desktop updates, and desktop application launchers belong to the local machine. External Harnesses retain their native capabilities and cannot be resumed with the Codex CLI. Remote Windows remains unsupported.
+
+`npx -y codex-buddy sync` updates model configuration but does not replace a running native server. If the catalog already contains `auto` while the menu or extension methods remain unavailable, start the remote Buddy Host after active tasks finish, then reconnect. Let running tasks finish before switching services.

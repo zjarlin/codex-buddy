@@ -5,64 +5,67 @@ import { createDraftPrewarmPolicyBridge } from "../src/renderer-draft-prewarm-ru
 
 afterEach(() => vi.useRealTimers());
 
-it("keeps a slow planning submission pending until its single native receipt arrives", async () => {
-  vi.useFakeTimers();
-  const onOutcomeUnknown = vi.fn();
-  const receipt = { turn: { id: "accepted-turn", status: "inProgress" } };
-  let nativePromise: Promise<unknown> | undefined;
-  const originalSend = vi.fn((_method, _params, options) => {
-    nativePromise = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        options.onOutcomeUnknown();
-        reject(new Error("outcome-unknown"));
-      }, options.timeoutMs);
-      setTimeout(() => {
-        clearTimeout(timeout);
-        resolve(receipt);
-      }, 146_000);
+it.each(["local", "remote-ssh-discovered:okm252"])(
+  "keeps %s planning pending until its single native receipt arrives",
+  async (hostId) => {
+    vi.useFakeTimers();
+    const onOutcomeUnknown = vi.fn();
+    const receipt = { turn: { id: "accepted-turn", status: "inProgress" } };
+    let nativePromise: Promise<unknown> | undefined;
+    const originalSend = vi.fn((_method, _params, options) => {
+      nativePromise = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          options.onOutcomeUnknown();
+          reject(new Error("outcome-unknown"));
+        }, options.timeoutMs);
+        setTimeout(() => {
+          clearTimeout(timeout);
+          resolve(receipt);
+        }, 146_000);
+      });
+      return nativePromise;
     });
-    return nativePromise;
-  });
-  const bridge = {
-    sendRequest: originalSend,
-    prewarmThreadStart: vi.fn(),
-    enqueueRequest: vi.fn(),
-    onResult: vi.fn(),
-    onError: vi.fn(),
-  };
-  const manager = {
-    onNotification: vi.fn(),
-    onRequest: vi.fn(),
-    dispatchAppServerResponse: vi.fn(),
-  };
-  createDraftPrewarmPolicyBridge(
-    manager,
-    bridge,
-    "local",
-    {},
-    {
-      discardAllPrewarmedThreads: vi.fn(),
-    },
-  );
-  const parameters = { threadId: "work", input: [{ type: "text", text: "修复问题" }] };
-  const options = { timeoutMs: 30_000, onOutcomeUnknown, priority: "critical" };
-  const promise = bridge.sendRequest("turn/start", parameters, options);
-  expect(promise).toBe(nativePromise);
-  expect(originalSend).toHaveBeenCalledExactlyOnceWith("turn/start", parameters, {
-    ...options,
-    timeoutMs: 240_000,
-  });
-  await vi.advanceTimersByTimeAsync(31_000);
-  expect(onOutcomeUnknown).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(115_000);
-  await expect(promise).resolves.toBe(receipt);
-  expect(onOutcomeUnknown).not.toHaveBeenCalled();
-  expect(originalSend).toHaveBeenCalledTimes(1);
-  expect(options.timeoutMs).toBe(30_000);
-});
+    const bridge = {
+      sendRequest: originalSend,
+      prewarmThreadStart: vi.fn(),
+      enqueueRequest: vi.fn(),
+      onResult: vi.fn(),
+      onError: vi.fn(),
+    };
+    const manager = {
+      onNotification: vi.fn(),
+      onRequest: vi.fn(),
+      dispatchAppServerResponse: vi.fn(),
+    };
+    createDraftPrewarmPolicyBridge(
+      manager,
+      bridge,
+      hostId,
+      {},
+      {
+        discardAllPrewarmedThreads: vi.fn(),
+      },
+    );
+    const parameters = { threadId: "work", input: [{ type: "text", text: "修复问题" }] };
+    const options = { timeoutMs: 30_000, onOutcomeUnknown, priority: "critical" };
+    const promise = bridge.sendRequest("turn/start", parameters, options);
+    expect(promise).toBe(nativePromise);
+    expect(originalSend).toHaveBeenCalledExactlyOnceWith("turn/start", parameters, {
+      ...options,
+      timeoutMs: 240_000,
+    });
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(onOutcomeUnknown).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(115_000);
+    await expect(promise).resolves.toBe(receipt);
+    expect(onOutcomeUnknown).not.toHaveBeenCalled();
+    expect(originalSend).toHaveBeenCalledTimes(1);
+    expect(options.timeoutMs).toBe(30_000);
+  },
+);
 
 it.each([
-  ["remote-ssh-discovered:host", "turn/start", {}],
+  ["", "turn/start", {}],
   ["local", "turn/steer", {}],
   ["local", "turn/start", { outputSchema: { type: "object" } }],
   ["local", "turn/start", { toolOutput: { callId: "tool", output: "ok" } }],

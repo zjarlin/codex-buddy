@@ -43,11 +43,14 @@ function nativeUnread(row: HTMLElement): boolean {
   for (const fiber of committedReactAncestors(Reflect.get(row, key)).slice(0, 12)) {
     const props = record(fiber.memoizedProps);
     const attributes = record(props?.dataAttributes);
+    const status = record(props?.statusState);
     if (
       attributes?.[SIDEBAR_THREAD_ID_ATTRIBUTE] === row.getAttribute(SIDEBAR_THREAD_ID_ATTRIBUTE) &&
       attributes?.[SIDEBAR_THREAD_HOST_ID_ATTRIBUTE] ===
         row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) &&
-      record(props?.statusState)?.unread === true
+      status?.unread === true &&
+      status.type !== "loading" &&
+      props?.hideStatusIndicator !== true
     )
       return true;
   }

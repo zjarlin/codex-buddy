@@ -60,8 +60,12 @@ const { outputFiles } = await build({
       action('Replace A', () => { row.remove(); row=mount(remote, 'SSH A'); });
       action('Remove slot', () => row.querySelector('.w-4').remove());
       action('Native unread', () => {
-        row.__reactFiber$fixture.memoizedProps.statusState.unread=true;
+        row.__reactFiber$fixture.memoizedProps.statusState={type:'idle',unread:true};
         row.querySelector('[data-original-status]').innerHTML='<span class="native-unread" aria-label="Native unread"></span>';
+      });
+      action('Native loading', () => {
+        row.__reactFiber$fixture.memoizedProps.statusState={type:'loading',unread:true};
+        row.querySelector('[data-original-status]').innerHTML='<span role="status">Working</span>';
       });
       action('Native read', () => {
         row.__reactFiber$fixture.memoizedProps.statusState.unread=false;
@@ -174,6 +178,8 @@ test("native unread state takes over without a duplicate dot or stale read state
 }) => {
   await page.getByRole("button", { name: "Complete first", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(1);
+  await page.getByRole("button", { name: "Native loading", exact: true }).click();
+  await expect(page.locator(dotSelector)).toBeVisible();
   await page.getByRole("button", { name: "Native unread", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(0);
   await expect(page.getByLabel("Native unread", { exact: true })).toBeVisible();

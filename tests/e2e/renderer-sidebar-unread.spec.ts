@@ -11,6 +11,11 @@ const { outputFiles } = await build({
       const remote = 'remote-ssh-discovered:a';
       const callbacks = new Map();
       const retired = [];
+      let focusOverride = null;
+      let hiddenOverride = false;
+      const hasFocus = document.hasFocus.bind(document);
+      Object.defineProperty(document, 'hasFocus', {value: () => focusOverride ?? hasFocus()});
+      Object.defineProperty(document, 'hidden', {get: () => hiddenOverride});
       globalThis.subscriptions = [];
       const manager = host => ({addNotificationCallback(methods, callback) {
         globalThis.subscriptions.push(host);
@@ -73,6 +78,10 @@ const { outputFiles } = await build({
       });
       action('Reconnect', () => {managers.set(remote, manager(remote)); control.refresh();});
       action('Old notification', () => retired.forEach(callback => callback({method:'turn/completed',params:{threadId:'same-id',turn:{id:'stale',status:'completed'}}})));
+      action('Simulate blur', () => {focusOverride=false; window.dispatchEvent(new Event('blur'));});
+      action('Simulate focus', () => {focusOverride=true; window.dispatchEvent(new Event('focus'));});
+      action('Simulate hidden', () => {hiddenOverride=true; document.dispatchEvent(new Event('visibilitychange'));});
+      action('Simulate visible', () => {hiddenOverride=false; document.dispatchEvent(new Event('visibilitychange'));});
       action('Dispose', () => control.dispose());
     `,
   },
@@ -88,6 +97,9 @@ const remoteSelector = '[data-app-action-sidebar-thread-host-id="remote-ssh-disc
 const dotSelector = "[data-codexhost-sidebar-unread]";
 
 test.beforeEach(async ({ page }) => {
+  const time = new Date("2026-09-29T12:00:00Z");
+  await page.clock.install({ time });
+  await page.clock.pauseAt(time);
   await page.setViewportSize({ width: 760, height: 420 });
   await page.setContent(`<style>
     body{font:14px system-ui;margin:20px;background:light-dark(#fff,#191b20);color:light-dark(#222,#eee)}
@@ -121,6 +133,9 @@ for (const theme of ["light", "dark"] as const) {
     ).toBe("rgb(59, 130, 246)");
     await page.screenshot({ path: `test-results/sidebar-unread-${theme}.png` });
     await row.click();
+    await page.clock.runFor(2_999);
+    await expect(page.locator(dotSelector)).toHaveCount(1);
+    await page.clock.runFor(1);
     await expect(page.locator(dotSelector)).toHaveCount(0);
     await page.getByRole("button", { name: "Local", exact: true }).click();
     await page.getByRole("button", { name: "Complete first", exact: true }).click();
@@ -129,9 +144,16 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-test("viewed replies and unsuccessful turns do not acquire an unread dot", async ({ page }) => {
+test("reading starts after completion; failed turns do not acquire a blue dot", async ({
+  page,
+}) => {
   await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(10_000);
   await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  await expect(page.locator(dotSelector)).toBeVisible();
+  await page.clock.runFor(2_999);
+  await expect(page.locator(dotSelector)).toBeVisible();
+  await page.clock.runFor(1);
   await expect(page.locator(dotSelector)).toHaveCount(0);
   await page.getByRole("button", { name: "Local", exact: true }).click();
   await page.getByRole("button", { name: "Start next", exact: true }).click();
@@ -143,6 +165,7 @@ test("Hosts stay isolated and restarting a turn clears its prior blue dot", asyn
   await page.getByRole("button", { name: "Complete all", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(2);
   await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(3_000);
   await expect(page.locator(remoteSelector).locator(dotSelector)).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "SSH B", exact: true }).locator(dotSelector),
@@ -173,7 +196,7 @@ test("first completion survives a collapsed project, row replacement and a missi
   await expect(page.locator(dotSelector)).toHaveCount(1);
 });
 
-test("native unread state takes over without a duplicate dot or stale read state", async ({
+test("native unread state avoids duplicate dots but early native read preserves the reminder", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Complete first", exact: true }).click();
@@ -183,8 +206,16 @@ test("native unread state takes over without a duplicate dot or stale read state
   await page.getByRole("button", { name: "Native unread", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(0);
   await expect(page.getByLabel("Native unread", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(1_000);
   await page.getByRole("button", { name: "Native read", exact: true }).click();
+  await expect(page.locator(dotSelector)).toBeVisible();
+  await page.getByRole("button", { name: "Local", exact: true }).click();
   await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  await page.clock.runFor(5_000);
+  await expect(page.locator(dotSelector)).toBeVisible();
+  await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(3_000);
   await expect(page.locator(dotSelector)).toHaveCount(0);
 });
 
@@ -195,15 +226,71 @@ test("reconnecting keeps unread replies and ignores retired notifications; dispo
   await page.getByRole("button", { name: "Reconnect", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(1);
   await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(3_000);
   await page.getByRole("button", { name: "Local", exact: true }).click();
   await page.getByRole("button", { name: "Old notification", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(0);
   await page.getByRole("button", { name: "Start next", exact: true }).click();
   await page.getByRole("button", { name: "Complete next", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(2);
+  await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(1_000);
   await page.getByRole("button", { name: "Dispose", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(0);
   await expect(page.locator("[data-codexhost-sidebar-unread-slot]")).toHaveCount(0);
   await page.getByRole("button", { name: "Old notification", exact: true }).click();
+  await page.clock.runFor(5_000);
   await expect(page.locator(dotSelector)).toHaveCount(0);
+});
+
+test("brief visits retain the reminder and never accumulate reading time", async ({ page }) => {
+  const row = page.getByRole("button", { name: "SSH A", exact: true });
+  await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  for (let visit = 0; visit < 2; visit++) {
+    await row.click();
+    await page.clock.runFor(2_000);
+    await page.getByRole("button", { name: "Local", exact: true }).click();
+    await page.clock.runFor(5_000);
+    await expect(row.locator(dotSelector)).toBeVisible();
+  }
+  await page.screenshot({ path: "test-results/sidebar-unread-brief-visit.png" });
+  await row.click();
+  await page.clock.runFor(2_999);
+  await expect(row.locator(dotSelector)).toBeVisible();
+  await page.clock.runFor(1);
+  await expect(row.locator(dotSelector)).toHaveCount(0);
+  await page.screenshot({ path: "test-results/sidebar-unread-read.png" });
+});
+
+for (const [leave, returnToWindow] of [
+  ["Simulate blur", "Simulate focus"],
+  ["Simulate hidden", "Simulate visible"],
+] as const) {
+  test(`${leave} resets the continuous foreground reading time`, async ({ page }) => {
+    await page.getByRole("button", { name: "Complete first", exact: true }).click();
+    await page.getByRole("button", { name: "SSH A", exact: true }).click();
+    await page.clock.runFor(2_000);
+    await page.getByRole("button", { name: leave, exact: true }).click();
+    await page.clock.runFor(10_000);
+    await expect(page.locator(dotSelector)).toBeVisible();
+    await page.getByRole("button", { name: returnToWindow, exact: true }).click();
+    await page.clock.runFor(2_999);
+    await expect(page.locator(dotSelector)).toBeVisible();
+    await page.clock.runFor(1);
+    await expect(page.locator(dotSelector)).toHaveCount(0);
+  });
+}
+
+test("a new completion receives a full reading interval", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(2_000);
+  await page.getByRole("button", { name: "Start next", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(0);
+  await page.getByRole("button", { name: "Complete next", exact: true }).click();
+  const dot = page.locator(remoteSelector).locator(dotSelector);
+  await page.clock.runFor(2_999);
+  await expect(dot).toBeVisible();
+  await page.clock.runFor(1);
+  await expect(dot).toHaveCount(0);
 });

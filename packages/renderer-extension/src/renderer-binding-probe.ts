@@ -4,6 +4,7 @@ import { installAutoRouteCards } from "./auto-route-card/index.js";
 import { installRendererGitWorkflowControl } from "./renderer-git-workflow-control.js";
 import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installRendererSidebarUnread } from "./renderer-sidebar-unread.js";
+import { installRendererSidebarVisits } from "./renderer-sidebar-visits.js";
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
@@ -803,6 +804,9 @@ export function installRendererBindingProbe(
   });
   const sidebarUnread = installRendererSidebarUnread({
     getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+  });
+  const sidebarVisits = installRendererSidebarVisits({
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
   const sidebarStatusFilter = installRendererSidebarStatusFilter({
@@ -3142,6 +3146,7 @@ export function installRendererBindingProbe(
     scheduleScan(true);
     sidebarContinuation.refresh();
     sidebarUnread.refresh();
+    sidebarVisits.refresh();
     sidebarStatusFilter.refresh();
     threadActions.refresh();
     queuedTransfer.refresh();
@@ -3482,6 +3487,7 @@ export function installRendererBindingProbe(
       autoRouteCards.dispose();
       sidebarContinuation.dispose();
       sidebarUnread.dispose();
+      sidebarVisits.dispose();
       sidebarStatusFilter.dispose();
       threadActions.dispose();
       queuedTransfer.dispose();

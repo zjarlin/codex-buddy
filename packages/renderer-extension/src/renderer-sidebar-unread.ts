@@ -25,6 +25,7 @@ interface HostState {
 const DOT = "data-codexhost-sidebar-unread";
 const SLOT = "data-codexhost-sidebar-unread-slot";
 const ACTIVE = "data-app-action-sidebar-thread-active";
+const READ_DWELL_MS = 3_000;
 const style = `
 [${SLOT}]{position:relative}
 [${SLOT}]>:not([${DOT}]){visibility:hidden}
@@ -68,6 +69,8 @@ export function installRendererSidebarUnread(options: {
   const mounted = new Map<HTMLElement, { dot: HTMLElement; slot: HTMLElement | null }>();
   let disposed = false;
   let scheduled = false;
+  let reading: { turn: TurnState; since: number } | null = null;
+  let readTimer: ReturnType<typeof setTimeout> | null = null;
 
   const clear = (row: HTMLElement): void => {
     const entry = mounted.get(row);
@@ -141,16 +144,22 @@ export function installRendererSidebarUnread(options: {
     }
     for (const hostId of hostIds) connect(hostId);
     const visible = !document.hidden && document.hasFocus();
+    const now = performance.now();
+    let readingTurn: TurnState | null = null;
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const id = threadIdFromSidebarRowElement(row);
       const threadId = hostId && id?.startsWith(`${hostId}:`) ? id.slice(hostId.length + 1) : id;
       const turn = hostId && threadId ? hosts.get(hostId)?.turns.get(threadId) : undefined;
-      if (turn?.unread && ((visible && row.getAttribute(ACTIVE) === "true") || nativeUnread(row))) {
-        // 官方未读标识出现后交回官方；查看会话时只清除本窗口的补充提示。
-        turn.unread = false;
+      if (turn?.unread && visible && row.getAttribute(ACTIVE) === "true") {
+        if (reading?.turn === turn && now - reading.since >= READ_DWELL_MS) {
+          turn.unread = false;
+        } else {
+          readingTurn = turn;
+        }
       }
-      if (!turn?.unread) {
+      // 官方蓝点显示时避免重复，但保留补充状态，防止短暂查看被官方立即标为已读。
+      if (!turn?.unread || nativeUnread(row)) {
         clear(row);
         continue;
       }
@@ -191,6 +200,23 @@ export function installRendererSidebarUnread(options: {
         entry.dot.setAttribute("aria-label", label);
       }
     }
+    // 仅连续前台阅读计时；切换会话、失焦或新回合都会重新开始。
+    if (reading?.turn !== readingTurn) {
+      if (readTimer !== null) {
+        clearTimeout(readTimer);
+        readTimer = null;
+      }
+      reading = readingTurn ? { turn: readingTurn, since: now } : null;
+    }
+    if (reading && readTimer === null) {
+      readTimer = setTimeout(
+        () => {
+          readTimer = null;
+          schedule();
+        },
+        Math.max(0, READ_DWELL_MS - (now - reading.since)),
+      );
+    }
   }
 
   const observer = new MutationObserver((records) => {
@@ -204,6 +230,7 @@ export function installRendererSidebarUnread(options: {
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE, ACTIVE],
   });
   window.addEventListener("focus", schedule);
+  window.addEventListener("blur", schedule);
   document.addEventListener("visibilitychange", schedule);
   schedule();
   return {
@@ -212,7 +239,12 @@ export function installRendererSidebarUnread(options: {
       disposed = true;
       observer.disconnect();
       window.removeEventListener("focus", schedule);
+      window.removeEventListener("blur", schedule);
       document.removeEventListener("visibilitychange", schedule);
+      if (readTimer !== null) {
+        clearTimeout(readTimer);
+      }
+      reading = null;
       for (const state of hosts.values()) state.unsubscribe?.();
       for (const row of mounted.keys()) clear(row);
       hosts.clear();

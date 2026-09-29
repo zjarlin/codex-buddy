@@ -521,6 +521,7 @@ describe("Renderer fixed Model request client", () => {
       "pullProjectSyncGit",
       "pushGit",
       "pushProjectSyncGit",
+      "readThreadActivity",
       "readUpdateStatus",
       "readWorkspaceFile",
       "refreshCodexAccounts",
@@ -935,6 +936,23 @@ describe("Renderer fixed Model request client", () => {
     expect(() => client?.subscribeThreadUsage?.(() => undefined)).toThrow(
       "Renderer Usage notification callback is unavailable",
     );
+  });
+
+  it("reads official Thread activity without loading turns", async () => {
+    const sendRequest = vi.fn()
+      .mockResolvedValueOnce({ thread: { status: { type: "active" } } })
+      .mockResolvedValueOnce({ thread: { status: { type: "idle" } } })
+      .mockResolvedValueOnce({ thread: {} });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client?.readThreadActivity) throw new Error("Thread activity reader was not created");
+
+    await expect(client.readThreadActivity("thread-1")).resolves.toBe(true);
+    await expect(client.readThreadActivity("thread-1")).resolves.toBe(false);
+    await expect(client.readThreadActivity("thread-1")).rejects.toThrow("unavailable");
+    expect(sendRequest).toHaveBeenCalledWith("thread/read", {
+      threadId: "thread-1",
+      includeTurns: false,
+    });
   });
 
   it("rejects a Thread inspection that leaks Native identity", async () => {

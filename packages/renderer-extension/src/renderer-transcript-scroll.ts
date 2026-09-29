@@ -33,7 +33,13 @@ export function installTranscriptAutoScroll(ownerDocument: Document): () => void
       });
     };
     const resize = new ResizeObserver(schedule);
+    const contentMutations = new MutationObserver(schedule);
     resize.observe(scroller);
+    contentMutations.observe(scroller, {
+      childList: true,
+      characterData: true,
+      subtree: true,
+    });
     const refresh = (): void => {
       const next = scroller.firstElementChild;
       if (content !== next) {
@@ -110,6 +116,7 @@ export function installTranscriptAutoScroll(ownerDocument: Document): () => void
       resume,
       dispose() {
         resize.disconnect();
+        contentMutations.disconnect();
         if (scrollFrame) ownerWindow.cancelAnimationFrame(scrollFrame);
         scroller.removeEventListener("scroll", onScroll);
         scroller.removeEventListener("wheel", onWheel);
@@ -134,13 +141,25 @@ export function installTranscriptAutoScroll(ownerDocument: Document): () => void
       else bindings.get(scroller)?.refresh();
     }
   };
-  const mutations = new MutationObserver(() => {
-    if (!frame && !disposed) frame = ownerWindow.requestAnimationFrame(reconcile);
+  const mutations = new MutationObserver((records) => {
+    for (const record of records) {
+      const target = record.target instanceof Element ? record.target : record.target.parentElement;
+      const scroller = target?.closest<HTMLElement>(SCROLLER);
+      if (scroller && bindings.has(scroller)) {
+        if (record.target === scroller) bindings.get(scroller)?.refresh();
+        continue;
+      }
+      const changed = [...record.addedNodes, ...record.removedNodes].some(
+        (node) =>
+          node instanceof Element &&
+          (node.matches(SCROLLER) || node.querySelector(SCROLLER) !== null),
+      );
+      if (changed && !frame && !disposed) frame = ownerWindow.requestAnimationFrame(reconcile);
+    }
   });
   mutations.observe(ownerDocument.documentElement, {
     childList: true,
     subtree: true,
-    characterData: true,
   });
   const onSubmission = (event: Event): void => {
     const composerId = event instanceof CustomEvent ? event.detail?.composerId : null;

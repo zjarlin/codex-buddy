@@ -1,5 +1,6 @@
 import type { GitWorkflowSnapshot, GitWorkflowParams } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
+import { createVisiblePoll } from "./renderer-visible-poll.js";
 
 interface Client {
   inspectGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
@@ -44,6 +45,7 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
   let generation = 0;
   const requests = new WeakMap<Client, Set<string>>();
   let reading = false;
+  let rendered = "";
 
   const pending = (): boolean =>
     Boolean(context && requests.get(context.client)?.has(context.threadId));
@@ -53,6 +55,15 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
       snapshot?.phase === "starting" ||
       snapshot?.phase === "running" ||
       snapshot?.phase === "waiting";
+    const signature = JSON.stringify([
+      Boolean(context),
+      busy,
+      snapshot?.workspace,
+      snapshot?.phase,
+      snapshot?.message,
+    ]);
+    if (rendered === signature) return;
+    rendered = signature;
     button.disabled = !context || busy || (snapshot !== null && snapshot.workspace === null);
     button.setAttribute("aria-busy", String(busy));
     status.textContent = snapshot?.message ?? "全部任务结束后自动推送";
@@ -69,6 +80,7 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
       reading = false;
     }
     context = next;
+    poll.setActive(Boolean(next));
     if (!next) {
       root.remove();
       return;
@@ -77,7 +89,9 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
     render();
   };
   const refresh = async (): Promise<void> => {
+    if (disposed) return;
     refreshContext();
+    if (document.hidden) return;
     const request = context;
     const version = generation;
     if (!request || reading || pending()) return;
@@ -87,6 +101,7 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
       if (!disposed && generation === version) snapshot = value;
     } catch (error) {
       if (!disposed && generation === version) {
+        rendered = "";
         status.textContent = error instanceof Error ? error.message : String(error);
         status.dataset.error = "true";
       }
@@ -133,14 +148,14 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
         }
       });
   });
-  const timer = window.setInterval(() => void refresh(), 1500);
+  const poll = createVisiblePoll(document, 1500, () => void refresh());
   void refresh();
   return {
     refreshContext,
     dispose() {
       disposed = true;
       generation++;
-      window.clearInterval(timer);
+      poll.dispose();
       root.remove();
     },
   };

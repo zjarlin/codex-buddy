@@ -49,6 +49,7 @@ vi.mock("../src/settings/trigger.js", () => ({
 
 import { installRendererSettingsLifecycle } from "../src/renderer-settings-lifecycle.js";
 import { createDefaultRendererSettingsPages } from "../src/settings/pages.js";
+import { installSystemOneModelHeaderControl } from "../src/settings/trigger.js";
 
 function failedUpdateCheck(): UpdateCheckResult {
   return {
@@ -80,11 +81,17 @@ describe("Renderer Settings lifecycle", () => {
     } as unknown as Window;
 
     const lifecycle = installRendererSettingsLifecycle(ownerWindow, { onLocaleChange });
+    const previousHeader = vi.mocked(installSystemOneModelHeaderControl).mock.results.at(-1)?.value;
     await Promise.resolve();
     await Promise.resolve();
 
     expect(onLocaleChange).toHaveBeenCalledWith("en");
+    expect(previousHeader.dispose).toHaveBeenCalledTimes(1);
+    const currentHeader = vi.mocked(installSystemOneModelHeaderControl).mock.results.at(-1)?.value;
+    expect(currentHeader).not.toBe(previousHeader);
+    expect(currentHeader.dispose).not.toHaveBeenCalled();
     lifecycle.dispose();
+    expect(currentHeader.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("does not bypass update backoff when DOM reconciliation refreshes repeatedly", async () => {

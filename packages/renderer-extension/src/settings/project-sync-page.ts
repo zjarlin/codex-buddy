@@ -12,6 +12,7 @@ import type {
 
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "./core.js";
 import { createRendererSettingsIcon } from "./icons.js";
+import { createVisiblePoll } from "../renderer-visible-poll.js";
 import type { RendererSettingsMessages } from "./localization.js";
 
 export interface ProjectSyncClient {
@@ -346,17 +347,23 @@ export function createProjectSyncPage(
         () => void perform((client) => client.pushProjectSyncGit()),
         { signal },
       );
-      const poll = window.setInterval(() => {
+      let polling = false;
+      const poll = createVisiblePoll(document, 2000, () => {
         const client = getClient();
-        if (busy || signal.aborted || !client) return;
+        if (busy || polling || signal.aborted || !client) return;
+        polling = true;
         void client
           .inspectProjectSync()
           .then((snapshot) => {
             if (!signal.aborted) render(snapshot);
           })
-          .catch(() => undefined);
-      }, 2000);
-      signal.addEventListener("abort", () => window.clearInterval(poll), { once: true });
+          .catch(() => undefined)
+          .finally(() => {
+            polling = false;
+          });
+      });
+      poll.setActive(true);
+      signal.addEventListener("abort", () => poll.dispose(), { once: true });
       void perform((client) => client.inspectProjectSync());
       return undefined;
     },

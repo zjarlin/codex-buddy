@@ -7,6 +7,7 @@ import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import { hostThreadIdSchema, type ThreadTerminalDescriptor } from "@codexhost/shared-contracts";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import {
   getSharedThreadTerminalPreferenceStore,
   type ThreadTerminalPreferenceStore,
@@ -426,9 +427,9 @@ export function installRendererThreadActions(options: {
   const scan = (): void => {
     scheduled = false;
     if (disposed) return;
-    const rows = [...document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)];
+    const rows = new Set(document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR));
     for (const row of [...mounted.keys()]) {
-      if (!rows.includes(row)) clear(row);
+      if (!rows.has(row)) clear(row);
     }
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
@@ -480,8 +481,10 @@ export function installRendererThreadActions(options: {
         mounted.set(row, entry);
       }
       const label = menuLabel(options.getLocale());
-      entry.trigger.title = label;
-      entry.trigger.setAttribute("aria-label", label);
+      if (entry.trigger.title !== label) {
+        entry.trigger.title = label;
+        entry.trigger.setAttribute("aria-label", label);
+      }
     }
   };
 
@@ -506,7 +509,11 @@ export function installRendererThreadActions(options: {
   };
   const onWindowChange = (): void => closeMenu();
 
-  const observer = new MutationObserver(schedule);
+  const observer = new MutationObserver((records) => {
+    if (records.some((record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR))) {
+      schedule();
+    }
+  });
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,

@@ -253,6 +253,91 @@ test("a native Codex draft hides the external Harness command button", async ({ 
   await expect(root).toBeHidden();
 });
 
+test("streamed transcript text does not rescan the Composer", async ({ page }) => {
+  await page.addScriptTag({ content: browserBundle });
+  await expect(
+    page.locator('[data-codexhost-model-control] > button[aria-haspopup="menu"]'),
+  ).toContainText("Startup Model");
+  const scans = await page.evaluate(async () => {
+    const transcript = document.createElement("div");
+    transcript.setAttribute("data-app-action-timeline-scroll", "");
+    const text = document.createTextNode("Starting answer");
+    transcript.append(text);
+    document.body.append(transcript);
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    const original = document.querySelectorAll;
+    let count = 0;
+    document.querySelectorAll = function (selectors: string) {
+      if (selectors === 'textarea, [contenteditable="true"], [role="textbox"]') count += 1;
+      return original.call(this, selectors);
+    };
+    for (let index = 0; index < 50; index += 1) text.data += " streamed text";
+    for (let index = 0; index < 50; index += 1) transcript.append(" streamed text");
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    document.querySelectorAll = original;
+    return count;
+  });
+  expect(scans).toBe(0);
+});
+
+test("streaming elements in a long transcript leave unrelated injection surfaces idle", async ({
+  page,
+}, testInfo) => {
+  await page.addScriptTag({ content: browserBundle });
+  await expect(
+    page.locator('[data-codexhost-model-control] > button[aria-haspopup="menu"]'),
+  ).toContainText("Startup Model");
+  const counts = await page.evaluate(async () => {
+    const history = document.createElement("section");
+    history.innerHTML =
+      '<div data-turn-key="history"><pre><code>Historical output</code></pre></div>'.repeat(2000);
+    const output = history.lastElementChild as HTMLElement;
+    document.body.append(history);
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    const counts: Record<string, number> = {};
+    const queryAll = document.querySelectorAll;
+    const queryOne = document.querySelector;
+    document.querySelectorAll = function (selector: string) {
+      counts[selector] = (counts[selector] ?? 0) + 1;
+      return queryAll.call(this, selector);
+    };
+    document.querySelector = function (selector: string) {
+      counts[selector] = (counts[selector] ?? 0) + 1;
+      return queryOne.call(this, selector);
+    };
+    try {
+      for (let index = 0; index < 30; index += 1) {
+        const chunk = document.createElement("pre");
+        chunk.innerHTML =
+          '<code><span>Streamed tool output</span></code><button aria-label="Copy output">Copy</button>';
+        output.append(chunk);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      );
+    } finally {
+      document.querySelectorAll = queryAll;
+      document.querySelector = queryOne;
+    }
+    return counts;
+  });
+  await testInfo.attach("streaming-document-queries", {
+    body: JSON.stringify(counts, null, 2),
+    contentType: "application/json",
+  });
+  for (const selector of [
+    'textarea, [contenteditable="true"], [role="textbox"]',
+    "[data-app-action-sidebar-thread-row]",
+    "button[aria-label]",
+    '[role="menuitem"]',
+  ])
+    expect(counts[selector] ?? 0, selector).toBe(0);
+});
+
 test("Auto Router follows the draft Harness and stops polling for external Harnesses", async ({
   page,
 }, testInfo) => {

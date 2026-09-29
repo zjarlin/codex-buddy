@@ -1,3 +1,4 @@
+import { createVisiblePoll } from "./renderer-visible-poll.js";
 import type {
   ProjectSyncAddParams,
   ProjectSyncBindParams,
@@ -460,20 +461,22 @@ export function createRendererProjectSyncPanel(options: {
   );
   refresh.addEventListener("click", () => void inspect(), listenerOptions);
 
-  const poll = ownerWindow.setInterval(() => void inspect(true), 2000);
-  options.signal?.addEventListener("abort", () => ownerWindow.clearInterval(poll), { once: true });
+  const poll = createVisiblePoll(document, 2000, () => void inspect(true));
+  options.signal?.addEventListener("abort", () => poll.dispose(), { once: true });
 
   return {
     panel,
     activate() {
       if (disposed || active) return;
       active = true;
+      poll.setActive(true);
       panel.hidden = false;
       setNotice("正在读取设备状态…");
       void inspect();
     },
     deactivate() {
       active = false;
+      poll.setActive(false);
       panel.hidden = true;
     },
     refresh() {
@@ -484,7 +487,7 @@ export function createRendererProjectSyncPanel(options: {
       disposed = true;
       active = false;
       generation += 1;
-      ownerWindow.clearInterval(poll);
+      poll.dispose();
       panel.remove();
     },
   };

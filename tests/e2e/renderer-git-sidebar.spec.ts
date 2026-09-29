@@ -293,6 +293,40 @@ async function setup(page: Page): Promise<void> {
   await page.evaluate(() => Reflect.get(globalThis, "setupGitSidebar")());
 }
 
+test("tracks native terminal replacement and label changes without relying on message updates", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const terminal = page.locator("[data-codexhost-git-sidebar-terminal]");
+  await expect(terminal).toHaveAttribute("title", "终端");
+  await page
+    .locator('body > button[aria-label="切换底部面板显示"]')
+    .evaluate((button) => button.remove());
+  await expect(terminal).toHaveAttribute("title", "终端（不可用）");
+  await page.evaluate(() => {
+    const replacement = document.createElement("button");
+    replacement.id = "replacement-terminal";
+    replacement.setAttribute("aria-label", "Toggle bottom panel");
+    replacement.setAttribute("aria-pressed", "true");
+    document.body.append(replacement);
+  });
+  await expect(terminal).toHaveAttribute("title", "终端");
+  await expect(terminal).toHaveAttribute("aria-pressed", "true");
+  await page
+    .locator("#replacement-terminal")
+    .evaluate((button) => button.setAttribute("aria-label", "Copy output"));
+  await expect(terminal).toHaveAttribute("title", "终端（不可用）");
+  await expect(terminal).toHaveAttribute("aria-pressed", "false");
+  await page
+    .locator("#replacement-terminal")
+    .evaluate((button) => button.setAttribute("aria-label", "切换底部面板显示"));
+  await expect(terminal).toHaveAttribute("title", "终端");
+  await expect(terminal).toHaveAttribute("aria-pressed", "true");
+});
+
 test("forwards files and terminal to the official UI and keeps project sync available", async ({
   page,
 }) => {

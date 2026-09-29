@@ -12,8 +12,12 @@ import {
 import {
   ProjectGitWorkflow,
   type ProjectGitWorkflowGroup,
-  projectGitWorkflowPrompt,
+  projectGitWorkflowInput,
 } from "./project-git-workflow.js";
+import {
+  readProjectGitRepositories,
+  type ProjectGitRepository,
+} from "./project-git-repositories.js";
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
 import { recentMessages } from "./buddy/history.js";
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
@@ -719,9 +723,12 @@ export class AppServerHost {
       project: async (threadId) =>
         this.#gitWorkspace.root(await this.#gitWorkspaceForThread(threadId)),
       activeThreads: () => this.#projectActiveThreads(),
-      status: (cwd) => this.#gitWorkspace.status(cwd),
-      start: (threadId, cwd, beforeStart) =>
-        this.#startProjectGitWorkflow(threadId, cwd, beforeStart),
+      repositories: (cwd) =>
+        readProjectGitRepositories(cwd, this.#gitRepositoryLinks, this.#gitWorkspace),
+      linkedRepositories: async (cwd) =>
+        (await this.#gitRepositoryLinks.list(cwd)).repositories.map(({ path }) => path),
+      start: (threadId, cwd, beforeStart, repositories) =>
+        this.#startProjectGitWorkflow(threadId, cwd, beforeStart, repositories),
       diagnose: (error) => this.#diagnose(error),
       changed: () => this.#signalActiveWorkChanged(false),
       automatic: () => (this.#options.environment ?? process.env).CODEXHOST_GIT_AUTO_PUSH !== "0",
@@ -3071,22 +3078,23 @@ export class AppServerHost {
     threadId: string,
     cwd: string,
     beforeStart: () => Promise<void>,
+    repositories: readonly ProjectGitRepository[],
   ): Promise<string> {
+    const prompt = projectGitWorkflowInput(repositories);
     if (await this.#buddy?.privateMode()) throw new Error("隐私模式下不自动推送代码。");
     const resolution = await this.#resolveExternalThread(threadId);
     if (resolution.kind === "error") throw new Error(resolution.error.message);
     if (resolution.kind === "external") {
       await beforeStart();
       const turnId = randomUUID();
-      await this.#startDelegatedExternalTurn(resolution.thread, projectGitWorkflowPrompt, turnId);
+      await this.#startDelegatedExternalTurn(resolution.thread, prompt, turnId);
       return turnId;
     }
-    if (this.#buddy)
-      return this.#buddy.startGitWorkflow(threadId, cwd, projectGitWorkflowPrompt, beforeStart);
+    if (this.#buddy) return this.#buddy.startGitWorkflow(threadId, cwd, prompt, beforeStart);
     await beforeStart();
     const result = await this.#sendOfficialDelegationThread({
       threadId,
-      message: projectGitWorkflowPrompt,
+      message: prompt,
     });
     return result.turnId;
   }

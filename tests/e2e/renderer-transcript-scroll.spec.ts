@@ -84,6 +84,12 @@ for (const reverse of [false, true]) {
       node.scrollTop = reverse ? 0 : node.scrollHeight;
     }, reverse);
     await expect.poll(gap).toBeLessThanOrEqual(1);
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+        ),
+    );
     await page.evaluate(() => Reflect.get(globalThis, "grow")());
     await expect.poll(gap).toBeLessThanOrEqual(1);
 
@@ -146,4 +152,40 @@ test("a replacement conversation gets its own scroll state", async ({ page }) =>
   );
   await page.evaluate(() => Reflect.get(globalThis, "grow")());
   await expect.poll(gap).toBeLessThanOrEqual(1);
+});
+
+test("streamed text does not rescan the whole document", async ({ page }) => {
+  await page.setContent(`<style>
+    [data-app-action-timeline-scroll] { height: 120px; overflow: auto; }
+    #answer { white-space: pre-wrap; line-height: 20px; }
+  </style><div data-app-action-timeline-scroll><div>Earlier turn</div><div><pre id="answer">Start</pre></div></div>`);
+  await page.addScriptTag({ content: bundle });
+  // 等待初始尺寸通知，确保后面的跟随确实由第二个子树的流式文本触发。
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  const scans = await page.evaluate(async () => {
+    const original = document.querySelectorAll;
+    let count = 0;
+    document.querySelectorAll = function (selectors: string) {
+      if (selectors === "[data-app-action-timeline-scroll]") count += 1;
+      return original.call(this, selectors);
+    };
+    const answer = document.querySelector("#answer") as HTMLElement;
+    const text = answer.firstChild as Text;
+    for (let index = 0; index < 100; index += 1) text.data += "Streamed line\n";
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    document.querySelectorAll = original;
+    return count;
+  });
+  expect(scans).toBe(0);
+  const gap = await page
+    .locator("[data-app-action-timeline-scroll]")
+    .evaluate((node) => node.scrollHeight - node.clientHeight - node.scrollTop);
+  expect(gap).toBeLessThanOrEqual(1);
 });

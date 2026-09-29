@@ -2,6 +2,8 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import { createVisiblePoll } from "../renderer-visible-poll.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ID_ATTRIBUTE,
@@ -88,9 +90,9 @@ export function installSidebarContinuation(options: {
   const decorate = (row: HTMLElement, running: boolean, thread: InterruptedThread | undefined) => {
     row.toggleAttribute(runningMarker, running);
     row.toggleAttribute(recoverableMarker, !running && thread !== undefined);
-    if (running) row.setAttribute(stateMarker, "running");
-    else if (thread) row.setAttribute(stateMarker, thread.status);
-    else row.removeAttribute(stateMarker);
+    const state = running ? "running" : thread?.status;
+    if (state && row.getAttribute(stateMarker) !== state) row.setAttribute(stateMarker, state);
+    else if (!state) row.removeAttribute(stateMarker);
   };
   const schedule = () => {
     if (disposed || scheduled) return;
@@ -98,7 +100,13 @@ export function installSidebarContinuation(options: {
     queueMicrotask(scan);
   };
   const load = async (hostId: string, state: NonNullable<ReturnType<typeof hosts.get>>) => {
-    if (state.pending || !state.client.buddyStatus || !state.client.buddyInterrupted) return;
+    if (
+      document.hidden ||
+      state.pending ||
+      !state.client.buddyStatus ||
+      !state.client.buddyInterrupted
+    )
+      return;
     state.pending = true;
     state.updatedAt = Date.now();
     try {
@@ -147,9 +155,9 @@ export function installSidebarContinuation(options: {
     scheduled = false;
     if (disposed) return;
     const visibleHosts = new Set<string>();
-    const rows = [...document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)];
+    const rows = new Set(document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR));
     for (const row of mounted.keys()) {
-      if (!rows.includes(row)) clearRow(row);
+      if (!rows.has(row)) clearRow(row);
     }
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
@@ -241,7 +249,7 @@ export function installSidebarContinuation(options: {
             : thread.status === "cancelled"
               ? "Conversation cancelled. Click to resume"
               : "Conversation interrupted. Click to resume";
-      entry.button.disabled = busy;
+      if (entry.button.disabled !== busy) entry.button.disabled = busy;
       if (entry.button.title !== statusLabel) {
         entry.button.title = statusLabel;
         entry.button.setAttribute("aria-label", statusLabel);
@@ -250,19 +258,27 @@ export function installSidebarContinuation(options: {
     for (const hostId of hosts.keys()) {
       if (!visibleHosts.has(hostId)) hosts.delete(hostId);
     }
+    poll.setActive(hosts.size > 0);
   }
   const refresh = () => {
     for (const state of hosts.values()) state.updatedAt = 0;
     schedule();
   };
-  const observer = new MutationObserver(schedule);
+  const observer = new MutationObserver((records) => {
+    if (records.some((record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR))) {
+      schedule();
+    }
+  });
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     attributes: true,
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE],
   });
-  const timer = window.setInterval(schedule, 1500);
+  // DOM 变化负责重绑行；状态只按原有 15 秒有效期刷新，不再每 1.5 秒全量扫描。
+  const poll = createVisiblePoll(document, 15_000, () => {
+    for (const [hostId, state] of hosts) void load(hostId, state);
+  });
   window.addEventListener("focus", refresh);
   schedule();
   return {
@@ -270,7 +286,7 @@ export function installSidebarContinuation(options: {
     dispose() {
       disposed = true;
       observer.disconnect();
-      window.clearInterval(timer);
+      poll.dispose();
       window.removeEventListener("focus", refresh);
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
         clearRow(row);

@@ -27,6 +27,7 @@ const { outputFiles } = await build({
       globalThis.buddyThreadId = "fixture";
       globalThis.buddyContextEnabled = true;
       globalThis.buddyStatusPending = false;
+      globalThis.buddyStatusRequests = 0;
       globalThis.buddyInterrupted = [
         { threadId: "stalled", turnId: "interrupted-turn", title: "网络中断的会话", status: "interrupted", owner: "codex" }
       ];
@@ -34,6 +35,7 @@ const { outputFiles } = await build({
       globalThis.buddyContinueFailure = true;
       const client = {
         buddyStatus: async () => {
+          globalThis.buddyStatusRequests += 1;
           if (globalThis.buddyStatusPending) {
             await new Promise((resolve) => { globalThis.resolveBuddyStatus = resolve; });
           }
@@ -684,6 +686,78 @@ for (const colorScheme of ["light", "dark"] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+test("unchanged polling and other chats preserve routing controls and unsaved input", async ({
+  page,
+}) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  await page.locator("[data-buddy-router] summary").click();
+  const input = page.getByLabel("JEV 网关地址", { exact: true });
+  await input.fill("https://unsaved.example/v1");
+  await input.focus();
+  const result = await page.evaluate(async () => {
+    const input = document.querySelector('input[aria-label="JEV 网关地址"]');
+    const summary = document.querySelector("[data-buddy-router] summary");
+    if (!input || !summary) throw new Error("Routing controls are missing");
+    let mutations = 0;
+    const observer = new MutationObserver((records) => {
+      mutations += records.length;
+    });
+    observer.observe(summary, { childList: true, subtree: true, attributes: true });
+    const snapshot = Reflect.get(globalThis, "buddySnapshot");
+    for (let index = 0; index < 30; index += 1) {
+      snapshot.decisions = [
+        { threadId: "another-chat", phase: "executing", reason: String(index) },
+      ];
+      await Reflect.get(globalThis, "buddyControl").refresh();
+    }
+    observer.disconnect();
+    return {
+      mutations,
+      sameInput: input === document.querySelector('input[aria-label="JEV 网关地址"]'),
+    };
+  });
+  expect(result).toEqual({ mutations: 0, sameInput: true });
+  await expect(input).toHaveValue("https://unsaved.example/v1");
+  await expect(input).toBeFocused();
+  await page.getByRole("switch", { name: /Auto Router/ }).click();
+  await expect(page.getByRole("switch", { name: /Auto Router/ })).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+});
+
+test("a control installed while hidden resumes polling only with an active context", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.setContent("<body></body>");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "fixtureHidden", true);
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => Reflect.get(globalThis, "fixtureHidden"),
+    });
+  });
+  await page.addScriptTag({ content: browserBundle });
+  await page.clock.runFor(3600);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(0);
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "fixtureHidden", false);
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(1);
+  await page.clock.runFor(1200);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(2);
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "buddyContextEnabled", false);
+    Reflect.get(globalThis, "buddyControl").refreshContext();
+  });
+  await page.clock.runFor(3600);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(2);
+  await expect(page.locator("[data-buddy-router]")).toHaveCount(0);
+});
 
 test("saves and clears the JEV API key without ever showing the stored value", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });

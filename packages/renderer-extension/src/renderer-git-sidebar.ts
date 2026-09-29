@@ -14,6 +14,7 @@ import type {
   HostThreadId,
 } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { RendererGitCache } from "./renderer-git-cache.js";
 import { openNativeGitReview, runNativeWorkspaceCommand } from "./renderer-native-workspace.js";
 import {
@@ -245,12 +246,19 @@ function gitChangeStatus(
   return { code: code === " " ? "M" : code, label: labels[code] ?? "已修改" };
 }
 
-function officialPanelButton(document: Document, panel: OfficialPanel): HTMLButtonElement | null {
+function matchesOfficialPanel(button: Element, panel: OfficialPanel): boolean {
+  const label = button.getAttribute("aria-label")?.trim() ?? "";
   return (
-    [...document.querySelectorAll<HTMLButtonElement>("button[aria-label]")].find((button) => {
-      const label = button.getAttribute("aria-label")?.trim() ?? "";
-      return OFFICIAL_PANEL_LABELS[panel].some((pattern) => pattern.test(label));
-    }) ?? null
+    button.matches("button") && OFFICIAL_PANEL_LABELS[panel].some((pattern) => pattern.test(label))
+  );
+}
+
+function officialPanelButton(root: ParentNode, panel: OfficialPanel): HTMLButtonElement | null {
+  if (root instanceof HTMLButtonElement && matchesOfficialPanel(root, panel)) return root;
+  return (
+    [...root.querySelectorAll<HTMLButtonElement>("button[aria-label]")].find((button) =>
+      matchesOfficialPanel(button, panel),
+    ) ?? null
   );
 }
 
@@ -672,17 +680,21 @@ export function installRendererGitSidebar(options: {
     return true;
   };
 
+  let nativeTerminal: HTMLButtonElement | null = null;
   const syncOfficialPanelState = (): void => {
     for (const [panel, button] of [
       ["terminal", terminal],
       ["files", files],
     ] as const) {
       const target = officialPanelButton(document, panel);
-      button.setAttribute("aria-pressed", String(target?.getAttribute("aria-pressed") === "true"));
-      button.title =
-        target || panel === "files"
-          ? (button.getAttribute("aria-label") ?? "")
-          : `${button.getAttribute("aria-label") ?? ""}（不可用）`;
+      if (panel === "terminal") nativeTerminal = target;
+      const pressed = String(target?.getAttribute("aria-pressed") === "true");
+      if (button.getAttribute("aria-pressed") !== pressed)
+        button.setAttribute("aria-pressed", pressed);
+      const title = target || panel === "files"
+        ? (button.getAttribute("aria-label") ?? "")
+        : `${button.getAttribute("aria-label") ?? ""}（不可用）`;
+      if (button.title !== title) button.title = title;
     }
   };
 
@@ -1761,6 +1773,12 @@ export function installRendererGitSidebar(options: {
 
   const mount = (): void => {
     if (disposed) return;
+    if (
+      anchor?.container.isConnected &&
+      anchor.content.parentElement === anchor.container &&
+      root.parentElement === anchor.container
+    )
+      return;
     const next = sidebarAnchor(document);
     if (!next) {
       cancelReview();
@@ -1787,9 +1805,32 @@ export function installRendererGitSidebar(options: {
     render();
   };
 
-  const observer = new MutationObserver(() => {
-    mount();
-    syncOfficialPanelState();
+  const observer = new MutationObserver((records) => {
+    if (
+      records.some((record) =>
+        mutationAffectsElements(record, `${APP_SIDEBAR_SELECTOR},${SIDEBAR_THREAD_ROW_SELECTOR}`),
+      )
+    ) {
+      mount();
+    }
+    // 消息中的复制、工具按钮不影响原生终端；只在候选按钮或已有锚点变化时重新定位。
+    const terminalChanged = records.some((record) => {
+      if (record.type === "attributes") {
+        return (
+          record.target === nativeTerminal ||
+          (record.target instanceof Element && matchesOfficialPanel(record.target, "terminal"))
+        );
+      }
+      return [...record.addedNodes, ...record.removedNodes].some(
+        (node) =>
+          node instanceof Element &&
+          ((nativeTerminal !== null && node.contains(nativeTerminal)) ||
+            officialPanelButton(node, "terminal")),
+      );
+    });
+    if (terminalChanged) {
+      syncOfficialPanelState();
+    }
   });
   observer.observe(document.documentElement, {
     childList: true,

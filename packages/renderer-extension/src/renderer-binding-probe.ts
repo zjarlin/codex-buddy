@@ -24,6 +24,7 @@ import {
   type CodexhostError,
   type ModelAvailabilityParams,
   type ModelAvailabilitySnapshot,
+  hostThreadIdSchema,
 } from "@codexhost/shared-contracts";
 
 import {
@@ -111,6 +112,7 @@ import {
 } from "./renderer-delegation-mention.js";
 import { RENDERER_AGENT_LABELS } from "./renderer-agent-icon.js";
 import { openRendererThread } from "./renderer-fork-control.js";
+import { insertNativeTextAtSelection } from "./renderer-native-composer-controller.js";
 import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
@@ -731,6 +733,8 @@ export function installRendererBindingProbe(
     ...(options.defaultAgent ? { defaultAgent: options.defaultAgent } : {}),
   });
   const mountedByComposer = new Map<Element, MountedComposer>();
+  const replayingSubmissions = new WeakSet<Element>();
+  const sessionRoutePending = new WeakMap<Element, Promise<void>>();
   let buddyControl: ReturnType<typeof installBuddyControl> | null = null;
   const catalogRequests = new WeakMap<MountedComposer, MountedCatalogRequest>();
   const pendingReplacements = new Map<Element, PendingComposerReplacement>();
@@ -787,9 +791,6 @@ export function installRendererBindingProbe(
   const projectActions = installRendererProjectActions({
     getClient: () => modelClientForHost("local"),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
-  });
-  const projectTabs = installProjectTabs({
-    getLocale: () => settingsLifecycle.locale,
   });
   const activeGitContext = () => {
     const mainSurface = document.querySelector('[data-app-shell-main-surface="default"]');
@@ -871,6 +872,9 @@ export function installRendererBindingProbe(
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
       gitSidebar.refresh();
     },
+  });
+  const projectTabs = installProjectTabs({
+    getLocale: () => settingsLifecycle.locale,
   });
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
@@ -1053,6 +1057,99 @@ export function installRendererBindingProbe(
       }
     }
   }
+
+  const mountedConversation = (hostId: string, threadId: string): MountedComposer | null => {
+    for (const mounted of mountedByComposer.values()) {
+      if (
+        mounted.hostId === hostId &&
+        threadIdFromComposerModelTarget(mounted.modelTarget) === threadId &&
+        mounted.composer.isConnected
+      ) {
+        return mounted;
+      }
+    }
+    return null;
+  };
+
+  const waitForMountedConversation = (
+    hostId: string,
+    threadId: string,
+    timeoutMs = 5_000,
+  ): Promise<MountedComposer> =>
+    new Promise((resolve, reject) => {
+      const started = Date.now();
+      const poll = (): void => {
+        const mounted = mountedConversation(hostId, threadId);
+        if (mounted) {
+          resolve(mounted);
+          return;
+        }
+        if (Date.now() - started >= timeoutMs) {
+          reject(new Error("Target Codex Thread composer did not appear"));
+          return;
+        }
+        window.setTimeout(poll, 50);
+      };
+      poll();
+    });
+
+  const replayDraftSubmission = (mounted: MountedComposer): void => {
+    const button = refreshSendButton(mounted.control);
+    if (!button) return;
+    replayingSubmissions.add(mounted.composer);
+    try {
+      button.click();
+    } finally {
+      replayingSubmissions.delete(mounted.composer);
+    }
+  };
+
+  const autoRouteDraftSubmission = (
+    mounted: MountedComposer,
+    message: string,
+  ): Promise<void> => {
+    const existing = sessionRoutePending.get(mounted.composer);
+    if (existing) return existing;
+    const operation = (async (): Promise<void> => {
+      const hostId = mounted.hostId ?? activeModelHostId();
+      const client = hostId ? modelClientForHost(hostId) : null;
+      if (!hostId || !client?.routeSession) {
+        replayDraftSubmission(mounted);
+        return;
+      }
+      try {
+        const result = await client.routeSession({
+          message,
+          ...(draftWorkspaces.get(hostId) ? { cwd: draftWorkspaces.get(hostId) } : {}),
+        });
+        if (!result.routed || !result.threadId) {
+          replayDraftSubmission(mounted);
+          return;
+        }
+        await openRendererThread(hostThreadIdSchema.parse(result.threadId), { hostId });
+        const target = await waitForMountedConversation(hostId, result.threadId);
+        const editor = target.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+        if (!editor || editor.textContent?.trim()) {
+          throw new Error("Target Codex Thread composer is not empty");
+        }
+        if (!insertNativeTextAtSelection(editor, () => message)) {
+          throw new Error("Could not write the routed message into the target composer");
+        }
+        replayDraftSubmission(target);
+      } catch (error) {
+        console.warn("codexhost session routing failed; preserving the draft", error);
+        replayDraftSubmission(mounted);
+      }
+    })().finally(() => sessionRoutePending.delete(mounted.composer));
+    sessionRoutePending.set(mounted.composer, operation);
+    return operation;
+  };
+
+  const shouldAutoRouteDraft = (mounted: MountedComposer): boolean => {
+    if (replayingSubmissions.has(mounted.composer)) return false;
+    if (controller.get(mounted.composer).agent !== "codex") return false;
+    return mounted.modelTarget?.[0] === "default" && !threadIdFromComposerModelTarget(mounted.modelTarget);
+  };
   /**
    * `keepCurrent` refreshes in place (the `#` menu reopening) instead of
    * clearing first, so an open menu never flickers empty.
@@ -2973,6 +3070,14 @@ export function installRendererBindingProbe(
       blockEvent(event);
       return;
     }
+    const mounted = mountedByComposer.get(composer);
+    const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    const message = editor?.textContent?.trim() ?? "";
+    if (mounted && message && shouldAutoRouteDraft(mounted)) {
+      blockEvent(event);
+      void autoRouteDraftSubmission(mounted, message);
+      return;
+    }
     notifySubmission(composer, "submit");
   };
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -2995,6 +3100,13 @@ export function installRendererBindingProbe(
       blockEvent(event);
       return;
     }
+    const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    const message = editor?.textContent?.trim() ?? "";
+    if (mounted && message && shouldAutoRouteDraft(mounted)) {
+      blockEvent(event);
+      void autoRouteDraftSubmission(mounted, message);
+      return;
+    }
     notifySubmission(composer, "enter");
   };
   const onClick = (event: MouseEvent): void => {
@@ -3007,6 +3119,13 @@ export function installRendererBindingProbe(
     if (!composer || !mounted || refreshSendButton(mounted.control) !== button) return;
     if (!prepareComposer(composer)) {
       blockEvent(event);
+      return;
+    }
+    const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    const message = editor?.textContent?.trim() ?? "";
+    if (message && shouldAutoRouteDraft(mounted)) {
+      blockEvent(event);
+      void autoRouteDraftSubmission(mounted, message);
       return;
     }
     notifySubmission(composer, "click");

@@ -15,6 +15,7 @@ import {
   projectGitWorkflowPrompt,
 } from "./project-git-workflow.js";
 import { BUDDY_PRIVATE_TURN_MARKER, BuddyRouter } from "./buddy/router.js";
+import { recentMessages } from "./buddy/history.js";
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { LiveModelCatalog } from "./buddy/live-model-catalog.js";
 import { ModelAvailability } from "./model-availability.js";
@@ -93,6 +94,9 @@ import {
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
+  SESSION_ROUTE_METHOD,
+  sessionRouteParamsSchema,
+  sessionRouteResultSchema,
 } from "@codexhost/shared-contracts";
 import {
   CREDENTIAL_IMPORTS_METHOD,
@@ -1258,6 +1262,10 @@ export class AppServerHost {
       }
       return;
     }
+    if (request.method === SESSION_ROUTE_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleSessionRoute(request));
+      return;
+    }
     if (request.method === MODEL_AVAILABILITY_METHOD) {
       this.#dispatchDesktopRequest(async () => {
         try {
@@ -2290,6 +2298,80 @@ export class AppServerHost {
       return { ...response, result: catalog.list(params) };
     }
     return this.#officialRuntime.request(method, params);
+  }
+
+  async #handleSessionRoute(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = sessionRouteParamsSchema.parse(request.params);
+      if (!this.#buddy || (await this.#buddy.privateMode())) {
+        throw new Error("Session routing requires Auto Router and is unavailable in privacy mode.");
+      }
+      const response = await this.#requestOfficial("thread/list", {
+        limit: 40,
+        archived: false,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+      });
+      if (isRecord(response.error)) {
+        throw new Error(typeof response.error.message === "string" ? response.error.message : "Unable to list Codex Threads");
+      }
+      const page = isRecord(response.result) ? response.result : null;
+      const rows = page && Array.isArray(page.data) ? page.data : [];
+      const candidates = [];
+      for (const row of rows.slice(0, 32)) {
+        if (!isRecord(row) || typeof row.id !== "string" || typeof row.cwd !== "string") continue;
+        if (params.cwd && row.cwd !== params.cwd) continue;
+        const status = isRecord(row.status) ? row.status.type : null;
+        if (status === "active") continue;
+        const recent = await recentMessages(
+          (method, input) => this.#requestOfficial(method, input),
+          row.id,
+        ).catch(() => []);
+        const recentText = recent
+          .map((item) => (typeof item === "string" ? item : JSON.stringify(item)))
+          .join("\n")
+          .slice(-4_000);
+        candidates.push({
+          id: row.id,
+          title:
+            typeof row.title === "string"
+              ? row.title
+              : typeof row.name === "string"
+                ? row.name
+                : null,
+          cwd: row.cwd,
+          recent: recentText,
+        });
+      }
+      const decision = await this.#buddy.chooseSession({
+        message: params.message,
+        candidates,
+      });
+      const result = sessionRouteResultSchema.parse(
+        decision
+          ? {
+              routed: true,
+              threadId: decision.threadId,
+              turnId: null,
+              confidence: decision.confidence,
+              title: decision.title,
+              cwd: decision.cwd,
+              reason: decision.reason,
+            }
+          : {
+              routed: false,
+              threadId: null,
+              turnId: null,
+              confidence: 0,
+              title: null,
+              cwd: null,
+              reason: "System One 对已有会话的把握不足，保留新会话。",
+            },
+      );
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32090, errorMessage(error).slice(0, 20_000)));
+    }
   }
 
   #inspectHarnessAccount(

@@ -1086,6 +1086,11 @@ export function installCurrentRendererAdapter(): {
       }
       return client.buddyCancel(threadId);
     },
+    routeSession: (input: { message: string; cwd?: string | null }) => {
+      const client = currentModelClient();
+      if (!client.routeSession) throw new Error("Session routing unavailable");
+      return client.routeSession(input);
+    },
     currentHostId: () => {
       currentRequestRoute();
       return disposed ? null : (window.__codexhostHostRoutingV1?.hostIdForComposer() ?? null);

@@ -526,6 +526,7 @@ describe("Renderer fixed Model request client", () => {
       "refreshCodexAccounts",
       "rejectProjectSync",
       "removeProjectSyncPeer",
+      "routeSession",
       "runGitWorkflow",
       "selectThreadModel",
       "selectThreadPermissionMode",

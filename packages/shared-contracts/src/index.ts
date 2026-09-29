@@ -94,6 +94,15 @@ export type {
   ThreadArchiveCompletedParams,
   ThreadArchiveCompletedResult,
 } from "./thread-archive.js";
+export {
+  SESSION_ROUTE_METHOD,
+  sessionRouteParamsSchema,
+  sessionRouteResultSchema,
+} from "./session-routing.js";
+export type {
+  SessionRouteParams,
+  SessionRouteResult,
+} from "./session-routing.js";
 export type {
   ThreadTerminalDescriptor,
   ThreadTerminalId,

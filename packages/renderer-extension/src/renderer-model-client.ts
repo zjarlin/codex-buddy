@@ -168,6 +168,11 @@ import {
   buddySnapshotSchema,
   type BuddySnapshot,
   type BuddySettings,
+  SESSION_ROUTE_METHOD,
+  sessionRouteParamsSchema,
+  sessionRouteResultSchema,
+  type SessionRouteParams,
+  type SessionRouteResult,
 } from "@codexhost/shared-contracts";
 import {
   HARNESS_LAUNCH_SETTINGS_GET_METHOD,
@@ -387,6 +392,7 @@ function notificationTarget(manager: RequestManagerCandidate): RequestManagerCan
 }
 
 export interface RendererModelClient extends Partial<RendererSessionImportClient> {
+  routeSession?(input: SessionRouteParams): Promise<SessionRouteResult>;
   inspectProjectSync?(): Promise<ProjectSyncSnapshot>;
   inviteProjectSync?(): Promise<ProjectSyncInvite>;
   pairProjectSync?(input: ProjectSyncPairParams): Promise<ProjectSyncSnapshot>;
@@ -1032,6 +1038,10 @@ export function createRendererModelClient(
       ),
     buddyCancel: async (threadId: string) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_CANCEL_METHOD, { threadId })),
+    routeSession: async (input: SessionRouteParams): Promise<SessionRouteResult> =>
+      sessionRouteResultSchema.parse(
+        await manager.sendRequest(SESSION_ROUTE_METHOD, sessionRouteParamsSchema.parse(input)),
+      ),
     async getHarnessLaunchSettings(
       input: HarnessLaunchSettingsGet,
     ): Promise<HarnessLaunchSettings> {

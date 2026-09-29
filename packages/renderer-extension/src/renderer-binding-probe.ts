@@ -1049,6 +1049,19 @@ export function installRendererBindingProbe(
    * workspace's live commands and skills.
    */
   const draftWorkspaces = new Map<string, string>();
+  const sessionPickerStyle = document.createElement("style");
+  sessionPickerStyle.textContent = `
+    .codexhost-session-picker { position: absolute; z-index: 10000; right: 8px; bottom: 58px; width: min(520px, calc(100vw - 32px)); max-height: min(520px, 70vh); overflow: auto; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; background: Canvas; box-shadow: 0 8px 30px rgb(0 0 0 / 18%); }
+    .codexhost-session-picker input { width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; background: Canvas; color: CanvasText; }
+    .codexhost-session-picker-list { display: grid; gap: 4px; }
+    .codexhost-session-picker-option, .codexhost-session-picker-new { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; padding: 8px; border: 0; border-radius: 6px; text-align: left; background: transparent; color: CanvasText; cursor: pointer; }
+    .codexhost-session-picker-option:hover, .codexhost-session-picker-new:hover { background: color-mix(in srgb, Highlight 14%, transparent); }
+    .codexhost-session-picker-title { font-weight: 650; }
+    .codexhost-session-picker-confidence { font-variant-numeric: tabular-nums; font-weight: 700; color: Highlight; }
+    .codexhost-session-picker-path, .codexhost-session-picker-preview, .codexhost-session-picker-empty { grid-column: 1 / -1; overflow: hidden; color: GrayText; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .codexhost-session-picker-new { display: block; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); color: Highlight; }
+  `;
+  document.head.append(sessionPickerStyle);
   {
     const published: unknown = Reflect.get(window, "__codexhostDraftWorkspacesV1");
     if (typeof published === "object" && published !== null) {
@@ -1104,7 +1117,7 @@ export function installRendererBindingProbe(
     }
   };
 
-  const autoRouteDraftSubmission = (
+  const chooseDraftSession = (
     mounted: MountedComposer,
     message: string,
   ): Promise<void> => {
@@ -1113,36 +1126,123 @@ export function installRendererBindingProbe(
     const operation = (async (): Promise<void> => {
       const hostId = mounted.hostId ?? activeModelHostId();
       const client = hostId ? modelClientForHost(hostId) : null;
-      if (!hostId || !client?.routeSession) {
-        replayDraftSubmission(mounted);
-        return;
-      }
+      if (!hostId || !client?.routeSession) return;
       try {
         const result = await client.routeSession({
           message,
           ...(draftWorkspaces.get(hostId) ? { cwd: draftWorkspaces.get(hostId) } : {}),
         });
-        if (!result.routed || !result.threadId) {
-          replayDraftSubmission(mounted);
-          return;
-        }
-        await openRendererThread(hostThreadIdSchema.parse(result.threadId), { hostId });
-        const target = await waitForMountedConversation(hostId, result.threadId);
-        const editor = target.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-        if (!editor || editor.textContent?.trim()) {
-          throw new Error("Target Codex Thread composer is not empty");
-        }
-        if (!insertNativeTextAtSelection(editor, () => message)) {
-          throw new Error("Could not write the routed message into the target composer");
-        }
-        replayDraftSubmission(target);
+        await showSessionPicker({ mounted, hostId, message, candidates: result.candidates });
       } catch (error) {
-        console.warn("codexhost session routing failed; preserving the draft", error);
-        replayDraftSubmission(mounted);
+        console.warn("codexhost could not rank recent sessions", error);
+        showSessionPicker({ mounted, hostId, message, candidates: [] });
       }
     })().finally(() => sessionRoutePending.delete(mounted.composer));
     sessionRoutePending.set(mounted.composer, operation);
     return operation;
+  };
+
+  const showSessionPicker = async (input: {
+    mounted: MountedComposer;
+    hostId: string;
+    message: string;
+    candidates: Array<{ threadId: string; title: string | null; cwd: string; confidence: number; preview: string }>;
+  }): Promise<void> => {
+    const { mounted, hostId, message } = input;
+    const picker = document.createElement("div");
+    picker.className = "codexhost-session-picker";
+    picker.setAttribute("role", "dialog");
+    picker.setAttribute("aria-label", "选择发送会话");
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = "搜索会话或项目";
+    search.setAttribute("aria-label", "搜索会话或项目");
+    const list = document.createElement("div");
+    list.className = "codexhost-session-picker-list";
+    picker.append(search, list);
+    mounted.composer.append(picker);
+
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      picker.remove();
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+    const dispatchTo = async (threadId: string): Promise<void> => {
+      finish();
+      try {
+        await openRendererThread(hostThreadIdSchema.parse(threadId), { hostId });
+        const target = await waitForMountedConversation(hostId, threadId);
+        const editor = target.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+        if (!editor || editor.textContent?.trim()) throw new Error("Target Thread composer is not empty");
+        if (!insertNativeTextAtSelection(editor, () => message)) throw new Error("Could not restore the message");
+        replayDraftSubmission(target);
+      } catch (error) {
+        console.warn("codexhost could not send to the selected session", error);
+        const originalEditor = mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+        if (originalEditor && !originalEditor.textContent?.trim()) {
+          insertNativeTextAtSelection(originalEditor, () => message);
+        }
+      }
+    };
+    const render = (): void => {
+      list.replaceChildren();
+      const query = search.value.trim().toLocaleLowerCase();
+      const candidates = input.candidates.filter((candidate) =>
+        `${candidate.title ?? ""} ${candidate.cwd} ${candidate.preview}`.toLocaleLowerCase().includes(query),
+      );
+      for (const candidate of candidates) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "codexhost-session-picker-option";
+        const title = document.createElement("span");
+        title.className = "codexhost-session-picker-title";
+        title.textContent = candidate.title ?? "未命名会话";
+        const confidence = document.createElement("span");
+        confidence.className = "codexhost-session-picker-confidence";
+        confidence.textContent = `${Math.round(candidate.confidence * 100)}%`;
+        const path = document.createElement("span");
+        path.className = "codexhost-session-picker-path";
+        path.textContent = candidate.cwd;
+        const preview = document.createElement("span");
+        preview.className = "codexhost-session-picker-preview";
+        preview.textContent = candidate.preview.slice(-220);
+        button.append(title, confidence, path, preview);
+        button.addEventListener("click", () => void dispatchTo(candidate.threadId));
+        list.append(button);
+      }
+      if (!candidates.length) {
+        const empty = document.createElement("div");
+        empty.className = "codexhost-session-picker-empty";
+        empty.textContent = "没有匹配的近期会话";
+        list.append(empty);
+      }
+      const newThread = document.createElement("button");
+      newThread.type = "button";
+      newThread.className = "codexhost-session-picker-new";
+      newThread.textContent = "在新会话发送";
+      newThread.addEventListener("click", () => {
+        finish();
+        insertNativeTextAtSelection(
+          mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR) ?? mounted.composer,
+          () => message,
+        );
+        replayDraftSubmission(mounted);
+      });
+      list.append(newThread);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        finish();
+      }
+    };
+    search.addEventListener("input", render);
+    window.addEventListener("keydown", onKeyDown, true);
+    render();
+    search.focus();
   };
 
   const shouldAutoRouteDraft = (mounted: MountedComposer): boolean => {
@@ -3075,7 +3175,7 @@ export function installRendererBindingProbe(
     const message = editor?.textContent?.trim() ?? "";
     if (mounted && message && shouldAutoRouteDraft(mounted)) {
       blockEvent(event);
-      void autoRouteDraftSubmission(mounted, message);
+      void chooseDraftSession(mounted, message);
       return;
     }
     notifySubmission(composer, "submit");
@@ -3104,7 +3204,7 @@ export function installRendererBindingProbe(
     const message = editor?.textContent?.trim() ?? "";
     if (mounted && message && shouldAutoRouteDraft(mounted)) {
       blockEvent(event);
-      void autoRouteDraftSubmission(mounted, message);
+      void chooseDraftSession(mounted, message);
       return;
     }
     notifySubmission(composer, "enter");
@@ -3125,7 +3225,7 @@ export function installRendererBindingProbe(
     const message = editor?.textContent?.trim() ?? "";
     if (message && shouldAutoRouteDraft(mounted)) {
       blockEvent(event);
-      void autoRouteDraftSubmission(mounted, message);
+      void chooseDraftSession(mounted, message);
       return;
     }
     notifySubmission(composer, "click");
@@ -3483,6 +3583,7 @@ export function installRendererBindingProbe(
       connectionListeners.clear();
       connectionDiagnostics = null;
       delete window.__codexhostRendererBindingProbeV1;
+      sessionPickerStyle.remove();
     },
   };
   window.__codexhostRendererBindingProbeV1 = api;

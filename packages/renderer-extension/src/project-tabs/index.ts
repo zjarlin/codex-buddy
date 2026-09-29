@@ -201,11 +201,15 @@ export function installProjectTabs(options: { getLocale(): string }): {
         parent = parent.parentElement;
       }
       if (parent && parent !== document.body) {
-        let first: HTMLElement = firstRow;
-        while (first.parentElement && first.parentElement !== parent) {
-          first = first.parentElement;
+        // Virtualized project lists can place a flexible spacer before the rows.
+        // Mount before the first content child so that spacer cannot push the
+        // filter bar into the middle of the available sidebar height.
+        const firstChild = parent.firstElementChild;
+        if (firstChild) {
+          parent.insertBefore(bar, firstChild);
+        } else {
+          parent.append(bar);
         }
-        parent.insertBefore(bar, first);
       }
     }
     if (bar.isConnected) {

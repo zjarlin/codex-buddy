@@ -15,6 +15,11 @@ export interface SessionRouteDecision {
   reason: string;
 }
 
+export interface SessionRouteResult {
+  candidates: Array<Omit<SessionRouteDecision, "reason"> & { preview: string }>;
+  reason: string;
+}
+
 const automaticThreshold = 0.82;
 
 /** Select a previously used Codex Thread without granting any execution authority. */
@@ -22,8 +27,8 @@ export async function chooseSessionWithSystemOne(
   client: TypeSafeClient,
   input: { message: string; candidates: readonly SessionRouteCandidate[]; model: string },
   signal?: AbortSignal,
-): Promise<SessionRouteDecision | null> {
-  if (input.candidates.length === 0) return null;
+): Promise<SessionRouteResult> {
+  if (input.candidates.length === 0) return { candidates: [], reason: "没有可用的近期会话。" };
   const candidates = input.candidates.slice(0, 32);
   const criteria: Record<string, string> = {
     none: "没有足够把握，保留为新会话",
@@ -65,16 +70,21 @@ export async function chooseSessionWithSystemOne(
     result.decisions.session.status !== "automatic" ||
     !answer.probabilities[answer.choice]
   ) {
-    return null;
+    return { candidates: [], reason: "System One 无法确认候选会话。" };
   }
   const index = Number(answer.choice.slice(1));
   const candidate = Number.isInteger(index) ? candidates[index] : undefined;
-  if (!candidate) return null;
+  if (!candidate) return { candidates: [], reason: "System One 返回了无效的会话候选。" };
+  const scored = candidates.map((item, candidateIndex) => ({
+    threadId: item.id,
+    title: item.title,
+    cwd: item.cwd,
+    confidence: candidateIndex === index ? confidence : answer.probabilities[`c${candidateIndex}`] ?? 0,
+    preview: item.recent,
+  }));
+  scored.sort((left, right) => right.confidence - left.confidence);
   return {
-    threadId: candidate.id,
-    title: candidate.title,
-    cwd: candidate.cwd,
-    confidence,
-    reason: `System One 选择了 ${candidate.title ?? candidate.id}（confidence=${confidence.toFixed(2)}）`,
+    candidates: scored,
+    reason: `System One 已完成候选排序，最高置信度 ${confidence.toFixed(2)}。`,
   };
 }

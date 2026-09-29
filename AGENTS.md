@@ -86,6 +86,9 @@ Existing Harness integration and Desktop update audit skills remain applicable t
 
 - Choose build and validation commands from `package.json`, not a copied command catalog. For focused tests, use the repository configuration in `tests/vitest.config.js` or `tests/e2e/playwright.config.js`, and the owning `Cargo.toml` for Rust test features.
 - To build and launch from source, run `npm start` at the repository root; `npm start -- --no-build` reuses existing artifacts. On macOS/Windows this stops running Codex Desktop processes before launch. Use it when launching is intended, not as a routine validation command; implementation is in `tools/dev-desktop/run.mjs`.
+- 默认安装与重启目标是 `ssh macbook` 对应的 MacBook（192.168.31.75）“应用程序”目录中已安装的 Codex Buddy。252（192.168.31.252）是当前 Linux 开发主机；在 252 上构建或启动不等于更新了 MacBook 应用。
+- 完成影响应用行为的仓库改动并通过相应验证后，自动构建适配 MacBook 架构的 macOS 安装包，通过 `ssh macbook` 更新其“应用程序”中的 Codex Buddy，并重启对应应用加载改动。这是用户已授权的默认交付流程，无需每次重新询问；仅文档修改无需重新安装。
+- 更新前确认远端主机、架构和实际应用路径，复用仓库现有打包与安装流程，保留用户配置和会话数据。更新后核验已安装产物及运行进程确实来自本次构建；报告安装位置和重启结果。SSH、构建或安装失败时明确报告阻塞，不把本地构建成功当作远端更新完成。
 - Small, low-risk changes do not require tests. For high-risk or cross-package changes, or when explicitly requested, add focused tests for changed behavior and boundary conditions; do not run full test suites by default.
 - Do not claim a check passed unless it was executed. Report skipped or blocked checks and the reason.
 - A change is complete only when implementation, contracts, tests, and affected documentation agree.

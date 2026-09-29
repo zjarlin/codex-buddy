@@ -25,6 +25,13 @@ const { outputFiles } = await build({
         const bind = (element, value) => Object.defineProperty(element, "__reactFiber$fixture", { enumerable: true, value });
         const render = (active = false) => {
           document.querySelectorAll('[data-sidebar-project-container-id]').forEach(el => el.remove());
+          const projectsRoot = document.querySelector("#projects");
+          if (!projectsRoot.querySelector(".project-spacer")) {
+            const spacer = document.createElement("div");
+            spacer.className = "project-spacer";
+            spacer.style.height = "80px";
+            projectsRoot.prepend(spacer);
+          }
           for (const [index, project] of projects.entries()) {
             if (active && index !== 1) continue;
             const container = document.createElement("div");
@@ -61,7 +68,7 @@ const { outputFiles } = await build({
             };
             header.append(label, trigger);
             const thread = document.createElement("div"); thread.className = "thread"; thread.textContent = index === 1 ? "正在处理项目任务" : "暂无聊天";
-            container.append(header, thread); document.querySelector("#projects").append(container);
+            container.append(header, thread); projectsRoot.append(container);
           }
         };
         if (corrupt) localStorage.setItem("codexhost.project-tabs.v1", "broken");
@@ -117,6 +124,9 @@ test("prefix tabs intersect native activity filters and survive row rerendering"
   page.on("pageerror", (error) => errors.push(error.message));
   await setup(page);
   await expect(rows(page)).toHaveCount(4);
+  await expect(
+    page.locator("#projects > [data-codexhost-project-tabs] ~ .project-spacer"),
+  ).toHaveCount(1);
   await category(page, "公司的项目").click();
   await expect(rows(page)).toHaveCount(2);
   await expect(rows(page).first()).toContainText("remote_company_okmy-scada");

@@ -42,7 +42,7 @@ import { createJevClient, type SystemOneCommand } from "./judgment.js";
 import {
   chooseSessionWithSystemOne,
   type SessionRouteCandidate,
-  type SessionRouteDecision,
+  type SessionRouteResult,
 } from "./session-routing.js";
 import type { TypeSafeClient } from "@codexhost/jev";
 import {
@@ -344,11 +344,11 @@ export class BuddyRouter {
 
   async chooseSession(
     input: { message: string; candidates: readonly SessionRouteCandidate[] },
-  ): Promise<SessionRouteDecision | null> {
+  ): Promise<SessionRouteResult> {
     await this.#loadSettings();
     await this.#loadJevKey();
     if (this.#settings.privateMode || !this.#settings.enabled || !this.#settings.jev || !this.#jev) {
-      return null;
+      return { candidates: [], reason: "System One 未启用。" };
     }
     return chooseSessionWithSystemOne(this.#jev, {
       ...input,

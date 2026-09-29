@@ -2347,27 +2347,7 @@ export class AppServerHost {
         message: params.message,
         candidates,
       });
-      const result = sessionRouteResultSchema.parse(
-        decision
-          ? {
-              routed: true,
-              threadId: decision.threadId,
-              turnId: null,
-              confidence: decision.confidence,
-              title: decision.title,
-              cwd: decision.cwd,
-              reason: decision.reason,
-            }
-          : {
-              routed: false,
-              threadId: null,
-              turnId: null,
-              confidence: 0,
-              title: null,
-              cwd: null,
-              reason: "System One 对已有会话的把握不足，保留新会话。",
-            },
-      );
+      const result = sessionRouteResultSchema.parse(decision);
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32090, errorMessage(error).slice(0, 20_000)));

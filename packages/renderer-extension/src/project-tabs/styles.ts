@@ -1,6 +1,6 @@
 export const projectTabsStyle = `
 [data-codexhost-project-tab-hidden]{display:none!important}
-[data-codexhost-project-tabs]{display:flex;align-items:center;gap:4px;min-width:0;margin:6px 8px 10px;font:12px/18px system-ui,sans-serif;color:var(--color-token-text-primary,inherit)}
+[data-codexhost-project-tabs]{display:flex;align-items:center;gap:4px;min-width:0;flex:0 0 auto;margin:6px 8px 10px;font:12px/18px system-ui,sans-serif;color:var(--color-token-text-primary,inherit)}
 [data-codexhost-project-tabs] [role=group]{display:flex;gap:3px;overflow-x:auto;min-width:0;scrollbar-width:thin}
 [data-codexhost-project-tabs] button{flex-shrink:0;white-space:nowrap;border:0;border-radius:6px;padding:4px 8px;background:transparent;color:inherit;cursor:pointer;font:inherit}
 [data-codexhost-project-tabs] button[aria-pressed=true]{background:color-mix(in srgb,currentColor 12%,transparent)}

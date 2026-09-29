@@ -1692,9 +1692,11 @@ describe("AppServerHost project Git workflow", () => {
           await fixture.collector.waitFor((message) => requestId(message, 100)),
         ).not.toHaveProperty("error");
         await completePiTurn(fixture, threadId, 2);
+        // Windows 的多仓库 Git 探测受磁盘扫描影响，等待真实活动检查完成。
+        const workflowTimeout = process.platform === "win32" ? 10_000 : 3_000;
         await vi.waitFor(
           () => expect(nativeRequests.some((entry) => entry.method === "thread/list")).toBe(true),
-          { timeout: 3000 },
+          { timeout: workflowTimeout },
         );
         expect(execute.mock.calls).toMatchObject([[{ type: "turn.start" }]]);
         nativeActive = false;
@@ -1713,12 +1715,14 @@ describe("AppServerHost project Git workflow", () => {
           executor === "native"
             ? nativeRequests.filter((entry) => entry.method === "turn/start").length
             : execute.mock.calls.length - 2;
-        await vi.waitFor(() => expect(starts()).toBe(1), { timeout: 3000 });
+        await vi.waitFor(() => expect(starts()).toBe(1), { timeout: workflowTimeout });
         const workflowRequest =
           executor === "native"
-            ? nativeRequests.find((entry) => entry.method === "turn/start")
+            ? nativeRequests.find((entry) => entry.method === "turn/start")?.params
             : execute.mock.calls.at(-1)?.[0];
-        expect(JSON.stringify(workflowRequest)).toContain(frontend);
+        expect(workflowRequest).toMatchObject({
+          input: [{ type: "text", text: expect.stringContaining(JSON.stringify(frontend)) }],
+        });
         expect(JSON.stringify(workflowRequest)).toContain("先提交并推送最深层子模块");
         writeRequest(fixture.desktopInput, {
           id: 10,

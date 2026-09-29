@@ -41,6 +41,14 @@ vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
   installRendererSidebarStatusFilter: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
+vi.mock("../src/renderer-sidebar-unread.js", () => ({
+  installRendererSidebarUnread: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-visits.js", () => ({
+  installRendererSidebarVisits: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
 vi.mock("../src/renderer-queued-transfer.js", () => ({
   installRendererQueuedTransfer: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
@@ -72,6 +80,10 @@ vi.mock("../src/renderer-git-sidebar.js", () => ({
 
 vi.mock("../src/renderer-git-workflow-control.js", () => ({
   installRendererGitWorkflowControl: () => ({ refreshContext: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-git-branch-control.js", () => ({
+  installRendererGitBranchControl: () => ({ refreshContext: vi.fn(), dispose: vi.fn() }),
 }));
 
 vi.mock("../src/buddy/control.js", () => ({

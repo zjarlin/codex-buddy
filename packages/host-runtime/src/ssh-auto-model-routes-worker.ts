@@ -10,7 +10,7 @@ import { readAutoModelRoutes } from "./auto-model-routes.js";
 
 function rolloutHome(input: SshAutoModelRoutesParams): string {
   const match = /^(.*)\/(?:sessions\/\d{4}\/\d{2}\/\d{2}|archived_sessions)\/([^/]+)$/u.exec(
-    input.rolloutPath,
+    input.rolloutPath.split(path.sep).join("/"),
   );
   if (
     !match?.[1] ||
@@ -21,7 +21,7 @@ function rolloutHome(input: SshAutoModelRoutesParams): string {
   ) {
     throw new Error("Auto route Thread rollout path is unavailable");
   }
-  return match[1];
+  return path.normalize(match[1]);
 }
 
 async function readThreadMetadata(rolloutPath: string): Promise<unknown> {

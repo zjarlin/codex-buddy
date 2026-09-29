@@ -1122,7 +1122,6 @@ export function installRendererBindingProbe(
 
   const sessionRouting = createSessionRouting({
     mounted: mountedByComposer,
-    draftWorkspaces,
     activeHostId: activeModelHostId,
     client: modelClientForHost,
     locale: () => settingsLifecycle.locale,

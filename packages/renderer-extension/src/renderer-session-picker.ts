@@ -155,7 +155,7 @@ export function showSessionPicker(input: {
     option(
       "current",
       m.current,
-      [input.cwd, host].filter(Boolean).join(" · "),
+      [input.cwd ?? m.workspaceUnavailable, host].filter(Boolean).join(" · "),
       input.sendCurrent,
       m.default,
     );

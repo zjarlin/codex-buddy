@@ -1,5 +1,6 @@
 import { hostThreadIdSchema } from "@codexhost/shared-contracts";
 import { EDITOR_SELECTOR } from "./renderer-composer-dom.js";
+import { composerDraftWorkspace } from "./renderer-composer-workspace.js";
 import { openRendererThread } from "./renderer-fork-control.js";
 import { insertNativeTextAtSelection } from "./renderer-native-composer-controller.js";
 import { threadIdFromComposerModelTarget } from "./versioned-renderer-adapter.js";
@@ -26,7 +27,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** 防呆选择与原生草稿转移共享生命周期；关闭窗口或换连接后不继续发送。 */
 export function createSessionRouting<M extends SessionComposer>(options: {
   mounted: ReadonlyMap<Element, M>;
-  draftWorkspaces: ReadonlyMap<string, string>;
   activeHostId(): string | null;
   client(hostId: string): RendererModelClient | null;
   locale(): string;
@@ -63,12 +63,15 @@ export function createSessionRouting<M extends SessionComposer>(options: {
           sendRequest?(method: string, params: unknown): Promise<unknown>;
         }
       | undefined;
-    const workspace = threadId
-      ? manager?.getConversationCwd?.(threadId)
-      : hostId
-        ? options.draftWorkspaces.get(hostId)
-        : undefined;
-    const cwd = typeof workspace === "string" ? workspace : undefined;
+    const readWorkspace = (): string | undefined => {
+      const workspace = threadId
+        ? manager?.getConversationCwd?.(threadId)
+        : hostId
+          ? composerDraftWorkspace(mounted.composer, hostId)
+          : undefined;
+      return typeof workspace === "string" && workspace ? workspace : undefined;
+    };
+    const cwd = readWorkspace();
     const modelTarget = JSON.stringify(mounted.modelTarget);
     const editor = mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
     const draftFingerprint = () =>
@@ -96,7 +99,7 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       options.mounted.get(mounted.composer) === mounted &&
       mounted.composer.querySelector(EDITOR_SELECTOR) === editor &&
       JSON.stringify(mounted.modelTarget) === modelTarget &&
-      (!threadId ? (hostId ? options.draftWorkspaces.get(hostId) : undefined) === workspace : true);
+      readWorkspace() === cwd;
     const captureTransferDraft = () => {
       if (!editor || !isCurrent()) {
         throw new Error("会话已变化，请重新选择");
@@ -221,7 +224,7 @@ export function createSessionRouting<M extends SessionComposer>(options: {
           (target) =>
             target.modelTarget?.[0] === "default" &&
             JSON.stringify(target.modelTarget) !== modelTarget &&
-            options.draftWorkspaces.get(project.hostId) === project.cwd,
+            composerDraftWorkspace(target.composer, project.hostId) === project.cwd,
         ),
       sendExisting: async (candidate) => {
         const draft = captureTransferDraft();

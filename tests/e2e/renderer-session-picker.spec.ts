@@ -25,6 +25,16 @@ const { outputFiles } = await build({
       let finishTargetCheck;
       const targetCheck = new Promise(resolve => { finishTargetCheck = resolve; });
       const main = document.querySelector('main');
+      const publishWorkspace = (workspace) => {
+        window.__codexhostDraftWorkspacesV1 = { [hostId]: workspace };
+        window.dispatchEvent(new CustomEvent('codexhost:draft-workspace', { detail: { hostId, cwd: workspace } }));
+      };
+      const locationProps = () => ({
+        composerMode: 'local', setComposerMode: () => {},
+        ...(hostId === 'local'
+          ? { executionTargetOverride: { hostId, cwd } }
+          : { remoteSelectionState: { isAttachedToStartedTask: false, draftNewThreadRemoteSelectionState: { hostId, projectPath: cwd } } }),
+      });
       const project = { projectKind: hostId === 'local' ? 'local' : 'remote', hostId, projectId: 'other', path: '/workspace/other', label: 'Other project' };
       const row = document.querySelector('#project');
       row.setAttribute('data-sidebar-project-kind', project.projectKind);
@@ -45,19 +55,21 @@ const { outputFiles } = await build({
       document.querySelector('#finish-target-check').addEventListener('click', () => finishTargetCheck());
       document.querySelector('#switch-project').addEventListener('click', () => {
         cwd = '/other/project';
-        window.dispatchEvent(new CustomEvent('codexhost:draft-workspace', { detail: { hostId, cwd } }));
+        main.querySelector('#location').__reactFiber$fixture.memoizedProps = locationProps();
+        if (!config.delayWorkspace) publishWorkspace(cwd);
       });
+      document.querySelector('#background-prewarm').addEventListener('click', () => publishWorkspace('/workspace/official-app'));
       document.querySelector('#switch-host').addEventListener('click', () => { hostId = 'ssh:another'; });
       function mount(threadId, workspace) {
         cwd = workspace;
-        window.__codexhostDraftWorkspacesV1 = { [hostId]: cwd };
-        window.dispatchEvent(new CustomEvent('codexhost:draft-workspace', { detail: { hostId, cwd } }));
+        publishWorkspace(config.staleWorkspace ? '/workspace/official-app' : cwd);
         const draftKey = threadId ?? 'draft-' + (++serial);
         main.innerHTML = '<div data-codex-composer-root style="position:relative;border:1px solid #555;padding:12px">' +
           (threadId ? '<div data-above-composer-portal data-above-composer-conversation-id="' + threadId + '"></div>' : '') +
           '<div data-codex-composer contenteditable="true" role="textbox" aria-label="Message" style="min-height:60px;white-space:pre-wrap"></div>' +
           (config.attachment ? '<div data-composer-attachments-row>attached.txt</div>' : '') +
-          '<div><button id="send" type="submit">Send</button></div></div>';
+          '<div><button id="location" type="button">Project location</button><button id="send" type="submit">Send</button></div></div>';
+        if (!config.missingWorkspace) main.querySelector('#location').__reactFiber$fixture = { memoizedProps: locationProps(), return: null };
         const editor = main.querySelector('[contenteditable]');
         editor.innerText = globalThis.drafts[draftKey] ?? (threadId === targetId ? config.targetDraft ?? '' : '');
         const makeDoc = (text) => ({ text, content: { size: text.length }, type: { createAndFill: () => makeDoc('') }, textBetween: (from,to) => text.slice(from,to) });
@@ -128,7 +140,7 @@ async function setup(page: Page, config: Record<string, unknown> = {}) {
       contentType: "text/html",
       body: `<!doctype html><body style="background:#202124;color:#eee;color-scheme:dark;padding:24px">
     <button id="switch-project">Switch project</button><button id="switch-host">Switch Host</button><button id="busy">Start target</button>
-    <button id="finish-target-check">Finish target check</button>
+    <button id="finish-target-check">Finish target check</button><button id="background-prewarm">Background prewarm</button>
     <aside><div id="project" role="listitem" data-sidebar-project-container-id="project:other"><button id="new">New project chat</button></div><button id="target">Open target</button></aside>
     <main style="margin-top:440px"></main></body>`,
     }),
@@ -142,6 +154,55 @@ async function setup(page: Page, config: Record<string, unknown> = {}) {
 const sends = (page: Page) => page.evaluate(() => Reflect.get(globalThis, "sends"));
 const current = (page: Page) => page.getByRole("button", { name: /当前会话/ });
 const picker = (page: Page) => page.getByRole("dialog", { name: "选择发送会话" });
+
+for (const hostId of ["local", "remote-ssh-discovered:okm252"]) {
+  test(`current project uses the composer instead of another prewarmed project: ${hostId}`, async ({
+    page,
+  }, testInfo) => {
+    await setup(page, { hostId, staleWorkspace: true });
+    await page.keyboard.press("Enter");
+    await page.screenshot({ path: testInfo.outputPath("current-project.png") });
+    await expect(current(page)).toContainText("/workspace/demo");
+    await expect(current(page)).not.toContainText("official-app");
+    expect(await page.evaluate(() => Reflect.get(globalThis, "rankings")[0].cwd)).toBe(
+      "/workspace/demo",
+    );
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toHaveLength(1);
+    expect((await sends(page))[0]).toMatchObject({ hostId, cwd: "/workspace/demo" });
+  });
+}
+
+test("background prewarm cannot invalidate the current project", async ({ page }) => {
+  await setup(page, { hostId: "remote-ssh-discovered:okm252" });
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Background prewarm" }).click();
+  await current(page).click();
+  await expect(picker(page)).toHaveCount(0);
+  expect(await sends(page)).toHaveLength(1);
+  expect((await sends(page))[0].cwd).toBe("/workspace/demo");
+});
+
+test("project changes invalidate the picker before prewarm catches up", async ({ page }) => {
+  await setup(page, { delayWorkspace: true });
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Switch project" }).click();
+  await current(page).click();
+  await expect(picker(page)).toContainText("会话、项目或 Host 已改变");
+  expect(await sends(page)).toEqual([]);
+});
+
+test("unknown project never borrows a cached directory and still sends natively", async ({
+  page,
+}) => {
+  await setup(page, { missingWorkspace: true, staleWorkspace: true });
+  await page.keyboard.press("Enter");
+  await expect(current(page)).not.toContainText("official-app");
+  await expect(current(page)).toContainText("项目路径暂不可用");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "rankings")[0].cwd)).toBeUndefined();
+  await page.keyboard.press("Enter");
+  expect(await sends(page)).toHaveLength(1);
+});
 
 for (const existing of [false, true]) {
   test(`${existing ? "existing conversation" : "new draft"}: two Enters send only to the current conversation`, async ({
@@ -326,7 +387,7 @@ test("cleared draft can be edited again without reopening the picker", async ({ 
 
 for (const destination of ["existing", "new"]) {
   test(`transfer from an existing conversation to ${destination} target`, async ({ page }) => {
-    await setup(page, { existing: true, hostId: "ssh:macbook" });
+    await setup(page, { existing: true, hostId: "ssh:macbook", staleWorkspace: true });
     await page.keyboard.press("Enter");
     await page
       .getByRole("button", {

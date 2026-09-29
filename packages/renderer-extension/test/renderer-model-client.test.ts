@@ -966,7 +966,8 @@ describe("Renderer fixed Model request client", () => {
   });
 
   it("reads official Thread activity without loading turns", async () => {
-    const sendRequest = vi.fn()
+    const sendRequest = vi
+      .fn()
       .mockResolvedValueOnce({ thread: { status: { type: "active" } } })
       .mockResolvedValueOnce({ thread: { status: { type: "idle" } } })
       .mockResolvedValueOnce({ thread: {} });

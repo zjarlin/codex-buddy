@@ -1759,7 +1759,7 @@ describe("AppServerHost project Git workflow", () => {
         expect(starts()).toBe(1);
       } finally {
         await stopFixture(fixture);
-        rmSync(directory, { recursive: true, force: true });
+        await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
       }
     },
   );

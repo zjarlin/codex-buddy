@@ -256,7 +256,10 @@ export function mountModelShortcuts(
           const remove = document.createElement("button");
           remove.type = "button";
           remove.dataset.modelShortcutRemove = model.id;
-          remove.setAttribute("aria-label", `${chinese ? "取消收藏" : "Unfavorite"} ${model.label}`);
+          remove.setAttribute(
+            "aria-label",
+            `${chinese ? "取消收藏" : "Unfavorite"} ${model.label}`,
+          );
           remove.title = remove.getAttribute("aria-label") ?? "";
           remove.disabled = isDisabled();
           remove.append(createElement(X, { width: 13, height: 13, "aria-hidden": "true" }));

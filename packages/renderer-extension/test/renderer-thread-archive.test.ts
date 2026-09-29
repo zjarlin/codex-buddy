@@ -86,7 +86,10 @@ describe("native thread archive compatibility", () => {
       installRendererThreadArchive({ getHostId: () => "local", pendingThreadArchives: inherited }),
     ).toBeNull();
     expect(
-      installRendererThreadArchive({ getHostId: () => null, pendingThreadArchives: { add: vi.fn() } }),
+      installRendererThreadArchive({
+        getHostId: () => null,
+        pendingThreadArchives: { add: vi.fn() },
+      }),
     ).toBeNull();
     expect(installRendererThreadArchive({})).toBeNull();
   });

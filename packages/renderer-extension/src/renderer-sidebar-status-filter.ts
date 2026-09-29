@@ -101,12 +101,20 @@ export function installRendererSidebarStatusFilter(options: {
     const statusLabel = !activeOnly
       ? ""
       : pending > 0
-        ? chinese ? "正在检查状态…" : "Checking status…"
+        ? chinese
+          ? "正在检查状态…"
+          : "Checking status…"
         : failed > 0
-          ? chinese ? "部分状态读取失败，稍后重试" : "Some statuses unavailable; retrying"
+          ? chinese
+            ? "部分状态读取失败，稍后重试"
+            : "Some statuses unavailable; retrying"
           : count === 0
-            ? chinese ? "没有进行中的会话" : "No active conversations"
-            : chinese ? `${count} 个进行中` : `${count} active`;
+            ? chinese
+              ? "没有进行中的会话"
+              : "No active conversations"
+            : chinese
+              ? `${count} 个进行中`
+              : `${count} active`;
     if (status.textContent !== statusLabel) status.textContent = statusLabel;
   };
 
@@ -120,22 +128,25 @@ export function installRendererSidebarStatusFilter(options: {
     state.pending = true;
     state.checkedAt = Date.now();
     inFlight += 1;
-    void state.client.readThreadActivity(state.threadId).then(
-      (active) => {
-        if (states.get(row) !== state || disposed) return;
-        state.active = active;
-        state.failed = false;
-      },
-      () => {
-        if (states.get(row) !== state || disposed) return;
-        state.active = null;
-        state.failed = true;
-      },
-    ).finally(() => {
-      state.pending = false;
-      inFlight -= 1;
-      schedule();
-    });
+    void state.client
+      .readThreadActivity(state.threadId)
+      .then(
+        (active) => {
+          if (states.get(row) !== state || disposed) return;
+          state.active = active;
+          state.failed = false;
+        },
+        () => {
+          if (states.get(row) !== state || disposed) return;
+          state.active = null;
+          state.failed = true;
+        },
+      )
+      .finally(() => {
+        state.pending = false;
+        inFlight -= 1;
+        schedule();
+      });
   };
 
   function scan(): void {
@@ -146,7 +157,10 @@ export function installRendererSidebarStatusFilter(options: {
       `#app-shell-sidebar > :not([${FILTER_ATTRIBUTE}]):not([data-codexhost-git-sidebar])`,
     );
     const anchor = project ?? fallback;
-    if (anchor?.parentElement && (toolbar.parentElement !== anchor.parentElement || toolbar.nextElementSibling !== anchor)) {
+    if (
+      anchor?.parentElement &&
+      (toolbar.parentElement !== anchor.parentElement || toolbar.nextElementSibling !== anchor)
+    ) {
       anchor.parentElement.insertBefore(toolbar, anchor);
     } else if (!anchor) {
       toolbar.remove();
@@ -172,11 +186,29 @@ export function installRendererSidebarStatusFilter(options: {
         if (activeOnly) failed += 1;
         continue;
       }
-      if (!state || state.hostId !== hostId || state.threadId !== threadId || state.client !== client) {
-        state = { hostId, threadId, client, active: null, failed: false, checkedAt: 0, pending: false };
+      if (
+        !state ||
+        state.hostId !== hostId ||
+        state.threadId !== threadId ||
+        state.client !== client
+      ) {
+        state = {
+          hostId,
+          threadId,
+          client,
+          active: null,
+          failed: false,
+          checkedAt: 0,
+          pending: false,
+        };
         states.set(row, state);
       }
-      if (activeOnly && !state.pending && now - state.checkedAt >= REFRESH_MS && inFlight < MAX_CONCURRENT_READS) {
+      if (
+        activeOnly &&
+        !state.pending &&
+        now - state.checkedAt >= REFRESH_MS &&
+        inFlight < MAX_CONCURRENT_READS
+      ) {
         read(row, state);
       }
       row.toggleAttribute(HIDDEN_ATTRIBUTE, activeOnly && state.active !== true);
@@ -189,13 +221,21 @@ export function installRendererSidebarStatusFilter(options: {
   }
 
   const observer = new MutationObserver((records) => {
-    if (records.some((record) =>
-      mutationAffectsElements(record, `${PROJECT_SELECTOR},${ROW_SELECTOR}`) ||
-      mutationAffectsElements(record, "#app-shell-sidebar", false)
-    )) schedule();
+    if (
+      records.some(
+        (record) =>
+          mutationAffectsElements(record, `${PROJECT_SELECTOR},${ROW_SELECTOR}`) ||
+          mutationAffectsElements(record, "#app-shell-sidebar", false),
+      )
+    )
+      schedule();
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true,
-    attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, "data-app-action-sidebar-thread-id"] });
+  observer.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, "data-app-action-sidebar-thread-id"],
+  });
   const poll = createVisiblePoll(document, REFRESH_MS, schedule);
   const onFocus = () => {
     for (const state of states.values()) state.checkedAt = 0;

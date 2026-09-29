@@ -584,7 +584,8 @@ export function createRendererModelClient(
   const notifications = notificationTarget(source);
   const subscribe = notifications?.addNotificationCallback?.bind(notifications);
   const nativeModelAvailability = createNativeModelAvailability({
-    sendRequest: (method, params) => manager.sendRequest(method, params, { priority: "interactive" }),
+    sendRequest: (method, params) =>
+      manager.sendRequest(method, params, { priority: "interactive" }),
     ...(subscribe ? { subscribe } : {}),
   });
 

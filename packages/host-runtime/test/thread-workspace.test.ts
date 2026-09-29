@@ -44,7 +44,7 @@ describe("thread workspace", () => {
     await chmod(code, 0o755);
     const spawnApplication = fakeSpawn();
     await openThreadWorkspace("/remote-only/project #1", {
-      platform: "linux",
+      platform: process.platform,
       environment: { PATH: bin },
       spawnApplication,
       sshAuthority: "okm252",

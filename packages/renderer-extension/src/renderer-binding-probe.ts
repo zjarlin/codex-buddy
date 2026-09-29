@@ -3358,7 +3358,17 @@ export function installRendererBindingProbe(
         const root =
           mounted.composer.closest<HTMLElement>('[data-app-shell-main-surface="default"]') ??
           document.body;
-        return { threadId, hostId, client, root };
+        const selectedModel = nativeModelBinding(
+          mounted.control.nativeModelControl?.element ?? null,
+        )?.view.selected;
+        return {
+          threadId,
+          hostId,
+          client,
+          root,
+          composer: mounted.composer,
+          ...(selectedModel ? { selectedModel } : {}),
+        };
       }
       return null;
     },

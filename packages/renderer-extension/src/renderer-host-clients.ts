@@ -5,6 +5,8 @@ import type {
 import { createRendererModelClient, type RendererModelClient } from "./renderer-model-client.js";
 import { installRendererExternalQueue } from "./renderer-external-queue.js";
 import { installRendererExternalSteering } from "./renderer-external-steering.js";
+import type { RendererRequestOptions } from "./renderer-request-sender.js";
+import { createRendererSshGitSender } from "./renderer-ssh-git.js";
 import { installRendererThreadArchive } from "./renderer-thread-archive.js";
 
 /** Model clients follow native connection identities, never the active Composer.
@@ -37,16 +39,33 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
     if (cached?.route === route) return cached.client;
     retire(route.hostId);
     const target = route.manager;
+    const isCurrent = () => !disposed && readRouting()?.forHost(route.hostId) === route;
+    const sendRequest = (method: string, params: unknown, options?: RendererRequestOptions) => {
+      if (!isCurrent())
+        throw new Error(`Renderer request manager is unavailable for Host ${route.hostId}`);
+      return options === undefined
+        ? target.sendRequest(method, params)
+        : target.sendRequest(method, params, options);
+    };
+    const send =
+      route.hostId === "local" || route.hostId.startsWith("remote-control:")
+        ? sendRequest
+        : createRendererSshGitSender({
+            hostId: route.hostId,
+            send: sendRequest,
+            isCurrent,
+            sendLocal(method, params, options) {
+              const local = readRouting()?.forHost("local")?.manager;
+              if (!local) throw new Error("本机 Git 执行服务不可用，请重新连接。");
+              return options === undefined
+                ? local.sendRequest(method, params)
+                : local.sendRequest(method, params, options);
+            },
+          });
     const client = createRendererModelClient([
       {
-        sendRequest(method, params, options) {
-          if (disposed || readRouting()?.forHost(route.hostId) !== route) {
-            throw new Error(`Renderer request manager is unavailable for Host ${route.hostId}`);
-          }
-          return options === undefined
-            ? target.sendRequest(method, params)
-            : target.sendRequest(method, params, options);
-        },
+        sendRequest: (method, params, options) =>
+          send(method, params, options as RendererRequestOptions | undefined),
         ...(target.addNotificationCallback
           ? { addNotificationCallback: target.addNotificationCallback.bind(target) }
           : {}),

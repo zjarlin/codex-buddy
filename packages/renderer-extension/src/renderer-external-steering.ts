@@ -11,6 +11,7 @@ interface SteeringManager {
   startTurn: RendererMethod;
   getTurnCoordinator: RendererMethod;
   getStreamRole?: RendererMethod;
+  getConversation?: RendererMethod;
 }
 
 function isManager(value: unknown): value is SteeringManager {
@@ -210,6 +211,17 @@ export function installRendererExternalSteering(target: unknown): (() => void) |
     const role = manager.getStreamRole?.(threadId);
     // Let Desktop forward to the owning window; its manager performs the replacement.
     if (isRecord(role) && role.role === "follower") return originalSteer.apply(manager, args);
+    const conversation = manager.getConversation?.(threadId);
+    // 原生远端服务没有 codexhost RPC；同一 Manager 的已加载元数据可确认原生 Thread。
+    if (
+      isRecord(conversation) &&
+      conversation.id === threadId &&
+      typeof conversation.modelProvider === "string" &&
+      conversation.modelProvider.length > 0 &&
+      conversation.modelProvider !== "codexhost"
+    ) {
+      return originalSteer.apply(manager, args);
+    }
     let host: ReturnType<typeof submissionHost> | null = null;
     let expectedTurnId: unknown;
     try {

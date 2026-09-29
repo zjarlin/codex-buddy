@@ -12,6 +12,7 @@ const { outputFiles } = await build({
     loader: "ts",
     contents: `
       import { installRendererBindingProbe } from './packages/renderer-extension/src/renderer-binding-probe.ts';
+      import { createRendererModelClient } from './packages/renderer-extension/src/renderer-model-client.ts';
       const config = globalThis.fixtureConfig;
       const sourceId = '${sourceId}', targetId = '${targetId}';
       let hostId = config.hostId ?? 'local';
@@ -22,6 +23,7 @@ const { outputFiles } = await build({
       globalThis.drafts = {};
       globalThis.rankings = [];
       globalThis.targetReads = 0;
+      globalThis.nativeRequests = [];
       let finishTargetCheck;
       const targetCheck = new Promise(resolve => { finishTargetCheck = resolve; });
       const main = document.querySelector('main');
@@ -64,8 +66,9 @@ const { outputFiles } = await build({
         cwd = workspace;
         publishWorkspace(config.staleWorkspace ? '/workspace/official-app' : cwd);
         const draftKey = threadId ?? 'draft-' + (++serial);
+        const composerThreadId = config.scopedCurrentThreadId && threadId ? hostId + ':' + threadId : threadId;
         main.innerHTML = '<div data-codex-composer-root style="position:relative;border:1px solid #555;padding:12px">' +
-          (threadId ? '<div data-above-composer-portal data-above-composer-conversation-id="' + threadId + '"></div>' : '') +
+          (threadId ? '<div data-above-composer-portal data-above-composer-conversation-id="' + composerThreadId + '"></div>' : '') +
           '<div data-codex-composer contenteditable="true" role="textbox" aria-label="Message" style="min-height:60px;white-space:pre-wrap"></div>' +
           (config.attachment ? '<div data-composer-attachments-row>attached.txt</div>' : '') +
           '<div><button id="location" type="button">Project location</button><button id="send" type="submit">Send</button></div></div>';
@@ -103,10 +106,15 @@ const { outputFiles } = await build({
         ...(config.mode === 'unsupported' ? {} : { routeSession: async params => {
           globalThis.rankings.push(params);
           if (config.mode === 'pending') return new Promise(() => {});
+          if (config.candidateDelay) await new Promise(resolve => setTimeout(resolve, config.candidateDelay));
           if (config.mode === 'failed') throw new Error('history unavailable');
           return { candidates: config.mode === 'empty' ? [] : [
             { threadId: targetId, title: 'Existing discussion', cwd: '/workspace/other', confidence: null, preview: 'Earlier message' },
-            { threadId: sourceId, title: 'Source discussion', cwd: '/workspace/demo', confidence: null, preview: 'Source message' },
+            { threadId: config.scopedCandidateThreadId ? hostId + ':' + sourceId : sourceId, title: 'Source discussion', cwd: '/workspace/demo', confidence: null, preview: 'Source message' },
+            ...Array.from({ length: config.extraCandidates ?? 0 }, (_, index) => ({
+              threadId: '019ccb31-9520-7120-bc17-556e9a92d9' + String(index).padStart(2, '0'),
+              title: 'Older discussion ' + index, cwd: '/workspace/other', confidence: null, preview: 'Earlier message',
+            })),
           ], reason: 'fixture' };
         } }),
         inspectThread: async () => ({ owner: 'codex', locked: true }),
@@ -117,6 +125,21 @@ const { outputFiles } = await build({
         selectThreadModel: unused, selectThreadThinking: unused, selectThreadPermissionMode: unused,
         checkUpdate: unused, startUpdate: unused, readUpdateStatus: unused,
       };
+      if (config.mode === 'native') {
+        client.routeSession = createRendererModelClient([{ sendRequest: async (method, params) => {
+          globalThis.nativeRequests.push(method);
+          if (method === 'codexhost/session/route') {
+            throw Object.assign(new Error('method not found'), { code: -32601 });
+          }
+          if (method === 'thread/list') {
+            return { data: [{ id: targetId, cwd: project.path, name: 'Native remote discussion' }] };
+          }
+          if (method === 'thread/turns/list' && params.threadId === targetId) {
+            return { data: [{ status: 'completed' }] };
+          }
+          throw new Error('Unexpected native request: ' + method);
+        } }]).routeSession;
+      }
       const binding = installRendererBindingProbe({ enabledAgents: ['codex'], defaultAgent: 'codex' });
       binding.setAdapter({ state: 'ready', reason: 'fixture', modelUpdates: 0, hook: 'model-state' }, undefined, () => true, client);
     `,
@@ -154,6 +177,36 @@ async function setup(page: Page, config: Record<string, unknown> = {}) {
 const sends = (page: Page) => page.evaluate(() => Reflect.get(globalThis, "sends"));
 const current = (page: Page) => page.getByRole("button", { name: /当前会话/ });
 const picker = (page: Page) => page.getByRole("dialog", { name: "选择发送会话" });
+
+for (const config of [
+  { hostId: "local" },
+  { hostId: "remote-ssh-discovered:okm252" },
+  { hostId: "remote-ssh-discovered:okm252", scopedCurrentThreadId: true },
+  { hostId: "remote-ssh-discovered:okm252", scopedCandidateThreadId: true },
+]) {
+  test(`recent conversations exclude the current conversation: ${JSON.stringify(config)}`, async ({
+    page,
+  }, testInfo) => {
+    await setup(page, { existing: true, ...config });
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Source discussion/ })).toHaveCount(0);
+    await expect(current(page)).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("searchbox").fill("Source discussion");
+    await expect(page.getByRole("button", { name: /Source discussion/ })).toHaveCount(0);
+    await expect(picker(page)).toContainText("没有匹配的已完成会话");
+    await page.screenshot({ path: testInfo.outputPath("current-excluded.png") });
+    await page.keyboard.press("Enter");
+    await expect(picker(page)).toHaveCount(0);
+    expect(await sends(page)).toMatchObject([{ hostId: config.hostId, threadId: sourceId }]);
+  });
+}
+
+test("a new draft still lists other conversations in its project", async ({ page }) => {
+  await setup(page);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /Source discussion/ })).toBeVisible();
+});
 
 for (const hostId of ["local", "remote-ssh-discovered:okm252"]) {
   test(`current project uses the composer instead of another prewarmed project: ${hostId}`, async ({
@@ -231,6 +284,85 @@ for (const existing of [false, true]) {
     ]);
   });
 }
+test("native SSH history remains selectable without Host extensions", async ({
+  page,
+}, testInfo) => {
+  await setup(page, { existing: true, hostId: "remote-ssh-discovered:cloud", mode: "native" });
+  await page.keyboard.press("Enter");
+  const target = page.getByRole("button", { name: /Native remote discussion/ });
+  await expect(target).toBeVisible();
+  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(picker(page)).not.toContainText("近期会话暂不可用");
+  expect(await sends(page)).toEqual([]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "nativeRequests"))).toEqual([
+    "codexhost/session/route",
+    "thread/list",
+    "thread/turns/list",
+  ]);
+  await page.screenshot({ path: testInfo.outputPath("native-ssh-history.png") });
+  await target.click();
+  await expect.poll(() => sends(page)).toHaveLength(1);
+  expect((await sends(page))[0]).toMatchObject({
+    hostId: "remote-ssh-discovered:cloud",
+    threadId: targetId,
+    cwd: "/workspace/other",
+  });
+});
+
+test("slow history remains available when it arrives after five seconds", async ({
+  page,
+}, testInfo) => {
+  await page.clock.install();
+  await setup(page, { existing: true, hostId: "ssh:macbook", candidateDelay: 6_000 });
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.clock.runFor(5_100);
+  await expect(picker(page)).toContainText("近期会话加载较慢，仍在读取");
+  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
+  await page.screenshot({ path: testInfo.outputPath("slow-history.png") });
+  await page.clock.runFor(1_000);
+  await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
+  await expect(picker(page)).not.toContainText("仍在读取");
+  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
+  expect(await sends(page)).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("history-loaded.png") });
+  await page.getByRole("button", { name: /Existing discussion/ }).click();
+  await expect.poll(() => sends(page)).toHaveLength(1);
+  expect((await sends(page))[0]).toMatchObject({
+    hostId: "ssh:macbook",
+    threadId: targetId,
+    text: "继续这个任务\n保留第二行",
+  });
+});
+
+test("a slow history failure replaces the loading notice", async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { mode: "failed", candidateDelay: 6_000 });
+  await page.keyboard.press("Enter");
+  await page.clock.runFor(5_100);
+  await expect(picker(page)).toContainText("近期会话加载较慢，仍在读取");
+  await page.clock.runFor(1_000);
+  await expect(picker(page)).toContainText("近期会话暂不可用");
+  await expect(picker(page)).not.toContainText("仍在读取");
+  expect(await sends(page)).toEqual([]);
+  await current(page).click();
+  expect(await sends(page)).toHaveLength(1);
+});
+
+test("late history cannot reopen a picker cancelled while loading", async ({ page }) => {
+  await page.clock.install();
+  await setup(page, { candidateDelay: 6_000 });
+  await page.keyboard.press("Enter");
+  await page.clock.runFor(5_100);
+  await page.keyboard.press("Escape");
+  await page.clock.runFor(1_000);
+  await expect(picker(page)).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveText(
+    "继续这个任务\n保留第二行",
+    { useInnerText: true },
+  );
+  expect(await sends(page)).toEqual([]);
+});
+
 for (const mode of ["empty", "failed", "unsupported", "pending"]) {
   test(`${mode}: never sends automatically and current remains available`, async ({ page }) => {
     await page.clock.install();
@@ -453,6 +585,66 @@ test("arrow navigation explicitly selects a project instead of the default", asy
   await page.keyboard.press("Enter");
   await expect.poll(() => sends(page)).toHaveLength(1);
   expect((await sends(page))[0]).toMatchObject({ threadId: null, cwd: "/workspace/other" });
+});
+
+test("history refresh preserves keyboard confirmation of a focused project", async ({
+  page,
+}, testInfo) => {
+  await page.clock.install();
+  await setup(page, { existing: true, candidateDelay: 1_000 });
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Tab");
+  await page.keyboard.press("Tab");
+  const project = page.getByRole("button", { name: /在 Other project 新建会话/ });
+  await expect(project).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath("focused-project.png") });
+  await page.clock.runFor(1_100);
+  await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
+  await expect(project).toBeFocused();
+  await expect(project).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Enter");
+  await page.clock.runFor(200);
+  await page.screenshot({ path: testInfo.outputPath("confirmed-project.png") });
+  await expect(picker(page)).toHaveCount(0);
+  expect(await sends(page)).toMatchObject([{ threadId: null, cwd: "/workspace/other" }]);
+});
+
+test("failed project selection keeps the reason visible and keyboard recovery available", async ({
+  page,
+}, testInfo) => {
+  await setup(page, { existing: true, attachment: true, extraCandidates: 16 });
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /Older discussion 15/ })).toBeAttached();
+  await page.screenshot({ path: testInfo.outputPath("attachment-picker.png") });
+  await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
+  const status = picker(page).getByRole("status");
+  await expect(status).toContainText("含附件、引用或格式的草稿暂不能跨会话发送");
+  await page.screenshot({ path: testInfo.outputPath("attachment-transfer-error.png") });
+  await expect(status).toBeInViewport({ ratio: 1 });
+  expect(await sends(page)).toEqual([]);
+  await page.keyboard.press("ArrowUp");
+  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("Enter");
+  await expect(picker(page)).toHaveCount(0);
+  expect(await sends(page)).toMatchObject([{ threadId: sourceId, attachment: true }]);
+});
+
+test("history updates preserve transfer errors without stealing composer focus", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await setup(page, { existing: true, attachment: true, candidateDelay: 1_000 });
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
+  const status = picker(page).getByRole("status");
+  await expect(status).toContainText("草稿暂不能跨会话发送");
+  const editor = page.getByRole("textbox", { name: "Message" });
+  await editor.click();
+  await page.clock.runFor(1_100);
+  await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeAttached();
+  await expect(status).toContainText("草稿暂不能跨会话发送");
+  await expect(editor).toBeFocused();
+  expect(await sends(page)).toEqual([]);
 });
 
 test("unconfirmed target submission preserves the source and does not retry", async ({ page }) => {

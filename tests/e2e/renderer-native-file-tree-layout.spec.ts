@@ -7,9 +7,45 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installNativeFileTreeLayout } from "./packages/renderer-extension/src/renderer-native-file-tree-layout.ts";
+      import { installNativeFilePanePlacement } from "./packages/renderer-extension/src/renderer-native-file-pane.ts";
       const content = document.querySelector("#content");
       const row = document.querySelector("#workspace");
       const calls = [];
+      const paneCalls = [];
+      let activeTab;
+      let paneTab;
+      let moveCount = 0;
+      let layout = "right";
+      let menuPending = false;
+      let resolveMenu;
+      const nativeMove = (side) => {
+        layout = side;
+        document.querySelector("#file-pane").style.order = side === "left" ? "-1" : "1";
+      };
+      const mountTab = (kind = "workspace-file", controller = "right", delayed = false) => {
+        paneTab?.remove();
+        paneTab = document.createElement("button");
+        paneTab.id = "native-file-tab";
+        paneTab.textContent = kind === "review" ? "审查" : "打开文件";
+        paneTab.setAttribute("role", "tab");
+        paneTab.setAttribute("aria-selected", "true");
+        menuPending = false;
+        activeTab = { tabId: "file:remote:/repo", dndId: "instance-" + (++moveCount), tabType: { kind } };
+        const props = { tab: activeTab, controller: { panelId: controller }, isActive: true };
+        paneTab.__reactFiber$fixture = {
+          memoizedProps: { getItems: () => {
+            const items = [{
+              id: "unified-workspace-move-" + (layout === "right" ? "left" : "right"),
+              onSelect: () => { paneCalls.push(activeTab.dndId); nativeMove("left"); }
+            }];
+            if (!delayed || menuPending) return items;
+            menuPending = true;
+            return new Promise((resolve) => { resolveMenu = () => resolve(items); });
+          } },
+          return: { memoizedProps: props, return: null }
+        };
+        document.querySelector("#file-toolbar").append(paneTab);
+      };
       let pane, separator, resizeFiber;
       const mount = (type = "workspace") => {
         pane?.remove();
@@ -53,10 +89,15 @@ const { outputFiles } = await build({
         });
       };
       const control = installNativeFileTreeLayout(document);
+      const placement = installNativeFilePanePlacement(document);
       mount();
+      mountTab();
       globalThis.treeFixture = {
-        calls, mount,
-        dispose: control.dispose,
+        calls, mount, paneCalls, mountTab, nativeMove,
+        menuPending: () => menuPending,
+        resolveMenu: () => resolveMenu?.(),
+        dispose: () => { control.dispose(); placement.dispose(); },
+        disposePlacement: placement.dispose,
         references: () => ({ pane, separator, parent: pane.parentElement }),
         replaceResize: () => {
           resizeFiber.memoizedProps = {
@@ -82,7 +123,13 @@ async function setup(page: Page) {
   await page.setContent(`<!doctype html><html><head><style>
     * { box-sizing:border-box; }
     body { margin:0; padding:24px; color:#202020; font:14px system-ui; }
-    #workspace { display:flex; height:480px; width:100%; background:#fafafa; border:1px solid #ccc; }
+    #shell { display:flex; height:480px; width:100%; background:#fafafa; border:1px solid #ccc; }
+    #sidebar { width:150px; flex:none; padding:16px; background:#f3f3f3; }
+    #split { display:flex; flex:1; min-width:0; }
+    #chat { flex:1; min-width:0; padding:24px; border-left:1px solid #ccc; }
+    #file-pane { display:flex; flex-direction:column; width:65%; min-width:0; }
+    #file-toolbar { height:36px; flex:none; padding:4px; border-bottom:1px solid #ccc; }
+    #workspace { display:flex; flex:1; min-height:0; width:100%; }
     #content { flex:1; min-width:0; padding:24px; }
     #native-tree { position:relative; flex:none; border-left:1px solid #ccc; }
     #native-tree h3 { padding:0 16px; }
@@ -91,14 +138,21 @@ async function setup(page: Page) {
     .native-resizer [role=separator] { position:absolute; inset:0; cursor:col-resize; }
     #unrelated { display:flex; }
   </style></head><body>
-    <h2>官方文件面板布局夹具</h2>
-    <div id="workspace"><main id="content">选择文件</main></div>
+    <h2>官方文件面板与对话布局夹具</h2>
+    <div id="shell"><aside id="sidebar">项目与会话列表</aside><div id="split">
+      <section id="chat">对话区域<textarea placeholder="输入消息"></textarea></section>
+      <section id="file-pane"><header id="file-toolbar"></header><div id="workspace"><main id="content">选择文件</main></div></section>
+    </div></div>
     <div id="unrelated"><div role="separator" aria-orientation="vertical"></div></div>
   </body></html>`);
   await page.addScriptTag({ content: source });
   await expect(page.locator("#native-tree")).toHaveAttribute(
     "data-codexhost-native-file-tree-left",
     "v1",
+  );
+  await expect(page.locator("#native-file-tab")).toHaveAttribute(
+    "data-codexhost-native-file-pane-layout",
+    "left",
   );
 }
 
@@ -122,10 +176,18 @@ test("places the existing official tree before file contents and preserves file 
   );
   const tree = await page.locator("#native-tree").boundingBox();
   const content = await page.locator("#content").boundingBox();
-  if (!tree || !content) throw new Error("Missing file tree or contents");
+  const chat = await page.locator("#chat").boundingBox();
+  const toolbar = await page.locator("#file-toolbar").boundingBox();
+  const sidebar = await page.locator("#sidebar").boundingBox();
+  if (!tree || !content || !chat || !toolbar || !sidebar) throw new Error("Missing workspace pane");
+  expect(sidebar.x + sidebar.width).toBeLessThanOrEqual(tree.x);
   expect(tree.x + tree.width).toBeLessThanOrEqual(content.x);
+  expect(content.x + content.width).toBeLessThanOrEqual(chat.x);
+  expect(toolbar.x + toolbar.width).toBeLessThanOrEqual(chat.x);
   await page.getByRole("button", { name: "src/app.ts" }).click();
   await expect(page.locator("#content")).toHaveText("export const app = true;");
+  await page.getByPlaceholder("输入消息").fill("继续修改文件");
+  await expect(page.getByPlaceholder("输入消息")).toHaveValue("继续修改文件");
   expect(
     await page.evaluate((previous) => {
       const current = Reflect.get(globalThis, "treeFixture").references();
@@ -197,4 +259,82 @@ test("ignores unsupported bindings and releases an active drag on disposal", asy
   await page.mouse.move(box.x + 80, box.y + 80);
   await page.mouse.up();
   expect(await page.evaluate(() => Reflect.get(globalThis, "treeFixture").calls)).toEqual([]);
+});
+
+test("uses official placement for review tabs and preserves later manual placement", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "treeFixture");
+    fixture.nativeMove("right");
+    fixture.mountTab("review");
+  });
+  await expect(page.locator("#native-file-tab")).toHaveAttribute(
+    "data-codexhost-native-file-pane-layout",
+    "left",
+  );
+  expect(await page.evaluate(() => Reflect.get(globalThis, "treeFixture").paneCalls)).toHaveLength(
+    2,
+  );
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "treeFixture").nativeMove("right");
+    document.querySelector("#native-file-tab")?.setAttribute("aria-selected", "false");
+  });
+  await page.getByPlaceholder("输入消息").fill("继续对话");
+  await expect(page.locator("#file-pane")).toHaveCSS("order", "1");
+});
+
+test("does not move terminals, browsers or bottom panels", async ({ page }) => {
+  await setup(page);
+  for (const [kind, controller] of [
+    ["terminal", "right"],
+    ["browser", "right"],
+    ["workspace-file", "bottom"],
+  ]) {
+    await page.evaluate(
+      ([kind, controller]) => {
+        const fixture = Reflect.get(globalThis, "treeFixture");
+        fixture.nativeMove("right");
+        fixture.mountTab(kind, controller);
+      },
+      [kind, controller],
+    );
+    await page.getByPlaceholder("输入消息").fill(kind ?? "");
+    await expect(page.locator("#file-pane")).toHaveCSS("order", "1");
+  }
+  expect(await page.evaluate(() => Reflect.get(globalThis, "treeFixture").paneCalls)).toHaveLength(
+    1,
+  );
+});
+
+test("ignores a delayed menu after replacing the active tab or disposing the extension", async ({
+  page,
+}) => {
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "treeFixture");
+    fixture.nativeMove("right");
+    fixture.mountTab("workspace-file", "right", true);
+  });
+  // 等待异步菜单已进入待处理状态，再模拟切换会话。
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "treeFixture").menuPending()))
+    .toBe(true);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "treeFixture");
+    fixture.mountTab("terminal");
+    fixture.resolveMenu();
+  });
+  await expect(page.locator("#file-pane")).toHaveCSS("order", "1");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "treeFixture").paneCalls)).toHaveLength(
+    1,
+  );
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "treeFixture");
+    fixture.disposePlacement();
+    fixture.mountTab();
+  });
+  await page.getByPlaceholder("输入消息").fill("卸载后仍可对话");
+  await expect(page.locator("#file-pane")).toHaveCSS("order", "1");
 });

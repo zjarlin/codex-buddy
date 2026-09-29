@@ -3,6 +3,7 @@ import Play from "lucide/dist/esm/icons/play.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 
 type InterruptedThread = BuddyInterrupted["threads"][number];
 const messages = {
@@ -16,6 +17,9 @@ const messages = {
     resumeAll: "全部继续",
     resumeFailed: "恢复失败",
     unavailable: "当前连接不支持会话恢复。",
+    waiting: "连接状态尚未确认，暂时无法恢复会话。",
+    unavailableHint:
+      "请确认当前连接已接入支持会话恢复的 codexhost；SSH 会话需在远端启用后重新连接。",
     private: "隐私模式下不能续接普通会话。",
     unreadable: "条会话历史暂时无法读取",
     failed: "失败",
@@ -32,6 +36,9 @@ const messages = {
     resumeAll: "Resume all",
     resumeFailed: "Resume failed",
     unavailable: "Conversation recovery is unavailable on this connection.",
+    waiting: "Waiting for connection status before allowing conversation recovery.",
+    unavailableHint:
+      "Check that this connection runs codexhost with conversation recovery; for SSH, enable it on the remote machine and reconnect.",
     private: "Ordinary conversations cannot resume in private mode.",
     unreadable: "conversation histories could not be read",
     failed: "Failed",
@@ -55,6 +62,7 @@ function session(client: RendererModelClient | null) {
     batch: false,
     updatedAt: 0,
     unreadable: 0,
+    unavailable: false,
     error: "",
   };
 }
@@ -70,11 +78,13 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   let fingerprint = "";
 
   const current = (target: typeof state) => !disposed && state === target;
-  const canResume = (target: typeof state) => current(target) && !privateMode;
+  const canResume = (target: typeof state) =>
+    current(target) && !privateMode && !target.unavailable;
 
   async function refresh(force = false): Promise<void> {
     const target = state;
     if (
+      document.hidden ||
       !canResume(target) ||
       !target.client?.buddyInterrupted ||
       target.loading ||
@@ -99,7 +109,10 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       );
       target.unreadable = result.unreadable;
     } catch (failure) {
-      if (current(target)) target.error = errorMessage(failure);
+      if (current(target)) {
+        target.unavailable ||= failure instanceof RendererMethodUnavailableError;
+        target.error = errorMessage(failure);
+      }
     } finally {
       target.loading = false;
       if (current(target)) render();
@@ -124,6 +137,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       target.continued.add(key);
       target.threads = target.threads.filter((candidate) => keyFor(candidate) !== key);
     } catch (failure) {
+      target.unavailable ||= failure instanceof RendererMethodUnavailableError;
       target.failures.set(key, errorMessage(failure));
     } finally {
       target.pending.delete(key);
@@ -162,6 +176,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       state.batch,
       state.error,
       state.unreadable,
+      state.unavailable,
       [...state.pending],
       [...state.failures],
     ]);
@@ -183,8 +198,14 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       element.textContent = text;
       parent.append(element);
     };
-    if (privateMode || !state.client?.buddyInterrupted || !state.client.buddyContinue) {
-      note(privateMode ? m.private : m.unavailable);
+    if (
+      privateMode ||
+      state.unavailable ||
+      !state.client?.buddyInterrupted ||
+      !state.client.buddyContinue
+    ) {
+      note(privateMode ? m.private : state.client ? m.unavailable : m.waiting);
+      if (state.unavailable && !privateMode) note(m.unavailableHint);
       root.replaceChildren(wrapper);
       return;
     }

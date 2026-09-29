@@ -25,7 +25,7 @@ import {
   gitFilePathSchema,
 } from "@codexhost/shared-contracts";
 import { readConnection } from "@codexhost/buddy-engine";
-import { readGitContent } from "./git-content.js";
+import { readGitContent, type GitContentFileSystem } from "./git-content.js";
 import { readGitSubmoduleStatus } from "./git-submodule-status.js";
 
 const execFileAsync = promisify(execFile);
@@ -95,6 +95,15 @@ function localizedGitError(detail: string): string {
   return detail;
 }
 
+export interface GitWorkspaceRuntime {
+  run(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult>;
+  paths: typeof path;
+  realpath(directory: string): Promise<string>;
+  exists(target: string): Promise<boolean>;
+  files: GitContentFileSystem;
+  nullDevice: string;
+}
+
 export class GitWorkspaceError extends Error {
   constructor(
     message: string,
@@ -123,7 +132,7 @@ export class GitPushRejectedError extends GitWorkspaceError {
   }
 }
 
-interface CommandResult {
+export interface GitCommandResult {
   stdout: string;
   stderr: string;
 }
@@ -132,7 +141,7 @@ async function runGit(
   cwd: string,
   arguments_: readonly string[],
   environment: NodeJS.ProcessEnv = process.env,
-): Promise<CommandResult> {
+): Promise<GitCommandResult> {
   try {
     const result = await execFileAsync("git", ["-C", cwd, ...arguments_], {
       encoding: "utf8",
@@ -170,7 +179,8 @@ function isConflicted(indexStatus: string, workTreeStatus: string): boolean {
 // 判断是否存在未完成的合并或变基。直接依赖 git 的元数据目录，稳定且无需解析日志。
 async function operationState(
   cwd: string,
-  git: (cwd: string, arguments_: readonly string[]) => Promise<CommandResult>,
+  git: (cwd: string, arguments_: readonly string[]) => Promise<GitCommandResult>,
+  exists: (target: string) => Promise<boolean>,
 ): Promise<"merge" | "rebase" | null> {
   const [mergeHead, rebaseMerge, rebaseApply] = await Promise.all([
     git(cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).catch(() => null),
@@ -180,7 +190,7 @@ async function operationState(
   if (mergeHead?.stdout.trim()) return "merge";
   for (const candidate of [rebaseMerge, rebaseApply]) {
     const directory = candidate?.stdout.trim();
-    if (directory && (await pathExists(directory))) return "rebase";
+    if (directory && (await exists(directory))) return "rebase";
   }
   return null;
 }
@@ -228,18 +238,9 @@ interface SubmoduleState {
   status: GitSubmodule["status"];
 }
 
-function absoluteGitPath(cwd: string, filePath: string): string {
-  const workspace = absoluteWorkspace(cwd);
-  const absolute = path.resolve(workspace, filePath);
-  if (absolute !== workspace && !absolute.startsWith(`${workspace}${path.sep}`)) {
-    throw new GitWorkspaceError("Git 路径超出工作区范围。");
-  }
-  return absolute;
-}
-
 async function submodules(
   cwd: string,
-  git: (cwd: string, arguments_: readonly string[]) => Promise<CommandResult> = runGit,
+  git: (cwd: string, arguments_: readonly string[]) => Promise<GitCommandResult> = runGit,
 ): Promise<{ submodules: SubmoduleState[]; warnings: string[] }> {
   const [result, porcelain] = await Promise.all([
     readGitSubmoduleStatus(cwd, git),
@@ -311,10 +312,6 @@ function parseBranch(header: string | undefined): BranchState {
     ahead,
     behind,
   };
-}
-
-function absoluteWorkspace(cwd: string): string {
-  return path.resolve(cwd);
 }
 
 async function pathExists(target: string): Promise<boolean> {
@@ -421,10 +418,29 @@ export class GitWorkspace {
   #queue: Promise<unknown> = Promise.resolve();
   readonly #mutations = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly environment: NodeJS.ProcessEnv = process.env) {}
+  constructor(
+    private readonly environment: NodeJS.ProcessEnv = process.env,
+    private readonly runtime?: GitWorkspaceRuntime,
+  ) {}
 
-  #run(cwd: string, arguments_: readonly string[]): Promise<CommandResult> {
-    return runGit(cwd, arguments_, this.environment);
+  #absoluteWorkspace(cwd: string): string {
+    return (this.runtime?.paths ?? path).resolve(cwd);
+  }
+
+  #absoluteGitPath(cwd: string, filePath: string): string {
+    const paths = this.runtime?.paths ?? path;
+    const workspace = this.#absoluteWorkspace(cwd);
+    const absolute = paths.resolve(workspace, filePath);
+    if (absolute !== workspace && !absolute.startsWith(`${workspace}${paths.sep}`)) {
+      throw new GitWorkspaceError("Git 路径超出工作区范围。");
+    }
+    return absolute;
+  }
+
+  #run(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult> {
+    return this.runtime
+      ? this.runtime.run(cwd, arguments_)
+      : runGit(cwd, arguments_, this.environment);
   }
 
   async status(cwd: string): Promise<GitWorkspaceStatus> {
@@ -433,8 +449,11 @@ export class GitWorkspace {
 
   async root(cwd: string): Promise<string | null> {
     try {
-      const result = await this.#run(absoluteWorkspace(cwd), ["rev-parse", "--show-toplevel"]);
-      return realpath(result.stdout.trim());
+      const result = await this.#run(this.#absoluteWorkspace(cwd), [
+        "rev-parse",
+        "--show-toplevel",
+      ]);
+      return (this.runtime?.realpath ?? realpath)(result.stdout.trim());
     } catch (error) {
       if (error instanceof GitWorkspaceError && /not a git repository/u.test(error.message)) {
         return null;
@@ -444,15 +463,15 @@ export class GitWorkspace {
   }
 
   async submoduleRoot(cwd: string, pathValue: string): Promise<string | null> {
-    const workspace = absoluteWorkspace(cwd);
+    const workspace = this.#absoluteWorkspace(cwd);
     const parsedPath = gitFilePathSchema.parse(pathValue);
-    const candidate = absoluteGitPath(workspace, parsedPath);
+    const candidate = this.#absoluteGitPath(workspace, parsedPath);
     const known = await submodules(workspace, (worktree, arguments_) =>
       this.#run(worktree, arguments_),
     );
     if (!known.submodules.some((entry) => entry.path === parsedPath)) return null;
     try {
-      return await realpath(candidate);
+      return await (this.runtime?.realpath ?? realpath)(candidate);
     } catch {
       return null;
     }
@@ -461,7 +480,7 @@ export class GitWorkspace {
   async diff(cwd: string, filePath: string): Promise<GitDiffResult> {
     return this.#serial(async () => {
       const pathValue = gitFilePathSchema.parse(filePath);
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const result = await this.#diffUnlocked(workspace, pathValue);
       const bytes = Buffer.byteLength(result.stdout, "utf8");
       return {
@@ -475,21 +494,22 @@ export class GitWorkspace {
   async content(cwd: string, filePath: string): Promise<GitContentResult> {
     return this.#serial(async () => {
       const pathValue = gitFilePathSchema.parse(filePath);
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const status = await this.#statusUnlocked(workspace);
       const change = status.changes.find((entry) => entry.path === pathValue);
       return readGitContent(
         pathValue,
-        absoluteGitPath(workspace, pathValue),
+        this.#absoluteGitPath(workspace, pathValue),
         change,
         (arguments_) => this.#run(workspace, arguments_),
+        this.runtime?.files,
       );
     });
   }
 
   async stage(cwd: string, paths: readonly string[]): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["stage", ...[...paths].sort()], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const validated = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       if (validated.length > 0) {
         await this.#run(workspace, ["add", "--", ...validated]);
@@ -500,7 +520,7 @@ export class GitWorkspace {
 
   async unstage(cwd: string, paths: readonly string[]): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["unstage", ...[...paths].sort()], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const validated = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       if (validated.length > 0) {
         await this.#run(workspace, ["restore", "--staged", "--", ...validated]);
@@ -516,7 +536,7 @@ export class GitWorkspace {
     paths: readonly string[] = [],
   ): Promise<GitCommitResult> {
     return this.#mutation(cwd, ["commit", message, push, [...paths].sort()], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const parsedMessage = gitCommitMessageSchema.parse(message);
       const validatedPaths = paths.map((pathValue) => gitFilePathSchema.parse(pathValue));
       await this.#run(workspace, [
@@ -544,7 +564,7 @@ export class GitWorkspace {
 
   async push(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["push"], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       await this.#pushUnlocked(workspace);
       return this.#statusUnlocked(workspace);
     });
@@ -553,7 +573,7 @@ export class GitWorkspace {
   /** 拉取远端引用，不改变工作区；供同步与状态刷新共用。 */
   async fetch(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["fetch"], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       await this.#fetchUnlocked(workspace);
       return this.#statusUnlocked(workspace);
     });
@@ -566,7 +586,7 @@ export class GitWorkspace {
    */
   async sync(cwd: string): Promise<GitSyncResult> {
     return this.#mutation(cwd, ["sync"], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const before = await this.#statusUnlocked(workspace);
       const upstream = before.upstream;
       if (!upstream) {
@@ -619,9 +639,14 @@ export class GitWorkspace {
   /** 冲突消解并暂存后，提交合并结果。 */
   async mergeContinue(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["merge-continue"], async () => {
-      const workspace = absoluteWorkspace(cwd);
-      const operation = await operationState(workspace, (worktree, arguments_) =>
-        this.#run(worktree, arguments_),
+      const workspace = this.#absoluteWorkspace(cwd);
+      const operation = await operationState(
+        workspace,
+        (worktree, arguments_) => this.#run(worktree, arguments_),
+        (target) =>
+          (this.runtime?.exists ?? pathExists)(
+            (this.runtime?.paths ?? path).resolve(workspace, target),
+          ),
       );
       if (operation !== "merge") {
         throw new GitWorkspaceError("当前没有进行中的合并，无法继续。");
@@ -638,9 +663,14 @@ export class GitWorkspace {
   /** 放弃当前合并，恢复到合并前状态。 */
   async mergeAbort(cwd: string): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["merge-abort"], async () => {
-      const workspace = absoluteWorkspace(cwd);
-      const operation = await operationState(workspace, (worktree, arguments_) =>
-        this.#run(worktree, arguments_),
+      const workspace = this.#absoluteWorkspace(cwd);
+      const operation = await operationState(
+        workspace,
+        (worktree, arguments_) => this.#run(worktree, arguments_),
+        (target) =>
+          (this.runtime?.exists ?? pathExists)(
+            (this.runtime?.paths ?? path).resolve(workspace, target),
+          ),
       );
       if (!operation) {
         throw new GitWorkspaceError("当前没有进行中的合并或变基，无法中止。");
@@ -652,7 +682,9 @@ export class GitWorkspace {
 
   async submodules(cwd: string): Promise<{ submodules: GitSubmodule[]; warnings: string[] }> {
     return this.#serial(() =>
-      submodules(absoluteWorkspace(cwd), (worktree, arguments_) => this.#run(worktree, arguments_)),
+      submodules(this.#absoluteWorkspace(cwd), (worktree, arguments_) =>
+        this.#run(worktree, arguments_),
+      ),
     );
   }
 
@@ -661,9 +693,9 @@ export class GitWorkspace {
     input: Pick<GitSubmoduleUpdateParams, "path" | "init">,
   ): Promise<GitWorkspaceStatus> {
     return this.#mutation(cwd, ["submodule-update", input.path, input.init], async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const pathValue = gitFilePathSchema.parse(input.path);
-      absoluteGitPath(workspace, pathValue);
+      this.#absoluteGitPath(workspace, pathValue);
       const known = await submodules(workspace, (worktree, arguments_) =>
         this.#run(worktree, arguments_),
       );
@@ -683,7 +715,7 @@ export class GitWorkspace {
 
   async log(cwd: string, limit = GIT_LOG_LIMIT): Promise<GitLogResult> {
     return this.#serial(async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const safeLimit = Math.max(1, Math.min(Math.trunc(limit), GIT_LOG_LIMIT));
       const [refs, commits, head, branch] = await Promise.all([
         this.#run(workspace, [
@@ -726,7 +758,7 @@ export class GitWorkspace {
 
   async commitDetail(cwd: string, commit: string): Promise<GitCommitDetail> {
     return this.#serial(async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const value = commit.trim();
       if (!/^[0-9a-f]{7,64}$/iu.test(value)) throw new GitWorkspaceError("无效的提交哈希。");
       const [metadata, body, status, numbers] = await Promise.all([
@@ -753,7 +785,7 @@ export class GitWorkspace {
 
   async commitDiff(cwd: string, commit: string, filePath: string): Promise<GitDiffResult> {
     return this.#serial(async () => {
-      const workspace = absoluteWorkspace(cwd);
+      const workspace = this.#absoluteWorkspace(cwd);
       const value = commit.trim();
       if (!/^[0-9a-f]{7,64}$/iu.test(value)) throw new GitWorkspaceError("无效的提交哈希。");
       const pathValue = gitFilePathSchema.parse(filePath);
@@ -847,7 +879,7 @@ export class GitWorkspace {
     environment: NodeJS.ProcessEnv;
   }): Promise<GitGeneratedMessage> {
     return this.#serial(async () => {
-      const workspace = absoluteWorkspace(input.cwd);
+      const workspace = this.#absoluteWorkspace(input.cwd);
       const model = input.model.trim();
       if (!model) throw new GitWorkspaceError("请选择模型后再生成提交消息。");
       const home = path.resolve(
@@ -912,7 +944,7 @@ export class GitWorkspace {
 
   // 进行中的相同写操作共用结果；成功或失败后均允许用户显式重试。
   #mutation<T>(cwd: string, input: readonly unknown[], operation: () => Promise<T>): Promise<T> {
-    const key = JSON.stringify([absoluteWorkspace(cwd), input]);
+    const key = JSON.stringify([this.#absoluteWorkspace(cwd), input]);
     const existing = this.#mutations.get(key);
     if (existing) return existing as Promise<T>;
     const request = this.#serial(operation).finally(() => {
@@ -928,7 +960,7 @@ export class GitWorkspace {
     return next;
   }
 
-  async #fetchUnlocked(cwd: string): Promise<CommandResult> {
+  async #fetchUnlocked(cwd: string): Promise<GitCommandResult> {
     return this.#run(cwd, ["fetch", "--prune"]);
   }
 
@@ -936,7 +968,7 @@ export class GitWorkspace {
    * 推送当前分支；non-fast-forward 被拒时抛结构化错误并带上落后提交数，
    * 让路由层可以自动进入"拉取并同步"或把冲突交给模型，而不是只显示 raw stderr。
    */
-  async #pushUnlocked(cwd: string): Promise<CommandResult> {
+  async #pushUnlocked(cwd: string): Promise<GitCommandResult> {
     try {
       return await this.#run(cwd, ["push"]);
     } catch (error) {
@@ -983,9 +1015,9 @@ export class GitWorkspace {
     }
   }
 
-  async #diffUnlocked(cwd: string, filePath?: string): Promise<CommandResult> {
+  async #diffUnlocked(cwd: string, filePath?: string): Promise<GitCommandResult> {
     const pathArguments = filePath ? ["--", filePath] : [];
-    let result: CommandResult;
+    let result: GitCommandResult;
     if (await this.#hasHead(cwd)) {
       result = await this.#run(cwd, [
         "diff",
@@ -1018,14 +1050,14 @@ export class GitWorkspace {
     return result;
   }
 
-  async #untrackedDiff(cwd: string, filePath: string): Promise<CommandResult> {
+  async #untrackedDiff(cwd: string, filePath: string): Promise<GitCommandResult> {
     try {
       return await this.#run(cwd, [
         "diff",
         "--no-index",
         "--no-color",
         "--unified=3",
-        process.platform === "win32" ? "NUL" : "/dev/null",
+        this.runtime?.nullDevice ?? (process.platform === "win32" ? "NUL" : "/dev/null"),
         filePath,
       ]);
     } catch (error) {
@@ -1037,7 +1069,7 @@ export class GitWorkspace {
   }
 
   async #statusUnlocked(cwd: string): Promise<GitWorkspaceStatus> {
-    const workspace = absoluteWorkspace(cwd);
+    const workspace = this.#absoluteWorkspace(cwd);
     const [{ stdout }, head, submoduleStates, operation] = await Promise.all([
       this.#run(workspace, ["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"]),
       this.#run(workspace, ["rev-parse", "--short", "HEAD"]).catch(() => ({
@@ -1045,7 +1077,14 @@ export class GitWorkspace {
         stderr: "",
       })),
       submodules(workspace, (worktree, arguments_) => this.#run(worktree, arguments_)),
-      operationState(workspace, (worktree, arguments_) => this.#run(worktree, arguments_)),
+      operationState(
+        workspace,
+        (worktree, arguments_) => this.#run(worktree, arguments_),
+        (target) =>
+          (this.runtime?.exists ?? pathExists)(
+            (this.runtime?.paths ?? path).resolve(workspace, target),
+          ),
+      ),
     ]);
     const records = stdout.split("\0");
     const header = records.find((record) => record.startsWith("## "));

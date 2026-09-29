@@ -12,6 +12,7 @@ import {
   withProjectTabs,
 } from "./model.js";
 import { PROJECT_ROW_SELECTOR, projectMenu, rowProject } from "./native-binding.js";
+import { createRecentSectionCollapse } from "./recent-section.js";
 import { projectTabsStyle } from "./styles.js";
 
 const HIDDEN = "data-codexhost-project-tab-hidden";
@@ -71,6 +72,7 @@ export function installProjectTabs(options: {
   let loadedClient: ProjectTabsPersistenceClient | null = null;
   let loadingClient: ProjectTabsPersistenceClient | null = null;
   let hostWrite = Promise.resolve();
+  const collapseRecents = createRecentSectionCollapse();
 
   const persistenceClient = (): Required<ProjectTabsPersistenceClient> | null => {
     const client = options.getClient?.();
@@ -250,6 +252,7 @@ export function installProjectTabs(options: {
     if (disposed) {
       return;
     }
+    collapseRecents(config.selected);
     const client = persistenceClient();
     if (client && client !== loadedClient && client !== loadingClient) {
       loadingClient = client;
@@ -432,6 +435,9 @@ export function installProjectTabs(options: {
       "aria-label",
       "data-sidebar-project-kind",
       "data-sidebar-project-container-id",
+      "data-app-action-sidebar-section-heading",
+      "data-app-action-sidebar-section-collapsed",
+      "aria-expanded",
     ],
   });
   document.addEventListener("keydown", onKeyDown, true);

@@ -277,6 +277,7 @@ import {
   type UpdateStatusResult,
 } from "@codexhost/shared-contracts";
 
+import { recentCompletedSessions } from "@codexhost/desktop-control/renderer-bindings";
 import {
   createRendererRequestSender,
   RendererMethodUnavailableError,
@@ -1039,7 +1040,10 @@ export function createRendererModelClient(
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
     buddyInterrupted: async () =>
       buddyInterruptedSchema.parse(await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {})),
-    readAutoModelRoutes: async (threadId: string, runId?: string) => {
+    readAutoModelRoutes: async (
+      threadId: string,
+      runId?: string,
+    ): Promise<AutoModelRoutesResult> => {
       const params = autoModelRoutesParamsSchema.parse({ threadId, ...(runId ? { runId } : {}) });
       try {
         return autoModelRoutesResultSchema.parse(
@@ -1047,7 +1051,7 @@ export function createRendererModelClient(
         );
       } catch (error) {
         if (error instanceof RendererMethodUnavailableError) {
-          return { supported: false, routes: [] };
+          return { supported: false, routes: [], unavailableReason: "host" };
         }
         throw error;
       }
@@ -1099,10 +1103,25 @@ export function createRendererModelClient(
       ),
     buddyCancel: async (threadId: string) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_CANCEL_METHOD, { threadId })),
-    routeSession: async (input: SessionRouteParams): Promise<SessionRouteResult> =>
-      sessionRouteResultSchema.parse(
-        await manager.sendRequest(SESSION_ROUTE_METHOD, sessionRouteParamsSchema.parse(input)),
-      ),
+    routeSession: async (input: SessionRouteParams): Promise<SessionRouteResult> => {
+      const params = sessionRouteParamsSchema.parse(input);
+      try {
+        return sessionRouteResultSchema.parse(
+          await manager.sendRequest(SESSION_ROUTE_METHOD, params),
+        );
+      } catch (error) {
+        if (!(error instanceof RendererMethodUnavailableError)) throw error;
+      }
+      // SSH 原生连接可能没有 Host 扩展；通过同一连接读取其真实历史。
+      const sessions = await recentCompletedSessions(async (method, nativeParams) => {
+        try {
+          return { result: await manager.sendRequest(method, nativeParams) };
+        } catch (error) {
+          return { error };
+        }
+      });
+      return sessionRouteResultSchema.parse(sessions);
+    },
     async getHarnessLaunchSettings(
       input: HarnessLaunchSettingsGet,
     ): Promise<HarnessLaunchSettings> {

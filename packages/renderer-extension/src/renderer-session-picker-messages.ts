@@ -5,6 +5,7 @@ const zh = {
   failed: "发送失败：",
   loadFailed: "近期会话暂不可用，仍可选择当前会话或新建会话",
   loading: "正在读取近期会话…",
+  loadingSlow: "近期会话加载较慢，仍在读取；可先选择当前会话或新建会话",
   empty: "没有匹配的已完成会话",
   unnamed: "未命名会话",
   current: "当前会话",
@@ -22,6 +23,8 @@ const en: typeof zh = {
   failed: "Could not send: ",
   loadFailed: "Recent conversations unavailable. You can still send here or start a new chat.",
   loading: "Loading recent conversations…",
+  loadingSlow:
+    "Recent conversations are taking longer to load. You can send here or start a new chat while waiting.",
   empty: "No matching completed conversations",
   unnamed: "Untitled conversation",
   current: "Current conversation",

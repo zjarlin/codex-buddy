@@ -6,12 +6,18 @@ import {
   type GitContentResult,
 } from "@codexhost/shared-contracts";
 
+export interface GitContentFileSystem {
+  stat(path: string): Promise<{ size: number; isDirectory(): boolean }>;
+  readFile(path: string): Promise<Buffer>;
+}
+
 // Gitlink 记录的是子仓库提交引用，不能把对应的工作区目录当作文本读取。
 export async function readGitContent(
   filePath: string,
   absolutePath: string,
   change: GitChange | undefined,
   git: (arguments_: readonly string[]) => Promise<{ stdout: string }>,
+  files: GitContentFileSystem = { stat, readFile },
 ): Promise<GitContentResult> {
   const index = await git(["ls-files", "--stage", "-z", "--", filePath]);
   const entries = index.stdout
@@ -30,7 +36,7 @@ export async function readGitContent(
         (entry) => entry.startsWith("160000 ") && entry.slice(entry.indexOf("\t") + 1) === filePath,
       );
   }
-  const info = await stat(absolutePath).catch((error: NodeJS.ErrnoException) => {
+  const info = await files.stat(absolutePath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT" || error.code === "ENOTDIR") {
       return null;
     }
@@ -74,7 +80,7 @@ export async function readGitContent(
   let revision = createHash("sha256").update("").digest("hex");
   if (size <= GIT_CONTENT_MAX_BYTES) {
     // 删除的普通文件以空工作区版本比对，保留基准内容。
-    const value = info ? await readFile(absolutePath) : Buffer.alloc(0);
+    const value = info ? await files.readFile(absolutePath) : Buffer.alloc(0);
     revision = createHash("sha256").update(value).digest("hex");
     binary = value.includes(0);
     if (!binary) {

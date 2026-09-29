@@ -1,8 +1,27 @@
 import type { SessionRouteResult } from "@codexhost/shared-contracts";
-import { object, result, type NativeRequest } from "./buddy/planner.js";
+
+export type RecentSessionsRequest = (
+  method: string,
+  params: Record<string, string | number | boolean>,
+) => Promise<{ result?: unknown; error?: unknown }>;
+
+function object(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function result(response: Awaited<ReturnType<RecentSessionsRequest>>): Record<string, unknown> {
+  if (response.error) {
+    throw new Error(`App Server 拒绝请求：${String(object(response.error).message ?? "unknown")}`);
+  }
+  return object(response.result);
+}
 
 /** 近期列表来自原生历史；只有最后一轮已完成的会话才作为续接目标。 */
-export async function recentCompletedSessions(request: NativeRequest): Promise<SessionRouteResult> {
+export async function recentCompletedSessions(
+  request: RecentSessionsRequest,
+): Promise<SessionRouteResult> {
   const page = result(
     await request("thread/list", {
       limit: 80,
@@ -38,10 +57,28 @@ export async function recentCompletedSessions(request: NativeRequest): Promise<S
         });
         const error = object(response.error);
         let turn: Record<string, unknown>;
-        if (error.code === -32601 || error.message === "thread/turns/list is not supported yet") {
-          const legacy = result(
-            await request("thread/read", { threadId: row.id, includeTurns: true }),
-          );
+        const unsupported =
+          error.code === -32601 ||
+          error.message === "thread/turns/list is not supported yet" ||
+          (error.code === -32600 &&
+            typeof error.message === "string" &&
+            error.message.includes("unknown variant `thread/turns/list`"));
+        if (unsupported) {
+          const legacyResponse = await request("thread/read", {
+            threadId: row.id,
+            includeTurns: true,
+          });
+          const legacyError = object(legacyResponse.error);
+          // 旧版完整历史接口也会遇到首条消息之前尚未物化的草稿。
+          if (
+            typeof legacyError.message === "string" &&
+            legacyError.message.endsWith(
+              "is not materialized yet; includeTurns is unavailable before first user message",
+            )
+          ) {
+            return null;
+          }
+          const legacy = result(legacyResponse);
           const thread = object(legacy.thread);
           if (thread.id !== row.id || object(thread.status).type === "active") {
             return null;

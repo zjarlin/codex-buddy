@@ -41,11 +41,12 @@ codexhost remote uninstall  # 卸载，保留 Thread 映射数据
 
 ## 升级
 
-在两台机器上用相同的包管理器升级到同一版本，然后在被控机器上重新执行 `codexhost remote install` 和 `codexhost remote start`，再重新连接 SSH 工作区。
+在两台机器上用相同的包管理器升级到同一版本，然后在被控机器上重新执行 `codexhost remote install`。等待远端现有任务结束，再执行 `codexhost remote stop` 和 `codexhost remote start`，最后重新连接 SSH 工作区。单独执行 `start` 会复用正在运行的 Host，不能保证已加载新版本。
 
 ## 常见问题
 
 - **`codexhost/harness/inspect is unsupported on this Host connection`**：当前 SSH 连接没有接入 codexhost。确认被控机器已安装并启动相同版本的 codexhost，然后重新连接 SSH 工作区。
+- **Auto Router 或会话恢复提示当前连接不支持**：该连接未提供对应扩展接口，可能仍连接官方原生服务或旧版本 Host。模型同步不启用这些接口；确认远端 codexhost 版本和运行状态，按上述升级流程切换服务后重新连接。Auto Router 与会话恢复独立检测，任一接口缺失不代表另一接口也缺失。
 - **`remote status` 提示 degraded 或需要重新安装**：重新执行 `codexhost remote install`，再执行 `codexhost remote start`。
 - **看不到某个 Harness**：在被控机器上检查该 Harness 是否已安装并登录，然后在设置中点击「重新诊断连接」。
 - **macOS 上安装失败，提示 launchd / `gui/$UID` 错误**：被控机器需要有已登录的图形会话，登录后重新执行 `codexhost remote install`。
@@ -53,6 +54,8 @@ codexhost remote uninstall  # 卸载，保留 Thread 映射数据
 ## SSH 功能归属
 
 模型目录和探测、Auto Router、自动会话推荐、中断会话恢复、Git 与文件操作、会话导入及已加载会话列表使用当前 SSH Host。远端 Provider、System One 和 Harness 的配置与登录留在远端；不会用本机凭据代替。会话导入后及打开已有推荐会话时保留原 Host，切换连接后不会把旧结果提交到另一台机器。
+
+基础 Git 操作也支持原生 SSH 服务：远端明确不提供 Git RPC 时，本机 Buddy Host 使用 Desktop 已保存的 SSH 连接，在远端执行 Git。状态、暂存／取消暂存、手动提交、推送、同步和子模块无需远端安装 codexhost。Git 凭据和文件仍在远端；该通道的关联仓库记录按连接保存在本机。AI 提交消息生成仍需远端服务。连接或操作失败不会换通道再次执行。详见 [Git 工作区](../../product/git-workspace.md)。
 
 官方 Codex 会话菜单的“从终端打开”在 Desktop 所在机器打开所选终端，使用 Desktop 已保存的 SSH 连接，再以远端工作目录、Codex 可执行文件和 CODEX_HOME 执行 `codex resume`。远端无需图形终端；本机需有 SSH 客户端。“在 VS Code 中打开”在本机使用 Remote SSH 打开远端目录；需要 VS Code Remote SSH 扩展。单独指定密钥文件的连接应先配置 SSH 别名，确保 VS Code 使用同一密钥。
 

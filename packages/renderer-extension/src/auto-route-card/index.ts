@@ -4,7 +4,7 @@ import Check from "lucide/dist/esm/icons/check.mjs";
 import CircleDashed from "lucide/dist/esm/icons/circle-dashed.mjs";
 import CircleAlert from "lucide/dist/esm/icons/circle-alert.mjs";
 import ChevronDown from "lucide/dist/esm/icons/chevron-down.mjs";
-import type { AutoModelRoute } from "@codexhost/shared-contracts";
+import type { AutoModelRoute, AutoModelRoutesResult } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { autoRouteMessages } from "./messages.js";
 import { autoRouteCardStyle } from "./style.js";
@@ -14,6 +14,8 @@ interface Context {
   hostId: string;
   root: HTMLElement;
   client: RendererModelClient;
+  composer?: Element;
+  selectedModel?: string;
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
@@ -150,7 +152,8 @@ function sameContext(left: Context | null, right: Context | null): boolean {
     left?.threadId === right?.threadId &&
     left?.hostId === right?.hostId &&
     left?.client === right?.client &&
-    left?.root === right?.root
+    left?.root === right?.root &&
+    left?.composer === right?.composer
   );
 }
 
@@ -201,12 +204,72 @@ export function installAutoRouteCards(options: {
   let reading = false;
   let disposed = false;
   let unavailable = false;
+  let result: AutoModelRoutesResult | null = null;
+  let feedback: { node: HTMLElement; signature: string } | null = null;
   let generation = 0;
   const cards = new Map<string, { node: HTMLElement; signature: string }>();
 
   function clear() {
     for (const { node } of cards.values()) node.remove();
     cards.clear();
+    feedback?.node.remove();
+    feedback = null;
+  }
+
+  function renderFeedback(groups: AutoModelRoute[][]) {
+    const composer = context?.composer;
+    const latestGroup = groups
+      .sort((a, b) => (a.at(-1)?.started_at ?? 0) - (b.at(-1)?.started_at ?? 0))
+      .at(-1);
+    if (
+      !composer?.isConnected ||
+      context?.selectedModel !== "auto" ||
+      result?.unavailableReason === "private" ||
+      (latestGroup?.[0] && cards.has(latestGroup[0].turn_id))
+    ) {
+      feedback?.node.remove();
+      feedback = null;
+      return;
+    }
+    const locale = options.getLocale();
+    const messages = autoRouteMessages(locale);
+    const unsupportedState =
+      result?.unavailableReason === "host"
+        ? "hostUnavailable"
+        : result?.unavailableReason === "provider"
+          ? "providerUnavailable"
+          : "unsupported";
+    const state = unavailable
+      ? "unavailable"
+      : !result
+        ? "loading"
+        : !result.supported
+          ? unsupportedState
+          : "waiting";
+    const signature = JSON.stringify([locale, state, latestGroup]);
+    if (feedback?.signature === signature && feedback.node.nextElementSibling === composer) return;
+    let node: HTMLElement;
+    if (latestGroup) {
+      // 记录已确认属于当前会话；回合 DOM 尚未出现时，在输入框前展示最新记录。
+      const expanded =
+        feedback?.node.querySelector("button")?.getAttribute("aria-expanded") === "true";
+      node = renderCard(latestGroup, locale, expanded);
+      node.dataset.codexhostAutoRoutePreview = "true";
+      node.append(
+        element("div", "route-notice", unavailable ? messages.unavailable : messages.latestRequest),
+      );
+    } else {
+      node = element("aside", "");
+      node.dataset.codexhostAutoRouteStatus = state;
+      node.setAttribute("aria-label", messages.statusTitle);
+      node.setAttribute("role", "status");
+      const heading = element("div", "route-heading", messages.statusTitle);
+      heading.prepend(createElement(Route, { width: 17, height: 17, "aria-hidden": "true" }));
+      node.append(heading, element("div", "route-notice", messages[state]));
+    }
+    feedback?.node.remove();
+    composer.before(node);
+    feedback = { node, signature };
   }
 
   function render() {
@@ -219,6 +282,10 @@ export function installAutoRouteCards(options: {
       group.push(route);
       byTurn.set(route.turn_id, group);
     }
+    const groups = [...byTurn.values()];
+    for (const group of groups) {
+      group.sort((a, b) => a.started_at - b.started_at || a.request_id.localeCompare(b.request_id));
+    }
     for (const [turnId, card] of cards) {
       if (!byTurn.has(turnId) || !card.node.isConnected) {
         card.node.remove();
@@ -229,13 +296,14 @@ export function installAutoRouteCards(options: {
     for (const [turnId, group] of byTurn) {
       const anchor = anchors.get(turnId);
       if (!anchor) continue;
-      group.sort((a, b) => a.started_at - b.started_at || a.request_id.localeCompare(b.request_id));
       const locale = options.getLocale();
       const signature = JSON.stringify([group, locale, unavailable]);
       const existing = cards.get(turnId);
       if (existing?.signature === signature && existing.node.parentElement === anchor) continue;
-      const expanded =
-        existing?.node.querySelector("button")?.getAttribute("aria-expanded") === "true";
+      const previous =
+        existing?.node ??
+        (feedback?.node.dataset.codexhostAutoRoute === turnId ? feedback.node : null);
+      const expanded = previous?.querySelector("button")?.getAttribute("aria-expanded") === "true";
       const node = renderCard(group, locale, expanded);
       if (unavailable)
         node.append(element("div", "route-notice", autoRouteMessages(locale).unavailable));
@@ -243,6 +311,7 @@ export function installAutoRouteCards(options: {
       anchor.prepend(node);
       cards.set(turnId, { node, signature });
     }
+    renderFeedback(groups);
   }
 
   async function tick() {
@@ -254,8 +323,11 @@ export function installAutoRouteCards(options: {
       routes = [];
       nextRead = 0;
       unavailable = false;
+      result = null;
       clear();
     }
+    // 同一会话可以切换下一回合的模型，不能只在会话身份变化时更新选模状态。
+    context = current;
     if (document.hidden || !context?.client.readAutoModelRoutes) return;
     render();
     if (reading || Date.now() < nextRead) return;
@@ -263,13 +335,14 @@ export function installAutoRouteCards(options: {
     const requestGeneration = generation;
     reading = true;
     try {
-      const result = await context.client.readAutoModelRoutes(context.threadId);
+      const response = await context.client.readAutoModelRoutes(context.threadId);
       if (
         disposed ||
         requestGeneration !== generation ||
         !sameContext(requestContext, options.getContext())
       )
         return;
+      result = response;
       routes = result.supported ? result.routes : [];
       unavailable = false;
       nextRead = Date.now() + (result.supported ? 2_000 : 60_000);

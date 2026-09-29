@@ -17,10 +17,14 @@ export class GitRepositoryLinks {
       cwd: string,
       path: string,
     ) => Promise<string | null> = async () => null,
+    private readonly files: {
+      paths: typeof path;
+      realpath: (directory: string) => Promise<string>;
+    } = { paths: path, realpath },
   ) {}
 
   async #project(cwd: string): Promise<string> {
-    return (await this.root(cwd)) ?? realpath(cwd);
+    return (await this.root(cwd)) ?? this.files.realpath(cwd);
   }
 
   #directory(project: string): string {
@@ -68,7 +72,7 @@ export class GitRepositoryLinks {
   }
 
   async link(cwd: string, repository: string): Promise<GitRepositories> {
-    if (!path.isAbsolute(repository)) {
+    if (!this.files.paths.isAbsolute(repository)) {
       throw new GitWorkspaceError("请输入 Git 仓库的绝对路径。");
     }
     const project = await this.#project(cwd);
@@ -117,9 +121,9 @@ export class GitRepositoryLinks {
       return repository;
     }
 
-    const relative = path.relative(project, repository);
-    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-      const submodulePath = relative.split(path.sep).join("/");
+    const relative = this.files.paths.relative(project, repository);
+    if (relative && !relative.startsWith("..") && !this.files.paths.isAbsolute(relative)) {
+      const submodulePath = relative.split(this.files.paths.sep).join("/");
       const submoduleRoot = await this.submoduleRoot(project, submodulePath);
       if (!submoduleRoot) {
         throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");

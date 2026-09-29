@@ -39,6 +39,7 @@ export const autoModelRouteListSchema = z.object({
 export const autoModelRoutesResultSchema = z.object({
   supported: z.boolean(),
   routes: z.array(autoModelRouteSchema).max(128),
+  unavailableReason: z.enum(["host", "provider", "private"]).optional(),
 });
 export type AutoModelRoute = z.infer<typeof autoModelRouteSchema>;
 export type AutoModelRoutesResult = z.infer<typeof autoModelRoutesResultSchema>;

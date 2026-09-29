@@ -41,11 +41,12 @@ After you start, stop, or uninstall, reconnect the SSH workspace in Codex Deskto
 
 ## Upgrade
 
-Upgrade both machines to the same version using the same package manager. Then rerun `codexhost remote install` and `codexhost remote start` on the remote machine and reconnect the SSH workspace.
+Upgrade both machines to the same version using the same package manager, then rerun `codexhost remote install` on the remote machine. Wait for existing remote tasks to finish before running `codexhost remote stop` followed by `codexhost remote start`, then reconnect the SSH workspace. Running `start` alone reuses a running Host and does not guarantee that it has loaded the new version.
 
 ## Troubleshooting
 
 - **`codexhost/harness/inspect is unsupported on this Host connection`**: the SSH connection isn't going through codexhost. Make sure the same codexhost version is installed and running on the remote machine, then reconnect the SSH workspace.
+- **Auto Router or conversation recovery is unavailable on this connection**: the connection does not provide that extension API and may still use the official native service or an older Host. Model synchronization does not enable these APIs. Check the remote codexhost version and status, follow the upgrade steps above, and reconnect. Auto Router and recovery are checked independently; either API can be available without the other.
 - **`remote status` says degraded or asks you to reinstall**: run `codexhost remote install`, then `codexhost remote start`.
 - **A Harness is missing**: make sure it is installed and signed in on the remote machine, then click **Run connection diagnostics** in Settings.
 - **Install fails on macOS with a launchd / `gui/$UID` error**: the remote Mac needs someone logged in to the desktop. Log in, then run `codexhost remote install` again.
@@ -53,6 +54,8 @@ Upgrade both machines to the same version using the same package manager. Then r
 ## SSH feature ownership
 
 Model catalogs and probes, Auto Router, session recommendations, interrupted conversation recovery, Git and file operations, session imports, and loaded sessions use the current SSH Host. Provider, System One, and Harness configuration and authentication remain remote. Imported and recommended conversations retain their originating Host; switching connections cannot submit stale selections to another machine.
+
+Basic Git operations also work with the native SSH service: when the remote explicitly lacks a Git RPC, the local Buddy Host uses Desktop's saved SSH connection to run Git on that remote machine. Status, stage/unstage, manual commits, push, sync, and submodules do not require remote codexhost installation. Git credentials and files remain remote; linked-repository records for this transport are stored locally per connection. AI commit-message generation still requires the remote service. Connection and operation failures never trigger a second execution through another transport. See [Git workspace](../../product/git-workspace.md) for details.
 
 For native Codex conversations, **Open in Terminal** launches the chosen terminal on the Desktop machine, uses its saved SSH connection, then runs `codex resume` with the remote workspace, executable and CODEX_HOME. The remote machine does not need a graphical terminal; the local machine needs an SSH client. **Open in VS Code** opens the remote directory through the local Remote SSH extension. Connections with an explicit identity file need an SSH alias so VS Code uses the same key.
 

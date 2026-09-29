@@ -7,9 +7,11 @@ const { outputFiles } = await build({
     contents: `
       import { installRendererGitSidebar } from "./packages/renderer-extension/src/renderer-git-sidebar.ts";
       import { RendererMethodUnavailableError } from "./packages/renderer-extension/src/renderer-request-sender.ts";
+      import { createRendererHostClients } from "./packages/renderer-extension/src/renderer-host-clients.ts";
       import { hostThreadIdSchema } from "./packages/shared-contracts/src/index.ts";
 
       globalThis.RendererMethodUnavailableError = RendererMethodUnavailableError;
+      globalThis.createRendererHostClients = createRendererHostClients;
       globalThis.setupGitSidebar = () => {
         document.body.innerHTML = "<style>[hidden] { display: none !important; }</style>";
         const sidebar = document.createElement("aside");
@@ -1271,3 +1273,117 @@ test("switching draft projects ignores stale status and preserves the name on re
   await page.getByRole("button", { name: "Clear project", exact: true }).click();
   await expect(project).toHaveText("未选择项目");
 });
+
+for (const hasThread of [false, true]) {
+  test(`native SSH Git fallback restores project and commit controls (${hasThread ? "thread" : "draft"})`, async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("http://localhost/git-sidebar-test", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><html><body></body></html>",
+      }),
+    );
+    await setup(page);
+    await page.evaluate((thread) => {
+      const f = Reflect.get(globalThis, "gitSidebarFixture");
+      const hostId = "remote-ssh-discovered:okm252";
+      const cwd = "/remote/remote_codex-host";
+      f.status.workspace = cwd;
+      f.status.submodules = [];
+      f.status.changes = [f.status.changes[0]];
+      f.sshCalls = [];
+      const routes = new Map();
+      routes.set(hostId, {
+        hostId,
+        manager: {
+          async sendRequest(method: string, params: unknown) {
+            f.sshCalls.push(["remote", method, params]);
+            if (method === "thread/read") return { thread: { cwd } };
+            throw { code: -32600, message: `Invalid request: unknown variant \`${method}\`` };
+          },
+        },
+      });
+      routes.set("local", {
+        hostId: "local",
+        manager: {
+          async sendRequest(
+            method: string,
+            params: { hostId: string; method: string; params: Record<string, unknown> },
+          ) {
+            f.sshCalls.push(["local", method, params]);
+            if (
+              method !== "codexhost/ssh/git" ||
+              params.hostId !== hostId ||
+              params.params.cwd !== cwd ||
+              "threadId" in params.params
+            )
+              throw new Error("Wrong SSH destination");
+            switch (params.method) {
+              case "codexhost/git/status":
+                return structuredClone(f.status);
+              case "codexhost/git/repositories":
+                return { project: cwd, repositories: [{ path: cwd, primary: true }] };
+              case "codexhost/git/message-models":
+                return { models: [], defaultModel: null };
+              case "codexhost/git/stage":
+                return f.client.stageGitPaths(params.params);
+              case "codexhost/git/commit":
+                return f.client.commitGit(params.params);
+              default:
+                throw new Error(`Unexpected method ${params.method}`);
+            }
+          },
+        },
+      });
+      const clients = Reflect.get(
+        globalThis,
+        "createRendererHostClients",
+      )(() => ({ forHost: (id: string) => routes.get(id) ?? null }));
+      f.setContext(
+        thread ? "same-id-as-local-thread" : null,
+        clients.forHost(hostId),
+        hostId,
+        thread ? undefined : cwd,
+      );
+    }, hasThread);
+    const root = page.locator("[data-codexhost-git-sidebar]");
+    await root.locator("[data-codexhost-git-sidebar-commits]").click();
+    await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText(
+      "remote_codex-host",
+    );
+    await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveAttribute(
+      "title",
+      "/remote/remote_codex-host",
+    );
+    await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeDisabled();
+    await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: remote SSH commit");
+    await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeEnabled();
+    await page.screenshot({
+      path: `test-results/native-ssh-git-${hasThread ? "thread" : "draft"}.png`,
+    });
+    await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
+    await expect(root.locator(".codexhost-git-empty")).toHaveText("没有待提交的变更");
+    const calls: [string, string, Record<string, unknown>][] = await page.evaluate(
+      () => Reflect.get(globalThis, "gitSidebarFixture").sshCalls,
+    );
+    for (const method of ["status", "stage", "commit"]) {
+      expect(calls).toContainEqual([
+        "local",
+        "codexhost/ssh/git",
+        expect.objectContaining({
+          hostId: "remote-ssh-discovered:okm252",
+          method: `codexhost/git/${method}`,
+          params: expect.objectContaining({ cwd: "/remote/remote_codex-host" }),
+        }),
+      ]);
+    }
+    expect(
+      calls.filter(([origin, method]) => origin === "remote" && method === "thread/read").length >
+        0,
+    ).toBe(hasThread);
+    expect(errors).toEqual([]);
+  });
+}

@@ -38,6 +38,7 @@ function fixture(owner: "external" | "codex" = "external") {
   );
   const manager = {
     sendRequest: rpc,
+    getConversation: vi.fn<(threadId: string) => unknown>(() => undefined),
     steerTurn: vi
       .fn<(...args: unknown[]) => Promise<{ turnId: string }>>()
       .mockResolvedValue({ turnId: "official" }),
@@ -161,6 +162,61 @@ describe("external direction changes use normal Desktop start presentation", () 
     expect(f.manager.steerTurn).toBe(f.originalSteer);
     expect(f.manager.sendRequest).toBe(f.rpc);
   });
+
+  it.each(["openai", "OpenAIProxy"])(
+    "steers a native %s Thread when the remote server has no codexhost methods",
+    async (modelProvider) => {
+      const f = fixture("codex");
+      f.manager.getConversation.mockReturnValue({ id: "thread", modelProvider });
+      f.rpc.mockImplementation(async (method) => {
+        if (method === "turn/steer") return { turnId: "old" };
+        throw new Error(`Invalid request: unknown variant ${method}`);
+      });
+      f.originalSteer.mockImplementation(async (...args) => {
+        return (await f.manager.sendRequest(
+          "turn/steer",
+          { threadId: args[0], input: args[1], expectedTurnId: "old" },
+          f.requestOptions,
+        )) as { turnId: string };
+      });
+      f.args.push(vi.fn(), vi.fn());
+      try {
+        await expect(f.manager.steerTurn(...f.args)).resolves.toEqual({ turnId: "old" });
+        expect(f.originalSteer).toHaveBeenCalledWith(...f.args);
+        expect(f.rpc.mock.calls.map(([method]) => method)).toEqual(["turn/steer"]);
+        expect(f.manager.startTurn).not.toHaveBeenCalled();
+        expect(f.turns).toHaveLength(1);
+        expect(f.turns[0]?.status).toBe("inProgress");
+      } finally {
+        f.dispose();
+      }
+    },
+  );
+
+  it.each([
+    undefined,
+    { id: "other-thread", modelProvider: "openai" },
+    { id: "thread" },
+    { id: "thread", modelProvider: "" },
+    { id: "thread", modelProvider: "codexhost" },
+  ])(
+    "keeps authoritative ownership checks for unresolved or external metadata: %j",
+    async (metadata) => {
+      const f = fixture();
+      f.manager.getConversation.mockReturnValue(metadata);
+      try {
+        await expect(f.manager.steerTurn(...f.args)).resolves.toEqual({ turnId: "replacement" });
+        expect(f.rpc.mock.calls.map(([method]) => method)).toEqual([
+          "codexhost/thread/ownership/list",
+          "turn/steer",
+        ]);
+        expect(f.originalSteer).not.toHaveBeenCalled();
+        expect(f.events).toContain("cancel old");
+      } finally {
+        f.dispose();
+      }
+    },
+  );
 
   it.each([
     { input: [] },

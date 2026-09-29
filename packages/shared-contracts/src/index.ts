@@ -602,3 +602,6 @@ export {
   type DelegationMention,
   type DelegationMentionRewrite,
 } from "./delegation-mention.js";
+
+export { SSH_GIT_METHOD, sshGitMethods, sshGitParamsSchema } from "./ssh-git.js";
+export type { SshGitParams } from "./ssh-git.js";

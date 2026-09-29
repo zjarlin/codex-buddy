@@ -9,6 +9,16 @@ const en = {
   requests: (count: number) => `${count} request${count === 1 ? "" : "s"}`,
   fallbacks: (count: number) => `${count} fallback${count === 1 ? "" : "s"}`,
   unavailable: "Route updates unavailable",
+  statusTitle: "Auto routing",
+  loading: "Reading Auto routing records…",
+  waiting: "Waiting for the gateway to report the selected model",
+  hostUnavailable:
+    "This connection does not provide Auto routing records. Enable Codex Buddy on the conversation's host and reconnect to see the actual model.",
+  providerUnavailable:
+    "The provider does not provide Auto routing records. The actual model cannot be confirmed.",
+  unsupported:
+    "Auto routing records are unavailable on this connection. The actual model cannot be confirmed.",
+  latestRequest: "Latest request in this conversation · Waiting for the turn to appear",
   unconfirmed: "Upstream did not report the actual model",
   candidates: "Fallback candidates",
   search: "Search candidates",
@@ -35,6 +45,14 @@ const zh: typeof en = {
   requests: (count) => `${count} 次请求`,
   fallbacks: (count) => `${count} 次回退`,
   unavailable: "路由状态暂时无法更新",
+  statusTitle: "Auto 选模",
+  loading: "正在读取 Auto 路由记录…",
+  waiting: "等待网关返回实际选中的模型",
+  hostUnavailable:
+    "当前连接未提供 Auto 路由记录。在会话所在主机启用 Codex Buddy 并重新连接后，才能显示实际模型。",
+  providerUnavailable: "当前供应商未提供 Auto 路由记录，暂时无法确认实际模型。",
+  unsupported: "当前连接暂未提供 Auto 路由记录，无法确认实际模型。",
+  latestRequest: "本会话最新请求 · 等待回合显示",
   unconfirmed: "上游未返回实际模型",
   candidates: "降级候选",
   search: "搜索候选模型",

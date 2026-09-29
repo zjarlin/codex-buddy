@@ -11,6 +11,7 @@ const bundle = await build({
     contents: `
     import { installSidebarContinuation } from './packages/renderer-extension/src/buddy/continuation.ts';
     import { installBuddyControl } from './packages/renderer-extension/src/buddy/control.ts';
+    import { RendererMethodUnavailableError } from './packages/renderer-extension/src/renderer-request-sender.ts';
     globalThis.mountRecovery = () => {
       const snapshot = { settings: { enabled:true,planning:true,privateMode:false,bypass:true,role:'auto',plannerModel:null,executorModel:null }, models:[], decisions:[{
         threadId:'work',turnId:'failed',phase:'retrying',role:'executor',difficulty:'simple',score:15,
@@ -30,6 +31,8 @@ const bundle = await build({
     globalThis.owner = "codex";
     globalThis.threadStatus = "failed";
     globalThis.activeHost = 'local';
+    globalThis.statusCalls = 0;
+    globalThis.interruptedCalls = 0;
     globalThis.mountSidebar = () => {
       const row = document.createElement('div');
       const attrs = {
@@ -51,19 +54,29 @@ const bundle = await build({
     };
     globalThis.row = globalThis.mountSidebar();
     const client = {
-      buddyStatus: async () => ({settings:{enabled:globalThis.enabled,privateMode:globalThis.privateMode}}),
+      ...(globalThis.statusMode === 'missing' ? {} : {buddyStatus: async () => {
+        globalThis.statusCalls++;
+        if (globalThis.statusMode === 'unsupported') throw new RendererMethodUnavailableError('codexhost/buddy/status', null);
+        if (globalThis.statusMode === 'failed') throw new Error('状态读取失败');
+        return {settings:{enabled:globalThis.enabled,privateMode:globalThis.privateMode}};
+      }}),
       buddyInterrupted: async () => {
+        globalThis.interruptedCalls++;
+        if (globalThis.recoveryMode === 'unsupported') throw new RendererMethodUnavailableError('codexhost/buddy/interrupted', null);
         if (globalThis.discoveryFail) throw new Error('列表读取失败');
         if (globalThis.interrupted) return globalThis.interrupted;
         return {threads:[{threadId:'thread',turnId:'failed',title:'网络中断的会话',status:globalThis.threadStatus,owner:globalThis.owner}],runningThreadIds:globalThis.running?['thread']:[],unreadable:0};
       },
       buddyContinue: async (...args) => {
         globalThis.calls.push(args);
+        if (globalThis.continueMode === 'unsupported') throw new RendererMethodUnavailableError('codexhost/buddy/continue', null);
         await new Promise(resolve=>globalThis.finishResume=resolve);
         if(globalThis.fail) { globalThis.fail=false; throw new Error('网络不可用'); }
       }
     };
-    globalThis.sidebar = installSidebarContinuation({getClient:host=>host===globalThis.activeHost?client:null,getLocale:()=> 'zh-CN'});
+    if (globalThis.recoveryMode === 'missing') delete client.buddyInterrupted;
+    globalThis.sidebarClient = client;
+    globalThis.sidebar = installSidebarContinuation({getClient:host=>host===globalThis.activeHost?globalThis.sidebarClient:null,getLocale:()=> 'zh-CN'});
 
   `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -259,6 +272,127 @@ test("sidebar recovery keeps the last successful state when discovery fails", as
   expect(runningStyle.background).not.toBe("rgba(0, 0, 0, 0)");
   expect(runningStyle.boxShadow).not.toBe("none");
   await page.screenshot({ path: "test-results/buddy-continuation-state.png" });
+});
+
+for (const statusMode of ["unsupported", "missing"]) {
+  test(`sidebar recovery works when router status is ${statusMode}`, async ({ page }) => {
+    await page.setContent("<body></body>");
+    await page.evaluate((mode) => Reflect.set(globalThis, "statusMode", mode), statusMode);
+    await page.addScriptTag({ content: browserBundle });
+    const resume = page.locator("[data-buddy-resume]");
+    await expect(resume).toHaveCount(1);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(
+      statusMode === "missing" ? 0 : 1,
+    );
+    expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(1);
+    await resume.click();
+    await expect(resume).toBeDisabled();
+    expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
+      ["thread", "failed"],
+    ]);
+    await page.evaluate(() => {
+      Reflect.set(globalThis, "fail", false);
+      Reflect.get(globalThis, "finishResume")();
+    });
+    await expect(resume).toHaveCount(0);
+    await expect(page.locator("[data-buddy-recovery-error]")).toBeEmpty();
+  });
+}
+
+test("sidebar recovery disables an existing resume action after a router status error", async ({
+  page,
+}) => {
+  const warnings: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "warning") warnings.push(message.text());
+  });
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  const resume = page.locator("[data-buddy-resume]");
+  await expect(resume).toHaveCount(1);
+  const discoveries = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "statusMode", "failed");
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(resume).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+  await expect.poll(() => warnings.join("\n")).toContain("状态读取失败");
+  await expect(page.locator("[data-buddy-sidebar-state]")).toHaveAttribute(
+    "data-buddy-sidebar-state",
+    "failed",
+  );
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "statusMode", null);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(resume).toHaveCount(1);
+});
+
+for (const recoveryMode of ["unsupported", "missing"]) {
+  test(`sidebar keeps native status when recovery is ${recoveryMode}`, async ({ page }) => {
+    await page.setContent("<body></body>");
+    await page.evaluate((mode) => {
+      Reflect.set(globalThis, "statusMode", "unsupported");
+      Reflect.set(globalThis, "recoveryMode", mode);
+    }, recoveryMode);
+    await page.addScriptTag({ content: browserBundle });
+    if (recoveryMode === "unsupported") {
+      await expect
+        .poll(() => page.evaluate(() => Reflect.get(globalThis, "interruptedCalls")))
+        .toBe(1);
+    }
+    await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
+    await expect(page.locator("[data-native-status]")).toBeVisible();
+    await expect(page.locator("[data-buddy-sidebar-state]")).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+  });
+}
+
+test("sidebar remembers unavailable continuation until the connection is replaced", async ({
+  page,
+}) => {
+  await page.setContent("<body></body>");
+  await page.evaluate(() => Reflect.set(globalThis, "continueMode", "unsupported"));
+  await page.addScriptTag({ content: browserBundle });
+  const resume = page.locator("[data-buddy-resume]");
+  await expect(resume).toHaveCount(1);
+  await resume.click();
+  await expect(resume).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveText("当前连接不支持会话恢复。");
+  await expect(page.locator("[data-native-status]")).toBeVisible();
+  const discoveries = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
+  await page.evaluate(() => Reflect.get(globalThis, "sidebar").refresh());
+  await expect(resume).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
+    ["thread", "failed"],
+  ]);
+  await page.evaluate(() => Reflect.get(globalThis, "row").remove());
+  await expect(page.locator("[data-native-status]")).toHaveCount(0);
+  await page.evaluate(() =>
+    Reflect.set(globalThis, "row", Reflect.get(globalThis, "mountSidebar")()),
+  );
+  await expect(page.locator("[data-native-status]")).toBeVisible();
+  await expect(resume).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "continueMode", null);
+    Reflect.set(globalThis, "fail", false);
+    Reflect.set(globalThis, "sidebarClient", { ...Reflect.get(globalThis, "sidebarClient") });
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(resume).toHaveCount(1);
+  await resume.click();
+  await expect(resume).toBeDisabled();
+  await page.evaluate(() => Reflect.get(globalThis, "finishResume")());
+  await expect(resume).toHaveCount(0);
+  await expect(page.locator("[data-buddy-recovery-error]")).toBeEmpty();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
+    ["thread", "failed"],
+    ["thread", "failed"],
+  ]);
 });
 
 test("sidebar recovery matches native thread ids inside host-prefixed rows", async ({ page }) => {

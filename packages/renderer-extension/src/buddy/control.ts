@@ -1,6 +1,7 @@
 import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
 import { createVisiblePoll } from "../renderer-visible-poll.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import { createInterruptedPanel } from "./interrupted-panel.js";
 import { plannerInputControl } from "./planner-input.js";
 
@@ -9,6 +10,9 @@ const messages = {
     waiting: "夯规划 → 垃执行",
     disabled: "固定模型 · 不规划",
     disconnected: "未连接路由",
+    unavailable: "当前连接不支持 Auto Router",
+    unavailableHint:
+      "当前连接未提供 Auto Router。请确认该连接已接入相同版本的 codexhost；SSH 会话需在远端启用后重新连接。会话恢复将单独检查。",
     enabled: "Auto Router",
     planningMode: "自动规划",
     privateMode: "隐私",
@@ -103,6 +107,9 @@ const messages = {
     waiting: "夯 plans → 垃 executes",
     disabled: "Fixed model · No planning",
     disconnected: "Router disconnected",
+    unavailable: "Auto Router unavailable on this connection",
+    unavailableHint:
+      "This connection does not provide Auto Router. Check that it runs the same version of codexhost; for SSH, enable it on the remote machine and reconnect. Conversation recovery is checked separately.",
     enabled: "Auto Router",
     planningMode: "Automatic planning",
     privateMode: "Private",
@@ -289,6 +296,9 @@ export function installBuddyControl(
   const tabs = document.createElement("div");
   tabs.className = "buddy-tabs";
   tabs.setAttribute("role", "tablist");
+  const connectionNotice = document.createElement("p");
+  connectionNotice.className = "buddy-note";
+  connectionNotice.setAttribute("role", "status");
   const routingPanel = document.createElement("div");
   routingPanel.className = "buddy-tab-panel";
   routingPanel.dataset.buddyTabPanel = "routing";
@@ -317,11 +327,13 @@ export function installBuddyControl(
   let inputClient: RendererModelClient | null = null;
   routingPanel.append(controls, routingFields);
   taskPanel.append(inputArea, taskEmpty, fields, error, note, footer);
-  panel.append(tabs, routingPanel, interruptedPanel, taskPanel);
+  panel.append(tabs, connectionNotice, routingPanel, interruptedPanel, taskPanel);
   root.append(styles, summary, panel);
   let disposed = false;
   let busy = false;
   let snapshot: BuddySnapshot | null = null;
+  let statusFailure: unknown = null;
+  let connectionEpoch = 0;
   let context: BuddyControlContext | null = null;
   let fingerprint = "";
   let activeTab: "routing" | "interrupted" | "task" = "routing";
@@ -334,13 +346,14 @@ export function installBuddyControl(
     if (!snapshot || !client?.buddyConfigure) {
       return;
     }
+    const epoch = connectionEpoch;
     try {
       const value = await client.buddyConfigure({ ...snapshot.settings, ...patch });
-      if (disposed || context?.client !== client) return;
+      if (disposed || context?.client !== client || connectionEpoch !== epoch) return;
       snapshot = value;
       render();
     } catch (failure) {
-      if (disposed || context?.client !== client) return;
+      if (disposed || context?.client !== client || connectionEpoch !== epoch) return;
       report(failure);
     }
   };
@@ -481,6 +494,11 @@ export function installBuddyControl(
     if (!client?.buddyJevKey) {
       return;
     }
+    const epoch = connectionEpoch;
+    const current = () => !disposed && context?.client === client && connectionEpoch === epoch;
+    const reportCurrent = (failure: unknown) => {
+      if (current()) report(failure);
+    };
     const wrapper = document.createElement("div");
     wrapper.className = "buddy-key";
     wrapper.title = t().jevKeyHint;
@@ -522,10 +540,12 @@ export function installBuddyControl(
         patch.apiKey = typedKey;
       }
       void (async () => {
-        snapshot = (await client.buddyJevKey?.(patch)) ?? snapshot;
+        const value = await client.buddyJevKey?.(patch);
         keyInput.value = "";
+        if (!current()) return;
+        snapshot = value ?? snapshot;
         render();
-      })().catch(report);
+      })().catch(reportCurrent);
     });
     const clear = document.createElement("button");
     clear.type = "button";
@@ -533,10 +553,12 @@ export function installBuddyControl(
     clear.disabled = disabled;
     clear.addEventListener("click", () => {
       void (async () => {
-        snapshot = (await client.buddyJevKey?.({ apiKey: null, baseURL: null })) ?? snapshot;
+        const value = await client.buddyJevKey?.({ apiKey: null, baseURL: null });
         keyInput.value = "";
+        if (!current()) return;
+        snapshot = value ?? snapshot;
         render();
-      })().catch(report);
+      })().catch(reportCurrent);
     });
     status.append(state, save, clear);
     wrapper.append(keyInput, urlInput, status);
@@ -545,9 +567,36 @@ export function installBuddyControl(
   const render = (): void => {
     const m = t();
     if (!snapshot) {
-      status.textContent = m.disconnected;
+      const unavailable = statusFailure instanceof RendererMethodUnavailableError;
+      interruptedControl.update(unavailable ? (context?.client ?? null) : null, false);
+      renderTabs();
+      const signature = JSON.stringify([getLocale(), String(statusFailure), unavailable]);
+      if (fingerprint === signature) return;
+      fingerprint = signature;
+      status.textContent = unavailable ? m.unavailable : m.disconnected;
+      connectionNotice.textContent = unavailable
+        ? m.unavailableHint
+        : statusFailure instanceof Error
+          ? statusFailure.message
+          : statusFailure === null
+            ? ""
+            : String(statusFailure);
+      connectionNotice.setAttribute("role", unavailable ? "status" : "alert");
+      for (const element of [controls, routingFields, fields, actions, inputArea]) {
+        element.replaceChildren();
+      }
+      inputKey = "";
+      inputClient = null;
+      title.textContent = "Auto Router";
+      summary.title = "";
+      root.removeAttribute("data-planner-input");
+      root.removeAttribute("data-model-bypass");
+      error.textContent = "";
+      note.textContent = "";
+      taskEmpty.textContent = unavailable ? m.unavailable : m.disconnected;
       return;
     }
+    connectionNotice.textContent = "";
     interruptedControl.update(context?.client ?? null, snapshot.settings.privateMode);
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
     // 其他会话的决策不会改变当前控件，也不能打断正在编辑的设置。
@@ -777,16 +826,14 @@ export function installBuddyControl(
       inputKey = "";
       inputClient = null;
       if (context?.client !== next?.client) {
+        connectionEpoch += 1;
         snapshot = null;
-        controls.replaceChildren();
-        fields.replaceChildren();
-        routingFields.replaceChildren();
-        error.textContent = "";
-        status.textContent = t().disconnected;
+        statusFailure = null;
         interruptedControl.update(null, false);
       }
     }
     context = next;
+    if (!snapshot) render();
     poll.setActive(Boolean(next));
     if (!next) {
       root.remove();
@@ -804,24 +851,28 @@ export function installBuddyControl(
     if (!next || busy) {
       return;
     }
-    if (!next.client.buddyStatus) {
-      fingerprint = "";
-      status.textContent = t().disconnected;
+    if (statusFailure instanceof RendererMethodUnavailableError) {
+      render();
       return;
     }
     busy = true;
     try {
+      if (!next.client.buddyStatus) {
+        throw new RendererMethodUnavailableError("codexhost/buddy/status", null);
+      }
       const value = await next.client.buddyStatus();
       if (disposed || context?.client !== next.client || context.threadId !== next.threadId) {
         return;
       }
       snapshot = value;
+      statusFailure = null;
       render();
     } catch (failure) {
       if (disposed || context?.client !== next.client || context.threadId !== next.threadId) return;
-      fingerprint = "";
-      status.textContent = t().disconnected;
-      report(failure);
+      connectionEpoch += 1;
+      snapshot = null;
+      statusFailure = failure;
+      render();
     } finally {
       busy = false;
     }

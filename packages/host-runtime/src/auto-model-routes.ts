@@ -19,7 +19,7 @@ export async function readAutoModelRoutes(input: {
 }): Promise<AutoModelRoutesResult> {
   const { threadId, runId } = autoModelRoutesParamsSchema.parse(input.params);
   if (await input.privateMode()) {
-    return { supported: false, routes: [] };
+    return { supported: false, routes: [], unavailableReason: "private" };
   }
   const response = record(await input.readThread(threadId));
   const thread = record(record(response?.result)?.thread);
@@ -41,13 +41,13 @@ export async function readAutoModelRoutes(input: {
   }
   const url = new URL(connection.url);
   if (url.hostname === "api.openai.com") {
-    return { supported: false, routes: [] };
+    return { supported: false, routes: [], unavailableReason: "provider" };
   }
   url.pathname = url.pathname.replace(/\/models$/, "/auto/routes");
   url.searchParams.set("session_id", threadId);
   if (runId) url.searchParams.set("run_id", runId);
   if (await input.privateMode()) {
-    return { supported: false, routes: [] };
+    return { supported: false, routes: [], unavailableReason: "private" };
   }
   let result: AutoModelRoutesResult;
   try {
@@ -58,7 +58,11 @@ export async function readAutoModelRoutes(input: {
     });
     if (response.status === 404 || response.status === 405) {
       await response.body?.cancel();
-      return { supported: false, routes: [] };
+      return {
+        supported: false,
+        routes: [],
+        unavailableReason: (await input.privateMode()) ? "private" : "provider",
+      };
     }
     if (!response.ok) {
       await response.body?.cancel();
@@ -94,9 +98,13 @@ export async function readAutoModelRoutes(input: {
     }
     result = { supported: true, routes: parsed.data };
   } catch {
+    if (await input.privateMode()) {
+      return { supported: false, routes: [], unavailableReason: "private" };
+    }
     // 不把上游正文、URL 或认证信息透传给 Renderer。
     throw new Error("Unable to read Auto route observations from Provider");
   }
-  if (await input.privateMode()) return { supported: false, routes: [] };
+  if (await input.privateMode())
+    return { supported: false, routes: [], unavailableReason: "private" };
   return result;
 }

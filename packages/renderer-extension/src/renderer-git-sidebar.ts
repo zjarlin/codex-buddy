@@ -20,6 +20,7 @@ import { RendererGitCache } from "./renderer-git-cache.js";
 import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 import { openNativeGitReview, runNativeWorkspaceCommand } from "./renderer-native-workspace.js";
 import { installNativeFileTreeLayout } from "./renderer-native-file-tree-layout.js";
+import { installNativeFilePanePlacement } from "./renderer-native-file-pane.js";
 import {
   createRendererProjectSyncPanel,
   type RendererProjectSyncClient,
@@ -689,6 +690,7 @@ export function installRendererGitSidebar(options: {
 
   let nativeTerminal: HTMLButtonElement | null = null;
   const nativeFileTreeLayout = installNativeFileTreeLayout(document);
+  const nativeFilePanePlacement = installNativeFilePanePlacement(document);
   const syncOfficialPanelState = (): void => {
     for (const [panel, button] of [
       ["terminal", terminal],
@@ -1887,6 +1889,7 @@ export function installRendererGitSidebar(options: {
       cache.clear();
       observer.disconnect();
       nativeFileTreeLayout.dispose();
+      nativeFilePanePlacement.dispose();
       projectSyncView.dispose();
       repositorySelector.dispose();
       if (anchor) restoreSidebarAnchor(anchor);

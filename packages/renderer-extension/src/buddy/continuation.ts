@@ -2,6 +2,7 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import { createVisiblePoll } from "../renderer-visible-poll.js";
 import {
@@ -57,6 +58,7 @@ export function installSidebarContinuation(options: {
       updatedAt: number;
     }
   >();
+  const unavailableRecoveryClients = new WeakSet<RendererModelClient>();
   const mounted = new Map<
     HTMLElement,
     { slot: HTMLElement; button: HTMLButtonElement; key: string }
@@ -103,19 +105,28 @@ export function installSidebarContinuation(options: {
     if (
       document.hidden ||
       state.pending ||
-      !state.client.buddyStatus ||
+      unavailableRecoveryClients.has(state.client) ||
       !state.client.buddyInterrupted
-    )
+    ) {
       return;
+    }
     state.pending = true;
     state.updatedAt = Date.now();
+    state.resumeEnabled = false;
     try {
-      const snapshot = await state.client.buddyStatus();
-      if (disposed || hosts.get(hostId) !== state) return;
-      // 手动恢复独立于自动路由，固定模型模式仍允许恢复；隐私模式仅保留状态。
-      state.resumeEnabled = !snapshot.settings.privateMode;
+      let snapshot;
+      try {
+        snapshot = await state.client.buddyStatus?.();
+      } catch (failure) {
+        if (!(failure instanceof RendererMethodUnavailableError)) throw failure;
+      }
+      if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
+        return;
+      // 路由状态缺失时独立探测恢复能力，续接仍由 Host 检查隐私；其他状态错误保持禁用。
+      state.resumeEnabled = !snapshot?.settings.privateMode;
       const result = await state.client.buddyInterrupted();
-      if (disposed || hosts.get(hostId) !== state) return;
+      if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
+        return;
       state.threads = new Map(
         result.threads
           .filter((thread) => thread.owner === "codex")
@@ -124,6 +135,12 @@ export function installSidebarContinuation(options: {
       state.runningThreadIds = new Set(result.runningThreadIds);
     } catch (failure) {
       if (disposed || hosts.get(hostId) !== state) return;
+      if (failure instanceof RendererMethodUnavailableError) {
+        unavailableRecoveryClients.add(state.client);
+        state.resumeEnabled = false;
+        state.threads.clear();
+        state.runningThreadIds.clear();
+      }
       // 后台发现失败不弹窗打断用户；实际点击的续接错误通过 alert 显示。
       console.warn("[codexhost] Sidebar continuation discovery failed", failure);
     } finally {
@@ -145,7 +162,20 @@ export function installSidebarContinuation(options: {
       hosts.get(hostId)?.threads.delete(thread.threadId);
     } catch (failure) {
       if (disposed || options.getClient(hostId) !== client) return;
-      error.textContent = `${chinese() ? "恢复失败，可点击状态图标重试" : "Could not resume. Click the status icon to retry"}: ${failure instanceof Error ? failure.message : String(failure)}`;
+      if (failure instanceof RendererMethodUnavailableError) {
+        unavailableRecoveryClients.add(client);
+        const state = hosts.get(hostId);
+        if (state) {
+          state.resumeEnabled = false;
+          state.threads.clear();
+          state.runningThreadIds.clear();
+        }
+        error.textContent = chinese()
+          ? "当前连接不支持会话恢复。"
+          : "Conversation recovery is unavailable on this connection.";
+      } else {
+        error.textContent = `${chinese() ? "恢复失败，可点击状态图标重试" : "Could not resume. Click the status icon to retry"}: ${failure instanceof Error ? failure.message : String(failure)}`;
+      }
     } finally {
       pending.delete(key);
       schedule();
@@ -163,13 +193,7 @@ export function installSidebarContinuation(options: {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const threadId = hostId ? nativeThreadId(hostId, row) : null;
       const client = hostId ? options.getClient(hostId) : null;
-      if (
-        !hostId ||
-        !threadId ||
-        !client?.buddyStatus ||
-        !client.buddyInterrupted ||
-        !client.buddyContinue
-      ) {
+      if (!hostId || !threadId || !client?.buddyInterrupted || !client.buddyContinue) {
         clearRow(row);
         continue;
       }

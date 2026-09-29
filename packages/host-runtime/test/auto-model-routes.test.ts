@@ -110,7 +110,11 @@ describe("gateway Auto route observations", () => {
     input.privateMode.mockResolvedValue(true);
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
-    expect(await readAutoModelRoutes(input)).toEqual({ supported: false, routes: [] });
+    expect(await readAutoModelRoutes(input)).toEqual({
+      supported: false,
+      routes: [],
+      unavailableReason: "private",
+    });
     expect(input.readThread).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -124,7 +128,11 @@ describe("gateway Auto route observations", () => {
         return Response.json({ object: "list", data: [route] });
       }),
     );
-    expect(await readAutoModelRoutes(input)).toEqual({ supported: false, routes: [] });
+    expect(await readAutoModelRoutes(input)).toEqual({
+      supported: false,
+      routes: [],
+      unavailableReason: "private",
+    });
   });
 
   it.each([404, 405])("treats HTTP %s as an unsupported extension", async (status) => {
@@ -133,8 +141,32 @@ describe("gateway Auto route observations", () => {
       "fetch",
       vi.fn(async () => new Response("not supported", { status })),
     );
-    expect(await readAutoModelRoutes(input)).toEqual({ supported: false, routes: [] });
+    expect(await readAutoModelRoutes(input)).toEqual({
+      supported: false,
+      routes: [],
+      unavailableReason: "provider",
+    });
   });
+
+  it.each([404, 503, "network"])(
+    "hides an in-flight %s failure after privacy mode changes",
+    async (failure) => {
+      const input = await fixture();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          input.privateMode.mockResolvedValue(true);
+          if (typeof failure === "string") throw new Error("offline");
+          return new Response("unavailable", { status: failure });
+        }),
+      );
+      expect(await readAutoModelRoutes(input)).toEqual({
+        supported: false,
+        routes: [],
+        unavailableReason: "private",
+      });
+    },
+  );
 
   it.each([
     () => new Response("fixture-secret", { status: 401 }),

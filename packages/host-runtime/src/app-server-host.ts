@@ -37,8 +37,13 @@ import {
   threadArchiveCompletedResultSchema,
 } from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
-import { AUTO_MODEL_ROUTES_METHOD, BUDDY_PRIVATE_METHOD } from "@codexhost/shared-contracts";
+import {
+  AUTO_MODEL_ROUTES_METHOD,
+  SSH_AUTO_MODEL_ROUTES_METHOD,
+  BUDDY_PRIVATE_METHOD,
+} from "@codexhost/shared-contracts";
 import { readAutoModelRoutes } from "./auto-model-routes.js";
+import { readSshAutoModelRoutes } from "./ssh-auto-model-routes.js";
 import {
   BUDDY_MODELS_METHOD,
   BUDDY_CATALOG_SYNC_METHOD,
@@ -1286,6 +1291,20 @@ export class AppServerHost {
       } catch (error) {
         await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
       }
+      return;
+    }
+    if (request.method === SSH_AUTO_MODEL_ROUTES_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const result = await readSshAutoModelRoutes({
+            params: request.params,
+            environment: this.#options.environment ?? process.env,
+          });
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
       return;
     }
     if (request.method === AUTO_MODEL_ROUTES_METHOD) {

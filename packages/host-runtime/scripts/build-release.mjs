@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { build as esbuildBuild } from "esbuild";
+import { buildAutoModelRoutesWorker } from "./build-auto-model-routes-worker.mjs";
 
 const forbiddenInputFragments = [
   "/packages/adapters/",
@@ -82,6 +83,7 @@ export function auditHostBundleSource(source) {
 
 export async function buildReleaseHostBundle({ repositoryRoot, outputPath }) {
   await mkdir(path.dirname(outputPath), { recursive: true });
+  const autoRoutesWorker = await buildAutoModelRoutesWorker(repositoryRoot);
   const result = await esbuildBuild({
     absWorkingDir: repositoryRoot,
     entryPoints: ["packages/host-runtime/src/release-main.ts"],
@@ -96,6 +98,9 @@ export async function buildReleaseHostBundle({ repositoryRoot, outputPath }) {
     minify: false,
     treeShaking: true,
     charset: "utf8",
+    define: {
+      __CODEXHOST_SSH_AUTO_MODEL_ROUTES_WORKER__: JSON.stringify(autoRoutesWorker),
+    },
     legalComments: "none",
     banner: {
       js: 'import { createRequire as __codexhostCreateRequire } from "node:module"; const require = __codexhostCreateRequire(import.meta.url);',

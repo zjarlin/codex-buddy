@@ -157,7 +157,7 @@ function sameContext(left: Context | null, right: Context | null): boolean {
   );
 }
 
-function turnAnchors(context: Context, turnIds: Set<string>): Map<string, HTMLElement> {
+function turnAnchors(context: Context, turnIds?: Set<string>): Map<string, HTMLElement> {
   const anchors = new Map<string, HTMLElement>();
   for (const turn of context.root.querySelectorAll<HTMLElement>(
     "[data-content-search-turn-key], [data-turn-key]",
@@ -165,7 +165,13 @@ function turnAnchors(context: Context, turnIds: Set<string>): Map<string, HTMLEl
     const turnId =
       turn.getAttribute("data-content-search-turn-key") ??
       turn.getAttribute("data-turn-key")?.replace(/^history-content:turn:/, "");
-    if (!turnId || !turnIds.has(turnId) || anchors.has(turnId)) continue;
+    if (
+      !turnId ||
+      turnId.startsWith("history-content:") ||
+      (turnIds && !turnIds.has(turnId)) ||
+      anchors.has(turnId)
+    )
+      continue;
     // 原生回合容器使用 display: contents；可见性必须由实际回复节点判断。
     const responses = [
       turn,
@@ -200,8 +206,9 @@ export function installAutoRouteCards(options: {
   document.head.append(style);
   let context: Context | null = null;
   let routes: AutoModelRoute[] = [];
+  const turnRecords = new Map<string, { routes: AutoModelRoute[]; nextRead: number }>();
   let nextRead = 0;
-  let reading = false;
+  let readingGeneration: number | null = null;
   let disposed = false;
   let unavailable = false;
   let result: AutoModelRoutesResult | null = null;
@@ -275,7 +282,15 @@ export function installAutoRouteCards(options: {
   function render() {
     if (!context) return;
     const byTurn = new Map<string, AutoModelRoute[]>();
-    const unique = new Map(routes.map((route) => [route.request_id, route]));
+    const unique = new Map<string, AutoModelRoute>();
+    for (const route of [...turnRecords.values()]
+      .flatMap((record) => record.routes)
+      .concat(routes)) {
+      const previous = unique.get(route.request_id);
+      if (!previous || route.updated_at >= previous.updated_at) {
+        unique.set(route.request_id, route);
+      }
+    }
     for (const route of unique.values()) {
       if (route.session_id !== context.threadId) continue;
       const group = byTurn.get(route.turn_id) ?? [];
@@ -321,6 +336,7 @@ export function installAutoRouteCards(options: {
       context = current;
       generation += 1;
       routes = [];
+      turnRecords.clear();
       nextRead = 0;
       unavailable = false;
       result = null;
@@ -329,13 +345,18 @@ export function installAutoRouteCards(options: {
     // 同一会话可以切换下一回合的模型，不能只在会话身份变化时更新选模状态。
     context = current;
     if (document.hidden || !context?.client.readAutoModelRoutes) return;
+    const readRoutes = context.client.readAutoModelRoutes.bind(context.client);
+    const visibleTurns = turnAnchors(context);
+    for (const turnId of turnRecords.keys()) {
+      if (!visibleTurns.has(turnId)) turnRecords.delete(turnId);
+    }
     render();
-    if (reading || Date.now() < nextRead) return;
+    if (readingGeneration === generation || Date.now() < nextRead) return;
     const requestContext = context;
     const requestGeneration = generation;
-    reading = true;
+    readingGeneration = requestGeneration;
     try {
-      const response = await context.client.readAutoModelRoutes(context.threadId);
+      const response = await readRoutes(requestContext.threadId);
       if (
         disposed ||
         requestGeneration !== generation ||
@@ -344,8 +365,51 @@ export function installAutoRouteCards(options: {
         return;
       result = response;
       routes = result.supported ? result.routes : [];
+      if (!result.supported) turnRecords.clear();
       unavailable = false;
       nextRead = Date.now() + (result.supported ? 2_000 : 60_000);
+      render();
+      if (!result.supported) return;
+      // 会话列表只有最近 128 个请求；按原生 turn_id 补查已挂载的旧回合，并限制每批数量。
+      const turnIds = [...visibleTurns.keys()]
+        .filter((turnId) => (turnRecords.get(turnId)?.nextRead ?? 0) <= Date.now())
+        .sort(
+          (left, right) =>
+            (turnRecords.get(left)?.nextRead ?? 0) - (turnRecords.get(right)?.nextRead ?? 0),
+        )
+        .slice(0, 4);
+      const responses = await Promise.all(
+        turnIds.map(async (turnId) => ({
+          turnId,
+          response: await readRoutes(requestContext.threadId, turnId),
+        })),
+      );
+      if (
+        disposed ||
+        requestGeneration !== generation ||
+        !sameContext(requestContext, options.getContext())
+      )
+        return;
+      const unsupported = responses.find((entry) => !entry.response.supported);
+      if (unsupported) {
+        result = unsupported.response;
+        routes = [];
+        turnRecords.clear();
+        nextRead = Date.now() + 60_000;
+      } else {
+        for (const { turnId, response: turnResponse } of responses) {
+          const records = turnResponse.routes.filter(
+            (route) => route.session_id === requestContext.threadId && route.turn_id === turnId,
+          );
+          const active = records.some(
+            (route) => route.state === "selected" || route.state === "responding",
+          );
+          turnRecords.set(turnId, {
+            routes: records,
+            nextRead: Date.now() + (active ? 2_000 : 30_000),
+          });
+        }
+      }
       render();
     } catch {
       if (
@@ -358,7 +422,7 @@ export function installAutoRouteCards(options: {
       nextRead = Date.now() + 10_000;
       render();
     } finally {
-      reading = false;
+      if (readingGeneration === requestGeneration) readingGeneration = null;
     }
   }
   const timer = window.setInterval(() => void tick(), 500);

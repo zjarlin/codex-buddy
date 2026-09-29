@@ -102,6 +102,37 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("reads upstream Auto observations through the saved SSH Host for the native turn", async () => {
+  const { adapter, local, remote } = await setup(remoteId);
+  const threadId = "019ccb31-9520-7120-bc17-556e9a92d860";
+  const path = `/remote/.codex/sessions/2026/09/29/rollout-${threadId}.jsonl`;
+  const routes = { supported: true, routes: [] };
+  remote.nativeSend.mockImplementation(async (method) => {
+    if (method === "codexhost/auto/routes") throw { code: -32601 };
+    if (method === "thread/read")
+      return { thread: { id: threadId, modelProvider: "remote", path } };
+    throw new Error(`Unexpected remote method: ${method}`);
+  });
+  local.nativeSend.mockResolvedValue(routes);
+  try {
+    const client = adapter.modelControl?.clientForHost?.(remoteId);
+    await expect(client?.readAutoModelRoutes?.(threadId, "native-turn")).resolves.toEqual(routes);
+    expect(local.nativeSend).toHaveBeenCalledWith("codexhost/ssh/auto/routes", {
+      hostId: remoteId,
+      threadId,
+      runId: "native-turn",
+      modelProvider: "remote",
+      rolloutPath: path,
+    });
+    expect(remote.nativeSend).toHaveBeenCalledWith("thread/read", {
+      threadId,
+      includeTurns: false,
+    });
+  } finally {
+    adapter.dispose();
+  }
+});
+
 it.each(["local", remoteId])(
   "queries both Hosts and follows switches immediately when %s opens first",
   async (hostId) => {

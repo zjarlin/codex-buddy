@@ -25,12 +25,27 @@ const { outputFiles } = await build({
         ...(config.candidates ? { candidates: config.candidates } : {}),
       });
       globalThis.calls = [];
-      const client = { readAutoModelRoutes: async (id) => {
-        globalThis.calls.push({ id, hostId });
+      const client = { readAutoModelRoutes: async (id, runId) => {
+        globalThis.calls.push({ id, hostId, runId });
         if (failed) throw new Error('provider offline');
         if (config.mode === 'failure') throw new Error('provider offline');
         if (config.mode === 'pending' && !pending) return new Promise((resolve) => { pending = resolve; });
         if (hostId !== 'ssh:252') return { supported: true, routes: [] };
+        if (config.mode === 'late-observation' && version === 1) return { supported: true, routes: [] };
+        if (config.mode === 'pending-turn') {
+          if (runId === 'turn-1') return new Promise((resolve) => { pending = resolve; });
+          return { supported: true, routes: [] };
+        }
+        if (config.mode === 'capped-session') {
+          if (runId === 'turn-1') return { supported: true, routes: [
+            { ...route(), resolved_model: 'old-tool-model', started_at: 1790651972000 },
+            { ...route(), request_id: '019ccb31-9520-7120-bc17-556e9a92d862', resolved_model: 'old-answer-model' },
+          ] };
+          return { supported: true, routes: [{ ...route(),
+            request_id: '019ccb31-9520-7120-bc17-556e9a92d863', turn_id: 'turn-2',
+            resolved_model: 'latest-answer-model', started_at: 1790651973000,
+          }] };
+        }
         if (config.mode === 'empty') return { supported: true, routes: [] };
         if (config.unavailableReason) return { supported: false, routes: [], unavailableReason: config.unavailableReason };
         return { supported: config.mode !== 'unsupported', routes: config.mode === 'unsupported' ? [] : [route(), route()] };
@@ -72,7 +87,8 @@ async function setup(page: Page, config: Record<string, unknown> = {}, dark = fa
     main{max-width:720px;margin:32px auto;padding:0 20px} header{padding:12px 20px;border-bottom:1px solid #8883;font-weight:600}
     .user{padding:12px 0 20px;text-align:right}.answer{line-height:1.8}nav{margin:28px 0;display:flex;gap:8px;flex-wrap:wrap}nav button{padding:4px 8px}
     </style></head><body><header>Codex Buddy</header><main><div class="user">检查 Auto 模型回退逻辑，并修复工具调用兼容性。</div>
-    <section data-turn-key="history-content:turn:turn-1"><div data-content-search-turn-key="turn-1" style="display:contents">${config.noResponse ? "" : `<div data-response-annotation-conversation="${threadId}"><div class="answer">已检查候选模型和工具调用配置。当前请求已完成模型回退，下面是检查结果。</div></div>`}</div></section>
+    <section data-turn-key="${config.tail ? "history-content:tail:0:local:tail-id" : "history-content:turn:turn-1"}"><div data-content-search-turn-key="turn-1" style="display:contents">${config.noResponse ? "" : `<div data-response-annotation-conversation="${threadId}"><div class="answer">已检查候选模型和工具调用配置。当前请求已完成模型回退，下面是检查结果。</div></div>`}</div></section>
+    ${config.multipleTurns ? `<section data-content-search-turn-key="turn-2"><div data-response-annotation-conversation="${threadId}">Latest answer</div></section>` : ""}
     <section data-turn-key="unrelated"><div data-response-annotation-conversation="other-thread">另一条消息</div></section>
     <div id="composer"><label>Model <select id="model"><option value="auto">auto</option><option value="fixed">fixed</option></select></label><textarea aria-label="Message"></textarea></div>
     <nav><button id="switch">Switch Host</button><button id="late">Deliver late result</button><button id="complete">Complete</button><button id="failure">Provider offline</button><button id="remount">Remount turn</button><button id="response">Show reply</button><button id="dispose">Dispose</button></nav></main></body></html>`);
@@ -205,6 +221,64 @@ test("rejects a late response from a retired Host", async ({ page }) => {
     .toBeGreaterThan(1);
   await expect(page.locator("[data-codexhost-auto-route]")).toHaveCount(0);
   await expect(page.getByRole("status", { name: "Auto 选模" })).toContainText("等待网关返回");
+});
+
+test("looks up native turn IDs and preserves older tool-loop records outside the session window", async ({
+  page,
+}) => {
+  await setup(page, { mode: "capped-session", multipleTurns: true, tail: true });
+  const oldCard = page.locator('[data-codexhost-auto-route="turn-1"]');
+  const latestCard = page.locator('[data-codexhost-auto-route="turn-2"]');
+  await expect(oldCard).toContainText("old-answer-model");
+  await expect(oldCard).toContainText("2 次请求");
+  await expect(latestCard).toContainText("latest-answer-model");
+  await expect(latestCard).toContainText("1 次请求");
+  await oldCard.getByRole("button", { name: "路由详情" }).click();
+  await expect(oldCard.locator("ol li")).toHaveCount(2);
+  await expect(oldCard.locator("ol li").first()).toContainText("old-tool-model");
+  await expect(oldCard.locator("ol li").last()).toContainText("old-answer-model");
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "calls"));
+  expect(calls).toEqual([
+    { id: threadId, hostId: "ssh:252", runId: undefined },
+    { id: threadId, hostId: "ssh:252", runId: "turn-1" },
+    { id: threadId, hostId: "ssh:252", runId: "turn-2" },
+  ]);
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "calls").length))
+    .toBeGreaterThan(calls.length);
+  await expect(oldCard).toContainText("2 次请求");
+  await expect(oldCard.locator("ol")).toBeVisible();
+  await expect(latestCard).toContainText("latest-answer-model");
+});
+
+test("discards a pending turn lookup when its Host retires", async ({ page }) => {
+  await setup(page, { mode: "pending-turn", selectedModel: "auto" });
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "calls").at(-1)?.runId))
+    .toBe("turn-1");
+  await page.getByRole("button", { name: "Switch Host" }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "calls").at(-1)?.hostId))
+    .toBe("ssh:other");
+  await page.getByRole("button", { name: "Deliver late result" }).click();
+  await expect(page.locator("[data-codexhost-auto-route]")).toHaveCount(0);
+  await expect(page.getByRole("status", { name: "Auto 选模" })).toContainText("等待网关返回");
+});
+
+test("session polling discovers a new route while an empty turn lookup is cached", async ({
+  page,
+}) => {
+  await setup(page, { mode: "late-observation", selectedModel: "auto" });
+  await expect(page.getByRole("status", { name: "Auto 选模" })).toContainText("等待网关返回");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "calls").at(-1)?.runId))
+    .toBe("turn-1");
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await expect(page.locator('[data-codexhost-auto-route="turn-1"]')).toContainText("gpt-5.6");
+  const turnReads = await page.evaluate(
+    () => Reflect.get(globalThis, "calls").filter((call: { runId?: string }) => call.runId).length,
+  );
+  expect(turnReads).toBe(1);
 });
 
 test("unsupported gateway does not add invented conversation content", async ({ page }) => {

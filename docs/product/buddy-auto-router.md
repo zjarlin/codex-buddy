@@ -14,11 +14,11 @@
 
 同一会话的相同候选计划通过 `plan_id` 去重保存，每次查询仅最新请求携带完整 `candidates`，历史记录保留摘要。查询条数上限 128 不限制每次请求的模型尝试数量，Host 仍对响应总字节数设限。Host 方法 `codexhost/auto/routes` 接受 threadId 和可选 runId，并核对返回会话和回合身份。旧网关缺少候选字段时，卡片照常显示实际模型和尝试记录。
 
-Renderer 通过当前 Host 的 `codexhost/auto/routes` 读取，Host 先核对原生 Thread 的 Provider，再读取该 Host 的凭据。可见会话每两秒刷新最近记录，隐藏窗口暂停；切换 Host、会话或连接后丢弃旧回包。会话内卡片必须匹配原生 Thread/turn DOM 标识，不挂载到无法确认归属的消息。选择 `auto` 后，输入框前会显示读取中、等待网关记录、Host 不支持、供应商不支持或读取失败的提示；无法读取记录时不猜测实际模型。已确认属于当前会话的最新路由在回合 DOM 出现前先显示在输入框前，匹配回复节点出现后移入对应回合，不重复展示。临时读取失败保留已有卡片并标记更新不可用。隐私模式禁止在线读取，也不显示选模提示。
+Renderer 通过当前 Host 的 `codexhost/auto/routes` 读取，Host 先核对原生 Thread 的 Provider，再读取该 Host 的凭据。可见会话每两秒刷新最近记录，并按已挂载原生回合的 `turn_id` 补查，每批最多四个回合；活动记录每两秒更新，完成或暂无记录的回合每三十秒更新，因此旧回合不会因会话最近 128 条的限制丢失。隐藏窗口暂停；切换 Host、会话或连接后丢弃旧回包。会话内卡片必须匹配原生 Thread/turn DOM 标识，不挂载到无法确认归属的消息。选择 `auto` 后，输入框前会显示读取中、等待网关记录、Host 不支持、供应商不支持或读取失败的提示；无法读取记录时不猜测实际模型。已确认属于当前会话的最新路由在回合 DOM 出现前先显示在输入框前，匹配回复节点出现后移入对应回合，不重复展示。临时读取失败保留已有卡片并标记更新不可用。隐私模式禁止在线读取，也不显示选模提示。
 
-官方 SSH app-server 不提供 `codexhost/auto/routes`。模型目录中存在 `auto` 只说明可以把该模型 ID 发给供应商，不能证明当前连接能读取其实际选模记录；此时界面提示在会话所在主机启用 Codex Buddy 后重新连接。状态读取不会改用本机凭据、自动安装远端服务或重启现有会话。
+官方 SSH app-server 明确不支持 `codexhost/auto/routes` 时，Renderer 先通过该连接的 `thread/read` 取得原生会话 ID、Provider 和 rollout 路径，再调用本机 Host 的专用 `codexhost/ssh/auto/routes`。Host 只使用 Desktop 保存的 SSH 连接，将内置的只读查询程序通过标准输入交给远端 Node.js 执行；远端 PATH 中需要 Node.js 18 或更高版本。程序从原生 rollout 路径确定远端 Codex 配置目录，核对持久化会话及 Provider，读取该目录的隐私设置和凭据，再查询上游。远端不需安装 Buddy 服务，也不会写入程序文件或重启会话。仅路由元数据回到 Renderer，凭据不经过浏览器；不会使用本机 Provider 配置替代远程配置。Provider 所需的环境凭据必须可由远端 SSH 环境读取，缺失时报告读取失败。网络或业务错误不触发这条回退路径。
 
-需要同时更新 Sub2API 网关、会话所属 Host 和 Codex Buddy Renderer。原版 Codex CLI/Desktop 不具备此卡片；不支持回合元数据的旧内核不会产生可关联记录。交付遵循仓库发布流水线；源码构建通过不等于正在运行的 MacBook 应用已升级。
+需要支持观察接口的 Sub2API 网关及更新后的 Codex Buddy Host/Renderer；原生 SSH 连接可通过上述只读通道获取记录。原版 Codex CLI/Desktop 不具备此卡片；不支持回合元数据的旧内核不会产生可关联记录，未使用 `auto` 的请求也没有 Auto 记录。交付遵循仓库发布流水线；源码构建通过不等于正在运行的 MacBook 应用已升级。
 
 ## 收藏与固定模型
 

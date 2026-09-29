@@ -36,8 +36,8 @@ const { outputFiles } = await build({
         inspectHarness: unused, forkThread: unused,
         selectThreadModel: unused, selectThreadThinking: unused, selectThreadPermissionMode: unused,
         checkUpdate: unused, startUpdate: unused, readUpdateStatus: unused,
-        readAutoModelRoutes: async (id) => {
-          globalThis.routeReads.push({ hostId, threadId: id });
+        readAutoModelRoutes: async (id, runId) => {
+          globalThis.routeReads.push({ hostId, threadId: id, ...(runId ? { runId } : {}) });
           if (globalThis.unsupportedHost) return routeClient.readAutoModelRoutes(id);
           return { supported: true, routes: [{
             request_id: '019ccb31-9520-7120-bc17-556e9a92d861', session_id: threadId,
@@ -98,10 +98,14 @@ for (const unsupportedHost of [false, true])
     } else {
       await expect(card).toBeVisible();
       await expect(card).toContainText("gpt-5.6");
+      await page.screenshot({ path: test.info().outputPath("ssh-auto-turn-card.png") });
     }
-    expect(await page.evaluate(() => Reflect.get(globalThis, "routeReads"))).toEqual([
-      { hostId: "ssh:252", threadId },
-    ]);
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "routeReads")))
+      .toEqual([
+        { hostId: "ssh:252", threadId },
+        ...(unsupportedHost ? [] : [{ hostId: "ssh:252", threadId, runId: "turn-1" }]),
+      ]);
     await expect(page.getByRole("textbox")).toHaveText("Next message");
     expect(errors).toEqual([]);
   });

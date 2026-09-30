@@ -92,6 +92,20 @@ export {
 } from "./thread-workspace.js";
 export type { ThreadWorkspaceOpenParams, ThreadWorkspaceOpenResult } from "./thread-workspace.js";
 export {
+  PROJECT_TERMINAL_OPEN_METHOD,
+  PROJECT_WORKSPACE_OPEN_METHOD,
+  projectTerminalOpenParamsSchema,
+  projectTerminalOpenResultSchema,
+  projectWorkspaceOpenParamsSchema,
+  projectWorkspaceOpenResultSchema,
+} from "./project-actions.js";
+export type {
+  ProjectTerminalOpenParams,
+  ProjectTerminalOpenResult,
+  ProjectWorkspaceOpenParams,
+  ProjectWorkspaceOpenResult,
+} from "./project-actions.js";
+export {
   DOUBAO_OPEN_METHOD,
   doubaoOpenParamsSchema,
   doubaoOpenResultSchema,

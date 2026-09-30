@@ -211,3 +211,65 @@ export async function openThreadWorkspace(
 
   return { workspace, application: "vscode" };
 }
+
+export async function openProjectWorkspace(
+  cwd: string,
+  options: {
+    platform?: NodeJS.Platform;
+    spawnApplication?: SpawnWorkspaceApplication;
+    environment?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<{ workspace: string; application: "vscode" }> {
+  let workspace: string;
+  try {
+    workspace = await realpath(cwd);
+  } catch (error) {
+    throw new ThreadWorkspaceError("项目路径不可用。", { cause: error });
+  }
+  let information;
+  try {
+    information = await stat(workspace);
+  } catch (error) {
+    throw new ThreadWorkspaceError("项目路径不可用。", { cause: error });
+  }
+  if (!information.isDirectory()) throw new ThreadWorkspaceError("项目路径不是目录。");
+
+  const platform = options.platform ?? process.platform;
+  const environment = options.environment ?? process.env;
+  const invocation = await vscodeInvocation(workspace, { platform, environment });
+  const spawnApplication: SpawnWorkspaceApplication =
+    options.spawnApplication ??
+    ((command, arguments_, spawnOptions) => spawn(command, arguments_, spawnOptions));
+
+  await new Promise<void>((resolve, reject) => {
+    let child;
+    try {
+      child = spawnApplication(invocation.command, invocation.arguments_, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch (error) {
+      reject(new ThreadWorkspaceError("无法打开 Visual Studio Code。", { cause: error }));
+      return;
+    }
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve();
+    };
+    child.once("error", (error) =>
+      finish(new ThreadWorkspaceError("无法打开 Visual Studio Code。", { cause: error })),
+    );
+    try {
+      child.unref();
+      finish();
+    } catch (error) {
+      finish(new ThreadWorkspaceError("无法打开 Visual Studio Code。", { cause: error }));
+    }
+  });
+
+  return { workspace, application: "vscode" };
+}

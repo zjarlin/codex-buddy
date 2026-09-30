@@ -49,7 +49,8 @@ const { outputFiles } = await build({
               const menu = document.createElement("div"); menu.setAttribute("role", "menu");
               const close = () => { menu.remove(); trigger.focus(); };
               const items = ["edit-project", ...(project.projectKind === "local" ? ["reveal-project-folder"] : []), "remove-project"];
-              const menuOwner = fiber({ getContextMenuItems: () => items.map(id => ({id})), triggerAriaLabel: project.label, onOpenChange: close }, fiber({ project }));
+              const projectValue = project.projectKind === "local" ? { ...project, path: "/workspace/" + project.projectId } : project;
+              const menuOwner = fiber({ getContextMenuItems: () => items.map(id => ({id})), triggerAriaLabel: project.label, onOpenChange: close }, fiber({ project: projectValue }));
               for (const [i, id] of items.entries()) {
                 const item = document.createElement("div"); item.setAttribute("role", "menuitem"); item.tabIndex = -1;
                 item.textContent = ({"edit-project":"编辑", "reveal-project-folder":"在访达中显示", "remove-project":"移除项目"})[id];
@@ -58,7 +59,7 @@ const { outputFiles } = await build({
               }
               menu.onkeydown = event => {
                 if (event.key === "Escape") close();
-                const entries = [...menu.querySelectorAll('[role=menuitem]')].filter(el => !el.hasAttribute('data-codexhost-project-tab-move') && !el.hasAttribute('data-codexhost-project-actions-open-doubao'));
+                const entries = [...menu.querySelectorAll('[role=menuitem]')].filter(el => !el.hasAttribute('data-codexhost-project-tab-move') && !el.hasAttribute('data-codexhost-project-actions'));
                 const i = entries.indexOf(document.activeElement);
                 if (event.key === "ArrowDown") { event.preventDefault(); entries[(i + 1) % entries.length]?.focus(); }
                 if (event.key === "ArrowUp") { event.preventDefault(); entries[(i - 1 + entries.length) % entries.length]?.focus(); }
@@ -114,7 +115,7 @@ const { outputFiles } = await build({
           };
           document.querySelector("footer").append(remount);
         }
-        const actions = installRendererProjectActions({ getClient: () => ({openDoubao: async () => ({opened:true})}), getLocale: () => "zh-CN" });
+        const actions = installRendererProjectActions({ getClient: () => ({}), getLocale: () => "zh-CN" });
         let hostConfig = null;
         const hostClient = {
           getProjectTabs: async () => ({ config: hostConfig }),
@@ -326,6 +327,50 @@ test("creating a project while a custom tab is selected assigns it to that tab",
   await expect(rows(page)).toContainText("新建项目 1");
 });
 
+test("searches project tabs by name and activates the chosen tab", async ({ page }, info) => {
+  const initialConfig = {
+    version: 2,
+    tabs: [
+      { id: "company", name: "remote_company_okmy_scada", prefixes: ["remote_company"] },
+      { id: "personal", name: "remote_zjarlin_codex_host", prefixes: ["remote_zjarlin"] },
+      { id: "infrequent", name: "不常用", prefixes: [] },
+    ],
+    assignments: {},
+    selected: null,
+  };
+  await setup(page, { persistentHost: true, initialConfig });
+  await expect(category(page, "项目")).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "搜索项目 Tab", exact: true }).click();
+  const search = page.getByRole("combobox");
+  await expect(search).toBeFocused();
+  await expect(page.getByRole("option", { name: /remote_company_okmy_scada/ })).toBeVisible();
+
+  await search.fill("codex_host");
+  const match = page.getByRole("option", { name: /remote_zjarlin_codex_host/ });
+  await expect(match).toBeVisible();
+  await page.screenshot({ path: info.outputPath("tab-search.png") });
+  await page.keyboard.press("Enter");
+
+  await expect(category(page, "remote_zjarlin_codex_host")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("combobox")).toHaveCount(0);
+  await expect(rows(page)).toContainText("remote_zjarlin_codex-host");
+
+  await page.keyboard.press("/");
+  await expect(page.getByRole("combobox")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("combobox")).toHaveCount(0);
+});
+
+test("slash opens tab search only inside the sidebar", async ({ page }) => {
+  await setup(page);
+  await page.locator("#rename").focus();
+  await page.keyboard.press("/");
+  await expect(page.getByRole("combobox")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("combobox")).toHaveCount(0);
+});
+
 test("manual move overrides prefixes, survives rename/reinstall and restores automatic rules", async ({
   page,
 }, info) => {
@@ -428,7 +473,7 @@ for (const dark of [false, true]) {
     await category(page, "其他项目").click();
     await expect(rows(page)).toHaveCount(1);
     await page.getByRole("button", { name: "other-project 项目操作", exact: true }).click();
-    await expect(page.getByRole("menuitem", { name: "在 Doubao 中打开" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "在终端中打开" })).toBeVisible();
     await page.keyboard.press("Escape");
     await settings(page).click();
     await dialog

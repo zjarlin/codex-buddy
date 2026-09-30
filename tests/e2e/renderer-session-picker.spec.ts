@@ -84,9 +84,16 @@ const { outputFiles } = await build({
           [undefined, atom, atom], [{}, {}, 'client-new-thread:' + draftKey, atom, undefined, atom, atom],
         ] } }, return: null };
         editor.addEventListener('input', () => { state.doc = makeDoc(editor.innerText); save(state.doc); });
+        editor.addEventListener('input', () => { if (!editor.innerText.trim()) editor.innerText = ''; });
         document.querySelector('#send').addEventListener('click', () => {
           globalThis.sends.push({ hostId, cwd, threadId, text: editor.innerText, attachment: config.attachment ?? false });
           if (!config.sendFails) { controller.view.dispatch({ text: '' }); }
+        });
+        editor.addEventListener('keydown', event => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+            event.preventDefault();
+            document.querySelector('#send').click();
+          }
         });
       }
       mount(config.existing ? sourceId : null, cwd);
@@ -175,8 +182,35 @@ async function setup(page: Page, config: Record<string, unknown> = {}) {
   await page.getByRole("textbox", { name: "Message" }).fill("继续这个任务\n保留第二行");
 }
 const sends = (page: Page) => page.evaluate(() => Reflect.get(globalThis, "sends"));
-const current = (page: Page) => page.getByRole("button", { name: /当前会话/ });
-const picker = (page: Page) => page.getByRole("dialog", { name: "选择发送会话" });
+const transfer = (page: Page) => page.getByRole("button", { name: "发送到其他会话或项目" });
+const picker = (page: Page) => page.getByRole("dialog", { name: "发送到其他会话" });
+const closePicker = (page: Page) => picker(page).getByRole("button", { name: "关闭" });
+
+test("completed conversations lead, new conversations follow, and the header closes the picker", async ({
+  page,
+}) => {
+  await setup(page, { existing: true });
+  await transfer(page).click();
+  const panel = picker(page);
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("继续已完成会话", { exact: true })).toBeVisible();
+  await expect(panel.getByText("新建会话", { exact: true })).toBeVisible();
+  const headings = await panel.locator(".codexhost-session-picker-heading").allTextContents();
+  expect(headings.indexOf("继续已完成会话")).toBeLessThan(headings.indexOf("新建会话"));
+  await closePicker(page).click();
+  await expect(panel).toHaveCount(0);
+  expect(await sends(page)).toEqual([]);
+});
+
+test("Escape closes the picker even when focus moves outside it", async ({ page }) => {
+  await setup(page, { existing: true });
+  await transfer(page).click();
+  await page.getByRole("textbox", { name: "Message" }).focus();
+  await page.keyboard.press("Escape");
+  await expect(picker(page)).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Message" })).toBeFocused();
+  expect(await sends(page)).toEqual([]);
+});
 
 for (const config of [
   { hostId: "local" },
@@ -188,23 +222,22 @@ for (const config of [
     page,
   }, testInfo) => {
     await setup(page, { existing: true, ...config });
-    await page.keyboard.press("Enter");
+    await transfer(page).click();
     await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
     await expect(page.getByRole("button", { name: /Source discussion/ })).toHaveCount(0);
-    await expect(current(page)).toHaveAttribute("aria-pressed", "true");
     await page.getByRole("searchbox").fill("Source discussion");
     await expect(page.getByRole("button", { name: /Source discussion/ })).toHaveCount(0);
-    await expect(picker(page)).toContainText("没有匹配的已完成会话");
+    await expect(picker(page)).toContainText("没有匹配的发送目标");
     await page.screenshot({ path: testInfo.outputPath("current-excluded.png") });
-    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
     await expect(picker(page)).toHaveCount(0);
-    expect(await sends(page)).toMatchObject([{ hostId: config.hostId, threadId: sourceId }]);
+    expect(await sends(page)).toEqual([]);
   });
 }
 
 test("a new draft still lists other conversations in its project", async ({ page }) => {
   await setup(page);
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await expect(page.getByRole("button", { name: /Source discussion/ })).toBeVisible();
 });
 
@@ -213,66 +246,47 @@ for (const hostId of ["local", "remote-ssh-discovered:okm252"]) {
     page,
   }, testInfo) => {
     await setup(page, { hostId, staleWorkspace: true });
-    await page.keyboard.press("Enter");
+    await transfer(page).click();
     await page.screenshot({ path: testInfo.outputPath("current-project.png") });
-    await expect(current(page)).toContainText("/workspace/demo");
-    await expect(current(page)).not.toContainText("official-app");
     expect(await page.evaluate(() => Reflect.get(globalThis, "rankings")[0].cwd)).toBe(
       "/workspace/demo",
     );
-    await page.keyboard.press("Enter");
-    expect(await sends(page)).toHaveLength(1);
-    expect((await sends(page))[0]).toMatchObject({ hostId, cwd: "/workspace/demo" });
+    await page.keyboard.press("Escape");
+    expect(await sends(page)).toEqual([]);
   });
 }
 
 test("background prewarm cannot invalidate the current project", async ({ page }) => {
   await setup(page, { hostId: "remote-ssh-discovered:okm252" });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: "Background prewarm" }).click();
-  await current(page).click();
-  await expect(picker(page)).toHaveCount(0);
-  expect(await sends(page)).toHaveLength(1);
-  expect((await sends(page))[0].cwd).toBe("/workspace/demo");
+  await page.keyboard.press("Escape");
+  expect(await sends(page)).toEqual([]);
 });
 
-test("project changes invalidate the picker before prewarm catches up", async ({ page }) => {
+test("project changes invalidate explicit transfer before prewarm catches up", async ({ page }) => {
   await setup(page, { delayWorkspace: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: "Switch project" }).click();
-  await current(page).click();
+  await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
   await expect(picker(page)).toContainText("会话、项目或 Host 已改变");
   expect(await sends(page)).toEqual([]);
 });
 
-test("unknown project never borrows a cached directory and still sends natively", async ({
-  page,
-}) => {
+test("unknown project never borrows a cached directory", async ({ page }) => {
   await setup(page, { missingWorkspace: true, staleWorkspace: true });
-  await page.keyboard.press("Enter");
-  await expect(current(page)).not.toContainText("official-app");
-  await expect(current(page)).toContainText("项目路径暂不可用");
+  await transfer(page).click();
   expect(await page.evaluate(() => Reflect.get(globalThis, "rankings")[0].cwd)).toBeUndefined();
-  await page.keyboard.press("Enter");
-  expect(await sends(page)).toHaveLength(1);
+  await page.keyboard.press("Escape");
+  expect(await sends(page)).toEqual([]);
 });
 
 for (const existing of [false, true]) {
-  test(`${existing ? "existing conversation" : "new draft"}: two Enters send only to the current conversation`, async ({
+  test(`${existing ? "existing conversation" : "new draft"}: Enter sends directly and explicit transfer offers other targets`, async ({
     page,
   }, testInfo) => {
     await setup(page, { existing });
     await page.keyboard.press("Enter");
-    await expect(picker(page)).toBeVisible();
-    await expect(current(page)).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("button", { name: /在 Other project 新建会话/ })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
-    expect(await sends(page)).toEqual([]);
-    await page.screenshot({
-      path: testInfo.outputPath("picker.png"),
-    });
-    await page.keyboard.press("Enter");
-    await expect(picker(page)).toHaveCount(0);
     expect(await sends(page)).toEqual([
       {
         hostId: "local",
@@ -282,16 +296,26 @@ for (const existing of [false, true]) {
         attachment: false,
       },
     ]);
+    await page.getByRole("textbox", { name: "Message" }).fill("继续这个任务\n保留第二行");
+    await transfer(page).click();
+    await expect(picker(page)).toBeVisible();
+    await expect(page.getByRole("button", { name: /在 Other project 新建会话/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
+    expect(await sends(page)).toHaveLength(1);
+    await page.screenshot({
+      path: testInfo.outputPath("picker.png"),
+    });
+    await page.keyboard.press("Escape");
+    await expect(picker(page)).toHaveCount(0);
   });
 }
 test("native SSH history remains selectable without Host extensions", async ({
   page,
 }, testInfo) => {
   await setup(page, { existing: true, hostId: "remote-ssh-discovered:cloud", mode: "native" });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   const target = page.getByRole("button", { name: /Native remote discussion/ });
   await expect(target).toBeVisible();
-  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
   await expect(picker(page)).not.toContainText("近期会话暂不可用");
   expect(await sends(page)).toEqual([]);
   expect(await page.evaluate(() => Reflect.get(globalThis, "nativeRequests"))).toEqual([
@@ -314,15 +338,13 @@ test("slow history remains available when it arrives after five seconds", async 
 }, testInfo) => {
   await page.clock.install();
   await setup(page, { existing: true, hostId: "ssh:macbook", candidateDelay: 6_000 });
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await transfer(page).click();
   await page.clock.runFor(5_100);
   await expect(picker(page)).toContainText("近期会话加载较慢，仍在读取");
-  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
   await page.screenshot({ path: testInfo.outputPath("slow-history.png") });
   await page.clock.runFor(1_000);
   await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
   await expect(picker(page)).not.toContainText("仍在读取");
-  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
   expect(await sends(page)).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("history-loaded.png") });
   await page.getByRole("button", { name: /Existing discussion/ }).click();
@@ -337,21 +359,19 @@ test("slow history remains available when it arrives after five seconds", async 
 test("a slow history failure replaces the loading notice", async ({ page }) => {
   await page.clock.install();
   await setup(page, { mode: "failed", candidateDelay: 6_000 });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.clock.runFor(5_100);
   await expect(picker(page)).toContainText("近期会话加载较慢，仍在读取");
   await page.clock.runFor(1_000);
   await expect(picker(page)).toContainText("近期会话暂不可用");
   await expect(picker(page)).not.toContainText("仍在读取");
   expect(await sends(page)).toEqual([]);
-  await current(page).click();
-  expect(await sends(page)).toHaveLength(1);
 });
 
 test("late history cannot reopen a picker cancelled while loading", async ({ page }) => {
   await page.clock.install();
   await setup(page, { candidateDelay: 6_000 });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.clock.runFor(5_100);
   await page.keyboard.press("Escape");
   await page.clock.runFor(1_000);
@@ -364,25 +384,23 @@ test("late history cannot reopen a picker cancelled while loading", async ({ pag
 });
 
 for (const mode of ["empty", "failed", "unsupported", "pending"]) {
-  test(`${mode}: never sends automatically and current remains available`, async ({ page }) => {
+  test(`${mode}: explicit transfer never sends automatically`, async ({ page }) => {
     await page.clock.install();
     await setup(page, { hostId: "ssh:macbook", mode, attachment: true });
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await transfer(page).click();
     await expect(picker(page)).toBeVisible();
     await page.clock.runFor(5_100);
     expect(await sends(page)).toEqual([]);
-    await current(page).click();
-    expect(await sends(page)).toHaveLength(1);
-    expect((await sends(page))[0].attachment).toBe(true);
-    expect((await sends(page))[0].hostId).toBe("ssh:macbook");
   });
 }
 
-test("search never changes default; Escape preserves the original draft", async ({ page }) => {
+test("search stays inside explicit transfer; Escape preserves the original draft", async ({
+  page,
+}) => {
   await setup(page, { existing: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("searchbox").fill("Existing discussion");
-  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(picker(page)).toHaveCount(0);
   await expect(page.getByRole("textbox")).toHaveText("继续这个任务\n保留第二行", {
@@ -394,61 +412,46 @@ test("search never changes default; Escape preserves the original draft", async 
 for (const change of ["project", "host"]) {
   test(`stale ${change} cannot submit`, async ({ page }) => {
     await setup(page);
-    await page.keyboard.press("Enter");
+    await transfer(page).click();
     await page.locator(`#switch-${change}`).click();
-    await current(page).click();
+    await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
     await expect(picker(page)).toContainText("会话、项目或 Host 已改变");
     expect(await sends(page)).toEqual([]);
   });
 }
 
 for (const existing of [false, true]) {
-  for (const confirmation of ["Enter", "Send", "current"]) {
-    test(`${existing ? "existing conversation" : "new draft"}: edit after Send then confirm via ${confirmation}`, async ({
-      page,
-    }, testInfo) => {
-      await setup(page, { existing, mode: "pending" });
-      await page.getByRole("button", { name: "Send", exact: true }).click();
-      await expect(picker(page)).toBeVisible();
-      const editor = page.getByRole("textbox", { name: "Message" });
-      await editor.press("ControlOrMeta+End");
-      await editor.pressSequentially(" 补充内容");
-      expect(await sends(page)).toEqual([]);
-      await expect(editor).toHaveText("继续这个任务\n保留第二行 补充内容", {
-        useInnerText: true,
-      });
-      if (confirmation === "Enter") {
-        await page.screenshot({
-          path: testInfo.outputPath("edited-draft.png"),
-        });
-      }
-      if (confirmation === "Enter") await editor.press("Enter");
-      else if (confirmation === "Send") {
-        await page.getByRole("button", { name: "Send", exact: true }).click();
-      } else await current(page).click();
-      await expect(picker(page)).toHaveCount(0);
-      if (confirmation === "Enter") {
-        await page.screenshot({
-          path: testInfo.outputPath("sent-draft.png"),
-        });
-      }
-      expect(await sends(page)).toEqual([
-        {
-          hostId: "local",
-          cwd: "/workspace/demo",
-          threadId: existing ? sourceId : null,
-          text: "继续这个任务\n保留第二行 补充内容",
-          attachment: false,
-        },
-      ]);
+  test(`${existing ? "existing conversation" : "new draft"}: editing while transfer is open does not affect direct send`, async ({
+    page,
+  }) => {
+    await setup(page, { existing, mode: "pending" });
+    await transfer(page).click();
+    await expect(picker(page)).toBeVisible();
+    const editor = page.getByRole("textbox", { name: "Message" });
+    await editor.press("ControlOrMeta+End");
+    await editor.pressSequentially(" 补充内容");
+    expect(await sends(page)).toEqual([]);
+    await expect(editor).toHaveText("继续这个任务\n保留第二行 补充内容", {
+      useInnerText: true,
     });
-  }
+    await editor.press("Enter");
+    await expect(picker(page)).toHaveCount(0);
+    expect(await sends(page)).toEqual([
+      {
+        hostId: "local",
+        cwd: "/workspace/demo",
+        threadId: existing ? sourceId : null,
+        text: "继续这个任务\n保留第二行 补充内容",
+        attachment: false,
+      },
+    ]);
+  });
 }
 
 for (const destination of ["existing", "new"]) {
   test(`edit before selecting ${destination} transfers the latest draft`, async ({ page }) => {
     await setup(page, { existing: true });
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await transfer(page).click();
     await page.getByRole("textbox", { name: "Message" }).fill("改过的正文\n补充内容");
     await page
       .getByRole("button", {
@@ -465,11 +468,11 @@ for (const destination of ["existing", "new"]) {
   });
 }
 
-test("editing during target verification preserves the draft and allows fresh confirmation", async ({
+test("editing during target verification preserves the draft and allows retry", async ({
   page,
 }) => {
   await setup(page, { existing: true, delayTargetCheck: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: /Existing discussion/ }).click();
   await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "targetReads"))).toBe(1);
   const editor = page.getByRole("textbox", { name: "Message" });
@@ -479,7 +482,8 @@ test("editing during target verification preserves the draft and allows fresh co
   await expect(picker(page)).toContainText("草稿已变化");
   expect(await sends(page)).toEqual([]);
   await expect(editor).toHaveText("核对期间补充的正文");
-  await editor.press("Enter");
+  await transfer(page).click();
+  await page.getByRole("button", { name: /Existing discussion/ }).click();
   await expect.poll(() => sends(page)).toHaveLength(1);
   expect((await sends(page))[0]).toMatchObject({
     threadId: targetId,
@@ -489,7 +493,7 @@ test("editing during target verification preserves the draft and allows fresh co
 
 test("repeated submit while verifying a target sends only once", async ({ page }) => {
   await setup(page, { existing: true, delayTargetCheck: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: /Existing discussion/ }).click();
   const editor = page.getByRole("textbox", { name: "Message" });
   await editor.press("Enter");
@@ -502,25 +506,38 @@ test("repeated submit while verifying a target sends only once", async ({ page }
   await expect(picker(page)).toHaveCount(0);
 });
 
-test("cleared draft can be edited again without reopening the picker", async ({ page }) => {
+test("empty transfer reports an error and keeps direct editing available", async ({ page }) => {
   await setup(page);
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   const editor = page.getByRole("textbox", { name: "Message" });
   await editor.fill("");
-  await current(page).click();
+  await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
   await expect(picker(page)).toContainText("请输入消息后再发送");
+  await expect(page.getByRole("textbox", { name: "Message" })).toHaveText("");
   expect(await sends(page)).toEqual([]);
   await editor.fill("重新输入的正文");
   await editor.press("Enter");
+  expect((await sends(page))[0]?.text).toBe("重新输入的正文");
+});
+
+test("empty existing-conversation transfer reports an error and preserves the draft (legacy coverage)", async ({
+  page,
+}) => {
+  await setup(page, { existing: true });
+  await transfer(page).click();
+  const editor = page.getByRole("textbox", { name: "Message" });
+  await editor.fill("");
+  await page.getByRole("button", { name: /Existing discussion/ }).click();
+  await expect(picker(page)).toContainText("请输入消息后再发送");
+  expect(await sends(page)).toEqual([]);
+  await page.keyboard.press("Escape");
   await expect(picker(page)).toHaveCount(0);
-  expect(await sends(page)).toHaveLength(1);
-  expect((await sends(page))[0].text).toBe("重新输入的正文");
 });
 
 for (const destination of ["existing", "new"]) {
   test(`transfer from an existing conversation to ${destination} target`, async ({ page }) => {
     await setup(page, { existing: true, hostId: "ssh:macbook", staleWorkspace: true });
-    await page.keyboard.press("Enter");
+    await transfer(page).click();
     await page
       .getByRole("button", {
         name: destination === "existing" ? /Existing discussion/ : /在 Other project 新建会话/,
@@ -541,7 +558,7 @@ for (const destination of ["existing", "new"]) {
 for (const config of [{ targetDraft: "Unsent target draft" }, { attachment: true }]) {
   test(`unsafe transfer preserves drafts: ${JSON.stringify(config)}`, async ({ page }) => {
     await setup(page, { existing: true, ...config });
-    await page.keyboard.press("Enter");
+    await transfer(page).click();
     await page.getByRole("button", { name: /Existing discussion/ }).click();
     await expect(picker(page)).toContainText("发送失败");
     expect(await sends(page)).toEqual([]);
@@ -553,30 +570,26 @@ for (const config of [{ targetDraft: "Unsent target draft" }, { attachment: true
 
 test("a target that starts running after listing cannot receive the draft", async ({ page }) => {
   await setup(page, { existing: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: "Start target" }).click();
   await page.getByRole("button", { name: /Existing discussion/ }).click();
   await expect(picker(page)).toContainText("已不处于完成状态");
   expect(await sends(page)).toEqual([]);
 });
 
-test("holding Enter does not confirm; a second distinct press sends during loading", async ({
-  page,
-}) => {
+test("holding Enter does not repeat a direct send", async ({ page }) => {
   await setup(page, { existing: true, mode: "pending" });
   await page.keyboard.down("Enter");
-  await expect(picker(page)).toBeVisible();
+  await expect.poll(() => sends(page)).toHaveLength(1);
   await page.keyboard.down("Enter");
-  expect(await sends(page)).toEqual([]);
   await page.keyboard.up("Enter");
-  await page.keyboard.press("Enter");
   expect(await sends(page)).toHaveLength(1);
-  expect((await sends(page))[0].threadId).toBe(sourceId);
+  expect(picker(page)).toHaveCount(0);
 });
 
-test("arrow navigation explicitly selects a project instead of the default", async ({ page }) => {
+test("arrow navigation explicitly selects a transfer project", async ({ page }) => {
   await setup(page, { existing: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.keyboard.press("ArrowDown");
   await expect(page.getByRole("button", { name: /在 Other project 新建会话/ })).toHaveAttribute(
     "aria-pressed",
@@ -592,10 +605,9 @@ test("history refresh preserves keyboard confirmation of a focused project", asy
 }, testInfo) => {
   await page.clock.install();
   await setup(page, { existing: true, candidateDelay: 1_000 });
-  await page.keyboard.press("Enter");
-  await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
+  await transfer(page).click();
   const project = page.getByRole("button", { name: /在 Other project 新建会话/ });
+  await project.focus();
   await expect(project).toBeFocused();
   await page.screenshot({ path: testInfo.outputPath("focused-project.png") });
   await page.clock.runFor(1_100);
@@ -613,7 +625,7 @@ test("failed project selection keeps the reason visible and keyboard recovery av
   page,
 }, testInfo) => {
   await setup(page, { existing: true, attachment: true, extraCandidates: 16 });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await expect(page.getByRole("button", { name: /Older discussion 15/ })).toBeAttached();
   await page.screenshot({ path: testInfo.outputPath("attachment-picker.png") });
   await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
@@ -622,11 +634,9 @@ test("failed project selection keeps the reason visible and keyboard recovery av
   await page.screenshot({ path: testInfo.outputPath("attachment-transfer-error.png") });
   await expect(status).toBeInViewport({ ratio: 1 });
   expect(await sends(page)).toEqual([]);
-  await page.keyboard.press("ArrowUp");
-  await expect(current(page)).toHaveAttribute("aria-pressed", "true");
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
   await expect(picker(page)).toHaveCount(0);
-  expect(await sends(page)).toMatchObject([{ threadId: sourceId, attachment: true }]);
+  expect(await sends(page)).toEqual([]);
 });
 
 test("history updates preserve transfer errors without stealing composer focus", async ({
@@ -634,7 +644,7 @@ test("history updates preserve transfer errors without stealing composer focus",
 }) => {
   await page.clock.install();
   await setup(page, { existing: true, attachment: true, candidateDelay: 1_000 });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: /在 Other project 新建会话/ }).click();
   const status = picker(page).getByRole("status");
   await expect(status).toContainText("草稿暂不能跨会话发送");
@@ -650,7 +660,7 @@ test("history updates preserve transfer errors without stealing composer focus",
 test("unconfirmed target submission preserves the source and does not retry", async ({ page }) => {
   await page.clock.install();
   await setup(page, { existing: true, sendFails: true });
-  await page.keyboard.press("Enter");
+  await transfer(page).click();
   await page.getByRole("button", { name: /Existing discussion/ }).click();
   await page.clock.runFor(6_000);
   await expect(picker(page)).toContainText("尚未确认发送");
@@ -658,6 +668,7 @@ test("unconfirmed target submission preserves the source and does not retry", as
   expect(await page.evaluate((id) => Reflect.get(globalThis, "drafts")[id], sourceId)).toBe(
     "继续这个任务\n保留第二行",
   );
-  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: /Existing discussion/ }).click();
+  await page.clock.runFor(6_000);
   expect(await sends(page)).toHaveLength(1);
 });

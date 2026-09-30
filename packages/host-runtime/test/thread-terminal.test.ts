@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   listThreadTerminals,
+  openProjectTerminal,
   openThreadTerminal,
   ThreadTerminalError,
   threadTerminalResumeCommand,
   windowsTerminalInvocation,
+  windowsProjectTerminalInvocation,
   sshThreadResumeCommand,
 } from "../src/thread-terminal.js";
 
@@ -309,6 +311,65 @@ describe("thread terminal", () => {
     expect(nushell.arguments_[1]).toContain("cd ");
     expect(nushell.arguments_[1]).toContain("^");
     expect(nushell.arguments_[1]).toContain("resume 'session-id'");
+  });
+
+  it("opens a project directory in the selected terminal without starting Codex", async () => {
+    const directory = await workspace();
+    const spawnTerminal = fakeSpawn();
+    const result = await openProjectTerminal(directory, "apple-terminal", {
+      platform: "darwin",
+      environment: await macTerminalEnvironment(),
+      spawnTerminal,
+    });
+
+    const [command, arguments_] = spawnTerminal.mock.calls[0] as unknown as [
+      string,
+      string[],
+      unknown,
+    ];
+    expect(command).toBe("/usr/bin/osascript");
+    expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
+    expect(arguments_[1]).not.toContain("resume");
+    expect(result).toEqual({ workspace: await realpath(directory), terminal: "apple-terminal" });
+
+    const windows = windowsProjectTerminalInvocation(
+      "windows-terminal",
+      "C:\\Windows\\wt.exe",
+      "C:\\work\\project",
+    );
+    expect(windows.arguments_).toEqual(["-d", "C:\\work\\project"]);
+    const powershell = windowsProjectTerminalInvocation(
+      "powershell",
+      "C:\\pwsh.exe",
+      "C:\\work\\project",
+    );
+    expect(powershell.arguments_).toEqual([
+      "-NoExit",
+      "-Command",
+      "Set-Location -LiteralPath 'C:\\work\\project'",
+    ]);
+    const commandPrompt = windowsProjectTerminalInvocation(
+      "command-prompt",
+      "C:\\Windows\\System32\\cmd.exe",
+      "C:\\work & tools\\project",
+    );
+    expect(commandPrompt.arguments_).toEqual(["/d", "/k", 'pushd "C:\\work & tools\\project"']);
+  });
+
+  it("rejects a file when opening a project terminal", async () => {
+    const directory = await workspace();
+    const file = path.join(directory, "file.txt");
+    await writeFile(file, "not a directory\n");
+    const spawnTerminal = fakeSpawn();
+
+    await expect(
+      openProjectTerminal(file, "apple-terminal", {
+        platform: "darwin",
+        environment: await macTerminalEnvironment(),
+        spawnTerminal,
+      }),
+    ).rejects.toThrow("项目路径不是目录");
+    expect(spawnTerminal).not.toHaveBeenCalled();
   });
 
   it("rejects a terminal that is not installed", async () => {

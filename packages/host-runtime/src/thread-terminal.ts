@@ -457,6 +457,102 @@ export function windowsTerminalInvocation(
   };
 }
 
+export function windowsProjectTerminalInvocation(
+  terminal: WindowsTerminalId,
+  executablePath: string,
+  cwd: string,
+): TerminalInvocation {
+  if (terminal === "windows-terminal") {
+    return { command: executablePath, arguments_: ["-d", cwd], terminal };
+  }
+  if (terminal === "git-bash") {
+    return {
+      command: executablePath,
+      arguments_: ["--login", "-c", `cd ${shellQuote(cwd)} && exec bash --login`],
+      terminal,
+    };
+  }
+  if (terminal === "command-prompt") {
+    return {
+      command: executablePath,
+      arguments_: ["/d", "/k", `pushd "${cwd.replaceAll('"', '""')}"`],
+      terminal,
+    };
+  }
+  if (terminal === "nushell") {
+    return {
+      command: executablePath,
+      arguments_: ["-c", `cd ${powerShellQuote(cwd)}; exec nu`],
+      terminal,
+    };
+  }
+  return {
+    command: executablePath,
+    arguments_: ["-NoExit", "-Command", `Set-Location -LiteralPath ${powerShellQuote(cwd)}`],
+    terminal,
+  };
+}
+
+async function windowsProjectInvocation(
+  terminal: ThreadTerminalId,
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<TerminalInvocation> {
+  let selected =
+    terminal === "system-default"
+      ? undefined
+      : WINDOWS_TERMINALS.find((entry) => entry.id === terminal);
+  if (terminal === "system-default") {
+    for (const candidate of WINDOWS_TERMINALS) {
+      if (await candidate.resolve({ platform: "win32", environment })) {
+        selected = candidate;
+        break;
+      }
+    }
+  } else if (!selected) {
+    throw new ThreadTerminalError("当前系统不支持该终端。");
+  }
+  if (!selected) throw new ThreadTerminalError("未找到可用的系统终端。");
+  const resolved = await selected.resolve({ platform: "win32", environment });
+  if (!resolved) throw new ThreadTerminalError(`未找到 ${selected.name}。`);
+  return windowsProjectTerminalInvocation(selected.id, resolved.path, cwd);
+}
+
+async function spawnTerminalProcess(
+  invocation: TerminalInvocation,
+  spawnTerminal: SpawnTerminal,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let child;
+    try {
+      child = spawnTerminal(invocation.command, invocation.arguments_, {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } catch (error) {
+      reject(new ThreadTerminalError("无法打开系统终端。", { cause: error }));
+      return;
+    }
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve();
+    };
+    child.once("error", (error) =>
+      finish(new ThreadTerminalError("无法打开系统终端。", { cause: error })),
+    );
+    try {
+      child.unref();
+      finish();
+    } catch (error) {
+      finish(new ThreadTerminalError("无法打开系统终端。", { cause: error }));
+    }
+  });
+}
+
 export async function openThreadTerminal(
   cwd: string,
   sessionId: string,
@@ -522,34 +618,54 @@ export async function openThreadTerminal(
   const spawnTerminal: SpawnTerminal =
     options.spawnTerminal ??
     ((command, arguments_, spawnOptions) => spawn(command, arguments_, spawnOptions));
-  await new Promise<void>((resolve, reject) => {
-    let child;
-    try {
-      child = spawnTerminal(invocation.command, invocation.arguments_, {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      });
-    } catch (error) {
-      reject(new ThreadTerminalError("无法打开系统终端。", { cause: error }));
-      return;
-    }
-    let settled = false;
-    const finish = (error?: Error): void => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve();
-    };
-    child.once("error", (error) =>
-      finish(new ThreadTerminalError("无法打开系统终端。", { cause: error })),
-    );
-    try {
-      child.unref();
-      finish();
-    } catch (error) {
-      finish(new ThreadTerminalError("无法打开系统终端。", { cause: error }));
-    }
-  });
+  await spawnTerminalProcess(invocation, spawnTerminal);
   return { workspace, terminal: invocation.terminal, mode: "resume" };
+}
+
+export async function openProjectTerminal(
+  cwd: string,
+  terminalId: ThreadTerminalId = "system-default",
+  options: {
+    platform?: NodeJS.Platform;
+    spawnTerminal?: SpawnTerminal;
+    environment?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<{ workspace: string; terminal: ThreadTerminalId }> {
+  let workspace: string;
+  try {
+    workspace = await realpath(cwd);
+  } catch (error) {
+    throw new ThreadTerminalError("项目路径不可用。", { cause: error });
+  }
+  let information;
+  try {
+    information = await stat(workspace);
+  } catch (error) {
+    throw new ThreadTerminalError("项目路径不可用。", { cause: error });
+  }
+  if (!information.isDirectory()) throw new ThreadTerminalError("项目路径不是目录。");
+
+  const platform = options.platform ?? process.platform;
+  const environment = options.environment ?? process.env;
+  const shell = environment.SHELL || "/bin/zsh";
+  const invocation =
+    platform === "darwin"
+      ? await macInvocation(
+          terminalId,
+          workspace,
+          `cd ${shellQuote(workspace)} && exec ${shellQuote(shell)} -l`,
+          environment,
+        )
+      : platform === "win32"
+        ? await windowsProjectInvocation(terminalId, workspace, environment)
+        : {
+            command: "x-terminal-emulator",
+            arguments_: ["--working-directory", workspace],
+            terminal: "x-terminal-emulator" as const,
+          };
+  const spawnTerminal: SpawnTerminal =
+    options.spawnTerminal ??
+    ((command, arguments_, spawnOptions) => spawn(command, arguments_, spawnOptions));
+  await spawnTerminalProcess(invocation, spawnTerminal);
+  return { workspace, terminal: invocation.terminal };
 }

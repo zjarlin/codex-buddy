@@ -51,6 +51,10 @@ import {
   mountRendererHarnessCommandControl,
   type RendererHarnessCommandControl,
 } from "./renderer-harness-command-control.js";
+import {
+  mountRendererSessionTransferControl,
+  type RendererSessionTransferControl,
+} from "./renderer-session-transfer-control.js";
 
 export { CONTROL_ATTRIBUTE };
 export type ExternalModelControlView = RendererModelControlView;
@@ -97,6 +101,7 @@ export interface ComposerAgentControl {
   usage: RendererUsageControl | null;
   composerId: string;
   harnessCommands: RendererHarnessCommandControl;
+  sessionTransfer: RendererSessionTransferControl;
   sendButton: HTMLButtonElement;
   sendDisabledBeforeSwitch: boolean | null;
 }
@@ -127,7 +132,8 @@ function isOwnedRendererControl(element: Element): boolean {
     element.hasAttribute("data-codexhost-permission-mode-control") ||
     element.hasAttribute("data-codexhost-usage-control") ||
     element.hasAttribute("data-codexhost-credits-control") ||
-    element.hasAttribute("data-codexhost-harness-command-control")
+    element.hasAttribute("data-codexhost-harness-command-control") ||
+    element.hasAttribute("data-codexhost-session-transfer-control")
   );
 }
 
@@ -535,7 +541,8 @@ function refreshTrailingClusterPlacement(control: ComposerAgentControl): void {
   const sendButton = refreshSendButton(control);
   const modelRoot = control.modelPicker?.root;
   const agentRoot = control.root ?? control.picker?.root;
-  if (!sendButton || !modelRoot || !agentRoot) return;
+  const transferRoot = control.sessionTransfer?.root;
+  if (!sendButton || !modelRoot || !agentRoot || !transferRoot) return;
   const anchor = trailingActionAnchor(sendButton);
   const parent = anchor.parentElement;
   if (!parent || typeof parent.insertBefore !== "function") return;
@@ -544,12 +551,14 @@ function refreshTrailingClusterPlacement(control: ComposerAgentControl): void {
     modelRoot.parentElement === parent &&
     agentRoot.parentElement === parent &&
     modelRoot.nextElementSibling === agentRoot &&
-    agentRoot.nextElementSibling === anchor
+    agentRoot.nextElementSibling === transferRoot &&
+    transferRoot.nextElementSibling === anchor
   ) {
     return;
   }
   parent.insertBefore(modelRoot, anchor);
   parent.insertBefore(agentRoot, anchor);
+  parent.insertBefore(transferRoot, anchor);
 }
 
 function refreshUsagePlacement(control: ComposerAgentControl): void {
@@ -659,6 +668,7 @@ export function mountComposerAgentControl(
   onSelectThinking: (thinkingOptionId: string) => void,
   onSelectPermissionMode: (permissionModeId: string) => void,
   onOpenCommandMenu: () => void,
+  onOpenSessionTransfer: () => void,
   onRefreshModels?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
   onSelectShortcut?: (modelId: string) => void | Promise<void>,
   onRefreshShortcutModels?: () => ModelRefreshOutcome | Promise<ModelRefreshOutcome>,
@@ -709,6 +719,11 @@ export function mountComposerAgentControl(
     trailingActionAnchor(sendButton),
     onOpenCommandMenu,
   );
+  const sessionTransfer = mountRendererSessionTransferControl(
+    toolbar ?? composer,
+    trailingActionAnchor(sendButton),
+    onOpenSessionTransfer,
+  );
 
   const permissionParent = nativePermissionModeControl?.element.parentElement;
   if (permissionParent && nativePermissionModeControl && nativePermissionModeControlVerified) {
@@ -733,6 +748,7 @@ export function mountComposerAgentControl(
     credits,
     usage: null,
     harnessCommands,
+    sessionTransfer,
     sendButton,
     sendDisabledBeforeSwitch: null,
   } satisfies ComposerAgentControl;
@@ -880,6 +896,8 @@ export function renderComposerAgentControl(
   control.harnessCommands.setLocale(locale);
   control.harnessCommands.root.hidden = state.agent === "codex";
   control.harnessCommands.root.style.display = state.agent === "codex" ? "none" : "inline-flex";
+  control.sessionTransfer.setLocale(locale);
+  control.sessionTransfer.setVisible(state.agent === "codex" && !submissionBlocked);
   renderRendererCreditsControl(control.credits, accountCredits, locale);
   return state.agent !== "codex" && adapterState === "ready" && !submissionBlocked;
 }
@@ -898,6 +916,7 @@ export function disposeComposerAgentControl(control: ComposerAgentControl): void
   control.usage?.dispose();
   control.usage = null;
   control.harnessCommands.dispose();
+  control.sessionTransfer.dispose();
   control.permissionModePicker.dispose();
   control.modelPicker.dispose();
   control.modelShortcuts?.dispose();

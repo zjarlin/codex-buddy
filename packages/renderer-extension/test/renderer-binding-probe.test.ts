@@ -524,6 +524,7 @@ describe("Renderer Composer DOM behavior", () => {
       }
       const modelRoot = { parentElement: null, nextElementSibling: null };
       const agentRoot = { parentElement: null, nextElementSibling: null };
+      const transferRoot = { parentElement: null, nextElementSibling: null };
       const control = {
         composer,
         composerId: "test-composer",
@@ -531,13 +532,14 @@ describe("Renderer Composer DOM behavior", () => {
         sendDisabledBeforeSwitch: null,
         root: agentRoot,
         modelPicker: { root: modelRoot },
+        sessionTransfer: { root: transferRoot },
         nativeModelControl: null,
         nativePermissionModeControl: null,
         nativeContextUsageControl: null,
         credits: { anchor: null, place: vi.fn(), root: { remove: vi.fn() } },
         usage: null,
       } as unknown as ComposerAgentControl;
-      return { control, liveParent, detachedParent, modelRoot, agentRoot };
+      return { control, liveParent, detachedParent, modelRoot, agentRoot, transferRoot };
     };
 
     it("follows the live send button and carries the switch lock over", () => {
@@ -605,15 +607,15 @@ describe("Renderer Composer DOM behavior", () => {
     it("places the Agent and Model controls beside the replacement send button", () => {
       const stale = button(false);
       const live = button(true);
-      const { control, liveParent, detachedParent, modelRoot, agentRoot } = fakeControl(stale, [
-        live,
-      ]);
+      const { control, liveParent, detachedParent, modelRoot, agentRoot, transferRoot } =
+        fakeControl(stale, [live]);
 
       reconcileComposerNativeControls(control, false, false);
 
       expect(detachedParent.insertBefore).not.toHaveBeenCalled();
       expect(liveParent.insertBefore).toHaveBeenNthCalledWith(1, modelRoot, live);
       expect(liveParent.insertBefore).toHaveBeenNthCalledWith(2, agentRoot, live);
+      expect(liveParent.insertBefore).toHaveBeenNthCalledWith(3, transferRoot, live);
     });
   });
 
@@ -1006,12 +1008,14 @@ describe("Renderer Composer DOM behavior", () => {
     Object.assign(send, { parentElement: toolbar });
     const modelRoot = { parentElement: toolbar, nextElementSibling: send };
     const agentRoot = { parentElement: toolbar, nextElementSibling: send };
+    const transferRoot = { parentElement: toolbar, nextElementSibling: send };
     const control = {
       composer: { querySelectorAll: () => [], contains: () => true },
       sendButton: send,
       root: agentRoot,
       picker: { root: agentRoot },
       modelPicker: { root: modelRoot, trigger: {} },
+      sessionTransfer: { root: transferRoot },
       nativeModelControl: null,
       nativePermissionModeControl: null,
       credits: {
@@ -1030,6 +1034,7 @@ describe("Renderer Composer DOM behavior", () => {
 
     expect(insertBefore).toHaveBeenCalledWith(modelRoot, voice);
     expect(insertBefore).toHaveBeenCalledWith(agentRoot, voice);
+    expect(insertBefore).toHaveBeenCalledWith(transferRoot, voice);
   });
 
   it("re-places model and agent pickers before the pause button", () => {
@@ -1056,12 +1061,14 @@ describe("Renderer Composer DOM behavior", () => {
     Object.assign(send, { parentElement: toolbar });
     const modelRoot = { parentElement: toolbar, nextElementSibling: send };
     const agentRoot = { parentElement: toolbar, nextElementSibling: send };
+    const transferRoot = { parentElement: toolbar, nextElementSibling: send };
     const control = {
       composer: { querySelectorAll: () => [], contains: () => true },
       sendButton: send,
       root: agentRoot,
       picker: { root: agentRoot },
       modelPicker: { root: modelRoot, trigger: {} },
+      sessionTransfer: { root: transferRoot },
       nativeModelControl: null,
       nativePermissionModeControl: null,
       credits: {
@@ -1080,6 +1087,7 @@ describe("Renderer Composer DOM behavior", () => {
 
     expect(insertBefore).toHaveBeenCalledWith(modelRoot, pause);
     expect(insertBefore).toHaveBeenCalledWith(agentRoot, pause);
+    expect(insertBefore).toHaveBeenCalledWith(transferRoot, pause);
   });
 
   it("freezes only on a non-composing Enter without Shift", () => {

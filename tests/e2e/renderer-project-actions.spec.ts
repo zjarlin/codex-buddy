@@ -12,7 +12,7 @@ const { outputFiles } = await build({
     contents: `
       import { installRendererProjectActions } from "./packages/renderer-extension/src/renderer-project-actions.ts";
 
-      globalThis.setupProjectActions = ({ failLaunch = false, deferLaunch = false }) => {
+      globalThis.setupProjectActions = ({ terminalPreference = null } = {}) => {
         document.documentElement.lang = "zh-CN";
         document.body.innerHTML = \`
           <style>
@@ -69,10 +69,10 @@ const { outputFiles } = await build({
           </div>
         \`;
 
+        if (terminalPreference) localStorage.setItem("codexhost.thread-terminal.v1", terminalPreference);
         const hostCalls = [];
         const nativeCalls = [];
         const events = [];
-        const pendingLaunches = [];
         const actionOwners = [];
         let menu = null;
         let portal = null;
@@ -191,16 +191,21 @@ const { outputFiles } = await build({
             registeredItems[0]?.focus();
           });
         }
+        const clipboardCalls = [];
+        Object.defineProperty(navigator, "clipboard", {
+          configurable: true,
+          value: { writeText: async (...args) => { clipboardCalls.push(args); events.push("clipboard"); } },
+        });
         const client = {
-          openDoubao: async (...args) => {
+          openProjectTerminal: async (...args) => {
             events.push("host");
-            hostCalls.push(args);
-            if (deferLaunch) {
-              await new Promise((resolve, reject) => pendingLaunches.push({ resolve, reject }))
-                .finally(() => events.push("settled"));
-            }
-            if (failLaunch) throw new Error("Doubao is not installed");
-            return { opened: true };
+            hostCalls.push(["terminal", ...args]);
+            return { workspace: args[0].path, terminal: args[0].terminalId ?? "system-default" };
+          },
+          openProjectWorkspace: async (...args) => {
+            events.push("host");
+            hostCalls.push(["workspace", ...args]);
+            return { workspace: args[0].path, application: "vscode" };
           },
         };
         const control = installRendererProjectActions({ getClient: () => client, getLocale: () => "zh-CN" });
@@ -217,22 +222,9 @@ const { outputFiles } = await build({
           menu?.setAttribute("data-render-generation", "2");
         });
         document.querySelector("#remove-added-item").addEventListener("click", () => {
-          menu?.querySelector("[data-codexhost-project-actions-open-doubao]")?.remove();
+          menu?.querySelector("[data-codexhost-project-actions-open-terminal]")?.remove();
         });
-        if (deferLaunch) {
-          for (const [id, label, settle] of [
-            ["complete-launch", "Complete launch", () => pendingLaunches.shift()?.resolve()],
-            ["fail-launch", "Fail launch", () => pendingLaunches.shift()?.reject(new Error("Late launch failure"))],
-          ]) {
-            const button = document.createElement("button");
-            button.type = "button";
-            button.id = id;
-            button.textContent = label;
-            button.addEventListener("click", settle);
-            document.querySelector(".fixture-controls").append(button);
-          }
-        }
-        globalThis.projectActionsFixture = { hostCalls, nativeCalls, events };
+        globalThis.projectActionsFixture = { clipboardCalls, hostCalls, nativeCalls, events };
       };
     `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -254,7 +246,7 @@ const bundle = (() => {
 
 async function setup(
   page: Page,
-  options: { width?: number; height?: number; failLaunch?: boolean; deferLaunch?: boolean } = {},
+  options: { width?: number; height?: number; terminalPreference?: string } = {},
 ): Promise<void> {
   await page.setViewportSize({ width: options.width ?? 960, height: options.height ?? 700 });
   await page.route("http://localhost/project-actions-test", (route) =>
@@ -264,34 +256,32 @@ async function setup(
   await page.addScriptTag({ content: bundle });
   await page.evaluate(
     (configuration) => Reflect.get(globalThis, "setupProjectActions")(configuration),
-    { failLaunch: options.failLaunch === true, deferLaunch: options.deferLaunch === true },
+    { terminalPreference: options.terminalPreference ?? null },
   );
 }
 
-test("adds one Doubao action after Reveal and preserves the original project actions", async ({
+test("adds path, terminal, and VS Code actions after Reveal and preserves native actions", async ({
   page,
 }) => {
   await setup(page);
+  const inserted = ["复制绝对路径", "在终端中打开", "用 VS Code 打开"];
   const trigger = page.getByRole("button", { name: "codex-host 项目操作", exact: true });
   for (const nativeAction of ["编辑", "在访达中显示", "移除项目"]) {
     await trigger.click();
     const menu = page.getByRole("menu");
-    await expect(menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true })).toHaveCount(
-      1,
-    );
     await expect(menu.getByRole("menuitem")).toHaveText([
       "固定",
       "编辑",
       "分区",
       "在访达中显示",
-      "在 Doubao 中打开",
+      ...inserted,
       "归档对话",
       "移除项目",
     ]);
     await page.getByRole("button", { name: "Refresh extension" }).click();
-    await expect(menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true })).toHaveCount(
-      1,
-    );
+    for (const label of inserted) {
+      await expect(menu.getByRole("menuitem", { name: label, exact: true })).toHaveCount(1);
+    }
     await menu.getByRole("menuitem", { name: nativeAction, exact: true }).click();
     await expect(menu).toHaveCount(0);
   }
@@ -304,19 +294,37 @@ test("adds one Doubao action after Reveal and preserves the original project act
   expect(calls.hostCalls).toEqual([]);
 });
 
-test("closes the dropdown and calls the Host client without project arguments", async ({
-  page,
-}) => {
+test("copies the absolute project path and shows an inline success message", async ({ page }) => {
   await setup(page);
   await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
-  await page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true }).click();
+  await page.getByRole("menuitem", { name: "复制绝对路径", exact: true }).click();
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture"));
+  expect(calls.clipboardCalls).toEqual([["/repo/codex-host"]]);
+  expect(calls.hostCalls).toEqual([]);
+  expect(calls.events).toEqual(["close", "clipboard"]);
+  await expect(page.getByRole("status")).toHaveText("已复制绝对路径");
+});
+
+test("opens the project in the preferred terminal with its absolute path", async ({ page }) => {
+  await setup(page, { terminalPreference: "ghostty" });
+  await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "在终端中打开", exact: true }).click();
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture").hostCalls))
-    .toEqual([[]]);
+    .toEqual([["terminal", { path: "/repo/codex-host", terminalId: "ghostty" }]]);
   const calls = await page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture"));
   expect(calls.events).toEqual(["close", "host"]);
   expect(calls.nativeCalls).toEqual([]);
+});
+
+test("opens the project in VS Code with its absolute path", async ({ page }) => {
+  await setup(page);
+  await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
+  await page.getByRole("menuitem", { name: "用 VS Code 打开", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture").hostCalls))
+    .toEqual([["workspace", { path: "/repo/codex-host" }]]);
 });
 
 test("leaves remote project menus unchanged", async ({ page }) => {
@@ -325,9 +333,9 @@ test("leaves remote project menus unchanged", async ({ page }) => {
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
   await page.getByRole("button", { name: "Refresh extension" }).click();
-  await expect(menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true })).toHaveCount(
-    0,
-  );
+  for (const label of ["复制绝对路径", "在终端中打开", "用 VS Code 打开"]) {
+    await expect(menu.getByRole("menuitem", { name: label, exact: true })).toHaveCount(0);
+  }
   await expect(menu.getByRole("menuitem")).toHaveText([
     "固定",
     "编辑",
@@ -341,31 +349,17 @@ test("leaves remote project menus unchanged", async ({ page }) => {
   expect(calls.hostCalls).toEqual([]);
 });
 
-test("disposal removes the inserted action and preserves native selection", async ({ page }) => {
+test("disposal removes inserted actions and preserves native selection", async ({ page }) => {
   await setup(page);
   await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
   const menu = page.getByRole("menu");
-  await expect(menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "在终端中打开", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Dispose extension" }).click();
-  await expect(menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true })).toHaveCount(
-    0,
-  );
+  await expect(menu.getByRole("menuitem", { name: "在终端中打开", exact: true })).toHaveCount(0);
   await menu.getByRole("menuitem", { name: "在访达中显示", exact: true }).click();
   await expect(menu).toHaveCount(0);
   await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
-  await expect(page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true })).toHaveCount(
-    0,
-  );
-});
-
-test("reports a launch failure after closing the dropdown", async ({ page }) => {
-  await setup(page, { failLaunch: true });
-  await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
-  await page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true }).click();
-  await expect(page.getByRole("menu")).toHaveCount(0);
-  await expect(page.getByRole("alert")).toContainText("Doubao is not installed");
-  await page.getByRole("button", { name: "关闭", exact: true }).click();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("menuitem", { name: "在终端中打开", exact: true })).toHaveCount(0);
 });
 
 test("restores the added item after DOM removal and uses the current menu close callback", async ({
@@ -373,7 +367,7 @@ test("restores the added item after DOM removal and uses the current menu close 
 }) => {
   await setup(page);
   await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
-  const action = page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true });
+  const action = page.getByRole("menuitem", { name: "在终端中打开", exact: true });
   await expect(action).toBeVisible();
   await page.getByRole("button", { name: "Remove added item" }).click();
   await expect(action).toHaveCount(1);
@@ -385,63 +379,42 @@ test("restores the added item after DOM removal and uses the current menu close 
   expect(events).toEqual(["rerender-close", "close", "host"]);
 });
 
-test("keyboard navigation crosses the inserted item and Space selects it", async ({ page }) => {
+test("keyboard navigation crosses inserted items and Space opens the focused action", async ({
+  page,
+}) => {
   await setup(page);
   await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
   const menu = page.getByRole("menu");
   const reveal = menu.getByRole("menuitem", { name: "在访达中显示", exact: true });
-  const action = menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true });
+  const action = menu.getByRole("menuitem", { name: "在终端中打开", exact: true });
   await expect(action).toBeVisible();
   for (let index = 0; index < 3; index += 1) {
     await page.keyboard.press("ArrowDown");
   }
   await expect(reveal).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "复制绝对路径", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await expect(action).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "用 VS Code 打开", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(menu.getByRole("menuitem", { name: "移除项目", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowUp");
+  await expect(menu.getByRole("menuitem", { name: "用 VS Code 打开", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
   await expect(action).toBeFocused();
   await page.keyboard.press("ArrowUp");
+  await expect(menu.getByRole("menuitem", { name: "复制绝对路径", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
   await expect(reveal).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Space");
   await expect(menu).toHaveCount(0);
   const calls = await page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture"));
-  expect(calls.hostCalls).toEqual([[]]);
+  expect(calls.hostCalls).toEqual([["terminal", { path: "/repo/codex-host" }]]);
   expect(calls.nativeCalls).toEqual([]);
-});
-
-test("suppresses repeated launch clicks while a launch is pending and releases the guard", async ({
-  page,
-}) => {
-  await setup(page, { deferLaunch: true });
-  const trigger = page.getByRole("button", { name: "codex-host 项目操作", exact: true });
-  for (let index = 0; index < 2; index += 1) {
-    await trigger.click();
-    await page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true }).click();
-    await expect(page.getByRole("menu")).toHaveCount(0);
-  }
-  const hostCalls = () =>
-    page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture").hostCalls);
-  await expect.poll(hostCalls).toEqual([[]]);
-  await page.getByRole("button", { name: "Complete launch" }).click();
-  await trigger.click();
-  await page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true }).click();
-  await expect.poll(hostCalls).toEqual([[], []]);
-  await page.getByRole("button", { name: "Complete launch" }).click();
-});
-
-test("does not show a late launch error after disposal", async ({ page }) => {
-  await setup(page, { deferLaunch: true });
-  await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
-  await page.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true }).click();
-  await page.getByRole("button", { name: "Dispose extension" }).click();
-  await page.getByRole("button", { name: "Fail launch" }).click();
-  await expect
-    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture").events))
-    .toEqual(["close", "host", "settled"]);
-  await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
 for (const viewport of [
@@ -452,15 +425,15 @@ for (const viewport of [
     await setup(page, viewport);
     await page.getByRole("button", { name: "codex-host 项目操作", exact: true }).click();
     const menu = page.getByRole("menu");
-    const doubao = menu.getByRole("menuitem", { name: "在 Doubao 中打开", exact: true });
-    await expect(doubao).toBeVisible();
-    const initialBounds = await doubao.boundingBox();
-    await doubao.hover();
-    expect(await doubao.boundingBox()).toEqual(initialBounds);
-    for (let index = 0; index < 4; index += 1) {
+    const terminal = menu.getByRole("menuitem", { name: "在终端中打开", exact: true });
+    await expect(terminal).toBeVisible();
+    const initialBounds = await terminal.boundingBox();
+    await terminal.hover();
+    expect(await terminal.boundingBox()).toEqual(initialBounds);
+    for (let index = 0; index < 5; index += 1) {
       await page.keyboard.press("ArrowDown");
     }
-    await expect(doubao).toBeFocused();
+    await expect(terminal).toBeFocused();
     const geometry = await menu.evaluate((element) => {
       const bounds = element.getBoundingClientRect();
       const items = Array.from(element.querySelectorAll<HTMLElement>('[role="menuitem"]'));
@@ -486,6 +459,6 @@ for (const viewport of [
     await expect(menu).toHaveCount(0);
     await expect
       .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectActionsFixture").hostCalls))
-      .toEqual([[]]);
+      .toEqual([["terminal", { path: "/repo/codex-host" }]]);
   });
 }

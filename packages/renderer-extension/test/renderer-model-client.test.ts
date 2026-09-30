@@ -105,6 +105,28 @@ describe("Renderer fixed Model request client", () => {
     await expect(client?.openDoubao?.()).rejects.toThrow();
   });
 
+  it("opens project paths through the fixed local Host methods", async () => {
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ workspace: "/repo", terminal: "ghostty" })
+      .mockResolvedValueOnce({ workspace: "/repo", application: "vscode" });
+    const client = createRendererModelClient([{ sendRequest }]);
+
+    await expect(
+      client?.openProjectTerminal?.({ path: "/repo", terminalId: "ghostty" }),
+    ).resolves.toEqual({ workspace: "/repo", terminal: "ghostty" });
+    await expect(client?.openProjectWorkspace?.({ path: "/repo" })).resolves.toEqual({
+      workspace: "/repo",
+      application: "vscode",
+    });
+    expect(sendRequest.mock.calls).toEqual([
+      ["codexhost/project/terminal/open", { path: "/repo", terminalId: "ghostty" }],
+      ["codexhost/project/workspace/open", { path: "/repo" }],
+    ]);
+    await expect(client?.openProjectWorkspace?.({ path: "relative" })).rejects.toThrow();
+    expect(sendRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("validates repository links and preserves the selected repository in Git and file-write requests", async () => {
     const threadId = hostThreadIdSchema.parse("backend-chat");
     const target = { threadId, repository: "/frontend" };
@@ -556,6 +578,8 @@ describe("Renderer fixed Model request client", () => {
       "modelAvailability",
       "openDoubao",
       "openHarnessWebUi",
+      "openProjectTerminal",
+      "openProjectWorkspace",
       "openThreadTerminal",
       "openThreadWorkspace",
       "pairProjectSync",
@@ -569,6 +593,7 @@ describe("Renderer fixed Model request client", () => {
       "refreshCodexAccounts",
       "rejectProjectSync",
       "removeProjectSyncPeer",
+      "requestThreadProjection",
       "routeSession",
       "runGitWorkflow",
       "selectThreadModel",

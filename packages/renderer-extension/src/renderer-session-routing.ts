@@ -35,7 +35,9 @@ export function createSessionRouting<M extends SessionComposer>(options: {
 }) {
   let disposed = false;
   const replayingSubmissions = new WeakSet<Element>();
-  const sessionRoutePending = new WeakMap<Element, ReturnType<typeof showSessionPicker>>();
+  const sessionRoutePending = new WeakMap<Element, Promise<void>>();
+  const sessionRouteAbort = new WeakMap<Element, AbortController>();
+  const sessionRouteCancel = new WeakMap<Element, () => boolean>();
   const replayDraftSubmission = (mounted: M): void => {
     replayingSubmissions.add(mounted.composer);
     try {
@@ -49,8 +51,7 @@ export function createSessionRouting<M extends SessionComposer>(options: {
   const choose = (mounted: M, message: string): Promise<void> => {
     const existing = sessionRoutePending.get(mounted.composer);
     if (existing) {
-      existing.confirm();
-      return existing.closed;
+      return existing;
     }
     options.clearPending(mounted);
     const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
@@ -86,6 +87,7 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       ]);
     const abort = new AbortController();
     sessionPickerControllers.add(abort);
+    sessionRouteAbort.set(mounted.composer, abort);
     const sameConnection = (): boolean =>
       !disposed &&
       !abort.signal.aborted &&
@@ -100,12 +102,12 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       mounted.composer.querySelector(EDITOR_SELECTOR) === editor &&
       JSON.stringify(mounted.modelTarget) === modelTarget &&
       readWorkspace() === cwd;
-    const captureTransferDraft = () => {
+    const captureTransferDraft = (allowEmpty = false) => {
       if (!editor || !isCurrent()) {
         throw new Error("会话已变化，请重新选择");
       }
       const message = sessionDraftText(editor);
-      if (!message.trim()) {
+      if (!allowEmpty && !message.trim()) {
         throw new Error("请输入消息后再发送");
       }
       assertTransferableSessionDraft(mounted.composer, editor);
@@ -201,7 +203,6 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       locale: options.locale(),
       composer: mounted.composer,
       hostId: hostId ?? "",
-      ...(cwd ? { cwd } : {}),
       threadId,
       projects: hostId ? sessionProjects(hostId) : [],
       signal: abort.signal,
@@ -210,12 +211,6 @@ export function createSessionRouting<M extends SessionComposer>(options: {
         if (!client?.routeSession) throw new Error("近期会话接口不可用");
         const result = await client.routeSession({ message: message.slice(0, 12_000), cwd });
         return result.candidates;
-      },
-      sendCurrent: () => {
-        if (!sessionDraftText(editor).trim() && !hasSessionAttachments(mounted.composer)) {
-          throw new Error("请输入消息后再发送");
-        }
-        replayDraftSubmission(mounted);
       },
       sendNew: (project) =>
         transfer(
@@ -262,15 +257,21 @@ export function createSessionRouting<M extends SessionComposer>(options: {
     });
     const operation = picker.closed.finally(() => {
       sessionRoutePending.delete(mounted.composer);
+      sessionRouteAbort.delete(mounted.composer);
+      sessionRouteCancel.delete(mounted.composer);
       sessionPickerControllers.delete(abort);
       options.clearPending(mounted);
     });
-    sessionRoutePending.set(mounted.composer, { closed: operation, confirm: picker.confirm });
+    sessionRoutePending.set(mounted.composer, operation);
+    sessionRouteCancel.set(mounted.composer, picker.cancel);
     return operation;
   };
 
   return {
     choose,
+    cancel(mounted: M): boolean {
+      return sessionRouteCancel.get(mounted.composer)?.() ?? true;
+    },
     isReplaying: (composer: Element) => replayingSubmissions.has(composer),
     dispose() {
       disposed = true;

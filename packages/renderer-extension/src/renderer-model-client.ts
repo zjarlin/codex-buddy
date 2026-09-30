@@ -19,6 +19,16 @@ import {
   DOUBAO_OPEN_METHOD,
   doubaoOpenResultSchema,
   type DoubaoOpenResult,
+  PROJECT_TERMINAL_OPEN_METHOD,
+  projectTerminalOpenParamsSchema,
+  projectTerminalOpenResultSchema,
+  type ProjectTerminalOpenParams,
+  type ProjectTerminalOpenResult,
+  PROJECT_WORKSPACE_OPEN_METHOD,
+  projectWorkspaceOpenParamsSchema,
+  projectWorkspaceOpenResultSchema,
+  type ProjectWorkspaceOpenParams,
+  type ProjectWorkspaceOpenResult,
   GIT_REPOSITORIES_METHOD,
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
@@ -71,7 +81,6 @@ import {
   type ProjectSyncAddParams,
   type ProjectSyncBindParams,
   type ProjectSyncCloneParams,
-  type RemoteProjectsInspectParams,
   type RemoteProjectsSyncParams,
   type RemoteProjectsSnapshot,
   type RemoteProject,
@@ -481,6 +490,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   openThreadTerminal?(input: ThreadTerminalOpenParams): Promise<ThreadTerminalOpenResult>;
   threadOpenTarget?(threadId: string): Promise<ThreadOpenTarget>;
   openThreadWorkspace?(input: ThreadWorkspaceOpenParams): Promise<ThreadWorkspaceOpenResult>;
+  openProjectTerminal?(input: ProjectTerminalOpenParams): Promise<ProjectTerminalOpenResult>;
+  openProjectWorkspace?(input: ProjectWorkspaceOpenParams): Promise<ProjectWorkspaceOpenResult>;
   openDoubao?(): Promise<DoubaoOpenResult>;
   getThreadTerminalSettings?(): Promise<ThreadTerminalSettings>;
   setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
@@ -510,6 +521,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   currentHostId?(): string | null;
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
+  requestThreadProjection?(
+    method: "thread/list" | "thread/turns/list",
+    params: unknown,
+  ): Promise<unknown>;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
   inspectHarness(
     input: HarnessInspectParams,
@@ -1074,6 +1089,22 @@ export function createRendererModelClient(
     async openDoubao(): Promise<DoubaoOpenResult> {
       return doubaoOpenResultSchema.parse(await manager.sendRequest(DOUBAO_OPEN_METHOD, {}));
     },
+    async openProjectTerminal(
+      input: ProjectTerminalOpenParams,
+    ): Promise<ProjectTerminalOpenResult> {
+      const params = projectTerminalOpenParamsSchema.parse(input);
+      return projectTerminalOpenResultSchema.parse(
+        await manager.sendRequest(PROJECT_TERMINAL_OPEN_METHOD, params),
+      );
+    },
+    async openProjectWorkspace(
+      input: ProjectWorkspaceOpenParams,
+    ): Promise<ProjectWorkspaceOpenResult> {
+      const params = projectWorkspaceOpenParamsSchema.parse(input);
+      return projectWorkspaceOpenResultSchema.parse(
+        await manager.sendRequest(PROJECT_WORKSPACE_OPEN_METHOD, params),
+      );
+    },
     async getThreadTerminalSettings(): Promise<ThreadTerminalSettings> {
       return threadTerminalSettingsSchema.parse(
         await manager.sendRequest(THREAD_TERMINAL_SETTINGS_GET_METHOD, {}),
@@ -1214,6 +1245,12 @@ export function createRendererModelClient(
     },
     async listLoadedSessions(): Promise<LoadedSession[]> {
       return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
+    },
+    async requestThreadProjection(
+      method: "thread/list" | "thread/turns/list",
+      params: unknown,
+    ): Promise<unknown> {
+      return manager.sendRequest(method, params);
     },
     async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
       const params = idleReleaseSettingsSchema.parse(settings);

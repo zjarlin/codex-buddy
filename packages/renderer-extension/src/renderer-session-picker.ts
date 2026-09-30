@@ -1,3 +1,6 @@
+import createElement from "lucide/dist/esm/createElement.mjs";
+import X from "lucide/dist/esm/icons/x.mjs";
+
 import type { SessionRouteResult } from "@codexhost/shared-contracts";
 import { sessionPickerMessages } from "./renderer-session-picker-messages.js";
 import type { SessionProject } from "./renderer-session-targets.js";
@@ -9,16 +12,14 @@ export function showSessionPicker(input: {
   locale: string;
   composer: Element;
   hostId: string;
-  cwd?: string;
   threadId?: string | null;
   signal: AbortSignal;
   isCurrent: () => boolean;
   projects: SessionProject[];
   loadCandidates: () => Promise<Candidate[]>;
-  sendCurrent: () => void;
   sendNew: (project: SessionProject) => Promise<void>;
   sendExisting: (candidate: Candidate) => Promise<void>;
-}): { closed: Promise<void>; confirm(): void } {
+}): { closed: Promise<void>; confirm(): void; cancel(): boolean } {
   const m = sessionPickerMessages(input.locale);
   const hostPrefix = `${input.hostId}:`;
   // Desktop 的会话 ID 可能带 Host 前缀，原生历史使用同一 Host 下的原始 ID。
@@ -28,6 +29,10 @@ export function showSessionPicker(input: {
   const style = document.createElement("style");
   style.textContent = `
     .codexhost-session-picker { position: fixed; z-index: 10000; display: flex; flex-direction: column; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: min(540px, 70vh); overflow: hidden; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / 18%); font: 13px/1.5 system-ui,sans-serif; }
+    .codexhost-session-picker-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 6px 4px; font-weight: 600; }
+    .codexhost-session-picker-close { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+    .codexhost-session-picker-close:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+    .codexhost-session-picker-close:focus-visible { outline: 2px solid Highlight; }
     .codexhost-session-picker input { flex-shrink: 0; width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; background: Canvas; color: CanvasText; }
     .codexhost-session-picker-list { display: grid; gap: 4px; min-height: 0; overflow-y: auto; }
     .codexhost-session-picker button { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; padding: 8px; border: 0; border-radius: 6px; text-align: left; background: transparent; color: CanvasText; cursor: pointer; }
@@ -47,6 +52,17 @@ export function showSessionPicker(input: {
   picker.className = "codexhost-session-picker";
   picker.setAttribute("role", "dialog");
   picker.setAttribute("aria-label", m.title);
+  const header = document.createElement("div");
+  header.className = "codexhost-session-picker-header";
+  const title = document.createElement("span");
+  title.textContent = m.title;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "codexhost-session-picker-close";
+  close.setAttribute("aria-label", m.close);
+  close.title = m.close;
+  close.append(createElement(X, { width: 16, height: 16, "aria-hidden": "true" }));
+  header.append(title, close);
   const bounds = input.composer.getBoundingClientRect();
   picker.style.right = `${Math.max(16, window.innerWidth - bounds.right)}px`;
   const bottom = Math.max(
@@ -59,26 +75,38 @@ export function showSessionPicker(input: {
   search.type = "search";
   search.placeholder = m.search;
   search.setAttribute("aria-label", m.search);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" || event.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    event.stopPropagation();
+    selected = actions[0]?.id ?? "";
+    selectionTouched = true;
+    updateSelection();
+    list.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus({ preventScroll: true });
+  });
   const status = document.createElement("div");
   status.className = "codexhost-session-picker-status";
   status.setAttribute("role", "status");
   const list = document.createElement("div");
   list.className = "codexhost-session-picker-list";
-  picker.append(search, list, status);
+  picker.append(header, search, list, status);
   document.body.append(picker);
   let settled = false;
   let busy = false;
   let candidates: Candidate[] = [];
   let notice = m.loading;
   let failure = "";
-  let selected = "current";
+  let selected = "";
+  let selectionTouched = false;
+  let finish = (): void => {};
   let actions: { id: string; run(): void | Promise<void> }[] = [];
-  const finish = (): void => {
+  finish = (): void => {
     if (settled) {
       return;
     }
     settled = true;
     window.clearTimeout(timeout);
+    document.removeEventListener("keydown", onDocumentKeyDown, true);
     picker.remove();
     style.remove();
     input.signal.removeEventListener("abort", finish);
@@ -166,29 +194,6 @@ export function showSessionPicker(input: {
     actions = [];
     const query = search.value.trim().toLocaleLowerCase();
     const matches = (text: string) => text.toLocaleLowerCase().includes(query);
-    const host = input.hostId === "local" ? m.local : input.hostId;
-    option(
-      "current",
-      m.current,
-      [input.cwd ?? m.workspaceUnavailable, host].filter(Boolean).join(" · "),
-      input.sendCurrent,
-      m.default,
-    );
-    heading(m.projects);
-    const projects = input.projects.toSorted((a, b) => {
-      const index = (cwd: string) => {
-        const found = candidates.findIndex((candidate) => candidate.cwd === cwd);
-        return found < 0 ? candidates.length : found;
-      };
-      return index(a.cwd) - index(b.cwd);
-    });
-    for (const project of projects) {
-      if (matches(`${project.title} ${project.cwd}`)) {
-        option(`project:${project.cwd}`, m.newProject(project.title), project.cwd, () =>
-          input.sendNew(project),
-        );
-      }
-    }
     heading(m.completed);
     const matching = candidates.filter((candidate) =>
       matches(`${candidate.title ?? ""} ${candidate.cwd} ${candidate.preview}`),
@@ -207,32 +212,53 @@ export function showSessionPicker(input: {
         );
       }
     }
+    heading(m.projects);
+    const projects = input.projects.toSorted((a, b) => {
+      const index = (cwd: string) => {
+        const found = candidates.findIndex((candidate) => candidate.cwd === cwd);
+        return found < 0 ? candidates.length : found;
+      };
+      return index(a.cwd) - index(b.cwd);
+    });
+    for (const project of projects) {
+      if (matches(`${project.title} ${project.cwd}`)) {
+        option(`project:${project.cwd}`, m.newProject(project.title), project.cwd, () =>
+          input.sendNew(project),
+        );
+      }
+    }
     if (!actions.some((action) => action.id === selected)) {
-      selected = "current";
+      selected = actions[0]?.id ?? "";
     }
     if (focusedTarget) {
       const button = [...list.querySelectorAll<HTMLButtonElement>("button")].find(
         (element) => element.dataset.sessionTarget === focusedTarget,
       );
       // 只恢复列表内部焦点；提交期间按钮禁用时保留搜索框的键盘恢复入口。
-      const selection = selected;
-      (button && !button.disabled ? button : search).focus({ preventScroll: true });
-      selected = selection;
+      if (button && !button.disabled) {
+        selected = focusedTarget;
+        button.focus({ preventScroll: true });
+      } else if (active instanceof HTMLElement && picker.contains(active)) {
+        search.focus({ preventScroll: true });
+      }
+      selectionTouched = true;
     }
     updateSelection();
-    status.textContent = failure || notice || (matching.length ? "" : m.empty);
+    status.textContent = failure || notice || (actions.length ? "" : m.empty);
   };
-  picker.addEventListener("keydown", (event) => {
+  const onDocumentKeyDown = (event: KeyboardEvent): void => {
+    if (!picker.isConnected || settled) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!busy) finish();
+      input.composer.querySelector<HTMLElement>('[contenteditable="true"], textarea')?.focus();
+      return;
+    }
+    if (!picker.contains(event.target as Node)) return;
     event.stopPropagation();
     if (event.isComposing || event.keyCode === 229) {
       return;
-    }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      if (!busy) {
-        finish();
-      }
-      input.composer.querySelector<HTMLElement>('[contenteditable="true"], textarea')?.focus();
     }
     if (event.key === "Enter") {
       event.preventDefault();
@@ -242,18 +268,27 @@ export function showSessionPicker(input: {
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
+      selectionTouched = true;
       const index = actions.findIndex((action) => action.id === selected);
-      selected =
-        actions[(index + (event.key === "ArrowDown" ? 1 : -1) + actions.length) % actions.length]
-          ?.id ?? "current";
+      const nextIndex =
+        index < 0
+          ? event.key === "ArrowDown"
+            ? 0
+            : actions.length - 1
+          : (index + (event.key === "ArrowDown" ? 1 : -1) + actions.length) % actions.length;
+      selected = actions[nextIndex]?.id ?? "";
       updateSelection();
       list
         .querySelector<HTMLElement>('[aria-pressed="true"]')
         ?.scrollIntoView({ block: "nearest" });
     }
+  };
+  document.addEventListener("keydown", onDocumentKeyDown, true);
+  close.addEventListener("click", () => {
+    if (!busy) finish();
   });
   search.addEventListener("input", () => {
-    selected = "current";
+    selected = "";
     render();
   });
   input.signal.addEventListener("abort", finish, { once: true });
@@ -279,6 +314,7 @@ export function showSessionPicker(input: {
       );
       notice = "";
       if (!busy) {
+        if (!selectionTouched) selected = "";
         render();
       }
     })
@@ -289,12 +325,18 @@ export function showSessionPicker(input: {
       }
       console.warn("[codexhost] Recent conversations unavailable", error);
       notice = m.loadFailed;
-      if (!busy) {
-        render();
-      }
+      if (!busy) render();
     });
   if (input.signal.aborted) {
     finish();
   }
-  return { closed, confirm: () => void select(selected) };
+  return {
+    closed,
+    confirm: () => void select(selected),
+    cancel: () => {
+      if (busy) return false;
+      finish();
+      return true;
+    },
+  };
 }

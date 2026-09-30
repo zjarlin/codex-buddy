@@ -131,6 +131,15 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
           placeBefore: vi.fn(),
           dispose: vi.fn(),
         },
+        sessionTransfer: {
+          root: { isConnected: true, hidden: false },
+          trigger: { disabled: false },
+          setLocale: vi.fn(),
+          setVisible: vi.fn(),
+          setDisabled: vi.fn(),
+          placeBefore: vi.fn(),
+          dispose: vi.fn(),
+        },
         sendButton: testState.sendButton,
         sendDisabledBeforeSwitch: null,
       };

@@ -1,13 +1,22 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
-import ExternalLink from "lucide/dist/esm/icons/external-link.mjs";
+import Code from "lucide/dist/esm/icons/code.mjs";
+import Copy from "lucide/dist/esm/icons/copy.mjs";
+import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import X from "lucide/dist/esm/icons/x.mjs";
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import {
+  getSharedThreadTerminalPreferenceStore,
+  type ThreadTerminalPreferenceStore,
+} from "./thread-terminal-preference.js";
 
 const ERROR_ATTRIBUTE = "data-codexhost-project-actions-error";
-const ACTION_ATTRIBUTE = "data-codexhost-project-actions-open-doubao";
+const ACTION_ATTRIBUTE = "data-codexhost-project-actions";
+const COPY_PATH_ATTRIBUTE = `${ACTION_ATTRIBUTE}-copy-path`;
+const OPEN_TERMINAL_ATTRIBUTE = `${ACTION_ATTRIBUTE}-open-terminal`;
+const OPEN_VSCODE_ATTRIBUTE = `${ACTION_ATTRIBUTE}-open-vscode`;
 const MENU_ITEM_SELECTOR = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]';
 
 const style = `
@@ -23,17 +32,30 @@ const style = `
 `;
 
 type Locale = "zh-CN" | "en";
+type ProjectAction = "copy-path" | "terminal" | "vscode";
 
 interface NativeProjectMenuProps extends Record<string, unknown> {
   getContextMenuItems(): unknown;
   onOpenChange(open: boolean): void;
 }
 
+interface NativeProject {
+  projectId: string;
+  projectKind: "local";
+  path: string;
+}
+
+interface ProjectMenuTarget {
+  project: NativeProject;
+  close(): void;
+}
+
 interface MenuEntry {
   reveal: HTMLElement;
   menu: HTMLElement;
-  item: HTMLElement;
-  label: HTMLElement;
+  items: HTMLElement[];
+  snackbar: HTMLElement | null;
+  path: string;
   search: string;
   searchTime: number;
 }
@@ -42,35 +64,39 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
-// 原生菜单项以项目操作 ID 作为 React key；Portal 仍保留项目所有者的祖先链。
-function nativeProjectMenuProps(reveal: HTMLElement): NativeProjectMenuProps | null {
-  const key = Object.keys(reveal).find((key) => key.startsWith("__reactFiber$"));
-  if (!key) {
-    return null;
+function projectActionLabel(locale: Locale, action: ProjectAction): string {
+  if (locale !== "zh-CN") {
+    return {
+      "copy-path": "Copy absolute path",
+      terminal: "Open in Terminal",
+      vscode: "Open in VS Code",
+    }[action];
   }
-  const rawFiber = Reflect.get(reveal, key);
-  const seen = new Set<unknown>();
-  let candidate = false;
-  for (let node = record(rawFiber); node && seen.size < 100; node = record(node.return)) {
-    if (seen.has(node)) {
-      break;
-    }
-    seen.add(node);
-    const props = record(node.memoizedProps);
-    if ((record(props?.item)?.id ?? props?.id ?? node.key) === "reveal-project-folder") {
-      candidate = true;
-      break;
-    }
-  }
-  if (!candidate) {
-    return null;
-  }
+  return {
+    "copy-path": "复制绝对路径",
+    terminal: "在终端中打开",
+    vscode: "用 VS Code 打开",
+  }[action];
+}
+
+function copiedPathLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "已复制绝对路径" : "Absolute path copied";
+}
+
+function copyFailedLabel(locale: Locale): string {
+  return locale === "zh-CN" ? "复制绝对路径失败" : "Could not copy absolute path";
+}
+
+function nativeProjectMenuTarget(anchor: HTMLElement): ProjectMenuTarget | null {
+  const key = Object.keys(anchor).find((name) => name.startsWith("__reactFiber$"));
+  if (!key) return null;
+  const rawFiber = Reflect.get(anchor, key);
   let revealItem = false;
   let menuProps: NativeProjectMenuProps | null = null;
+  let project: NativeProject | null = null;
   for (const fiber of committedReactAncestors(rawFiber)) {
     const props = record(fiber.memoizedProps);
-    const itemId = record(props?.item)?.id ?? props?.id ?? fiber.key;
-    revealItem ||= itemId === "reveal-project-folder";
+    revealItem ||= (record(props?.item)?.id ?? props?.id ?? fiber.key) === "reveal-project-folder";
     if (
       typeof props?.getContextMenuItems === "function" &&
       typeof props.onOpenChange === "function" &&
@@ -78,44 +104,61 @@ function nativeProjectMenuProps(reveal: HTMLElement): NativeProjectMenuProps | n
     ) {
       menuProps = props as NativeProjectMenuProps;
     }
-    const project = record(props?.project);
-    if (!project) {
-      continue;
+    const candidate = record(props?.project);
+    if (
+      candidate?.projectKind === "local" &&
+      typeof candidate.projectId === "string" &&
+      typeof candidate.path === "string" &&
+      candidate.path.length > 0
+    ) {
+      project = {
+        projectId: candidate.projectId,
+        projectKind: "local",
+        path: candidate.path,
+      };
     }
-    if (!revealItem || project.projectKind !== "local" || !menuProps) {
-      return null;
-    }
-    let items: unknown;
-    try {
-      items = menuProps.getContextMenuItems();
-    } catch {
-      // 私有原生契约变化时保留原菜单，避免阻断 Renderer 的其他控件。
-      return null;
-    }
-    if (!Array.isArray(items)) {
-      return null;
-    }
-    const ids = new Set(items.map((item) => record(item)?.id));
-    return ["edit-project", "reveal-project-folder", "remove-project"].every((id) => ids.has(id))
-      ? menuProps
-      : null;
   }
-  return null;
+  if (!revealItem || !menuProps || !project) return null;
+  const target = menuProps;
+  return {
+    project,
+    close: () => target.onOpenChange(false),
+  };
 }
 
-function openDoubaoLabel(locale: Locale): string {
-  return locale === "zh-CN" ? "在 Doubao 中打开" : "Open in Doubao";
+function cloneNativeMenuItem(reveal: HTMLElement, attribute: string): HTMLElement {
+  const item = reveal.cloneNode(false) as HTMLElement;
+  for (const name of [
+    "id",
+    "href",
+    "title",
+    "aria-disabled",
+    "aria-labelledby",
+    "aria-describedby",
+    "aria-keyshortcuts",
+    "data-disabled",
+    "data-highlighted",
+    "data-radix-collection-item",
+  ]) {
+    item.removeAttribute(name);
+  }
+  item.setAttribute(ACTION_ATTRIBUTE, "");
+  item.setAttribute(attribute, "");
+  item.setAttribute("role", "menuitem");
+  item.tabIndex = -1;
+  return item;
 }
 
 export function installRendererProjectActions(options: {
   getClient(): RendererModelClient | null;
   getLocale(): Locale;
+  terminalPreference?: ThreadTerminalPreferenceStore;
 }): { refresh(): void; dispose(): void } {
   const styles = document.createElement("style");
   styles.textContent = style;
   document.head.append(styles);
+  const terminalPreference = options.terminalPreference ?? getSharedThreadTerminalPreferenceStore();
   let disposed = false;
-  let opening = false;
   let scheduled = false;
   let errorToast: HTMLElement | null = null;
   const mounted = new Map<HTMLElement, MenuEntry>();
@@ -127,12 +170,12 @@ export function installRendererProjectActions(options: {
 
   const showError = (failure: unknown): void => {
     clearError();
+    if (disposed) return;
     const toast = document.createElement("div");
     toast.setAttribute(ERROR_ATTRIBUTE, "");
     toast.setAttribute("role", "alert");
     const message = document.createElement("span");
-    const detail = failure instanceof Error ? failure.message : String(failure);
-    message.textContent = `${openDoubaoLabel(options.getLocale())}: ${detail}`;
+    message.textContent = failure instanceof Error ? failure.message : String(failure);
     const dismiss = document.createElement("button");
     dismiss.type = "button";
     const dismissLabel = options.getLocale() === "zh-CN" ? "关闭" : "Dismiss";
@@ -145,127 +188,135 @@ export function installRendererProjectActions(options: {
     errorToast = toast;
   };
 
-  const openDoubao = async (): Promise<void> => {
-    if (disposed || opening) {
+  const showCopyResult = (entry: MenuEntry, message: string): void => {
+    entry.snackbar?.remove();
+    if (disposed || !entry.menu.isConnected) return;
+    const snackbar = document.createElement("div");
+    snackbar.setAttribute("role", "status");
+    snackbar.style.padding = "5px 8px";
+    snackbar.style.color = "var(--color-token-text-secondary,currentColor)";
+    snackbar.style.fontSize = "12px";
+    snackbar.textContent = message;
+    entry.menu.append(snackbar);
+    entry.snackbar = snackbar;
+  };
+
+  const currentTarget = (entry: MenuEntry): ProjectMenuTarget | null =>
+    entry.reveal.isConnected &&
+    entry.items.every((item) => item.isConnected) &&
+    entry.menu.isConnected
+      ? nativeProjectMenuTarget(entry.reveal)
+      : null;
+
+  const copyPath = async (entry: MenuEntry): Promise<void> => {
+    clearError();
+    const clipboard = document.defaultView?.navigator.clipboard;
+    if (typeof clipboard?.writeText !== "function") {
+      showCopyResult(entry, copyFailedLabel(options.getLocale()));
       return;
     }
-    opening = true;
-    clearError();
     try {
-      const client = options.getClient();
-      if (!client?.openDoubao) {
-        throw new Error(
-          options.getLocale() === "zh-CN"
-            ? "Doubao 启动连接不可用"
-            : "Doubao launch connection is unavailable",
-        );
-      }
-      await client.openDoubao();
-    } catch (failure) {
-      if (!disposed) {
-        showError(failure);
-      }
-    } finally {
-      opening = false;
+      await clipboard.writeText(entry.path);
+      showCopyResult(entry, copiedPathLabel(options.getLocale()));
+    } catch {
+      showCopyResult(entry, copyFailedLabel(options.getLocale()));
     }
   };
 
-  const currentProps = (entry: MenuEntry): NativeProjectMenuProps | null =>
-    entry.reveal.isConnected &&
-    entry.item.isConnected &&
-    entry.item.parentElement === entry.reveal.parentElement
-      ? nativeProjectMenuProps(entry.reveal)
-      : null;
+  const openTerminal = async (entry: MenuEntry): Promise<void> => {
+    const client = options.getClient();
+    if (!client?.openProjectTerminal) throw new Error("本机终端入口不可用。");
+    const terminalId = terminalPreference.get();
+    await client.openProjectTerminal({
+      path: entry.path,
+      ...(terminalId ? { terminalId } : {}),
+    });
+  };
 
-  const select = (entry: MenuEntry): void => {
-    const props = currentProps(entry);
-    if (disposed || !props) {
-      return;
-    }
+  const openWorkspace = async (entry: MenuEntry): Promise<void> => {
+    const client = options.getClient();
+    if (!client?.openProjectWorkspace) throw new Error("本机 VS Code 入口不可用。");
+    await client.openProjectWorkspace({ path: entry.path });
+  };
+
+  const select = (entry: MenuEntry, action: ProjectAction): void => {
+    const target = currentTarget(entry);
+    if (disposed || !target) return;
     try {
-      props.onOpenChange(false);
-      void openDoubao();
+      target.close();
+      if (action === "copy-path") {
+        void copyPath(entry);
+        return;
+      }
+      void (action === "terminal" ? openTerminal(entry) : openWorkspace(entry)).catch(showError);
     } catch (failure) {
       showError(failure);
     }
   };
 
   const refresh = (): void => {
-    if (disposed) {
-      return;
-    }
+    if (disposed) return;
     for (const [reveal, entry] of mounted) {
-      if (!currentProps(entry)) {
-        entry.item.remove();
+      if (!currentTarget(entry)) {
+        for (const item of entry.items) item.remove();
+        entry.snackbar?.remove();
         mounted.delete(reveal);
       }
     }
     for (const reveal of document.querySelectorAll<HTMLElement>('[role="menuitem"]')) {
-      if (reveal.hasAttribute(ACTION_ATTRIBUTE)) {
-        continue;
-      }
-      const existing = mounted.get(reveal);
-      if (existing) {
-        const label = openDoubaoLabel(options.getLocale());
-        if (existing.label.textContent !== label) {
-          existing.label.textContent = label;
-        }
-        continue;
-      }
-      const props = nativeProjectMenuProps(reveal);
+      if (reveal.hasAttribute(ACTION_ATTRIBUTE) || mounted.has(reveal)) continue;
+      const target = nativeProjectMenuTarget(reveal);
       const menu = reveal.closest<HTMLElement>('[role="menu"]');
-      if (!props || !menu || menu.querySelector(`[${ACTION_ATTRIBUTE}]`)) {
-        continue;
+      if (!target || !menu || menu.querySelector(`[${ACTION_ATTRIBUTE}]`)) continue;
+      const icons = { "copy-path": Copy, terminal: Terminal, vscode: Code };
+      const entry: MenuEntry = {
+        reveal,
+        menu,
+        items: [],
+        snackbar: null,
+        path: target.project.path,
+        search: "",
+        searchTime: 0,
+      };
+      for (const action of ["copy-path", "terminal", "vscode"] as const) {
+        const attribute = {
+          "copy-path": COPY_PATH_ATTRIBUTE,
+          terminal: OPEN_TERMINAL_ATTRIBUTE,
+          vscode: OPEN_VSCODE_ATTRIBUTE,
+        }[action];
+        const item = cloneNativeMenuItem(reveal, attribute);
+        const icon = createElement(icons[action], { width: 16, height: 16, "aria-hidden": "true" });
+        const label = document.createElement("span");
+        label.textContent = projectActionLabel(options.getLocale(), action);
+        item.append(icon, label);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          select(entry, action);
+        });
+        entry.items.push(item);
       }
-      const item = reveal.cloneNode(false) as HTMLElement;
-      for (const attribute of [
-        "id",
-        "href",
-        "title",
-        "aria-disabled",
-        "aria-labelledby",
-        "aria-describedby",
-        "aria-keyshortcuts",
-        "data-disabled",
-        "data-highlighted",
-        "data-radix-collection-item",
-      ]) {
-        item.removeAttribute(attribute);
-      }
-      item.setAttribute(ACTION_ATTRIBUTE, "");
-      item.setAttribute("role", "menuitem");
-      item.tabIndex = -1;
-      const icon = createElement(ExternalLink, { width: 16, height: 16, "aria-hidden": "true" });
-      const label = document.createElement("span");
-      label.textContent = openDoubaoLabel(options.getLocale());
-      item.append(icon, label);
-      const entry = { reveal, menu, item, label, search: "", searchTime: 0 };
-      item.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        select(entry);
-      });
-      reveal.after(item);
+      const first = entry.items[0];
+      const second = entry.items[1];
+      const third = entry.items[2];
+      if (first && second && third) first.after(second, third);
       mounted.set(reveal, entry);
     }
   };
 
-  // 注入项不属于原生 roving-focus 注册表，在跨越该项时补齐键盘焦点移动。
+  // 注入项不属于原生 roving-focus 注册表，在跨越这些项时补齐键盘焦点移动。
   const onKeyDown = (event: KeyboardEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
-    if (!target || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) {
-      return;
-    }
+    if (!target || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     const menu = target.closest('[role="menu"]');
-    const entry = [...mounted.values()].find((entry) => entry.menu === menu);
-    if (!entry || !currentProps(entry)) {
-      return;
-    }
+    const entry = [...mounted.values()].find((candidate) => candidate.menu === menu);
+    if (!entry || !currentTarget(entry)) return;
     const current = target.closest<HTMLElement>(MENU_ITEM_SELECTOR);
-    if (current === entry.item && (event.key === "Enter" || event.key === " ")) {
+    const injectedIndex = current ? entry.items.indexOf(current) : -1;
+    if (injectedIndex >= 0 && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
       event.stopPropagation();
-      select(entry);
+      select(entry, (["copy-path", "terminal", "vscode"] as const)[injectedIndex] as ProjectAction);
       return;
     }
     const items = [...entry.menu.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR)].filter(
@@ -283,9 +334,7 @@ export function installRendererProjectActions(options: {
       End: items.at(-1),
     };
     let next = navigation[event.key as keyof typeof navigation];
-    if (next && current !== entry.item && next !== entry.item) {
-      return;
-    }
+    if (next && current && !entry.items.includes(current) && !entry.items.includes(next)) return;
     if (!next && event.key.length === 1 && event.key !== " " && !event.isComposing) {
       const now = Date.now();
       entry.search = now - entry.searchTime > 500 ? event.key : entry.search + event.key;
@@ -294,7 +343,7 @@ export function installRendererProjectActions(options: {
       const ordered = [...items.slice(index + 1), ...items.slice(0, index + 1)];
       next = ordered.find((item) => item.textContent?.trim().toLocaleLowerCase().startsWith(query));
     }
-    if (next && (current === entry.item || next === entry.item)) {
+    if (next && ((current && entry.items.includes(current)) || entry.items.includes(next))) {
       event.preventDefault();
       event.stopPropagation();
       next.focus();
@@ -322,14 +371,13 @@ export function installRendererProjectActions(options: {
   return {
     refresh,
     dispose() {
-      if (disposed) {
-        return;
-      }
+      if (disposed) return;
       disposed = true;
       observer.disconnect();
       document.removeEventListener("keydown", onKeyDown, true);
       for (const entry of mounted.values()) {
-        entry.item.remove();
+        for (const item of entry.items) item.remove();
+        entry.snackbar?.remove();
       }
       mounted.clear();
       clearError();

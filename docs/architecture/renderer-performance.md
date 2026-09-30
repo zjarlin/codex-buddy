@@ -40,4 +40,4 @@ Auto Router 只根据设置、模型目录、JEV 配置状态、当前聊天决�
 
 滚动测试覆盖直接文本更新、多个消息子树、容器替换、手动上翻与跟随恢复。Auto Router 测试覆盖重复读取、其他聊天更新时保留输入、隐藏窗口安装后恢复，以及上下文移除后的轮询停止。轮询单元测试覆盖激活、可见性、销毁和定时器释放。
 
-可按 `package.json` 的 `test:e2e` 脚本运行对应测试。`CODEXHOST_PLAYWRIGHT_EXECUTABLE_PATH` 可指定本机 Chromium 兼容浏览器。源码测试和 `build:renderer` 构建结果不代表已安装客户端已加载新代码；实际 CPU、内存和输入延迟需要在更新产物后，以相同聊天和输出负载另行对比。
+可按 `package.json` 的 `test:e2e` 脚本运行对应测试。`CODEXHOST_PLAYWRIGHT_EXECUTABLE_PATH` 可指定本机 Chromium 兼容浏览器。在 glibc 低于 2.25 的宿主机（如 CentOS 7）上，Playwright 自带的 Chromium 无法启动；此时改用 `npm run test:e2e:container`，它把同一套用例放进官方 Playwright 容器镜像运行，可用 `CODEXHOST_PLAYWRIGHT_IMAGE` 覆盖镜像版本，并透传 `CODEXHOST_PLAYWRIGHT_*` 环境变量。源码测试和 `build:renderer` 构建结果不代表已安装客户端已加载新代码；实际 CPU、内存和输入延迟需要在更新产物后，以相同聊天和输出负载另行对比。

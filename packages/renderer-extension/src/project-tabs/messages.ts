@@ -19,6 +19,11 @@ const zh = {
   duplicate: "Tab 名称不能重复",
   noTabs: "还没有自定义 Tab，可在配置中添加。",
   savedHere: "配置保存在当前客户端。",
+  searchTabs: "搜索项目 Tab",
+  searchPlaceholder: "搜索项目 Tab 名称…",
+  searchHint: "↑↓ 选择 · Enter 切换 · Esc 关闭",
+  searchEmpty: "没有匹配的 Tab",
+  current: "当前",
 };
 const en: typeof zh = {
   all: "Projects",
@@ -41,6 +46,11 @@ const en: typeof zh = {
   duplicate: "Tab names must be unique",
   noTabs: "No custom tabs yet. Add one in settings.",
   savedHere: "Settings are saved on this client.",
+  searchTabs: "Search project tabs",
+  searchPlaceholder: "Search project tab names…",
+  searchHint: "↑↓ select · Enter switch · Esc close",
+  searchEmpty: "No matching tabs",
+  current: "Current",
 };
 export function projectTabsMessages(locale: string): typeof zh {
   return locale === "zh-CN" ? zh : en;

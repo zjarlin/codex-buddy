@@ -1105,6 +1105,12 @@ export function installCurrentRendererAdapter(): {
       return disposed ? null : (window.__codexhostHostRoutingV1?.hostIdForComposer() ?? null);
     },
     clientForHost: (hostId: string) => (disposed ? null : clients.forHost(hostId)),
+    requestThreadProjection: (method: "thread/list" | "thread/turns/list", params: unknown) => {
+      const client = currentModelClient();
+      if (!client.requestThreadProjection)
+        throw new Error("Thread projection request is unavailable");
+      return client.requestThreadProjection(method, params);
+    },
     listHarnessPlugins: async () => {
       const client = currentModelClient();
       if (!client.listHarnessPlugins) throw new Error("Harness plugin directory is unavailable");

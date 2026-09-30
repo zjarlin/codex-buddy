@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   openThreadWorkspace,
+  openProjectWorkspace,
   ThreadWorkspaceError,
   windowsApplicationPath,
 } from "../src/thread-workspace.js";
@@ -77,6 +78,28 @@ describe("thread workspace", () => {
     ];
     expect(command).toBe(code);
     expect(arguments_).toEqual(["--reuse-window", await realpath(directory)]);
+    expect(result).toEqual({ workspace: await realpath(directory), application: "vscode" });
+  });
+
+  it("opens a project directory with the code CLI", async () => {
+    const directory = await workspace();
+    const bin = await workspace();
+    const code = path.join(bin, "code");
+    await writeFile(code, "#!/bin/sh\n");
+    await chmod(code, 0o755);
+    const spawnApplication = fakeSpawn();
+
+    const result = await openProjectWorkspace(directory, {
+      platform: process.platform,
+      environment: { PATH: bin },
+      spawnApplication,
+    });
+
+    expect(spawnApplication.mock.calls[0]?.[0]).toBe(code);
+    expect(spawnApplication.mock.calls[0]?.[1]).toEqual([
+      "--reuse-window",
+      await realpath(directory),
+    ]);
     expect(result).toEqual({ workspace: await realpath(directory), application: "vscode" });
   });
 

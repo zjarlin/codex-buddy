@@ -118,6 +118,9 @@ import {
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
+import { installRendererProjectDashboard } from "./renderer-project-dashboard.js";
+import { SIDEBAR_THREAD_HOST_ID_ATTRIBUTE } from "./renderer-sidebar-agent-icons.js";
+import { hostThreadIdSchema } from "@codexhost/shared-contracts";
 import { RENDERER_INJECTED_CONTROL_SELECTOR } from "./settings/trigger.js";
 import {
   installRendererDelegationMention,
@@ -814,6 +817,32 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const projectDashboard = installRendererProjectDashboard({
+    getRequest: (hostId) => {
+      const client = modelClientForHost(hostId);
+      const request = client?.requestThreadProjection;
+      return request
+        ? (method: "thread/list" | "thread/turns/list", params: unknown) => request(method, params)
+        : null;
+    },
+    getHostIds: () => {
+      const hostIds = new Set<string>(["local"]);
+      for (const row of document.querySelectorAll<HTMLElement>(
+        `[${SIDEBAR_THREAD_HOST_ID_ATTRIBUTE}]`,
+      )) {
+        const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
+        if (hostId) hostIds.add(hostId);
+      }
+      const activeHostId = activeModelHostId();
+      if (activeHostId) hostIds.add(activeHostId);
+      return [...hostIds];
+    },
+    onOpenThread(threadId, hostId) {
+      void openRendererThread(hostThreadIdSchema.parse(threadId), { hostId }).catch((error) => {
+        console.warn("[codexhost] Unable to open dashboard Thread", error);
+      });
+    },
+  });
   const threadActions = installRendererThreadActions({
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
@@ -1151,10 +1180,6 @@ export function installRendererBindingProbe(
     clearPending: (mounted) => controller.clearPendingSubmission(mounted.composer),
   });
 
-  const shouldChooseSession = (mounted: MountedComposer): boolean =>
-    !sessionRouting.isReplaying(mounted.composer) &&
-    controller.get(mounted.composer).agent === "codex" &&
-    (mounted.modelTarget?.[0] === "default" || mounted.modelTarget?.[0] === "conversation");
   /**
    * `keepCurrent` refreshes in place (the `#` menu reopening) instead of
    * clearing first, so an open menu never flickers empty.
@@ -2838,6 +2863,12 @@ export function installRendererBindingProbe(
         const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
         if (editor) delegationMention?.openFor(editor);
       },
+      () => {
+        const mounted = mountedByComposer.get(composer);
+        if (!composer.isConnected || !mounted) return;
+        const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+        void sessionRouting.choose(mounted, sessionDraftText(editor));
+      },
       () => refreshModels(true),
       async (modelId) => {
         const mounted = mountedByComposer.get(composer);
@@ -3078,11 +3109,8 @@ export function installRendererBindingProbe(
       return;
     }
     const mounted = mountedByComposer.get(composer);
-    const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-    const message = sessionDraftText(editor);
-    if (mounted && message.trim() && shouldChooseSession(mounted)) {
+    if (mounted && !sessionRouting.cancel(mounted)) {
       blockEvent(event);
-      void sessionRouting.choose(mounted, message);
       return;
     }
     notifySubmission(composer, "submit");
@@ -3112,11 +3140,8 @@ export function installRendererBindingProbe(
       blockEvent(event);
       return;
     }
-    const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-    const message = sessionDraftText(editor);
-    if (mounted && message.trim() && shouldChooseSession(mounted)) {
+    if (mounted && !sessionRouting.cancel(mounted)) {
       blockEvent(event);
-      void sessionRouting.choose(mounted, message);
       return;
     }
     notifySubmission(composer, "enter");
@@ -3133,11 +3158,8 @@ export function installRendererBindingProbe(
       blockEvent(event);
       return;
     }
-    const editor = composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
-    const message = sessionDraftText(editor);
-    if (message.trim() && shouldChooseSession(mounted)) {
+    if (!sessionRouting.cancel(mounted)) {
       blockEvent(event);
-      void sessionRouting.choose(mounted, message);
       return;
     }
     notifySubmission(composer, "click");
@@ -3548,6 +3570,7 @@ export function installRendererBindingProbe(
       sidebarUnread.dispose();
       sidebarVisits.dispose();
       sidebarStatusFilter.dispose();
+      projectDashboard.dispose();
       threadActions.dispose();
       queuedTransfer.dispose();
       projectActions.dispose();

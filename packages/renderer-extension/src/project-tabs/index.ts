@@ -20,6 +20,7 @@ import {
   rowProject,
 } from "./native-binding.js";
 import { createRecentSectionCollapse } from "./recent-section.js";
+import { createProjectTabSearch } from "./search-picker.js";
 import { projectTabsStyle } from "./styles.js";
 
 const HIDDEN = "data-codexhost-project-tab-hidden";
@@ -69,6 +70,10 @@ export function installProjectTabs(options: {
   let dialog: HTMLDialogElement | null = null;
   const bar = document.createElement("div");
   bar.setAttribute("data-codexhost-project-tabs", "");
+  const group = document.createElement("div");
+  group.setAttribute("role", "group");
+  const actions = document.createElement("div");
+  actions.setAttribute("data-codexhost-project-tab-actions", "");
   const empty = document.createElement("p");
   empty.setAttribute("data-codexhost-project-tabs-empty", "");
   empty.setAttribute("role", "status");
@@ -153,6 +158,11 @@ export function installProjectTabs(options: {
   const select = (selected: string | null): void => {
     void persist({ ...config, selected }).catch(() => undefined);
   };
+  const search = createProjectTabSearch({
+    getCurrent: () => config.selected,
+    select,
+  });
+  const settings = button("", configure);
   const onProjectCreateClick = (event: MouseEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target?.closest(PROJECT_CREATE_SELECTOR)) {
@@ -350,22 +360,27 @@ export function installProjectTabs(options: {
     const nextSignature = JSON.stringify([options.getLocale(), config.tabs, config.selected]);
     if (signature !== nextSignature) {
       signature = nextSignature;
-      const group = document.createElement("div");
-      group.setAttribute("role", "group");
       group.setAttribute("aria-label", m.title);
-      for (const tab of [{ id: null, name: m.all }, ...config.tabs]) {
+      const items = [{ id: null, name: m.all }, ...config.tabs].map((tab) => {
         const item = button(tab.name, () => select(tab.id));
         item.setAttribute("aria-pressed", String(config.selected === tab.id));
-        group.append(item);
-      }
-      const settings = button("", configure);
+        return item;
+      });
+      group.replaceChildren(...items);
       settings.setAttribute("aria-label", m.configure);
       settings.title = m.configure;
-      settings.append(createElement(Settings2, { width: 16, height: 16, "aria-hidden": "true" }));
-      const hadFocus = bar.contains(document.activeElement);
-      bar.replaceChildren(group, settings);
-      if (hadFocus) {
-        group.querySelector<HTMLElement>('[aria-pressed="true"]')?.focus();
+      if (!settings.querySelector("svg")) {
+        settings.append(createElement(Settings2, { width: 16, height: 16, "aria-hidden": "true" }));
+      }
+      search.update(
+        [{ id: null, name: m.all }, ...config.tabs.map((tab) => ({ id: tab.id, name: tab.name }))],
+        m,
+      );
+      if (!actions.contains(search.button)) {
+        actions.append(search.button, settings);
+      }
+      if (!bar.contains(group)) {
+        bar.replaceChildren(group, actions);
       }
     }
     for (const row of hiddenRows) {
@@ -403,6 +418,9 @@ export function installProjectTabs(options: {
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && pendingCreate.current()) {
       pendingCreate.clear();
+    }
+    if (search.handleKeyDown(event)) {
+      return;
     }
     const target = event.target instanceof Element ? event.target : null;
     const menu = target?.closest<HTMLElement>('[role="menu"]');
@@ -498,6 +516,7 @@ export function installProjectTabs(options: {
         entry.item.remove();
       }
       menus.clear();
+      search.dispose();
       bar.remove();
       empty.remove();
       error.remove();

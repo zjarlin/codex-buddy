@@ -4,11 +4,7 @@ export interface ProjectTabSearchTarget {
 }
 
 export type ProjectTabSearchMatchKind =
-  | "exact"
-  | "prefix"
-  | "segment-prefix"
-  | "substring"
-  | "subsequence";
+  "exact" | "prefix" | "segment-prefix" | "substring" | "subsequence";
 
 export interface ProjectTabSearchResult {
   kind: ProjectTabSearchMatchKind;

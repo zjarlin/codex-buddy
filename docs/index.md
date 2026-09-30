@@ -30,6 +30,7 @@
 | --- | --- |
 | [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏、关联仓库切换、官方审查转发与项目空闲推送工作流；维护 Git 界面时阅读。 |
 | [`product/workspace-files.md`](product/workspace-files.md) | 官方文件区域放在对话左侧、文件树与编辑器复用，以及保留的 Host 文件接口；维护文件浏览器时阅读。 |
+| [`product/project-dashboard.md`](product/project-dashboard.md) | 标题栏“项目态势”入口、按 Host/项目聚合的只读结果大屏，以及回合总结和文件变更统计；维护盯盘界面时阅读。 |
 
 ## Harness 专项
 

@@ -13,6 +13,10 @@ import { listGitRepositoryDirectories } from "./git-repository-directories.js";
 import {
   DOUBAO_OPEN_METHOD,
   doubaoOpenParamsSchema,
+  PROJECT_TERMINAL_OPEN_METHOD,
+  projectTerminalOpenParamsSchema,
+  PROJECT_WORKSPACE_OPEN_METHOD,
+  projectWorkspaceOpenParamsSchema,
   SSH_GIT_METHOD,
   sshGitParamsSchema,
   GIT_REPOSITORIES_METHOD,
@@ -146,9 +150,9 @@ import {
 } from "./delegation-mention-rewrite.js";
 import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
-import { listThreadTerminals, openThreadTerminal } from "./thread-terminal.js";
+import { listThreadTerminals, openProjectTerminal, openThreadTerminal } from "./thread-terminal.js";
 import { desktopSshConnection } from "./desktop-ssh-connection.js";
-import { openThreadWorkspace } from "./thread-workspace.js";
+import { openProjectWorkspace, openThreadWorkspace } from "./thread-workspace.js";
 import { createLauncherDoubaoOpener } from "./launcher-url-opener.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
 import { ProjectTabsSettingsStore } from "./project-tabs-settings.js";
@@ -1646,6 +1650,14 @@ export class AppServerHost {
     }
     if (request.method === DOUBAO_OPEN_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleDoubaoOpenRequest(request));
+      return;
+    }
+    if (request.method === PROJECT_TERMINAL_OPEN_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleProjectTerminalOpenRequest(request));
+      return;
+    }
+    if (request.method === PROJECT_WORKSPACE_OPEN_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleProjectWorkspaceOpenRequest(request));
       return;
     }
     if (
@@ -3562,6 +3574,34 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: { application: "doubao" } }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32098, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleProjectTerminalOpenRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = projectTerminalOpenParamsSchema.parse(request.params);
+      const environment = this.#options.environment ?? process.env;
+      const settings = await this.#threadTerminalSettings.load();
+      const result = await openProjectTerminal(
+        params.path,
+        params.terminalId ?? settings.terminalId ?? "system-default",
+        { environment },
+      );
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32101, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleProjectWorkspaceOpenRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = projectWorkspaceOpenParamsSchema.parse(request.params);
+      const result = await openProjectWorkspace(params.path, {
+        environment: this.#options.environment ?? process.env,
+      });
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32102, errorMessage(error).slice(0, 20_000)));
     }
   }
 

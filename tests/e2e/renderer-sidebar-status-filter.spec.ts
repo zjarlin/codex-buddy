@@ -42,8 +42,13 @@ const { outputFiles } = await build({
         sidebar.append(project("one", "项目一", [["running", "执行任务"], ["idle", "已完成"]]));
         sidebar.append(project("two", "项目二", [["other", "历史任务"]]));
         document.body.append(sidebar);
-        const control = installRendererSidebarStatusFilter({ getClient: () => client, getLocale: () => "zh-CN" });
-        globalThis.statusFilter = { activity, calls, control };
+        const pending = new Set(["idle"]);
+        const control = installRendererSidebarStatusFilter({
+          getClient: () => client,
+          getLocale: () => "zh-CN",
+          hasPending: (_hostId, threadId) => pending.has(threadId),
+        });
+        globalThis.statusFilter = { activity, calls, control, pending };
       };
     `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -94,6 +99,19 @@ test("active view keeps the project tree and restores all conversations", async 
   await expect(sidebar.getByRole("status")).toHaveText("没有进行中的会话");
   await expect(sidebar.getByRole("button", { name: "项目一" })).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "项目二" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "全部" }).click();
+  await expect(sidebar.getByText("执行任务")).toBeVisible();
+  await expect(sidebar.getByText("已完成")).toBeVisible();
+  await expect(sidebar.getByText("历史任务")).toBeVisible();
+  await sidebar.getByRole("button", { name: "待确认" }).click();
+  await expect(sidebar.getByText("已完成")).toBeVisible();
+  await expect(sidebar.getByText("执行任务")).toBeHidden();
+  await expect(sidebar.getByText("历史任务")).toBeHidden();
+  await expect(sidebar.getByRole("status")).toHaveText("1 个待确认");
+  await page.evaluate(() => Reflect.get(globalThis, "statusFilter").pending.clear());
+  await page.evaluate(() => Reflect.get(globalThis, "statusFilter").control.refresh());
+  await expect(sidebar.getByText("已完成")).toBeHidden();
+  await expect(sidebar.getByRole("status")).toHaveText("没有待确认的会话");
   await sidebar.getByRole("button", { name: "全部" }).click();
   await expect(sidebar.getByText("执行任务")).toBeVisible();
   await expect(sidebar.getByText("已完成")).toBeVisible();

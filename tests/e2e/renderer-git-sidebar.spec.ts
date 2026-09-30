@@ -104,7 +104,19 @@ const { outputFiles } = await build({
             target.changes[0].workTreeStatus = " ";
             return structuredClone(target);
           },
-          unstageGitPaths: async (input) => structuredClone(input.repository ? submoduleStatus : status),
+          unstageGitPaths: async (input) => {
+            calls.push(["unstage", input]);
+            const target = input.repository ? submoduleStatus : status;
+            for (const change of target.changes) {
+              if (input.paths.includes(change.path)) {
+                change.staged = false;
+                change.unstaged = true;
+                change.indexStatus = " ";
+                change.workTreeStatus = "M";
+              }
+            }
+            return structuredClone(target);
+          },
           commitGit: async (input) => {
             calls.push(["commit", input]);
             const target = input.repository ? submoduleStatus : status;
@@ -844,6 +856,14 @@ test("shows pending actions, ignores repeated clicks and permits retry after fai
     await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").rejectAction());
     await expect(button).toHaveAttribute("aria-busy", "false");
     await expect(root.getByText("operation failed; retry", { exact: true })).toBeVisible();
+    if (action === "stage-all") {
+      await expect(root.locator("[data-codexhost-git-sidebar-unstage-all]")).toBeEnabled();
+      await root.locator("[data-codexhost-git-sidebar-unstage-all]").click();
+      await expect(
+        await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").pendingCalls.at(-1)),
+      ).toBe("unstageGitPaths");
+      await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").rejectAction());
+    }
     if (action !== "refresh")
       await expect(root.locator("[data-codexhost-git-warnings]")).toBeVisible();
     // 刷新失败会清空当前快照，先重试恢复，再验证其他操作。
@@ -1085,6 +1105,19 @@ test("uses IDEA-style stage and unstage actions without showing a misleading plu
   await root.locator("[data-codexhost-git-sidebar-commits]").click();
   await root.locator("[data-codexhost-git-sidebar-tree]").click();
 
+  const commitPush = root.locator("[data-codexhost-git-sidebar-commit-push]");
+  const normal = await commitPush.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  await commitPush.hover();
+  const hovered = await commitPush.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { color: style.color, background: style.backgroundColor };
+  });
+  expect(hovered.color).toBe(normal.color);
+  expect(hovered.background).not.toBe(normal.background);
+
   const unstagedRow = root.locator('.codexhost-git-change[title="src/app.ts"]');
   await expect(unstagedRow.locator("[data-codexhost-git-sidebar-stage]")).toHaveAttribute(
     "data-action",
@@ -1110,16 +1143,16 @@ test("uses IDEA-style stage and unstage actions without showing a misleading plu
 
   await root.locator("[data-codexhost-git-sidebar-staged-tab]").click();
   const stagedRow = root.locator('.codexhost-git-change[title="src/app.ts"]');
-  await expect(stagedRow.locator("[data-codexhost-git-sidebar-unstage]")).toHaveAttribute(
-    "data-action",
-    "unstage",
-  );
-  await expect(stagedRow.locator("[data-codexhost-git-sidebar-unstage]")).toHaveAttribute(
-    "aria-label",
-    "取消暂存",
-  );
+  const stagedAction = stagedRow.locator('button[data-action="unstage"]');
+  await expect(stagedAction).toHaveAttribute("aria-label", "取消暂存");
   await expect(stagedRow.locator(".codexhost-git-status")).toHaveAttribute("aria-label", "已暂存");
   await expect(stagedRow.locator(".codexhost-git-status")).toHaveText("S");
+
+  await expect(root.locator("[data-codexhost-git-sidebar-unstage-all]")).toBeVisible();
+  await root.locator("[data-codexhost-git-sidebar-unstage-all]").click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual(["unstage", { threadId: "thread-1", paths: ["src/app.ts"] }]);
 });
 
 test("shows initialized submodules as separate actionable repositories", async ({ page }) => {

@@ -238,6 +238,9 @@ import {
   type LoadedSession,
   idleReleaseSettingsSchema,
   type IdleReleaseSettings,
+  THREAD_AUTO_ARCHIVE_SETTINGS_METHOD,
+  threadAutoArchiveSettingsSchema,
+  type ThreadAutoArchiveSettings,
   harnessAccountInspectParamsSchema,
   harnessAccountInspectResultSchema,
   harnessAccountSourceListResultSchema,
@@ -517,12 +520,15 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   getHarnessLaunchSettings?(input: HarnessLaunchSettingsGet): Promise<HarnessLaunchSettings>;
   setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
+  setThreadAutoArchiveSettings?(
+    settings: ThreadAutoArchiveSettings,
+  ): Promise<ThreadAutoArchiveSettings>;
   listLoadedSessions?(): Promise<LoadedSession[]>;
   currentHostId?(): string | null;
   listHarnessPlugins?(): Promise<HarnessPluginListResult>;
   clientForHost?(hostId: string): RendererModelClient | null;
   requestThreadProjection?(
-    method: "thread/list" | "thread/turns/list",
+    method: "thread/list" | "thread/turns/list" | "thread/read" | "thread/archive",
     params: unknown,
   ): Promise<unknown>;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
@@ -1247,7 +1253,7 @@ export function createRendererModelClient(
       return loadedSessionsSchema.parse(await manager.sendRequest(LOADED_SESSIONS_METHOD, {}));
     },
     async requestThreadProjection(
-      method: "thread/list" | "thread/turns/list",
+      method: "thread/list" | "thread/turns/list" | "thread/read" | "thread/archive",
       params: unknown,
     ): Promise<unknown> {
       return manager.sendRequest(method, params);
@@ -1256,6 +1262,14 @@ export function createRendererModelClient(
       const params = idleReleaseSettingsSchema.parse(settings);
       return idleReleaseSettingsSchema.parse(
         await manager.sendRequest(IDLE_RELEASE_SETTINGS_METHOD, params),
+      );
+    },
+    async setThreadAutoArchiveSettings(
+      settings: ThreadAutoArchiveSettings,
+    ): Promise<ThreadAutoArchiveSettings> {
+      const params = threadAutoArchiveSettingsSchema.parse(settings);
+      return threadAutoArchiveSettingsSchema.parse(
+        await manager.sendRequest(THREAD_AUTO_ARCHIVE_SETTINGS_METHOD, params),
       );
     },
     ...createRendererSessionImportClient(async (method, params) =>

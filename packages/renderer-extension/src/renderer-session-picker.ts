@@ -29,16 +29,17 @@ export function showSessionPicker(input: {
   const style = document.createElement("style");
   style.textContent = `
     .codexhost-session-picker { position: fixed; z-index: 10000; display: flex; flex-direction: column; box-sizing: border-box; width: min(520px, calc(100vw - 32px)); max-height: min(540px, 70vh); overflow: hidden; padding: 8px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 8px; background: Canvas; color: CanvasText; box-shadow: 0 8px 30px rgb(0 0 0 / 18%); font: 13px/1.5 system-ui,sans-serif; }
-    .codexhost-session-picker-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 6px 4px; font-weight: 600; }
-    .codexhost-session-picker-close { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
-    .codexhost-session-picker-close:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
-    .codexhost-session-picker-close:focus-visible { outline: 2px solid Highlight; }
+    .codexhost-session-picker-header { position: relative; display: flex; align-items: center; min-height: 28px; padding: 0 34px 6px 4px; font-weight: 600; }
+    .codexhost-session-picker-header > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .codexhost-session-picker-close { position: absolute; top: -2px; right: 0; display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #d94343; cursor: pointer; }
+    .codexhost-session-picker-close:hover, .codexhost-session-picker-close:focus-visible { background: color-mix(in srgb, #d94343 12%, transparent); }
+    .codexhost-session-picker-close:focus-visible { outline: 2px solid #d94343; outline-offset: 1px; }
     .codexhost-session-picker input { flex-shrink: 0; width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; background: Canvas; color: CanvasText; }
     .codexhost-session-picker-list { display: grid; gap: 4px; min-height: 0; overflow-y: auto; }
-    .codexhost-session-picker button { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; padding: 8px; border: 0; border-radius: 6px; text-align: left; background: transparent; color: CanvasText; cursor: pointer; }
-    .codexhost-session-picker button:hover, .codexhost-session-picker button[aria-pressed="true"] { background: color-mix(in srgb, Highlight 16%, transparent); }
-    .codexhost-session-picker button:focus-visible { outline: 2px solid Highlight; }
-    .codexhost-session-picker button:disabled { opacity: .55; cursor: wait; }
+    .codexhost-session-picker [data-session-target] { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; width: 100%; padding: 8px; border: 0; border-radius: 6px; text-align: left; background: transparent; color: CanvasText; cursor: pointer; }
+    .codexhost-session-picker [data-session-target]:hover, .codexhost-session-picker [data-session-target][aria-pressed="true"] { background: color-mix(in srgb, Highlight 16%, transparent); }
+    .codexhost-session-picker [data-session-target]:focus-visible { outline: 2px solid Highlight; }
+    .codexhost-session-picker [data-session-target]:disabled { opacity: .55; cursor: wait; }
     .codexhost-session-picker-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
     .codexhost-session-picker-hint { color: CanvasText; opacity: .8; font-size: 12px; }
     .codexhost-session-picker-path, .codexhost-session-picker-preview, .codexhost-session-picker-status { grid-column: 1 / -1; overflow: hidden; color: GrayText; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

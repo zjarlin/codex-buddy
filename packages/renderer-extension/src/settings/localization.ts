@@ -67,6 +67,14 @@ export interface RendererSettingsMessages {
   readonly idleReleasePending: string;
   readonly idleReleaseUnavailable: string;
   readonly idleReleaseFailed: string;
+  readonly threadAutoArchiveTitle: string;
+  readonly threadAutoArchiveDescription: string;
+  readonly threadAutoArchiveHelpLabel: string;
+  readonly threadAutoArchiveHelp: readonly string[];
+  readonly threadAutoArchiveTimeout: string;
+  readonly threadAutoArchiveTimeoutDescription: string;
+  readonly threadAutoArchiveDays: string;
+  readonly threadAutoArchiveInvalid: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
   readonly terminalSection: string;
@@ -336,6 +344,18 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleasePending: "Syncing…",
   idleReleaseUnavailable: "Not supported by this Host",
   idleReleaseFailed: "Sync failed, try again",
+  threadAutoArchiveTitle: "Archive conversations after inactivity",
+  threadAutoArchiveDescription:
+    "Move conversations out of the active list after they have not been used for the set period.",
+  threadAutoArchiveHelpLabel: "About automatic archiving",
+  threadAutoArchiveHelp: Object.freeze([
+    "Only conversations with no active Turn or pending work are archived.",
+    "Archiving hides a conversation from the active list but does not delete its history. It remains available in archived conversations.",
+  ]),
+  threadAutoArchiveTimeout: "Inactivity period",
+  threadAutoArchiveTimeoutDescription: "1–3650 days.",
+  threadAutoArchiveDays: "days",
+  threadAutoArchiveInvalid: "Enter a whole number from 1 to 3650.",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
   terminalSection: "Terminal",
@@ -638,6 +658,17 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   idleReleasePending: "同步中…",
   idleReleaseUnavailable: "当前 Host 不支持",
   idleReleaseFailed: "同步失败，请重试",
+  threadAutoArchiveTitle: "长期不用自动归档",
+  threadAutoArchiveDescription: "超过设定时间未使用的会话移出活动列表。",
+  threadAutoArchiveHelpLabel: "长期不用自动归档说明",
+  threadAutoArchiveHelp: Object.freeze([
+    "只归档没有运行中回合或待处理工作的会话。",
+    "归档只会把会话从活动列表移出，不会删除聊天记录；仍可在已归档会话中找到。",
+  ]),
+  threadAutoArchiveTimeout: "未使用时长",
+  threadAutoArchiveTimeoutDescription: "1～3650 天。",
+  threadAutoArchiveDays: "天",
+  threadAutoArchiveInvalid: "请输入 1～3650 之间的整数。",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
   terminalSection: "终端",

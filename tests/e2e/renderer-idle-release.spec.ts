@@ -15,6 +15,7 @@ const { outputFiles } = await build({
       import { mountRendererSettingsShell } from "./packages/renderer-extension/src/settings/shell.ts";
       import { createRendererModelClient } from "./packages/renderer-extension/src/renderer-model-client.ts";
       import { installIdleReleasePreferenceSync } from "./packages/renderer-extension/src/renderer-idle-release-preference.ts";
+      import { installThreadAutoArchivePreferenceSync } from "./packages/renderer-extension/src/renderer-thread-auto-archive-preference.ts";
       globalThis.setupIdleRelease = (unsupported = false) => {
         const calls = [];
         const client = createRendererModelClient([{sendRequest: async (method, params) => {
@@ -23,12 +24,14 @@ const { outputFiles } = await build({
           return params;
         }}]);
         const sync = installIdleReleasePreferenceSync(window);
+        const archiveSync = installThreadAutoArchivePreferenceSync(window);
         sync.connect(client);
+        archiveSync.connect(client);
         const messages = rendererSettingsMessages("zh-CN");
         const registry = createRendererSettingsPageRegistry([createAppearanceSettingsPage(messages)]);
         const shell = mountRendererSettingsShell(registry, document, messages);
         shell.openSettings(undefined, "appearance");
-        globalThis.idleFixture = {calls, dispose: () => {shell.dispose(); sync.dispose();}};
+        globalThis.idleFixture = {calls, client, dispose: () => {shell.dispose(); sync.dispose(); archiveSync.dispose();}};
       };
     `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -69,9 +72,13 @@ test("General groups appearance and idle release controls without dialogs or lon
   await expect(page.getByRole("heading", { name: "已加载会话", exact: true })).toHaveCount(0);
   const enabled = page.getByRole("switch", { name: "自动释放空闲会话" });
   const minutes = page.getByRole("spinbutton", { name: "空闲超时" });
+  const archiveEnabled = page.getByRole("switch", { name: "长期不用自动归档" });
+  const archiveDays = page.getByRole("spinbutton", { name: "未使用时长" });
   await expect(enabled).not.toBeChecked();
+  await expect(archiveEnabled).not.toBeChecked();
   // The timeout has no effect while release is off, so it is not shown.
   await expect(minutes).toBeHidden();
+  await expect(archiveDays).toBeHidden();
 
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toBeHidden();
@@ -136,6 +143,41 @@ test("General groups appearance and idle release controls without dialogs or lon
   await enabled.click();
   await expect(minutes).toHaveValue("6");
   await expect(minutes).toHaveAttribute("aria-invalid", "false");
+  await archiveEnabled.click();
+  await expect(archiveEnabled).toBeChecked();
+  await expect(archiveDays).toBeVisible();
+  await expect(archiveDays).toHaveValue("30");
+  await expect(archiveDays).toHaveAttribute("min", "1");
+  await expect(archiveDays).toHaveAttribute("max", "3650");
+  await archiveDays.fill("0");
+  await archiveDays.press("Tab");
+  await expect(archiveDays).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText("请输入 1～3650 之间的整数。")).toBeVisible();
+  await archiveDays.fill("60");
+  await archiveDays.press("Tab");
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("codexhost.thread-auto-archive.v1") ?? "null"),
+    ),
+  ).toEqual({ enabled: true, inactiveDays: 60 });
+  expect(
+    await page.evaluate(
+      () => typeof Reflect.get(globalThis, "idleFixture").client.setThreadAutoArchiveSettings,
+    ),
+  ).toBe("function");
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const calls = Reflect.get(globalThis, "idleFixture").calls;
+        return calls
+          .filter(
+            (call: { method?: string }) =>
+              call.method === "codexhost/settings/thread-auto-archive/set",
+          )
+          .at(-1)?.params.inactiveDays;
+      }),
+    )
+    .toBe(60);
   await enabled.click();
   await page.reload();
   await page.addScriptTag({ content: bundle });
@@ -144,6 +186,8 @@ test("General groups appearance and idle release controls without dialogs or lon
   await expect(minutes).toBeHidden();
   await enabled.click();
   await expect(minutes).toHaveValue("6");
+  await expect(archiveEnabled).toBeChecked();
+  await expect(archiveDays).toHaveValue("60");
 });
 
 test("another window's change updates both the UI and the Host without stale cached settings", async ({
@@ -169,5 +213,7 @@ test("another window's change updates both the UI and the Host without stale cac
 
 test("unsupported Host is visible rather than reported as applied", async ({ page }) => {
   await setup(page, true);
-  await expect(page.getByRole("status").filter({ hasText: "当前 Host 不支持" })).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: "当前 Host 不支持" }).first(),
+  ).toBeVisible();
 });

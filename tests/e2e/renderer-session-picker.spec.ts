@@ -197,6 +197,10 @@ test("completed conversations lead, new conversations follow, and the header clo
   await expect(panel.getByText("新建会话", { exact: true })).toBeVisible();
   const headings = await panel.locator(".codexhost-session-picker-heading").allTextContents();
   expect(headings.indexOf("继续已完成会话")).toBeLessThan(headings.indexOf("新建会话"));
+  await expect(closePicker(page)).toHaveCSS("position", "absolute");
+  await expect(closePicker(page)).toHaveCSS("width", "28px");
+  await expect(closePicker(page)).toHaveCSS("height", "28px");
+  await expect(closePicker(page)).toHaveCSS("color", "rgb(217, 67, 67)");
   await closePicker(page).click();
   await expect(panel).toHaveCount(0);
   expect(await sends(page)).toEqual([]);

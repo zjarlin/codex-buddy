@@ -135,6 +135,8 @@ import {
   restoreHarnessCommandMentions,
   LOADED_SESSIONS_METHOD,
   idleReleaseSettingsSchema,
+  THREAD_AUTO_ARCHIVE_SETTINGS_METHOD,
+  threadAutoArchiveSettingsSchema,
   SESSION_ROUTE_METHOD,
   sessionRouteParamsSchema,
   sessionRouteResultSchema,
@@ -306,6 +308,7 @@ import {
   harnessLaunchSettingsSetSchema,
 } from "@codexhost/shared-contracts";
 import { DesktopRequestQueue } from "./desktop-request-queue.js";
+import { ThreadAutoArchive } from "./thread-auto-archive.js";
 import type {
   DelegationControlRegistration,
   DelegationStartInput,
@@ -752,6 +755,7 @@ export class AppServerHost {
   #liveCodexModels: LiveModelCatalog | undefined;
   #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
   readonly #modelAvailability: ModelAvailability;
+  #threadAutoArchive: ThreadAutoArchive;
   #modelCatalogGeneration = 0;
 
   constructor(options: AppServerHostOptions) {
@@ -796,6 +800,42 @@ export class AppServerHost {
       home: permanentHome,
       environment,
       privateMode: async () => (await this.#buddy?.privateMode()) ?? false,
+    });
+    this.#threadAutoArchive = new ThreadAutoArchive({
+      allowed: async () => !(await this.#buddy?.privateMode()),
+      listOfficial: (cutoffSeconds) => this.#listAutoArchiveOfficial(cutoffSeconds),
+      listExternal: (cutoffSeconds) => this.#listAutoArchiveExternal(cutoffSeconds),
+      canArchiveOfficial: (threadId, cutoffSeconds) =>
+        this.#canAutoArchiveOfficial(threadId, cutoffSeconds),
+      canArchiveExternal: (threadId, cutoffSeconds) =>
+        this.#canAutoArchiveExternal(threadId, cutoffSeconds),
+      archiveOfficial: async (threadId, cutoffSeconds) => {
+        if (!(await this.#canAutoArchiveOfficial(threadId, cutoffSeconds))) return;
+        const response = await this.#requestOfficial("thread/archive", { threadId });
+        if (isRecord(response.error)) {
+          throw new Error(String(response.error.message ?? "Official Thread archive failed"));
+        }
+      },
+      archiveExternal: async (threadId, cutoffSeconds) => {
+        if (!(await this.#canAutoArchiveExternal(threadId, cutoffSeconds))) return;
+        const parsed = hostThreadIdSchema.parse(threadId);
+        const record = await this.#repository.setArchived(parsed, true);
+        const loaded = this.#externalRuntime.get(threadId);
+        if (loaded) {
+          loaded.record = record;
+          loaded.thread = {
+            ...externalThreadValue({
+              record,
+              turns: [],
+              sessionId: loaded.sessionId,
+              running: loaded.running,
+            }),
+            turns: loaded.thread.turns ?? [],
+          };
+        }
+        await this.#writer.json({ method: "thread/archived", params: { threadId } });
+      },
+      diagnose: (error) => this.#diagnose(error),
     });
     this.#sshGit = new SshGitWorkspaces(permanentHome, environment);
     this.#gitRepositoryLinks = new GitRepositoryLinks(
@@ -1018,6 +1058,7 @@ export class AppServerHost {
     this.#modelAvailability.close();
     this.#privateChat?.close();
     this.#externalRuntime.idleRelease.disable();
+    this.#threadAutoArchive.disable();
     this.#pluginLoadAbort.abort();
     this.#externalSteering.close();
     this.#signalActiveWorkChanged();
@@ -1135,6 +1176,8 @@ export class AppServerHost {
       await this.#desktopRequests.drain();
       this.#externalRuntime.idleRelease.stop();
       await this.#externalRuntime.idleRelease.drain();
+      this.#threadAutoArchive.stop();
+      await this.#threadAutoArchive.drain();
       await this.#pluginLoading;
       const threads = this.#externalRuntime.values();
       await Promise.allSettled(threads.map(({ session }) => session.close()));
@@ -1264,6 +1307,7 @@ export class AppServerHost {
     this.#desktopInputEnded = true;
     this.#modelAvailability.close();
     this.#externalRuntime.idleRelease.disable();
+    this.#threadAutoArchive.disable();
     // Cancel loading before draining requests that may be waiting for it.
     this.#pluginLoadAbort.abort();
     await this.#desktopRequests.drain();
@@ -1581,6 +1625,16 @@ export class AppServerHost {
         await this.#writer.json(rpcError(request, -32602, "Invalid idle release settings"));
       } else {
         const settings = this.#externalRuntime.idleRelease.configure(parsed.data);
+        await this.#writer.json(rpcEnvelope(request, { result: settings }));
+      }
+      return;
+    }
+    if (request.method === THREAD_AUTO_ARCHIVE_SETTINGS_METHOD) {
+      const parsed = threadAutoArchiveSettingsSchema.safeParse(request.params);
+      if (!parsed.success) {
+        await this.#writer.json(rpcError(request, -32602, "Invalid Thread auto archive settings"));
+      } else {
+        const settings = this.#threadAutoArchive.configure(parsed.data);
         await this.#writer.json(rpcEnvelope(request, { result: settings }));
       }
       return;
@@ -2479,6 +2533,132 @@ export class AppServerHost {
       return { ...response, result: catalog.list(params) };
     }
     return this.#officialRuntime.request(method, params);
+  }
+
+  async #listAutoArchiveOfficial(
+    cutoffSeconds: number,
+  ): Promise<Array<{ threadId: string; recencyAt: number }>> {
+    const candidates: Array<{ threadId: string; recencyAt: number }> = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    do {
+      const response = await this.#requestOfficial("thread/list", {
+        limit: 100,
+        archived: false,
+        sortKey: "recency_at",
+        sortDirection: "asc",
+        ...(cursor ? { cursor } : {}),
+      });
+      if (isRecord(response.error)) {
+        throw new Error(String(response.error.message ?? "Official Thread list failed"));
+      }
+      const page = isRecord(response.result) ? response.result : null;
+      const data = page && Array.isArray(page.data) ? page.data : null;
+      if (!page || !data) throw new Error("Official Thread list response is invalid");
+      let exhausted = false;
+      for (const entry of data) {
+        if (!isRecord(entry) || typeof entry.id !== "string") continue;
+        const recencyAt = entry.recencyAt ?? entry.updatedAt;
+        if (typeof recencyAt !== "number" || !Number.isSafeInteger(recencyAt)) continue;
+        if (recencyAt >= cutoffSeconds) {
+          exhausted = true;
+          break;
+        }
+        if (isRecord(entry.status) && entry.status.type === "active") continue;
+        candidates.push({ threadId: entry.id, recencyAt });
+      }
+      if (exhausted) break;
+      const next = typeof page.nextCursor === "string" ? page.nextCursor : null;
+      if (next && seenCursors.has(next)) throw new Error("Official Thread list cursor repeated");
+      if (next) seenCursors.add(next);
+      cursor = next;
+    } while (cursor);
+    return candidates;
+  }
+
+  async #listAutoArchiveExternal(
+    cutoffSeconds: number,
+  ): Promise<Array<{ threadId: string; recencyAt: number }>> {
+    return (await this.#repository.list()).flatMap((record) => {
+      if (
+        record.archived ||
+        record.state !== "ready" ||
+        !record.nativeSessionRef ||
+        record.subagent ||
+        record.ephemeral
+      )
+        return [];
+      const parsed = Math.floor(Date.parse(record.updatedAt) / 1_000);
+      const loaded = this.#externalRuntime.get(record.hostThreadId);
+      const recencyAt = Math.max(
+        parsed,
+        loaded
+          ? Math.floor((this.#externalRuntime.idleRelease.lastActivityAt(loaded) ?? 0) / 1_000)
+          : 0,
+      );
+      return recencyAt < cutoffSeconds ? [{ threadId: record.hostThreadId, recencyAt }] : [];
+    });
+  }
+
+  async #canAutoArchiveOfficial(threadId: string, cutoffSeconds: number): Promise<boolean> {
+    if (
+      this.#activeOfficialTurns.has(threadId) ||
+      [...this.#pendingOfficialTurnStarts.values()].includes(threadId)
+    ) {
+      return false;
+    }
+    const response = await this.#requestOfficial("thread/read", {
+      threadId,
+      includeTurns: true,
+    });
+    if (isRecord(response.error)) return false;
+    const result = isRecord(response.result) ? response.result : null;
+    const thread = result && isRecord(result.thread) ? result.thread : null;
+    if (
+      !thread ||
+      thread.id !== threadId ||
+      (isRecord(thread.status) && thread.status.type === "active")
+    ) {
+      return false;
+    }
+    const turns = Array.isArray(thread.turns) ? thread.turns : [];
+    if (turns.some((turn) => isRecord(turn) && turn.status === "inProgress")) return false;
+    const recencyAt = thread.recencyAt ?? thread.updatedAt;
+    return (
+      typeof recencyAt === "number" && Number.isSafeInteger(recencyAt) && recencyAt < cutoffSeconds
+    );
+  }
+
+  async #canAutoArchiveExternal(threadId: string, cutoffSeconds: number): Promise<boolean> {
+    const record = await this.#repository.find(threadId);
+    if (
+      !record ||
+      record.archived ||
+      record.state !== "ready" ||
+      !record.nativeSessionRef ||
+      record.subagent ||
+      record.ephemeral
+    )
+      return false;
+    const loaded = this.#externalRuntime.get(threadId);
+    if (loaded) {
+      if (
+        loaded.running ||
+        loaded.activeTurnId ||
+        loaded.persistenceError ||
+        this.#pendingExternalCommandRequests.has(threadId) ||
+        this.#externalSteering.hasPending(threadId) ||
+        this.#hasRunningSubagents(threadId)
+      )
+        return false;
+    }
+    const recencyAt = Math.max(
+      Math.floor(Date.parse(record.updatedAt) / 1_000),
+      loaded
+        ? Math.floor((this.#externalRuntime.idleRelease.lastActivityAt(loaded) ?? 0) / 1_000)
+        : 0,
+    );
+    return recencyAt < cutoffSeconds;
   }
 
   async #handleSessionRoute(request: JsonRpcRequest): Promise<void> {

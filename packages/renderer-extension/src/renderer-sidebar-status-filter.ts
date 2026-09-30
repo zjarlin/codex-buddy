@@ -12,6 +12,7 @@ const HIDDEN_ATTRIBUTE = "data-codexhost-sidebar-status-hidden";
 const PROJECT_SELECTOR = "#app-shell-sidebar [data-sidebar-project-container-id]";
 const ROW_SELECTOR = `#app-shell-sidebar ${SIDEBAR_THREAD_ROW_SELECTOR}`;
 const STORAGE_KEY = "codexhost.sidebar-status-view";
+type ViewMode = "all" | "active" | "pending";
 const REFRESH_MS = 15_000;
 const MAX_CONCURRENT_READS = 4;
 
@@ -26,12 +27,12 @@ interface RowState {
 }
 
 const style = `
-[${FILTER_ATTRIBUTE}]{display:flex;align-items:center;gap:6px;box-sizing:border-box;min-width:0;padding:6px 10px;color:var(--color-token-text-secondary,currentColor);font:12px/18px system-ui,sans-serif}
+[${FILTER_ATTRIBUTE}]{display:flex;align-items:center;gap:6px;box-sizing:border-box;min-width:0;padding:6px 10px;color:var(--color-token-text-secondary,currentColor);font:12px/18px system-ui,sans-serif;flex-wrap:wrap}
 [${FILTER_ATTRIBUTE}] [role="group"]{display:inline-flex;flex:none;padding:2px;border:1px solid color-mix(in srgb,currentColor 15%,transparent);border-radius:6px}
 [${FILTER_ATTRIBUTE}] button{min-width:0;min-height:24px;padding:2px 7px;border:0;border-radius:4px;background:transparent;color:inherit;font:inherit;cursor:pointer}
 [${FILTER_ATTRIBUTE}] button[aria-pressed="true"]{background:color-mix(in srgb,currentColor 13%,transparent);color:var(--color-token-text-primary,currentColor)}
 [${FILTER_ATTRIBUTE}] button:focus-visible{outline:2px solid #508df2;outline-offset:1px}
-[${FILTER_ATTRIBUTE}] [data-filter-status]{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[${FILTER_ATTRIBUTE}] [data-filter-status]{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 100px}
 [${HIDDEN_ATTRIBUTE}]{display:none!important}
 `;
 
@@ -45,10 +46,12 @@ function nativeThreadId(hostId: string, row: HTMLElement): string | null {
 export function installRendererSidebarStatusFilter(options: {
   getClient(hostId: string): RendererModelClient | null;
   getLocale(): "zh-CN" | "en";
+  hasPending?(hostId: string, threadId: string): boolean;
 }): { refresh(): void; dispose(): void } {
-  let activeOnly = false;
+  let mode: ViewMode = "all";
   try {
-    activeOnly = localStorage.getItem(STORAGE_KEY) === "active";
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved === "active" || saved === "pending") mode = saved;
   } catch {
     // The view remains usable when Desktop storage is unavailable.
   }
@@ -61,11 +64,12 @@ export function installRendererSidebarStatusFilter(options: {
   group.setAttribute("role", "group");
   const allButton = document.createElement("button");
   const activeButton = document.createElement("button");
-  allButton.type = activeButton.type = "button";
+  const pendingButton = document.createElement("button");
+  allButton.type = activeButton.type = pendingButton.type = "button";
   const status = document.createElement("span");
   status.dataset.filterStatus = "";
   status.setAttribute("role", "status");
-  group.append(allButton, activeButton);
+  group.append(allButton, activeButton, pendingButton);
   toolbar.append(group, status);
 
   const states = new Map<HTMLElement, RowState>();
@@ -73,32 +77,37 @@ export function installRendererSidebarStatusFilter(options: {
   let scheduled = false;
   let inFlight = 0;
 
-  const setMode = (onlyActive: boolean): void => {
-    if (activeOnly === onlyActive) return;
-    activeOnly = onlyActive;
+  const setMode = (next: ViewMode): void => {
+    if (mode === next) return;
+    mode = next;
     try {
-      localStorage.setItem(STORAGE_KEY, onlyActive ? "active" : "all");
+      localStorage.setItem(STORAGE_KEY, next);
     } catch {
       // Storage failure does not block this window's view.
     }
     for (const state of states.values()) state.checkedAt = 0;
     schedule();
   };
-  allButton.addEventListener("click", () => setMode(false));
-  activeButton.addEventListener("click", () => setMode(true));
+  allButton.addEventListener("click", () => setMode("all"));
+  activeButton.addEventListener("click", () => setMode("active"));
+  pendingButton.addEventListener("click", () => setMode("pending"));
 
   const renderToolbar = (count: number, pending: number, failed: number): void => {
     const chinese = options.getLocale() === "zh-CN";
     const allLabel = chinese ? "全部" : "All";
     const activeLabel = chinese ? "进行中" : "Active";
+    const pendingLabel = chinese ? "待确认" : "To review";
     if (allButton.textContent !== allLabel) allButton.textContent = allLabel;
     if (activeButton.textContent !== activeLabel) activeButton.textContent = activeLabel;
+    if (pendingButton.textContent !== pendingLabel) pendingButton.textContent = pendingLabel;
     activeButton.title = chinese
       ? "只显示运行中和进行中的会话"
       : "Show only running and in-progress conversations";
-    allButton.setAttribute("aria-pressed", String(!activeOnly));
-    activeButton.setAttribute("aria-pressed", String(activeOnly));
-    const statusLabel = !activeOnly
+    allButton.setAttribute("aria-pressed", String(mode === "all"));
+    activeButton.setAttribute("aria-pressed", String(mode === "active"));
+    pendingButton.setAttribute("aria-pressed", String(mode === "pending"));
+    pendingButton.title = chinese ? "只显示待确认的会话" : "Show only conversations awaiting confirmation";
+    const statusLabel = mode === "all"
       ? ""
       : pending > 0
         ? chinese
@@ -110,11 +119,19 @@ export function installRendererSidebarStatusFilter(options: {
             : "Some statuses unavailable; retrying"
           : count === 0
             ? chinese
-              ? "没有进行中的会话"
-              : "No active conversations"
+              ? mode === "pending"
+                ? "没有待确认的会话"
+                : "没有进行中的会话"
+              : mode === "pending"
+                ? "No conversations awaiting confirmation"
+                : "No active conversations"
             : chinese
-              ? `${count} 个进行中`
-              : `${count} active`;
+              ? mode === "pending"
+                ? `${count} 个待确认`
+                : `${count} 个进行中`
+              : mode === "pending"
+                ? `${count} awaiting confirmation`
+                : `${count} active`;
     if (status.textContent !== statusLabel) status.textContent = statusLabel;
   };
 
@@ -174,6 +191,7 @@ export function installRendererSidebarStatusFilter(options: {
     let count = 0;
     let pending = 0;
     let failed = 0;
+    let pendingCount = 0;
     const now = Date.now();
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
@@ -182,8 +200,8 @@ export function installRendererSidebarStatusFilter(options: {
       let state = states.get(row);
       if (!hostId || !threadId || !client?.readThreadActivity) {
         states.delete(row);
-        row.toggleAttribute(HIDDEN_ATTRIBUTE, activeOnly);
-        if (activeOnly) failed += 1;
+        row.toggleAttribute(HIDDEN_ATTRIBUTE, mode !== "all");
+        if (mode !== "all") failed += 1;
         continue;
       }
       if (
@@ -204,20 +222,24 @@ export function installRendererSidebarStatusFilter(options: {
         states.set(row, state);
       }
       if (
-        activeOnly &&
+        mode === "active" &&
         !state.pending &&
         now - state.checkedAt >= REFRESH_MS &&
         inFlight < MAX_CONCURRENT_READS
       ) {
         read(row, state);
       }
-      row.toggleAttribute(HIDDEN_ATTRIBUTE, activeOnly && state.active !== true);
+      const awaiting = options.hasPending?.(hostId, threadId) ?? false;
+      if (awaiting) pendingCount += 1;
+      const hidden =
+        mode === "active" ? state.active !== true : mode === "pending" ? !awaiting : false;
+      row.toggleAttribute(HIDDEN_ATTRIBUTE, hidden);
       if (state.active) count += 1;
-      if (activeOnly && (state.pending || state.checkedAt === 0)) pending += 1;
-      if (activeOnly && state.failed) failed += 1;
+      if (mode === "active" && (state.pending || state.checkedAt === 0)) pending += 1;
+      if (mode === "active" && state.failed) failed += 1;
     }
-    renderToolbar(count, pending, failed);
-    poll.setActive(activeOnly && rows.size > 0);
+    renderToolbar(mode === "pending" ? pendingCount : count, pending, failed);
+    poll.setActive(mode === "active" && rows.size > 0);
   }
 
   const observer = new MutationObserver((records) => {

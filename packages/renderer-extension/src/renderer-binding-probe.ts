@@ -5,6 +5,8 @@ import { installAutoRouteCards } from "./auto-route-card/index.js";
 import { installRendererGitWorkflowControl } from "./renderer-git-workflow-control.js";
 import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installRendererSidebarUnread } from "./renderer-sidebar-unread.js";
+import { PendingConfirmationsModel } from "./pending-confirmations-state.js";
+import { installRendererPendingConfirmations } from "./renderer-pending-confirmations.js";
 import { installRendererSidebarVisits } from "./renderer-sidebar-visits.js";
 import { installBuddyControl } from "./buddy/control.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
@@ -806,16 +808,46 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const pendingConfirmations = new PendingConfirmationsModel(window.localStorage);
   const sidebarUnread = installRendererSidebarUnread({
     getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    pendingConfirmations,
   });
   const sidebarVisits = installRendererSidebarVisits({
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
+  const pendingConfirmationPanel = installRendererPendingConfirmations({
+    getClient: (hostId) => modelClientForHost(hostId),
+    getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
+    getHostIds: () => {
+      const hostIds = new Set<string>(["local"]);
+      for (const row of document.querySelectorAll<HTMLElement>(
+        `[${SIDEBAR_THREAD_HOST_ID_ATTRIBUTE}]`,
+      )) {
+        const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
+        if (hostId) hostIds.add(hostId);
+      }
+      const activeHostId = activeModelHostId();
+      if (activeHostId) hostIds.add(activeHostId);
+      return [...hostIds];
+    },
+    activeThread: () => {
+      for (const mounted of mountedByComposer.values()) {
+        if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0) continue;
+        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+        const hostId = mounted.hostId ?? activeModelHostId();
+        if (threadId && hostId) return { hostId, threadId };
+      }
+      return null;
+    },
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    model: pendingConfirmations,
+  });
   const sidebarStatusFilter = installRendererSidebarStatusFilter({
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    hasPending: (hostId, threadId) => pendingConfirmations.hasPending(hostId, threadId),
   });
   const projectDashboard = installRendererProjectDashboard({
     getRequest: (hostId) => {
@@ -3493,7 +3525,10 @@ export function installRendererBindingProbe(
       adapterDispose = dispose ?? null;
       applyAdapterAgent = applyAgent ?? null;
       modelControl = nextModelControl ?? null;
+      projectDashboard.refresh();
       sidebarUnread.refresh();
+      pendingConfirmationPanel.refresh();
+      sidebarStatusFilter.refresh();
       gitBranchControl.refreshContext();
       queuedTransfer.refresh();
       try {
@@ -3568,6 +3603,7 @@ export function installRendererBindingProbe(
       turnActionCards.dispose();
       sidebarContinuation.dispose();
       sidebarUnread.dispose();
+      pendingConfirmationPanel.dispose();
       sidebarVisits.dispose();
       sidebarStatusFilter.dispose();
       projectDashboard.dispose();

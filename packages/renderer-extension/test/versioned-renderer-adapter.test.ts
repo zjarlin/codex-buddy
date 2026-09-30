@@ -481,6 +481,13 @@ describe("current Codex Renderer Agent adapter", () => {
               timeoutMinutes: 30,
             },
           );
+          expect(requestTarget.sendRequest).toHaveBeenCalledWith(
+            "codexhost/settings/thread-auto-archive/set",
+            {
+              enabled: false,
+              inactiveDays: 30,
+            },
+          );
           const localClient = adapter.modelControl?.clientForHost?.("local");
           expect(localClient).toBeTruthy();
           // The local target remains discoverable while the remote route is active.
@@ -506,7 +513,7 @@ describe("current Codex Renderer Agent adapter", () => {
             fakeWindow.__codexhostDraftPrewarmPolicyV1 = policy;
             expect(adapter.modelControl?.clientForHost?.("local")).toBe(localClient);
           }
-          expect(requestTarget.sendRequest).toHaveBeenCalledTimes(1);
+          expect(requestTarget.sendRequest).toHaveBeenCalledTimes(2);
           expect(remoteTarget.sendRequest).not.toHaveBeenCalled();
           // Auxiliary lookups must not disable real connection or explicit policy invalidation.
           Object.defineProperty(requestTarget, "requestClient", { value: { ...requestTarget } });

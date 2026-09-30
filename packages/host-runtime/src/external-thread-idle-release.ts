@@ -66,6 +66,11 @@ export class ExternalThreadIdleRelease {
       });
   }
 
+  /** Host-only activity observation used by other runtime policies. */
+  lastActivityAt(thread: ExternalThread): number | undefined {
+    return this.#activity.get(thread)?.lastActivity;
+  }
+
   outputFailed(thread: ExternalThread): void {
     this.touch(thread);
     const state = this.#activity.get(thread);

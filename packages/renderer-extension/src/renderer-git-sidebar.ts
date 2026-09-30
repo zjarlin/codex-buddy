@@ -79,6 +79,7 @@ export const GIT_SIDEBAR_TREE_ATTRIBUTE = "data-codexhost-git-sidebar-tree";
 export const GIT_SIDEBAR_STAGE_ATTRIBUTE = "data-codexhost-git-sidebar-stage";
 export const GIT_SIDEBAR_UNSTAGE_ATTRIBUTE = "data-codexhost-git-sidebar-unstage";
 export const GIT_SIDEBAR_STAGE_ALL_ATTRIBUTE = "data-codexhost-git-sidebar-stage-all";
+export const GIT_SIDEBAR_UNSTAGE_ALL_ATTRIBUTE = "data-codexhost-git-sidebar-unstage-all";
 export const GIT_SIDEBAR_MESSAGE_ATTRIBUTE = "data-codexhost-git-sidebar-message";
 export const GIT_SIDEBAR_MODEL_ATTRIBUTE = "data-codexhost-git-sidebar-model";
 export const GIT_SIDEBAR_GENERATE_ATTRIBUTE = "data-codexhost-git-sidebar-generate";
@@ -379,7 +380,8 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-commit-model select { min-width:0; flex:1; padding:4px 6px; color:inherit; background:var(--surface-primary,transparent); border:1px solid var(--border-default, color-mix(in srgb,currentColor 18%,transparent)); border-radius:2px; font-size:10px; }
     .codexhost-git-commit-model button, .codexhost-git-commit-actions button { min-height:28px; padding:4px 7px; color:inherit; background:transparent; border:1px solid var(--border-default, color-mix(in srgb,currentColor 18%,transparent)); border-radius:2px; cursor:pointer; font-size:10px; }
     .codexhost-git-commit-model button:hover:not(:disabled), .codexhost-git-commit-actions button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 9%,transparent); }
-    .codexhost-git-commit-actions { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
+    .codexhost-git-commit-actions button[data-primary="true"]:hover:not(:disabled) { color:white; background:#1684d6; border-color:#1684d6; }
+    .codexhost-git-commit-actions { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:4px; }
     .codexhost-git-commit-actions button { display:grid; place-items:center; min-width:0; padding:4px; white-space:nowrap; }
     .codexhost-git-commit-actions button:not([data-primary="true"]) { border-color:transparent; }
     .codexhost-git-commit-actions button[data-primary="true"] { grid-column:1 / -1; grid-row:1; color:white; background:#007acc; border-color:#007acc; }
@@ -504,8 +506,14 @@ export function installRendererGitSidebar(options: {
   modelRow.append(model, generate);
   const commitActions = document.createElement("div");
   commitActions.className = "codexhost-git-commit-actions";
-  const stageAll = iconButton(document, "全部暂存", "M12 5v14M5 12h14");
+  const stageAll = iconButton(
+    document,
+    "全部暂存",
+    "M12 3v9m0 0 3.2-3.2M12 12 8.8 8.8M4.5 12.5h3.4l1.2 2.2h5.8l1.2-2.2h3.4v6.8h-15z",
+  );
   stageAll.setAttribute(GIT_SIDEBAR_STAGE_ALL_ATTRIBUTE, "v1");
+  const unstageAll = iconButton(document, "全部取出", "M11 12H3M16 6H3M16 18H3M21 12h-6");
+  unstageAll.setAttribute(GIT_SIDEBAR_UNSTAGE_ALL_ATTRIBUTE, "v1");
   const commit = iconButton(document, "提交", "M20 6 9 17l-5-5");
   commit.setAttribute(GIT_SIDEBAR_COMMIT_ATTRIBUTE, "v1");
   const commitPush = document.createElement("button");
@@ -521,7 +529,7 @@ export function installRendererGitSidebar(options: {
     "M20 5v6h-6M4 19v-6h6M5.6 8a7 7 0 0 1 11.6-2L20 11M4 13l2.8 5A7 7 0 0 0 18.4 16",
   );
   sync.setAttribute(GIT_SIDEBAR_SYNC_ATTRIBUTE, "v1");
-  commitActions.append(stageAll, commit, commitPush, push, sync);
+  commitActions.append(stageAll, unstageAll, commit, commitPush, push, sync);
   const notice = document.createElement("p");
   notice.className = "codexhost-git-notice";
   notice.hidden = true;
@@ -584,6 +592,7 @@ export function installRendererGitSidebar(options: {
   let warmTimer: ReturnType<typeof setTimeout> | undefined;
   refresh.dataset.gitAction = "refresh";
   stageAll.dataset.gitAction = "stage-all";
+  unstageAll.dataset.gitAction = "unstage-all";
   generate.dataset.gitAction = "generate";
   commit.dataset.gitAction = "commit";
   commitPush.dataset.gitAction = "commit-push";
@@ -1249,7 +1258,17 @@ export function installRendererGitSidebar(options: {
     const client = context().client;
     const hasCommittable = current?.changes.some((change) => !change.conflicted) ?? false;
     stageAll.disabled =
-      isBusy() || !client || !(current?.changes.some((change) => !change.conflicted) ?? false);
+      isBusy() ||
+      !client ||
+      !(
+        current?.changes.some(
+          (change) => !change.conflicted && (!change.staged || change.unstaged),
+        ) ?? false
+      );
+    unstageAll.disabled =
+      isBusy() ||
+      !client ||
+      !(current?.changes.some((change) => !change.conflicted && change.staged) ?? false);
     generate.disabled = isBusy() || !client || !current || !modelsLoaded || !model.value;
     commit.disabled = isBusy() || !client || !hasCommittable;
     commitPush.disabled = commit.disabled;
@@ -1633,42 +1652,40 @@ export function installRendererGitSidebar(options: {
     },
     listenerOptions,
   );
-  stageAll.addEventListener(
-    "click",
-    () => {
-      const request = context();
-      if (!hasGitTarget(request) || !request.client || !current || isBusy()) return;
-      const paths = current.changes
-        .filter((change) => !change.conflicted && (!change.staged || change.unstaged))
-        .map((change) => change.path);
-      if (!paths.length) return;
-      generation += 1;
-      beginAction(request, "stage-all");
-      setNotice("");
-      render();
-      void request.client
-        .stageGitPaths({
-          ...gitTargetParams(request),
-          ...(request.repository ? { repository: request.repository } : {}),
-          paths,
-        })
-        .then((status) => {
-          if (request.client && hasGitTarget(request))
-            cache.update(request.client, request, status, request.repository);
-          if (!isCurrentRequest(request)) return;
-          current = status;
-          setNotice("已暂存全部变更。");
-        })
-        .catch((error) => {
-          if (isCurrentRequest(request))
-            setNotice(error instanceof Error ? error.message : String(error));
-        })
-        .finally(() => {
-          finishAction(request);
-        });
-    },
-    listenerOptions,
-  );
+  const updateAllStaged = async (stage: boolean): Promise<void> => {
+    const request = context();
+    if (!hasGitTarget(request) || !request.client || !current || isBusy()) return;
+    const paths = current.changes
+      .filter(
+        (change) =>
+          !change.conflicted && (stage ? !change.staged || change.unstaged : change.staged),
+      )
+      .map((change) => change.path);
+    if (!paths.length) return;
+    generation += 1;
+    beginAction(request, stage ? "stage-all" : "unstage-all");
+    setNotice(stage ? "正在暂存全部变更…" : "正在取出全部已暂存变更…");
+    render();
+    try {
+      const status = await (stage ? request.client.stageGitPaths : request.client.unstageGitPaths)({
+        ...gitTargetParams(request),
+        ...(request.repository ? { repository: request.repository } : {}),
+        paths,
+      });
+      if (request.client && hasGitTarget(request))
+        cache.update(request.client, request, status, request.repository);
+      if (!isCurrentRequest(request)) return;
+      current = status;
+      setNotice(stage ? "已暂存全部变更。" : "已取出全部已暂存变更。");
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      finishAction(request);
+    }
+  };
+  stageAll.addEventListener("click", () => void updateAllStaged(true), listenerOptions);
+  unstageAll.addEventListener("click", () => void updateAllStaged(false), listenerOptions);
   generate.addEventListener(
     "click",
     () => {

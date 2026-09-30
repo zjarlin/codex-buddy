@@ -24,7 +24,7 @@ const SIDEBAR_THREAD_ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
 const REFRESH_MS = 30_000;
 
 const style = `
-  :host{display:block;position:absolute;z-index:20;inset:0;color:var(--text-primary,inherit);background:var(--surface-primary,#fff);pointer-events:auto;font:12px/1.45 system-ui,sans-serif}
+  :host{display:block;position:fixed;z-index:50;color:var(--text-primary,inherit);background:var(--surface-primary,#fff);pointer-events:auto;font:12px/1.45 system-ui,sans-serif}
   :host([hidden]){display:none}
   *{box-sizing:border-box}
   button{color:inherit;font:inherit}
@@ -240,7 +240,7 @@ function mountDashboard(
   options: { onOpenThread(threadId: string): void; onRefresh(): void; onChat(): void },
 ): {
   root: HTMLElement;
-  update(snapshot: ProjectDashboardSnapshot | null, error: unknown): void;
+  update(snapshot: ProjectDashboardSnapshot | null, error: unknown | string): void;
   setBusy(busy: boolean): void;
   dispose(): void;
 } {
@@ -295,7 +295,7 @@ function mountDashboard(
   shadow.append(styles, shell);
 
   let snapshot: ProjectDashboardSnapshot | null = null;
-  let failure: unknown = null;
+  let failure: unknown | string = null;
   let renderedKey = "";
   let disposed = false;
   const render = (): void => {
@@ -305,9 +305,12 @@ function mountDashboard(
     summary.replaceChildren();
     board.replaceChildren();
     if (failure) {
+      const pending = typeof failure === "string";
       const error = document.createElement("div");
-      error.className = "error";
-      error.textContent = `项目态势读取失败：${failure instanceof Error ? failure.message : String(failure)}`;
+      error.className = pending ? "empty" : "error";
+      error.textContent = pending
+        ? String(failure)
+        : `项目态势读取失败：${failure instanceof Error ? failure.message : String(failure)}`;
       board.append(error);
     }
     if (snapshot) {
@@ -337,7 +340,7 @@ function mountDashboard(
         summary.append(metric);
       }
       subtitle.textContent = `更新于 ${formatTime(snapshot.refreshedAt)} · 只汇总结果与文件变更`;
-      if (snapshot.projects.length === 0) {
+      if (snapshot.projects.length === 0 && !failure) {
         const empty = document.createElement("div");
         empty.className = "empty";
         empty.textContent = "没有可展示的项目会话";
@@ -416,10 +419,16 @@ export function installRendererProjectDashboard(options: {
   const syncSurfaceBounds = (): void => {
     if (!surface) return;
     const bounds = surface.getBoundingClientRect();
-    host.style.left = `${bounds.left}px`;
-    host.style.top = `${bounds.top}px`;
-    host.style.width = `${bounds.width}px`;
-    host.style.height = `${bounds.height}px`;
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    const left = Math.max(0, bounds.left);
+    const top = Math.max(0, bounds.top);
+    const width = Math.max(0, Math.min(bounds.width, viewportWidth - left));
+    const height = Math.max(0, Math.min(bounds.height, viewportHeight - top));
+    host.style.left = `${left}px`;
+    host.style.top = `${top}px`;
+    host.style.width = `${width}px`;
+    host.style.height = `${height}px`;
     host.style.right = "auto";
     host.style.bottom = "auto";
   };
@@ -440,15 +449,16 @@ export function installRendererProjectDashboard(options: {
     void Promise.all(
       hostIds.map(async (hostId) => {
         const request = options.getRequest(hostId);
-        if (!request) return { hostId, snapshot: null, error: new Error(`Host ${hostId} 不可用`) };
+        if (!request) return { hostId, snapshot: null, error: null, pending: true };
         try {
           return {
             hostId,
             snapshot: await readProjectDashboard(request),
             error: null,
+            pending: false,
           };
         } catch (error) {
-          return { hostId, snapshot: null, error };
+          return { hostId, snapshot: null, error, pending: false };
         }
       }),
     )
@@ -464,6 +474,7 @@ export function installRendererProjectDashboard(options: {
           })),
         );
         const errors = results.flatMap(({ error }) => (error ? [String(error)] : []));
+        const pending = results.some(({ pending: value }) => value);
         snapshot = {
           projects,
           threads: results.flatMap(({ snapshot: next }) => next?.threads ?? []),
@@ -471,7 +482,7 @@ export function installRendererProjectDashboard(options: {
           refreshedAt: Date.now(),
         };
         failure = null;
-        dashboard?.update(snapshot, null);
+        dashboard?.update(snapshot, pending ? "正在连接 Host…" : null);
       })
       .catch((error) => {
         if (disposed || generation !== requestGeneration) return;

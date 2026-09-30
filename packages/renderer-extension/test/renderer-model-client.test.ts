@@ -602,6 +602,7 @@ describe("Renderer fixed Model request client", () => {
       "setHarnessLaunchSettings",
       "setIdleReleaseSettings",
       "setProjectTabs",
+      "setThreadAutoArchiveSettings",
       "setThreadTerminalSettings",
       "stageGitPaths",
       "startUpdate",

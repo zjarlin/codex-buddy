@@ -6,6 +6,7 @@ import {
 } from "@codexhost/desktop-control/renderer-bindings";
 import { createRendererHostClients } from "./renderer-host-clients.js";
 import { installIdleReleasePreferenceSync } from "./renderer-idle-release-preference.js";
+import { installThreadAutoArchivePreferenceSync } from "./renderer-thread-auto-archive-preference.js";
 import {
   encodeHarnessPluginRoute,
   harnessIdSchema,
@@ -919,11 +920,13 @@ export function installCurrentRendererAdapter(): {
 
   const usageSubscription = createThreadUsageSubscriptionRelay();
   const idleReleaseSync = installIdleReleasePreferenceSync(window);
+  const threadAutoArchiveSync = installThreadAutoArchivePreferenceSync(window);
   const clients = createRendererHostClients(() => window.__codexhostHostRoutingV1);
   const currentRequestRoute = (): RendererHostRoute | null => {
     const route = disposed ? null : (window.__codexhostHostRoutingV1?.forComposer() ?? null);
     usageSubscription.connect(clients.forRoute(route));
     idleReleaseSync.connect(disposed ? null : clients.forHost("local"));
+    threadAutoArchiveSync.connect(disposed ? null : clients.forHost("local"));
     updateStatus(
       route ? "ready" : "installing",
       route ? "ready" : "draft-routing-policy-unavailable",
@@ -1258,6 +1261,7 @@ export function installCurrentRendererAdapter(): {
         () => clients.dispose(),
         () => usageSubscription.dispose(),
         () => idleReleaseSync.dispose(),
+        () => threadAutoArchiveSync.dispose(),
       ];
       selectedPolicies.clear();
       for (const cleanup of cleanups) {

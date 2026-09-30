@@ -61,6 +61,32 @@ describe("AppServerHost idle resource release", () => {
     }
   });
 
+  it("validates Thread auto archive settings locally without forwarding them", async () => {
+    const fixture = createFixture();
+    try {
+      await fixture.ready;
+      writeRequest(fixture.desktopInput, {
+        id: 902,
+        method: "codexhost/settings/thread-auto-archive/set",
+        params: { enabled: true, inactiveDays: 0 },
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 902))).toMatchObject({
+        error: { code: -32602 },
+      });
+      writeRequest(fixture.desktopInput, {
+        id: 903,
+        method: "codexhost/settings/thread-auto-archive/set",
+        params: { enabled: false, inactiveDays: 30 },
+      });
+      expect(await fixture.collector.waitFor((message) => requestId(message, 903))).toMatchObject({
+        result: { enabled: false, inactiveDays: 30 },
+      });
+      expect(fixture.official.stdin.read()).toBeNull();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("silently releases an idle session and resumes its history for another Turn", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     const fixture = createFixture();

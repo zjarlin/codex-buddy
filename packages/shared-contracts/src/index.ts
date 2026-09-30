@@ -58,6 +58,14 @@ export {
   type IdleReleaseSettings,
 } from "./idle-release.js";
 export {
+  THREAD_AUTO_ARCHIVE_SETTINGS_METHOD,
+  THREAD_AUTO_ARCHIVE_DAYS_MAX,
+  THREAD_AUTO_ARCHIVE_DAYS_MIN,
+  DEFAULT_THREAD_AUTO_ARCHIVE_SETTINGS,
+  threadAutoArchiveSettingsSchema,
+  type ThreadAutoArchiveSettings,
+} from "./thread-auto-archive.js";
+export {
   THREAD_TERMINAL_OPEN_METHOD,
   THREAD_TERMINAL_LIST_METHOD,
   threadTerminalDescriptorSchema,

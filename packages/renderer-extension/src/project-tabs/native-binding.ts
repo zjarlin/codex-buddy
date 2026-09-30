@@ -3,6 +3,7 @@ import type { SidebarProject } from "./model.js";
 
 export const PROJECT_ROW_SELECTOR =
   '[role="listitem"][data-sidebar-project-container-id][data-sidebar-project-kind]';
+export const PROJECT_CREATE_SELECTOR = "[data-app-action-sidebar-project-create]";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;

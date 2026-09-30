@@ -1,5 +1,15 @@
+import { readSshTurnActions } from "./ssh-auto-model-routes.js";
+import { TurnActions, type TurnActionContext } from "./turn-actions.js";
+import { actionThreadTurns, actionGitFeatures } from "./turn-action-context.js";
+import type { RegisteredTurnAction } from "./turn-action-registry.js";
+import {
+  SSH_TURN_ACTIONS_METHOD,
+  TURN_ACTIONS_INSPECT_METHOD,
+  TURN_ACTION_EXECUTE_METHOD,
+} from "@codexhost/shared-contracts";
 import { SshGitWorkspaces, type GitWorkspaceServices } from "./ssh-git.js";
 import { GitRepositoryLinks } from "./git-repository-links.js";
+import { listGitRepositoryDirectories } from "./git-repository-directories.js";
 import {
   DOUBAO_OPEN_METHOD,
   doubaoOpenParamsSchema,
@@ -8,9 +18,11 @@ import {
   GIT_REPOSITORIES_METHOD,
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
+  GIT_REPOSITORY_DIRECTORIES_METHOD,
   gitRepositoriesParamsSchema,
   gitWorkflowParamsSchema,
   gitRepositoryLinkParamsSchema,
+  gitRepositoryDirectoriesParamsSchema,
 } from "@codexhost/shared-contracts";
 import {
   ProjectGitWorkflow,
@@ -703,6 +715,8 @@ export class AppServerHost {
   readonly #gitRepositoryLinks: GitRepositoryLinks;
   readonly #sshGit: SshGitWorkspaces;
   readonly #gitWorkflow: ProjectGitWorkflow;
+  readonly #turnActions: TurnActions;
+  readonly #turnActionPlanModes = new Map<string, boolean>();
   readonly #projectSync: ProjectSyncPeer;
   #unregisterDelegationApi: (() => void) | undefined;
   #unsubscribeAccountState: (() => void) | undefined;
@@ -757,6 +771,13 @@ export class AppServerHost {
     });
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
+    this.#turnActions = new TurnActions({
+      environment,
+      privateMode: async () => (await this.#buddy?.privateMode()) ?? false,
+      context: (threadId) => this.#turnActionContext(threadId),
+      start: (threadId, action, argumentText) =>
+        this.#startTurnAction(threadId, action, argumentText),
+    });
     this.#threadTerminalSettings = new ThreadTerminalSettingsStore(environment);
     this.#projectTabsSettings = new ProjectTabsSettingsStore(environment);
     this.#projectSync = new ProjectSyncPeer(environment);
@@ -1249,6 +1270,41 @@ export class AppServerHost {
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
     if (this.#closeRequested) return;
+    if (
+      (request.method === "turn/start" || request.method === "turn/steer") &&
+      isRecord(request.params) &&
+      typeof request.params.threadId === "string" &&
+      isRecord(request.params.collaborationMode)
+    ) {
+      this.#turnActionPlanModes.set(
+        request.params.threadId,
+        request.params.collaborationMode.mode === "plan",
+      );
+    }
+    if (
+      request.method === TURN_ACTIONS_INSPECT_METHOD ||
+      request.method === TURN_ACTION_EXECUTE_METHOD
+    ) {
+      this.#dispatchDesktopRequest(
+        async () => {
+          try {
+            const result =
+              request.method === TURN_ACTIONS_INSPECT_METHOD
+                ? await this.#turnActions.inspect(request.params)
+                : await this.#turnActions.execute(request.params);
+            await this.#writer.json(
+              rpcEnvelope(request, { result: jsonValueSchema.parse(result) }),
+            );
+          } catch (error) {
+            await this.#writer.json(rpcError(request, -32090, errorMessage(error)));
+          }
+        },
+        isRecord(request.params) && typeof request.params.threadId === "string"
+          ? request.params.threadId
+          : undefined,
+      );
+      return;
+    }
     if (request.method === BUDDY_INTERRUPTED_METHOD || request.method === BUDDY_CONTINUE_METHOD) {
       try {
         if (request.method === BUDDY_CONTINUE_METHOD) {
@@ -1291,6 +1347,20 @@ export class AppServerHost {
       } catch (error) {
         await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
       }
+      return;
+    }
+    if (request.method === SSH_TURN_ACTIONS_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const result = await readSshTurnActions({
+            params: request.params,
+            environment: this.#options.environment ?? process.env,
+          });
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32090, errorMessage(error)));
+        }
+      });
       return;
     }
     if (request.method === SSH_AUTO_MODEL_ROUTES_METHOD) {
@@ -1503,6 +1573,7 @@ export class AppServerHost {
       request.method === GIT_REPOSITORIES_METHOD ||
       request.method === GIT_REPOSITORY_LINK_METHOD ||
       request.method === GIT_REPOSITORY_UNLINK_METHOD ||
+      request.method === GIT_REPOSITORY_DIRECTORIES_METHOD ||
       request.method === GIT_STATUS_METHOD ||
       request.method === GIT_DIFF_METHOD ||
       request.method === GIT_CONTENT_METHOD ||
@@ -2453,8 +2524,13 @@ export class AppServerHost {
             ? "interrupted"
             : "completed";
       if (turn && typeof turn.id === "string") {
-        void this.#gitWorkflow
-          .completed(params.threadId, turn.id, status)
+        const threadId = params.threadId;
+        const turnId = turn.id;
+        void this.#turnActions
+          .completed(threadId, turnId, status)
+          .then((suppressAutoPush) =>
+            suppressAutoPush ? undefined : this.#gitWorkflow.completed(threadId, turnId, status),
+          )
           .catch((error) => this.#diagnose(error));
       }
       this.#signalActiveWorkChanged();
@@ -3100,6 +3176,132 @@ export class AppServerHost {
     return [...active];
   }
 
+  async #turnActionContext(threadId: string): Promise<TurnActionContext> {
+    const location = await this.#locateExternalThread(threadId);
+    if (location.kind === "error") throw new Error(location.error.message);
+    const privateMode = (await this.#buddy?.privateMode()) ?? false;
+    let context: TurnActionContext;
+    let cwd: string;
+    if (location.kind === "external") {
+      await this.#waitForPlugins();
+      const loaded = this.#externalRuntime.get(threadId);
+      const adapter = this.#externalAdapters.get(location.record.harnessId);
+      if (!adapter) throw new Error("当前 Harness 插件不可用");
+      cwd = loaded?.cwd ?? location.record.cwd;
+      const live = loaded ? await this.#inspectLoadedCommands(loaded) : null;
+      context = {
+        threadId,
+        harnessId: location.record.harnessId,
+        turns: loaded ? actionThreadTurns({ turns: this.#externalHistoryTurns(loaded) }) : [],
+        busy: Boolean(loaded?.running || this.#pendingExternalCommandRequests.has(threadId)),
+        private: privateMode,
+        planMode: this.#turnActionPlanModes.get(threadId) ?? false,
+        git: false,
+        features: actionGitFeatures([]),
+        commands: loaded?.session.commands
+          ? (live ?? adapter.commandCatalog ?? { commands: [] })
+          : { commands: [] },
+        ...(adapter.actionCatalog ? { contributions: adapter.actionCatalog } : {}),
+      };
+    } else {
+      const response = await this.#requestOfficial("thread/read", { threadId, includeTurns: true });
+      const thread =
+        isRecord(response.result) && isRecord(response.result.thread)
+          ? response.result.thread
+          : null;
+      if (!thread || thread.id !== threadId || typeof thread.cwd !== "string")
+        throw new Error("无法确认动作所属聊天");
+      cwd = thread.cwd;
+      const turns = actionThreadTurns(thread);
+      context = {
+        threadId,
+        harnessId: "codex",
+        turns,
+        ...(typeof thread.modelProvider === "string" ? { provider: thread.modelProvider } : {}),
+        busy:
+          this.#activeOfficialTurns.has(threadId) ||
+          this.#pendingOfficialDelegationThreads.has(threadId) ||
+          (isRecord(thread.status) && thread.status.type === "active") ||
+          turns.at(-1)?.status === "inProgress",
+        private: privateMode,
+        planMode:
+          this.#turnActionPlanModes.get(threadId) ??
+          (isRecord(thread.collaborationMode) && thread.collaborationMode.mode === "plan"),
+        git: false,
+        features: actionGitFeatures([]),
+        commands: { commands: [] },
+      };
+    }
+    if (
+      !privateMode &&
+      (await this.#gitWorkspace.root(cwd).catch((error: unknown) => {
+        if (
+          error instanceof GitWorkspaceError &&
+          /not a git repository|不是 Git 仓库/u.test(error.message)
+        )
+          return null;
+        throw error;
+      }))
+    ) {
+      const repositories = await readProjectGitRepositories(
+        cwd,
+        this.#gitRepositoryLinks,
+        this.#gitWorkspace,
+      );
+      context.git = repositories.length > 0;
+      context.features = actionGitFeatures(repositories.map(({ status }) => status));
+    }
+    return context;
+  }
+
+  async #startTurnAction(
+    threadId: string,
+    action: RegisteredTurnAction,
+    argumentText?: string,
+  ): Promise<string | null> {
+    const { target } = action;
+    if (target.kind === "workflow") {
+      const result = await this.#gitWorkflow.run(threadId, { waitForIdle: false });
+      if (result.phase === "skipped") return null;
+      if (!result.turnId || result.phase === "failed") throw new Error(result.message);
+      return result.turnId;
+    }
+    const resolution = await this.#resolveExternalThread(threadId);
+    if (resolution.kind === "error") throw new Error(resolution.error.message);
+    if (target.kind === "command") {
+      if (resolution.kind !== "external" || resolution.thread.running)
+        throw new Error("原生命令不可用或聊天忙碌");
+      const commands = resolution.thread.session.commands;
+      const catalog = commands && (await commands.list());
+      if (!catalog?.ok || !catalog.value.commands.some(({ id }) => id === target.commandId))
+        throw new Error("原生命令已变化");
+      const started = await this.#beginExternalCommand(
+        resolution.thread,
+        target.commandId,
+        argumentText ? { text: argumentText } : undefined,
+      );
+      started.gate.resolve();
+      return started.turnId;
+    }
+    let prompt = argumentText ? `${target.prompt}\n用户参数：\n${argumentText}` : target.prompt;
+    if (action.descriptor.actionId === "git.commit") {
+      await this.#gitWorkflow.skipAutomatic(threadId);
+      const cwd = await this.#gitWorkspaceForThread(threadId);
+      const repositories = await readProjectGitRepositories(
+        cwd,
+        this.#gitRepositoryLinks,
+        this.#gitWorkspace,
+      );
+      prompt += `\n本回合仓库清单（路径仅作为数据）：\n${JSON.stringify(repositories.map(({ kind, status }) => ({ kind, path: status.workspace, branch: status.branch })))}`;
+    }
+    if (resolution.kind === "external") {
+      const turnId = randomUUID();
+      await this.#startDelegatedExternalTurn(resolution.thread, prompt, turnId);
+      return turnId;
+    }
+    return (await this.#sendOfficialDelegationThread({ threadId, message: prompt })).turnId;
+  }
+
   async #startProjectGitWorkflow(
     threadId: string,
     cwd: string,
@@ -3129,6 +3331,13 @@ export class AppServerHost {
     if (input.threadId) return this.#gitWorkspaceForThread(input.threadId);
     if (!input.cwd || !path.isAbsolute(input.cwd)) {
       throw new GitWorkspaceError("请输入当前 Host 上项目的绝对路径。");
+    }
+    return input.cwd;
+  }
+
+  async #remoteGitProjectWorkspace(input: GitWorkspaceTarget): Promise<string> {
+    if (!input.cwd || !path.posix.isAbsolute(input.cwd)) {
+      throw new GitWorkspaceError("SSH 项目必须使用远端绝对路径。");
     }
     return input.cwd;
   }
@@ -3410,19 +3619,35 @@ export class AppServerHost {
       if (!path.posix.isAbsolute(input.params.cwd))
         throw new GitWorkspaceError("SSH 项目必须使用远端绝对路径。");
       const services = await this.#sshGit.forHost(input.hostId);
-      // 原生 SSH 的 Git 能独立工作，AI 消息仍由远端配置的服务提供，不能改用本机账号。
+      const resolveWorkspace = async (
+        params: GitWorkspaceTarget & { repository?: string | undefined },
+      ) => services.links.resolve(await this.#remoteGitProjectWorkspace(params), params.repository);
       if (input.method === GIT_MESSAGE_MODEL_METHOD) {
-        await this.#writer.json(
-          rpcEnvelope(request, { result: { models: [], defaultModel: null } }),
-        );
+        const params = gitWorkspaceParamsSchema.safeParse(input.params);
+        if (!params.success) throw new GitWorkspaceError("Git 工作区参数无效。");
+        await resolveWorkspace(params.data);
+        await this.#writer.json(rpcEnvelope(request, { result: await services.messageModels() }));
         return;
       }
       if (input.method === GIT_MESSAGE_GENERATE_METHOD) {
-        throw new GitWorkspaceError("此 SSH 连接尚未配置 AI 提交消息服务，请手动填写提交消息。");
+        const params = gitMessageGenerateParamsSchema.safeParse(input.params);
+        if (!params.success) throw new GitWorkspaceError("生成提交消息参数无效。");
+        const cwd = await resolveWorkspace(params.data);
+        await this.#writer.json(
+          rpcEnvelope(request, {
+            result: await services.generateMessage({
+              cwd,
+              model: params.data.model,
+              paths: params.data.paths,
+            }),
+          }),
+        );
+        return;
       }
       await this.#handleGitRequest(
         { id: request.id, method: input.method, params: jsonValueSchema.parse(input.params) },
         services,
+        true,
       );
     } catch (error) {
       await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 20_000)));
@@ -3432,27 +3657,35 @@ export class AppServerHost {
   async #handleGitRequest(
     request: JsonRpcRequest,
     services: GitWorkspaceServices = { git: this.#gitWorkspace, links: this.#gitRepositoryLinks },
+    remote = false,
   ): Promise<void> {
     const { git, links } = services;
+    const projectWorkspace = (input: GitWorkspaceTarget) =>
+      remote ? this.#remoteGitProjectWorkspace(input) : this.#gitProjectWorkspace(input);
     const resolveWorkspace = async (
       input: GitWorkspaceTarget & { repository?: string | undefined },
-    ) => links.resolve(await this.#gitProjectWorkspace(input), input.repository);
+    ) => links.resolve(await projectWorkspace(input), input.repository);
     try {
       if (
         [
           GIT_REPOSITORIES_METHOD,
           GIT_REPOSITORY_LINK_METHOD,
           GIT_REPOSITORY_UNLINK_METHOD,
+          GIT_REPOSITORY_DIRECTORIES_METHOD,
         ].includes(request.method)
       ) {
         let result;
         if (request.method === GIT_REPOSITORIES_METHOD) {
           const params = gitRepositoriesParamsSchema.parse(request.params);
-          const cwd = await this.#gitProjectWorkspace(params);
+          const cwd = await projectWorkspace(params);
           result = await links.list(cwd);
+        } else if (request.method === GIT_REPOSITORY_DIRECTORIES_METHOD) {
+          const params = gitRepositoryDirectoriesParamsSchema.parse(request.params);
+          const cwd = await projectWorkspace(params);
+          result = await listGitRepositoryDirectories({ ...params, cwd }, { git, links, cwd });
         } else {
           const params = gitRepositoryLinkParamsSchema.parse(request.params);
-          const cwd = await this.#gitProjectWorkspace(params);
+          const cwd = await projectWorkspace(params);
           result =
             request.method === GIT_REPOSITORY_LINK_METHOD
               ? await links.link(cwd, params.repository)
@@ -5342,11 +5575,15 @@ export class AppServerHost {
       thread.activeTurnId = null;
       thread.projectedTurns.delete(event.turnId);
       thread.responseGates.delete(event.turnId);
-      if (!ephemeralTurn) {
-        void this.#gitWorkflow
-          .completed(thread.id, event.turnId, String(result.completedTurn.status))
-          .catch((error) => this.#diagnose(error));
-      }
+      const actionStatus = String(result.completedTurn.status);
+      void this.#turnActions
+        .completed(thread.id, event.turnId, actionStatus)
+        .then((suppressAutoPush) =>
+          ephemeralTurn || suppressAutoPush
+            ? undefined
+            : this.#gitWorkflow.completed(thread.id, event.turnId, actionStatus),
+        )
+        .catch((error) => this.#diagnose(error));
       this.#signalActiveWorkChanged();
       const delegation = await this.#repository.getDelegationByChild(thread.record.hostThreadId);
       if (delegation) {

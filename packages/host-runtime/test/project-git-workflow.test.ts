@@ -84,6 +84,33 @@ afterEach(() => {
 });
 
 describe("Project Git workflow", () => {
+  it("does not queue a turn action or attach it to another running workflow", async () => {
+    const f = fixture();
+    f.active.add("b");
+    expect(await f.workflow.run("a", { waitForIdle: false })).toMatchObject({
+      phase: "failed",
+      turnId: null,
+    });
+    f.active.clear();
+    f.workflow.activityChanged();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.start).not.toHaveBeenCalled();
+    await f.workflow.run("b");
+    await expect(f.workflow.run("a", { waitForIdle: false })).rejects.toThrow("正在执行");
+    expect(f.start).toHaveBeenCalledOnce();
+    f.workflow.close();
+  });
+  it("cancels a pending automatic push for commit-only and rejects an already running workflow", async () => {
+    const f = fixture();
+    await f.workflow.completed("a", "source-turn", "completed");
+    await f.workflow.skipAutomatic("a");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.start).not.toHaveBeenCalled();
+    await f.workflow.run("a");
+    expect(f.start).toHaveBeenCalledOnce();
+    await expect(f.workflow.skipAutomatic("a")).rejects.toThrow("正在执行");
+    f.workflow.close();
+  });
   it("waits for every task in the project, isolates other projects and ignores its own completion", async () => {
     const f = fixture();
     f.active.add("b");

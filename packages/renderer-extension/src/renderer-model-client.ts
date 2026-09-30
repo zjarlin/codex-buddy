@@ -1,4 +1,17 @@
 import {
+  TURN_ACTIONS_INSPECT_METHOD,
+  TURN_ACTION_EXECUTE_METHOD,
+  nativeGitWorkflowPrompt,
+  turnActionsSnapshotSchema,
+  turnActionInvocationSchema,
+  turnActionsInspectParamsSchema,
+  turnActionExecuteParamsSchema,
+  type TurnActionsInspectParams,
+  type TurnActionsSnapshot,
+  type TurnActionExecuteParams,
+  type TurnActionInvocation,
+} from "@codexhost/shared-contracts";
+import {
   AUTO_MODEL_ROUTES_METHOD,
   autoModelRoutesParamsSchema,
   autoModelRoutesResultSchema,
@@ -9,7 +22,10 @@ import {
   GIT_REPOSITORIES_METHOD,
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
+  GIT_REPOSITORY_DIRECTORIES_METHOD,
   gitRepositoriesParamsSchema,
+  gitRepositoryDirectoriesParamsSchema,
+  gitRepositoryDirectoriesSchema,
   gitWorkflowParamsSchema,
   type GitWorkflowParams,
   gitRepositoryLinkParamsSchema,
@@ -17,6 +33,8 @@ import {
   type GitRepositoriesParams,
   type GitRepositoryLinkParams,
   type GitRepositories,
+  type GitRepositoryDirectoriesParams,
+  type GitRepositoryDirectories,
 } from "@codexhost/shared-contracts";
 import {
   PROJECT_SYNC_INSPECT_METHOD,
@@ -334,13 +352,6 @@ const THREAD_USAGE_REFRESH_METHODS = [
   TURN_COMPLETED_METHOD,
 ] as const;
 
-const NATIVE_GIT_WORKFLOW_PROMPT = [
-  "处理当前项目的 Git 提交和推送。",
-  "先确认当前工作区、分支和远程，只提交用户授权的改动。",
-  "有未提交改动时生成简洁的 Conventional Commit 消息并提交，然后推送当前分支；没有改动但有未推送提交时只推送；已经同步时不要创建空提交。",
-  "遇到 non-fast-forward 时先拉取并用 merge 同步，不要强制推送；遇到冲突、权限或其他错误时停止并报告真实结果。",
-].join("\n");
-
 const NATIVE_THREAD_READ_METHOD = "thread/read";
 const NATIVE_TURN_START_METHOD = "turn/start";
 
@@ -423,10 +434,15 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   bindProjectSync?(input: ProjectSyncBindParams): Promise<ProjectSyncSnapshot>;
   cloneProjectSync?(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot>;
   listGitRepositories?(input: GitRepositoriesParams): Promise<GitRepositories>;
+  listGitRepositoryDirectories?(
+    input: GitRepositoryDirectoriesParams,
+  ): Promise<GitRepositoryDirectories>;
   linkGitRepository?(input: GitRepositoryLinkParams): Promise<GitRepositories>;
   unlinkGitRepository?(input: GitRepositoryLinkParams): Promise<GitRepositories>;
   inspectGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
   runGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
+  inspectTurnActions?(input: TurnActionsInspectParams): Promise<TurnActionsSnapshot>;
+  executeTurnAction?(input: TurnActionExecuteParams): Promise<TurnActionInvocation>;
   inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
   inspectGitContent?(input: GitContentParams): Promise<GitContentResult>;
@@ -639,7 +655,7 @@ export function createRendererModelClient(
   const runNativeGitWorkflow = async (input: GitWorkflowParams): Promise<GitWorkflowSnapshot> => {
     const response = await manager.sendRequest(NATIVE_TURN_START_METHOD, {
       threadId: input.threadId,
-      input: [{ type: "text", text: NATIVE_GIT_WORKFLOW_PROMPT }],
+      input: [{ type: "text", text: nativeGitWorkflowPrompt }],
     });
     const turn = isRecord(response) && isRecord(response.turn) ? response.turn : null;
     const turnId = typeof turn?.id === "string" && turn.id.trim() ? turn.id : null;
@@ -815,6 +831,16 @@ export function createRendererModelClient(
         ),
       );
     },
+    async listGitRepositoryDirectories(
+      input: GitRepositoryDirectoriesParams,
+    ): Promise<GitRepositoryDirectories> {
+      return gitRepositoryDirectoriesSchema.parse(
+        await manager.sendRequest(
+          GIT_REPOSITORY_DIRECTORIES_METHOD,
+          gitRepositoryDirectoriesParamsSchema.parse(input),
+        ),
+      );
+    },
     async linkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories> {
       return gitRepositoriesSchema.parse(
         await manager.sendRequest(
@@ -828,6 +854,22 @@ export function createRendererModelClient(
         await manager.sendRequest(
           GIT_REPOSITORY_UNLINK_METHOD,
           gitRepositoryLinkParamsSchema.parse(input),
+        ),
+      );
+    },
+    async inspectTurnActions(input: TurnActionsInspectParams): Promise<TurnActionsSnapshot> {
+      return turnActionsSnapshotSchema.parse(
+        await manager.sendRequest(
+          TURN_ACTIONS_INSPECT_METHOD,
+          turnActionsInspectParamsSchema.parse(input),
+        ),
+      );
+    },
+    async executeTurnAction(input: TurnActionExecuteParams): Promise<TurnActionInvocation> {
+      return turnActionInvocationSchema.parse(
+        await manager.sendRequest(
+          TURN_ACTION_EXECUTE_METHOD,
+          turnActionExecuteParamsSchema.parse(input),
         ),
       );
     },

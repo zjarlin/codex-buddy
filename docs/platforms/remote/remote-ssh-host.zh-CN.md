@@ -55,7 +55,7 @@ codexhost remote uninstall  # 卸载，保留 Thread 映射数据
 
 模型目录和探测、Auto Router、自动会话推荐、中断会话恢复、Git 与文件操作、会话导入及已加载会话列表使用当前 SSH Host。远端 Provider、System One 和 Harness 的配置与登录留在远端；不会用本机凭据代替。会话导入后及打开已有推荐会话时保留原 Host，切换连接后不会把旧结果提交到另一台机器。
 
-基础 Git 操作也支持原生 SSH 服务：远端明确不提供 Git RPC 时，本机 Buddy Host 使用 Desktop 已保存的 SSH 连接，在远端执行 Git。状态、暂存／取消暂存、手动提交、推送、同步和子模块无需远端安装 codexhost。Git 凭据和文件仍在远端；该通道的关联仓库记录按连接保存在本机。AI 提交消息生成仍需远端服务。连接或操作失败不会换通道再次执行。详见 [Git 工作区](../../product/git-workspace.md)。
+基础 Git 操作也支持原生 SSH 服务：远端明确不提供 Git RPC 时，本机 Buddy Host 使用 Desktop 已保存的 SSH 连接，在远端执行 Git。状态、暂存／取消暂存、手动提交、推送、同步、子模块、关联仓库目录浏览和 AI 提交消息生成都无需远端安装 codexhost；目录选择返回的是该 SSH 主机上的路径。AI Worker 在远端读取 Codex 配置和认证、调用远端 Provider 并读取远端 Git diff；凭据、文件和上游错误详情不离开远端。该通道的关联仓库记录按连接保存在本机。连接或操作失败不会换通道再次执行。详见 [Git 工作区](../../product/git-workspace.md)。
 
 官方 Codex 会话菜单的“从终端打开”在 Desktop 所在机器打开所选终端，使用 Desktop 已保存的 SSH 连接，再以远端工作目录、Codex 可执行文件和 CODEX_HOME 执行 `codex resume`。远端无需图形终端；本机需有 SSH 客户端。“在 VS Code 中打开”在本机使用 Remote SSH 打开远端目录；需要 VS Code Remote SSH 扩展。单独指定密钥文件的连接应先配置 SSH 别名，确保 VS Code 使用同一密钥。
 

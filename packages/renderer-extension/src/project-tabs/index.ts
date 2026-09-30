@@ -6,18 +6,26 @@ import { projectTabsMessages } from "./messages.js";
 import {
   defaultProjectTabs,
   parseProjectTabs,
+  pendingProjectAssignment,
   PROJECT_TABS_STORAGE_KEY,
+  projectAssignment,
   projectKey,
   projectTab,
   withProjectTabs,
 } from "./model.js";
-import { PROJECT_ROW_SELECTOR, projectMenu, rowProject } from "./native-binding.js";
+import {
+  PROJECT_CREATE_SELECTOR,
+  PROJECT_ROW_SELECTOR,
+  projectMenu,
+  rowProject,
+} from "./native-binding.js";
 import { createRecentSectionCollapse } from "./recent-section.js";
 import { projectTabsStyle } from "./styles.js";
 
 const HIDDEN = "data-codexhost-project-tab-hidden";
 const MOVE = "data-codexhost-project-tab-move";
 const MENU_ITEMS = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]';
+const CREATE_INTENT_TTL_MS = 2 * 60 * 1000;
 
 interface ProjectTabsPersistenceClient {
   getProjectTabs?(): Promise<ProjectTabsState>;
@@ -39,6 +47,8 @@ export function installProjectTabs(options: {
   let localReadFailure: unknown = null;
   let hasLocalConfig = false;
   let revision = 0;
+  const pendingCreate = pendingProjectAssignment(CREATE_INTENT_TTL_MS);
+  const knownProjectKeys = new Set<string>();
   const read = (): void => {
     try {
       const raw = window.localStorage.getItem(PROJECT_TABS_STORAGE_KEY);
@@ -142,6 +152,17 @@ export function installProjectTabs(options: {
   };
   const select = (selected: string | null): void => {
     void persist({ ...config, selected }).catch(() => undefined);
+  };
+  const onProjectCreateClick = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest(PROJECT_CREATE_SELECTOR)) {
+      return;
+    }
+    pendingCreate.ensure(
+      config.selected && config.tabs.some((tab) => tab.id === config.selected)
+        ? config.selected
+        : null,
+    );
   };
   const move = (anchor: HTMLElement): void => {
     const target = projectMenu(anchor);
@@ -283,6 +304,21 @@ export function installProjectTabs(options: {
       })();
     }
     const rows = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)];
+    const rowProjects = rows.map((row) => ({ row, project: rowProject(row) }));
+    const created = pendingCreate.consume(
+      rowProjects.flatMap(({ project }) =>
+        project && !knownProjectKeys.has(projectKey(project)) ? [project] : [],
+      ),
+    );
+    if (created) {
+      const next = projectAssignment(config, created.tab, created.project);
+      if (next) void persist(next).catch(() => undefined);
+    }
+    for (const { project } of rowProjects) {
+      if (project) {
+        knownProjectKeys.add(projectKey(project));
+      }
+    }
     const firstRow = rows[0];
     if (!bar.isConnected && firstRow) {
       // 放在所有原生项目行的公共容器前端，保持原有状态筛选与分区结构。
@@ -339,8 +375,7 @@ export function installProjectTabs(options: {
       }
     }
     let matched = 0;
-    for (const row of rows) {
-      const project = rowProject(row);
+    for (const { row, project } of rowProjects) {
       const hidden = project !== null && projectTab(config, project) !== config.selected;
       if (hidden) {
         if (!row.hasAttribute(HIDDEN)) {
@@ -366,6 +401,9 @@ export function installProjectTabs(options: {
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape" && pendingCreate.current()) {
+      pendingCreate.clear();
+    }
     const target = event.target instanceof Element ? event.target : null;
     const menu = target?.closest<HTMLElement>('[role="menu"]');
     const entry = menu ? menus.get(menu) : null;
@@ -441,6 +479,7 @@ export function installProjectTabs(options: {
     ],
   });
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("click", onProjectCreateClick, true);
   window.addEventListener("storage", onStorage);
   refresh();
   return {
@@ -449,6 +488,7 @@ export function installProjectTabs(options: {
       disposed = true;
       observer.disconnect();
       document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("click", onProjectCreateClick, true);
       window.removeEventListener("storage", onStorage);
       dialog?.close();
       for (const row of hiddenRows) {

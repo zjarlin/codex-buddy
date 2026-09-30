@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -100,6 +100,7 @@ export interface GitWorkspaceRuntime {
   paths: typeof path;
   realpath(directory: string): Promise<string>;
   exists(target: string): Promise<boolean>;
+  listDirectories?(directory: string): Promise<readonly string[]>;
   files: GitContentFileSystem;
   nullDevice: string;
 }
@@ -441,6 +442,27 @@ export class GitWorkspace {
     return this.runtime
       ? this.runtime.run(cwd, arguments_)
       : runGit(cwd, arguments_, this.environment);
+  }
+
+  async realpath(directory: string): Promise<string> {
+    return (this.runtime?.realpath ?? realpath)(directory);
+  }
+
+  async listDirectories(directory: string): Promise<readonly string[]> {
+    if (this.runtime?.listDirectories) return this.runtime.listDirectories(directory);
+    const entries = await readdir(directory, { withFileTypes: true });
+    const directories = await Promise.all(
+      entries.map(async (entry) => {
+        if (entry.isDirectory()) return entry.name;
+        if (!entry.isSymbolicLink()) return null;
+        try {
+          return (await stat(path.join(directory, entry.name))).isDirectory() ? entry.name : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return directories.filter((name): name is string => name !== null);
   }
 
   async status(cwd: string): Promise<GitWorkspaceStatus> {
@@ -810,7 +832,7 @@ export class GitWorkspace {
   async messageModels(environment: NodeJS.ProcessEnv): Promise<GitMessageModels> {
     return this.#serial(async () => {
       const home = path.resolve(
-        environment.CODEX_HOME ?? path.join(process.env.HOME ?? "", ".codex"),
+        environment.CODEX_HOME ?? path.join(environment.HOME ?? process.env.HOME ?? "", ".codex"),
       );
       let connection;
       try {
@@ -883,7 +905,8 @@ export class GitWorkspace {
       const model = input.model.trim();
       if (!model) throw new GitWorkspaceError("请选择模型后再生成提交消息。");
       const home = path.resolve(
-        input.environment.CODEX_HOME ?? path.join(process.env.HOME ?? "", ".codex"),
+        input.environment.CODEX_HOME ??
+          path.join(input.environment.HOME ?? process.env.HOME ?? "", ".codex"),
       );
       const connection = await readConnection(home, input.environment);
       const paths = (input.paths ?? []).map((pathValue) => gitFilePathSchema.parse(pathValue));

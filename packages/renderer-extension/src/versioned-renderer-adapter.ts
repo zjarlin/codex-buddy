@@ -947,6 +947,15 @@ export function installCurrentRendererAdapter(): {
       if (!client.listGitRepositories) throw new Error("Git repository links are unavailable");
       return client.listGitRepositories(input);
     },
+    listGitRepositoryDirectories: (
+      input: Parameters<NonNullable<RendererModelClient["listGitRepositoryDirectories"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.listGitRepositoryDirectories) {
+        throw new Error("Git repository directory browsing is unavailable");
+      }
+      return client.listGitRepositoryDirectories(input);
+    },
     linkGitRepository: (
       input: Parameters<NonNullable<RendererModelClient["linkGitRepository"]>>[0],
     ) => {

@@ -166,3 +166,24 @@ The public `/dsh-goal` invocation avoids Codex Desktop's built-in `/goal` comman
 - Shared contracts remain Harness-neutral.
 - Renderer code must not parse or execute Harness `SKILL.md` files.
 - UI DOM selectors are compatibility details, not command contract requirements.
+
+## Turn actions
+
+`HarnessAdapter.actionCatalog?: readonly HarnessActionDefinition[]` is an additive plugin contract. Old plugins need no changes. The Host projects executable `session.commands` and the current command catalog into turn actions; an explicit contribution can supply a clearer label or a registered prompt:
+
+```ts
+readonly actionCatalog = [{
+  actionId: "pi.compact",
+  version: "1",
+  label: "整理上下文",
+  description: "使用当前会话的原生 compact",
+  argumentMode: "none",
+  target: { kind: "command", commandId: "pi.compact" },
+}] satisfies readonly HarnessActionDefinition[];
+```
+
+The command ID must be the Adapter's actual catalog ID. Action IDs must use the owning Harness ID prefix. `target` is either `{ kind: "command", commandId }` or `{ kind: "prompt", prompt }`; plugins cannot supply arbitrary Host workflow executors. The effective version hashes the complete definition so a changed implementation invalidates old buttons. Text arguments remain optional, bounded plain text. Command argument modes must match the native catalog.
+
+Renderer receives descriptors, never prompt bodies or executor code. `codexhost/thread/actions/inspect` reads the current directory and sideband recommendation; `codexhost/thread/action/execute` accepts threadId, sourceTurnId, actionId, version, invocationId and optional argumentText. Host checks ownership, current capability and busy state again after durable admission, then delegates through the existing native command, prompt, or Git workflow path. Native command completion remains a Harness event, including ephemeral compact Turns. A completed request to the gateway only records a recommendation.
+
+Receipts are Host-local durable metadata. Duplicate invocations return the same receipt, ambiguous starts remain unknown, and recovery reads actual Turn status without replaying commands. Gateway recommendations reference registered IDs and versions; they never authorize execution. Plugin install/uninstall within a running Session is outside this contract.

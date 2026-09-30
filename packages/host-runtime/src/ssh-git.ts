@@ -4,12 +4,14 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { desktopSshConnection, type DesktopSshConnection } from "./desktop-ssh-connection.js";
 import { GitRepositoryLinks } from "./git-repository-links.js";
+import { SshGitMessageService } from "./ssh-git-message.js";
 import {
   GitWorkspace,
   GitWorkspaceError,
   type GitCommandResult,
   type GitWorkspaceRuntime,
 } from "./git-workspace.js";
+import type { GitGeneratedMessage, GitMessageModels } from "@codexhost/shared-contracts";
 
 const execFileAsync = promisify(execFile);
 type Execute = (
@@ -74,6 +76,13 @@ export function createSshGitRuntime(
       // pwd 只移除自身的结尾换行，保留目录名内的空白。
       return result.stdout.replace(/\r?\n$/u, "");
     },
+    async listDirectories(directory) {
+      const result = await shell(
+        'for path in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -d "$path" ] || continue; name=${path##*/}; [ "$name" = . ] || [ "$name" = .. ] || printf "%s\\n" "$name"; done',
+        directory,
+      );
+      return result.stdout.split(/\r?\n/u).filter(Boolean);
+    },
     async exists(target) {
       const result = await shell('if [ -e "$1" ]; then printf yes; fi', target);
       return result.stdout === "yes";
@@ -106,15 +115,24 @@ export interface GitWorkspaceServices {
   links: GitRepositoryLinks;
 }
 
+export interface SshGitWorkspaceServices extends GitWorkspaceServices {
+  messageModels(): Promise<GitMessageModels>;
+  generateMessage(input: {
+    cwd: string;
+    model: string;
+    paths: readonly string[];
+  }): Promise<GitGeneratedMessage>;
+}
+
 // 同一 SSH 配置复用操作锁，连接配置变化后重新创建；关联记录按设备隔离。
 export class SshGitWorkspaces {
-  readonly #hosts = new Map<string, GitWorkspaceServices & { key: string }>();
+  readonly #hosts = new Map<string, SshGitWorkspaceServices & { key: string }>();
   constructor(
     private readonly home: string,
     private readonly environment: NodeJS.ProcessEnv,
   ) {}
 
-  async forHost(hostId: string): Promise<GitWorkspaceServices> {
+  async forHost(hostId: string): Promise<SshGitWorkspaceServices> {
     const connection = await desktopSshConnection(hostId, this.environment);
     const key = createHash("sha256")
       .update(JSON.stringify([hostId, connection.arguments]))
@@ -129,7 +147,15 @@ export class SshGitWorkspaces {
       (cwd, submodule) => git.submoduleRoot(cwd, submodule),
       { paths: runtime.paths, realpath: runtime.realpath },
     );
-    const services = { git, links, key };
+    const messages = new SshGitMessageService(connection, this.environment);
+    const services = {
+      git,
+      links,
+      key,
+      messageModels: () => messages.messageModels(),
+      generateMessage: (input: { cwd: string; model: string; paths: readonly string[] }) =>
+        messages.generateMessage(input),
+    };
     this.#hosts.set(hostId, services);
     return services;
   }

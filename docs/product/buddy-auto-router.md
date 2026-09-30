@@ -20,6 +20,22 @@ Renderer 通过当前 Host 的 `codexhost/auto/routes` 读取，Host 先核对�
 
 需要支持观察接口的 Sub2API 网关及更新后的 Codex Buddy Host/Renderer；原生 SSH 连接可通过上述只读通道获取记录。原版 Codex CLI/Desktop 不具备此卡片；不支持回合元数据的旧内核不会产生可关联记录，未使用 `auto` 的请求也没有 Auto 记录。交付遵循仓库发布流水线；源码构建通过不等于正在运行的 MacBook 应用已升级。
 
+## System One 判断与回合动作
+
+回合下方另有“System One／回合动作”卡片，展示判断模型、项目特征、推荐置信度和最多三个主要动作。它与 `Auto routed` 共用回合锚点：Auto 卡片继续展示初选、实际响应及回退模型；System One 是辅助判断，不冒充执行模型，也不改变 Auto 调度。没有网关判断时仍显示注册动作。
+
+Host 提供 `codexhost/thread/actions/inspect` 和 `codexhost/thread/action/execute`。内置“提交代码”使用明确禁止推送的 Prompt；“提交并推送”复用项目 Git 工作流。已有 Harness `commandCatalog`／`session.commands` 贡献原生命令，插件还可通过可选 `actionCatalog` 注册 Prompt 或命令，见 [Harness 命令契约](../architecture/harness-command-integration.md#turn-actions)。点击完整动作立即在当前聊天执行；文本参数用卡片内表单填写，保留 Composer 草稿。更多原生命令进入已有命令菜单。
+
+仅最新已结束回合可执行，历史卡片只读；Host 在执行前再次验证 Thread 归属、版本、参数、能力、忙闲、已知 Plan Mode 和项目状态。执行端保留 Harness 原生权限与审批。隐私模式隐藏动作卡片，拒绝动作及旁路推荐请求。没有原生命令能力的连接不提供可执行命令入口。
+
+旁路推荐使用当前 Host 的 Provider 与凭据：先读取 `GET /v1/turn/actions?session_id=…&run_id=…&context_id=…`，没有记录才调用 `POST /v1/turn/actions/recommend`。`run_id = turn_id`，`context_id` 为目录版本和结构化特征摘要。仅发送候选 ID、版本、标签、说明与 Git 改动／冲突／ahead／behind 数量；不发送聊天正文、文件路径、diff、Prompt 模板或参数。上下文相同的并发请求合并，单次三秒预算，超时或失败不阻塞主对话、不因卡片轮询重新生成。历史回合只读持久化推荐。旧网关返回 404／405 时降级为本地目录。
+
+网关按 API Key、session、run、context 隔离保存判断；Host 独立在 `CODEXHOST_DATA_DIR/turn-actions`（默认 `~/.codexhost/turn-actions`）保存 `invocationId`、`sourceTurnId`、`executionTurnId` 与状态，不保存 Prompt 或参数原文。同一次点击重试复用 invocationId；原子受理后才调度，重复请求读取已有结果。完成状态来自真实 Harness 回合事件或恢复后的回合查询。连接中断且无法确认启动时显示“状态待确认”，不会自动重放提交等动作；模型 HTTP 成功不表示 Harness 回合或 Git 验收成功。
+
+原生 SSH 缺少动作 RPC 时复用已验证的固定观测 Worker：远端核验 rollout 与 Provider，远端读取凭据和隐私设置、查询推荐并保存执行记录；当前原生连接负责 `turn/start` 和真实状态查询。此模式仅暴露提交／推送 Prompt 回退，不伪造 Harness 命令能力。Host／连接切换后丢弃迟到视图，已发起结果写回原目标。远端需 Node.js 18+，不会自动安装插件或重启应用。
+
+外部 Harness 尚未提供可验证的 Provider 身份时，保留本地动作与原生命令，不代用 Codex Provider 查询网关。首版没有插件热装卸、后台自动执行动作、独立动作执行器或 System One 调度策略改写。网关迁移与部署、真实 Desktop／SSH 验收独立于源码测试。
+
 ## 收藏与固定模型
 
 输入框上方的“收藏模型”提供搜索和收藏管理，收藏即 Pin，已收藏模型直接显示为 chip，右侧的 × 可直接取消收藏。收藏按 Harness 的模型 ID 分开存储，重启后保留；收藏操作本身不切换模型。目录刷新后缺失的收藏仍保留，使用模型 ID 显示并标记目录未列出，可继续取消收藏；不会因为上游返回数量减少而消失或替换成其他模型。原生模型菜单继续保留。

@@ -1,5 +1,6 @@
 import type {
   HarnessAccountSnapshot,
+  HarnessActionDefinition,
   HarnessCommandCatalog,
   HarnessId,
   HarnessInspection,
@@ -557,6 +558,8 @@ export interface HarnessSessionImportCapability {
 }
 
 export interface HarnessAdapter {
+  /** 已安装插件贡献的动作；读取不创建或恢复原生会话。 */
+  readonly actionCatalog?: readonly HarnessActionDefinition[];
   readonly credentialExport?: HarnessCredentialExport;
   readonly credentialImports?: HarnessCredentialImports;
   readonly harnessId: HarnessId;

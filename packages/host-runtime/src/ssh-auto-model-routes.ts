@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import {
   autoModelRoutesResultSchema,
+  sshTurnActionsParamsSchema,
+  turnActionsSnapshotSchema,
+  turnActionInvocationSchema,
   sshAutoModelRoutesParamsSchema,
   type AutoModelRoutesResult,
 } from "@codexhost/shared-contracts";
@@ -92,5 +95,61 @@ export async function readSshAutoModelRoutes(input: {
   } catch {
     // SSH、文件、配置和上游异常都可能含有敏感数据，不透传原始错误。
     throw new Error("Unable to read Auto route observations on SSH Host");
+  }
+}
+
+// 动作旁路复用固定 SSH Worker，凭据、隐私设置及执行记录留在远端。
+export async function readSshTurnActions(input: {
+  params: unknown;
+  environment: NodeJS.ProcessEnv;
+}): Promise<unknown> {
+  try {
+    const params = sshTurnActionsParamsSchema.parse(input.params);
+    const connection = await desktopSshConnection(params.target.hostId, input.environment);
+    const encoded = Buffer.from(JSON.stringify(params)).toString("base64");
+    const stdout = await execute({
+      arguments: [
+        "-T",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "SendEnv=-*",
+        ...connection.arguments,
+        `node --input-type=module - '${encoded}'`,
+      ],
+      environment: input.environment,
+      source: await workerSource(),
+    });
+    const result = JSON.parse(stdout);
+    if (params.operation === "inspect") {
+      const snapshot = turnActionsSnapshotSchema.parse(result);
+      if (
+        snapshot.threadId !== params.target.threadId ||
+        snapshot.sourceTurnId !== params.sourceTurnId ||
+        snapshot.latestTurnId !== params.latestTurnId ||
+        snapshot.invocations.some((value) => value.threadId !== snapshot.threadId) ||
+        (snapshot.recommendation &&
+          (snapshot.recommendation.session_id !== snapshot.threadId ||
+            snapshot.recommendation.run_id !== snapshot.sourceTurnId))
+      )
+        throw new Error("远程动作归属不匹配");
+      return snapshot;
+    }
+    const receipt = turnActionInvocationSchema.parse(result);
+    const expected = params.invocation;
+    if (
+      !expected ||
+      receipt.threadId !== params.target.threadId ||
+      receipt.invocationId !== expected.invocationId ||
+      receipt.sourceTurnId !== expected.sourceTurnId ||
+      receipt.actionId !== expected.actionId ||
+      receipt.version !== expected.version
+    )
+      throw new Error("远程执行记录归属不匹配");
+    return receipt;
+  } catch {
+    throw new Error("无法读取或保存远端回合动作，请检查 SSH 连接");
   }
 }

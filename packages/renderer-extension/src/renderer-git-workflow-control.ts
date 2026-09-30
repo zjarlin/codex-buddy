@@ -1,8 +1,10 @@
+import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
+import type { RendererModelClient } from "./renderer-model-client.js";
 import type { GitWorkflowSnapshot, GitWorkflowParams } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
 import { createVisiblePoll } from "./renderer-visible-poll.js";
 
-interface Client {
+interface Client extends Pick<RendererModelClient, "inspectTurnActions" | "executeTurnAction"> {
   inspectGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
   runGitWorkflow(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
 }
@@ -44,6 +46,7 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
   let disposed = false;
   let generation = 0;
   const requests = new WeakMap<Client, Set<string>>();
+  const attempts = new WeakMap<Client, Map<string, string>>();
   let reading = false;
   let rendered = "";
 
@@ -124,8 +127,49 @@ export function installRendererGitWorkflowControl(getContext: () => Context | nu
     const version = ++generation;
     reading = false;
     render();
-    void request.client
-      .runGitWorkflow({ threadId: request.threadId })
+    const run = async (): Promise<GitWorkflowSnapshot> => {
+      if (request.client.inspectTurnActions && request.client.executeTurnAction) {
+        try {
+          const actions = await request.client.inspectTurnActions({ threadId: request.threadId });
+          const action = actions.actions.find(({ actionId }) => actionId === "git.commit_push");
+          if (!action?.enabled || !actions.latestTurnId)
+            throw new Error(action?.disabledReason ?? "请先完成一个聊天回合");
+          let clientAttempts = attempts.get(request.client);
+          if (!clientAttempts) {
+            clientAttempts = new Map();
+            attempts.set(request.client, clientAttempts);
+          }
+          const key = `${request.threadId}:${actions.latestTurnId}:${action.version}`;
+          const invocationId = clientAttempts.get(key) ?? crypto.randomUUID();
+          clientAttempts.set(key, invocationId);
+          const result = await request.client.executeTurnAction({
+            threadId: request.threadId,
+            sourceTurnId: actions.latestTurnId,
+            actionId: action.actionId,
+            version: action.version,
+            invocationId,
+          });
+          return {
+            workspace: snapshot?.workspace ?? null,
+            threadId: request.threadId,
+            turnId: result.executionTurnId ?? null,
+            phase:
+              result.state === "running"
+                ? "running"
+                : result.state === "completed"
+                  ? "completed"
+                  : "failed",
+            message:
+              result.message ??
+              (result.state === "running" ? "提交并推送工作流运行中…" : "请查看实际回合结果"),
+          };
+        } catch (error) {
+          if (!(error instanceof RendererMethodUnavailableError)) throw error;
+        }
+      }
+      return request.client.runGitWorkflow({ threadId: request.threadId });
+    };
+    void run()
       .then((value) => {
         if (!disposed && generation === version) snapshot = value;
       })

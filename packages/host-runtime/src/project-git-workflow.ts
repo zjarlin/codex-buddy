@@ -276,13 +276,35 @@ export class ProjectGitWorkflow {
     }
   }
 
-  async run(threadId: string): Promise<GitWorkflowSnapshot> {
+  // 显式“仅提交”覆盖本聊天尚未启动的自动推送，避免旧定时器在提交结束后继续推送。
+  async skipAutomatic(threadId: string): Promise<void> {
+    const workspace = await this.#project(threadId);
+    if (!workspace) return;
+    const project = this.#projects.get(workspace);
+    if (!project) return;
+    if (project.pending || project.snapshot.phase === "running")
+      throw new Error("项目推送工作流正在执行");
+    if (project.queuedThreadId === threadId) project.queuedThreadId = null;
+    if (project.snapshot.threadId !== threadId || project.snapshot.phase !== "waiting") return;
+    clearTimeout(project.timer);
+    project.timer = undefined;
+    project.snapshot = { ...initial(workspace), message: "仅提交，不触发本回合自动推送" };
+    this.#changed();
+  }
+
+  async run(
+    threadId: string,
+    options: { waitForIdle?: boolean } = {},
+  ): Promise<GitWorkflowSnapshot> {
     if (this.#closed) throw new Error("推送工作流已关闭。");
     const workspace = await this.#project(threadId);
     if (!workspace) return { ...initial(null), message: "当前任务的项目不是 Git 仓库" };
     const project = this.#state(workspace);
     clearTimeout(project.timer);
-    if (project.pending || project.snapshot.phase === "running") return { ...project.snapshot };
+    if (project.pending || project.snapshot.phase === "running") {
+      if (options.waitForIdle === false) throw new Error("项目推送工作流正在执行");
+      return { ...project.snapshot };
+    }
     project.snapshot = {
       ...initial(workspace),
       phase: "starting",
@@ -290,7 +312,12 @@ export class ProjectGitWorkflow {
       message: "正在准备推送工作流…",
     };
     project.terminal = null;
-    project.pending = this.#start(project, threadId, workspace).finally(() => {
+    project.pending = this.#start(
+      project,
+      threadId,
+      workspace,
+      options.waitForIdle !== false,
+    ).finally(() => {
       project.pending = null;
       this.#resumeQueued(project);
       this.#changed();
@@ -299,7 +326,12 @@ export class ProjectGitWorkflow {
     return { ...project.snapshot };
   }
 
-  async #start(project: Project, threadId: string, workspace: string): Promise<void> {
+  async #start(
+    project: Project,
+    threadId: string,
+    workspace: string,
+    waitForIdle: boolean,
+  ): Promise<void> {
     const beforeStart = async (): Promise<void> => {
       if (this.#closed) throw new Error("推送工作流已关闭。");
       const busy = await this.#isBusy(workspace, project.repositories);
@@ -310,8 +342,10 @@ export class ProjectGitWorkflow {
       if (busy || occupied) {
         project.snapshot = {
           ...project.snapshot,
-          phase: "waiting",
-          message: "等待项目其他任务结束",
+          phase: waitForIdle ? "waiting" : "failed",
+          message: waitForIdle
+            ? "等待项目其他任务结束"
+            : "项目仍有任务运行，动作未启动；请稍后重新操作",
         };
         throw new ProjectBusy();
       }

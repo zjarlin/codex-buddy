@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import { build as esbuildBuild } from "esbuild";
 import { buildAutoModelRoutesWorker } from "./build-auto-model-routes-worker.mjs";
+import { buildSshGitMessageWorker } from "./build-ssh-git-message-worker.mjs";
 
 const forbiddenInputFragments = [
   "/packages/adapters/",
@@ -83,7 +84,10 @@ export function auditHostBundleSource(source) {
 
 export async function buildReleaseHostBundle({ repositoryRoot, outputPath }) {
   await mkdir(path.dirname(outputPath), { recursive: true });
-  const autoRoutesWorker = await buildAutoModelRoutesWorker(repositoryRoot);
+  const [autoRoutesWorker, sshGitMessageWorker] = await Promise.all([
+    buildAutoModelRoutesWorker(repositoryRoot),
+    buildSshGitMessageWorker(repositoryRoot),
+  ]);
   const result = await esbuildBuild({
     absWorkingDir: repositoryRoot,
     entryPoints: ["packages/host-runtime/src/release-main.ts"],
@@ -100,6 +104,7 @@ export async function buildReleaseHostBundle({ repositoryRoot, outputPath }) {
     charset: "utf8",
     define: {
       __CODEXHOST_SSH_AUTO_MODEL_ROUTES_WORKER__: JSON.stringify(autoRoutesWorker),
+      __CODEXHOST_SSH_GIT_MESSAGE_WORKER__: JSON.stringify(sshGitMessageWorker),
     },
     legalComments: "none",
     banner: {

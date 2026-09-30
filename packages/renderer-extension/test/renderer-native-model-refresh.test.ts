@@ -4,6 +4,7 @@ import {
   refreshNativeModelCatalog,
   refreshNativeModels,
 } from "../src/renderer-native-model-refresh.js";
+import { RendererMethodUnavailableError } from "../src/renderer-request-sender.js";
 
 function fixture(location: "provider" | "scope" | "context" = "provider") {
   const findAll = vi.fn(() => [{}]);
@@ -148,6 +149,36 @@ describe("provider catalog refresh", () => {
     snapshot.settings.privateMode = true;
     await expect(refreshNativeModelCatalog(options)).rejects.toThrow("隐私模式");
     expect(options.client.syncCodexCatalog).not.toHaveBeenCalled();
+    expect(refetchQueries).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the native catalog when the Host has no Buddy Router", async () => {
+    const { options, refetchQueries } = catalogFixture();
+    options.client.buddyStatus.mockRejectedValueOnce(
+      new RendererMethodUnavailableError("codexhost/buddy/status", null),
+    );
+    await expect(refreshNativeModelCatalog(options)).resolves.toBeUndefined();
+    expect(refetchQueries).toHaveBeenCalledExactlyOnceWith(
+      { queryKey: ["models", "list", "local"], type: "active" },
+      { throwOnError: true, cancelRefetch: false },
+    );
+    expect(options.client.syncCodexCatalog).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the native catalog when the connection exposes no Buddy status", async () => {
+    const { options, refetchQueries } = catalogFixture();
+    const client = {
+      syncCodexCatalog: options.client.syncCodexCatalog,
+    };
+    await expect(refreshNativeModelCatalog({ ...options, client })).resolves.toBeUndefined();
+    expect(refetchQueries).toHaveBeenCalledOnce();
+    expect(client.syncCodexCatalog).not.toHaveBeenCalled();
+  });
+
+  it("propagates a real Buddy status failure instead of silently refreshing", async () => {
+    const { options, refetchQueries } = catalogFixture();
+    options.client.buddyStatus.mockRejectedValueOnce(new Error("connection reset"));
+    await expect(refreshNativeModelCatalog(options)).rejects.toThrow("connection reset");
     expect(refetchQueries).not.toHaveBeenCalled();
   });
 

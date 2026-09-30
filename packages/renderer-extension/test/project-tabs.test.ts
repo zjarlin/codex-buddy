@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   defaultProjectTabs,
   parseProjectTabs,
+  pendingProjectAssignment,
+  projectAssignment,
   projectKey,
   projectTab,
   withProjectTabs,
@@ -47,6 +49,29 @@ describe("project tab classification", () => {
     expect(next.selected).toBeNull();
     expect(projectTab(next, project)).toBe("company");
     expect(config.tabs).toHaveLength(3);
+  });
+  it("consumes creation intent once and assigns the new project to its tab", () => {
+    const config = defaultProjectTabs();
+    const pending = pendingProjectAssignment();
+    pending.ensure("personal", 1000);
+    expect(pending.consume([project], 1001)).toEqual({ tab: "personal", project });
+    expect(pending.current()).toBeNull();
+    expect(pending.consume([project], 1002)).toBeNull();
+    expect(projectAssignment(config, "personal", project)?.assignments[projectKey(project)]).toBe(
+      "personal",
+    );
+    expect(projectAssignment(config, "missing", project)).toBeNull();
+  });
+  it("drops expired or explicitly cancelled creation intent", () => {
+    const pending = pendingProjectAssignment(10);
+    pending.ensure("personal", 1000);
+    expect(pending.consume([project], 1011)).toBeNull();
+    expect(pending.current()).toBeNull();
+    pending.ensure("personal", 2000);
+    pending.clear();
+    expect(pending.consume([project], 2001)).toBeNull();
+    pending.ensure(null, 3000);
+    expect(pending.consume([project], 3001)).toBeNull();
   });
   it("roundtrips empty tabs without reinstalling defaults", () => {
     const config = withProjectTabs(defaultProjectTabs(), []);

@@ -1,3 +1,4 @@
+import { installTurnActionCards } from "./turn-action-card/index.js";
 import { createSessionRouting } from "./renderer-session-routing.js";
 import { sessionDraftText } from "./renderer-session-targets.js";
 import { installAutoRouteCards } from "./auto-route-card/index.js";
@@ -3339,6 +3340,37 @@ export function installRendererBindingProbe(
     () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   );
 
+  const turnActionCards = installTurnActionCards({
+    getContext: () => {
+      for (const mounted of connectedComposers()) {
+        if (
+          mounted.ownershipStatus !== "ready" ||
+          controller.isSwitching(mounted.composer) ||
+          !mounted.composer.getClientRects().length
+        )
+          continue;
+        const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
+        const hostId = mounted.hostId;
+        const client = modelClientForHostFrom(modelControl, hostId);
+        if (!threadId || !hostId || hostId !== activeModelHostId() || !client?.inspectTurnActions)
+          continue;
+        return {
+          threadId,
+          hostId,
+          client,
+          composer: mounted.composer,
+          ...(controller.get(mounted.composer).agent !== "codex"
+            ? { openCommands: () => mounted.control.harnessCommands.trigger.click() }
+            : {}),
+          root:
+            mounted.composer.closest<HTMLElement>('[data-app-shell-main-surface="default"]') ??
+            document.body,
+        };
+      }
+      return null;
+    },
+  });
+
   const autoRouteCards = installAutoRouteCards({
     getLocale: () => settingsLifecycle.locale,
     getContext: () => {
@@ -3494,6 +3526,7 @@ export function installRendererBindingProbe(
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
       autoRouteCards.dispose();
+      turnActionCards.dispose();
       sidebarContinuation.dispose();
       sidebarUnread.dispose();
       sidebarVisits.dispose();

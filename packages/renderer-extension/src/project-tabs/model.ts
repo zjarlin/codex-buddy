@@ -32,6 +32,59 @@ export function projectKey(project: SidebarProject): string {
   return JSON.stringify([project.projectKind, project.hostId ?? "local", project.projectId]);
 }
 
+export interface PendingProjectAssignment {
+  current(): string | null;
+  ensure(tab: string | null, now?: number): void;
+  clear(): void;
+  consume(
+    projects: SidebarProject[],
+    now?: number,
+  ): { tab: string; project: SidebarProject } | null;
+}
+
+export function pendingProjectAssignment(ttlMs = 30 * 60 * 1000): PendingProjectAssignment {
+  let tab: string | null = null;
+  let startedAt = 0;
+  const clear = (): void => {
+    tab = null;
+    startedAt = 0;
+  };
+  return {
+    current: () => tab,
+    ensure(next, now = Date.now()) {
+      tab = next;
+      startedAt = next ? now : 0;
+    },
+    clear,
+    consume(projects, now = Date.now()) {
+      if (!tab) return null;
+      if (now - startedAt > ttlMs) {
+        clear();
+        return null;
+      }
+      const project = projects[0] ?? null;
+      if (!project) return null;
+      const result = { tab, project };
+      clear();
+      return result;
+    },
+  };
+}
+
+export function projectAssignment(
+  config: ProjectTabsConfig,
+  tab: string,
+  project: SidebarProject,
+): ProjectTabsConfig | null {
+  if (!config.tabs.some((candidate) => candidate.id === tab)) {
+    return null;
+  }
+  return {
+    ...config,
+    assignments: { ...config.assignments, [projectKey(project)]: tab },
+  };
+}
+
 export function projectTab(config: ProjectTabsConfig, project: SidebarProject): string | null {
   const assigned = config.assignments[projectKey(project)];
   if (assigned && config.tabs.some((tab) => tab.id === assigned)) {

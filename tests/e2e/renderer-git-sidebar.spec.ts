@@ -911,6 +911,19 @@ async function enableLinkedRepositories(page: Page): Promise<void> {
     const client = {
       ...fixture.client,
       listGitRepositories: async () => result(),
+      listGitRepositoryDirectories: async (input: { path?: string }) => {
+        fixture.calls.push(["directories", input]);
+        const target = input.path || "/repo";
+        return {
+          project: "/repo",
+          path: target,
+          parent: target === "/" ? null : target.slice(0, target.lastIndexOf("/")) || "/",
+          entries: [
+            { name: "frontend", path: target === "/" ? "/frontend" : `${target}/frontend` },
+          ],
+          truncated: false,
+        };
+      },
       linkGitRepository: (input: { repository: string }) => {
         fixture.calls.push(["link", input]);
         return new Promise((resolve) => {
@@ -977,15 +990,18 @@ test("links a frontend repository and scopes native review, staging, commit and 
   const selector = root.getByRole("combobox", { name: "操作仓库" });
   await expect(selector).toHaveValue("");
   await root.getByRole("button", { name: "关联仓库", exact: true }).click();
-  await root.getByRole("textbox", { name: "Git 仓库绝对路径" }).fill("/frontend");
-  const link = root.locator('.codexhost-git-repositories button[type="submit"]');
+  await expect(root.getByRole("listbox", { name: "目录列表" })).toBeVisible();
+  await expect(root.getByRole("textbox", { name: "目录路径" })).toHaveValue("/repo");
+  await root.getByRole("textbox", { name: "目录路径" }).fill("/frontend");
+  await root.getByRole("button", { name: "前往" }).click();
+  const link = root.getByRole("button", { name: "关联当前目录", exact: true });
+  await expect(link).toBeEnabled();
   await link.evaluate((element) => {
-    const form = (element as HTMLButtonElement).form;
-    if (!form) throw new Error("Missing link form");
-    form.requestSubmit();
-    form.requestSubmit();
+    if (!(element instanceof HTMLButtonElement)) throw new Error("Expected a link button");
+    element.click();
+    element.click();
   });
-  await expect(link).toHaveAttribute("aria-busy", "true");
+  await expect(link).toBeDisabled();
   await expect(selector).toBeDisabled();
   expect(
     await page.evaluate(() =>
@@ -1274,8 +1290,12 @@ test("switching draft projects ignores stale status and preserves the name on re
   await expect(project).toHaveText("未选择项目");
 });
 
-for (const hasThread of [false, true]) {
-  test(`native SSH Git fallback restores project and commit controls (${hasThread ? "thread" : "draft"})`, async ({
+for (const { hasThread, width, dark } of [
+  { hasThread: false, width: 180, dark: false },
+  { hasThread: false, width: 260, dark: true },
+  { hasThread: true, width: 520, dark: false },
+]) {
+  test(`native SSH Git fallback restores project and commit controls (${hasThread ? "thread" : "draft"}, ${width}px)`, async ({
     page,
   }) => {
     const errors: string[] = [];
@@ -1283,72 +1303,104 @@ for (const hasThread of [false, true]) {
     await page.route("http://localhost/git-sidebar-test", (route) =>
       route.fulfill({
         contentType: "text/html",
-        body: "<!doctype html><html><body></body></html>",
+        body: `<!doctype html><html><head><style>
+          :root { --surface-primary:${dark ? "#252526" : "#f3f3f3"}; --surface-secondary:${dark ? "#3c3c3c" : "#ffffff"}; --text-primary:${dark ? "#cccccc" : "#333333"}; --text-link:${dark ? "#4daafc" : "#007acc"}; --border-default:${dark ? "#454545" : "#dddddd"}; color-scheme:${dark ? "dark" : "light"}; }
+          body { margin:0; font:12px/1.4 system-ui,sans-serif; color:var(--text-primary); background:${dark ? "#1e1e1e" : "#ffffff"}; }
+          #app-shell-sidebar { background:var(--surface-primary); }
+        </style></head><body></body></html>`,
       }),
     );
     await setup(page);
-    await page.evaluate((thread) => {
-      const f = Reflect.get(globalThis, "gitSidebarFixture");
-      const hostId = "remote-ssh-discovered:okm252";
-      const cwd = "/remote/remote_codex-host";
-      f.status.workspace = cwd;
-      f.status.submodules = [];
-      f.status.changes = [f.status.changes[0]];
-      f.sshCalls = [];
-      const routes = new Map();
-      routes.set(hostId, {
-        hostId,
-        manager: {
-          async sendRequest(method: string, params: unknown) {
-            f.sshCalls.push(["remote", method, params]);
-            if (method === "thread/read") return { thread: { cwd } };
-            throw { code: -32600, message: `Invalid request: unknown variant \`${method}\`` };
+    await page.evaluate(
+      ({ thread, sidebarWidth }) => {
+        const sidebar = document.querySelector<HTMLElement>("#app-shell-sidebar");
+        const main = document.querySelector<HTMLElement>("[data-app-shell-main-surface]");
+        if (sidebar) sidebar.style.width = `${sidebarWidth}px`;
+        if (main) main.style.left = `${sidebarWidth}px`;
+        const f = Reflect.get(globalThis, "gitSidebarFixture");
+        const hostId = "remote-ssh-discovered:okm252";
+        const cwd = "/remote/remote_codex-host";
+        f.status.workspace = cwd;
+        f.status.submodules = [];
+        f.status.changes = [f.status.changes[0]];
+        f.sshCalls = [];
+        const routes = new Map();
+        routes.set(hostId, {
+          hostId,
+          manager: {
+            async sendRequest(method: string, params: unknown) {
+              f.sshCalls.push(["remote", method, params]);
+              if (method === "thread/read") return { thread: { cwd } };
+              throw { code: -32600, message: `Invalid request: unknown variant \`${method}\`` };
+            },
           },
-        },
-      });
-      routes.set("local", {
-        hostId: "local",
-        manager: {
-          async sendRequest(
-            method: string,
-            params: { hostId: string; method: string; params: Record<string, unknown> },
-          ) {
-            f.sshCalls.push(["local", method, params]);
-            if (
-              method !== "codexhost/ssh/git" ||
-              params.hostId !== hostId ||
-              params.params.cwd !== cwd ||
-              "threadId" in params.params
-            )
-              throw new Error("Wrong SSH destination");
-            switch (params.method) {
-              case "codexhost/git/status":
-                return structuredClone(f.status);
-              case "codexhost/git/repositories":
-                return { project: cwd, repositories: [{ path: cwd, primary: true }] };
-              case "codexhost/git/message-models":
-                return { models: [], defaultModel: null };
-              case "codexhost/git/stage":
-                return f.client.stageGitPaths(params.params);
-              case "codexhost/git/commit":
-                return f.client.commitGit(params.params);
-              default:
-                throw new Error(`Unexpected method ${params.method}`);
-            }
+        });
+        routes.set("local", {
+          hostId: "local",
+          manager: {
+            async sendRequest(
+              method: string,
+              params: { hostId: string; method: string; params: Record<string, unknown> },
+            ) {
+              f.sshCalls.push(["local", method, params]);
+              if (
+                method !== "codexhost/ssh/git" ||
+                params.hostId !== hostId ||
+                params.params.cwd !== cwd ||
+                "threadId" in params.params
+              )
+                throw new Error("Wrong SSH destination");
+              switch (params.method) {
+                case "codexhost/git/status":
+                  return structuredClone(f.status);
+                case "codexhost/git/repositories":
+                  return { project: cwd, repositories: [{ path: cwd, primary: true }] };
+                case "codexhost/git/repository/directories":
+                  return {
+                    project: cwd,
+                    path: cwd,
+                    parent: "/remote",
+                    entries: [{ name: "frontend", path: "/remote/frontend" }],
+                    truncated: false,
+                  };
+                case "codexhost/git/message-models":
+                  return {
+                    models: [
+                      {
+                        id: "remote-fast",
+                        label: "remote-fast",
+                        tier: "夯",
+                        eligible: true,
+                        recommended: true,
+                      },
+                    ],
+                    defaultModel: "remote-fast",
+                  };
+                case "codexhost/git/message/generate":
+                  return { message: "fix: remote SSH commit", model: "remote-fast" };
+                case "codexhost/git/stage":
+                  return f.client.stageGitPaths(params.params);
+                case "codexhost/git/commit":
+                  return f.client.commitGit(params.params);
+                default:
+                  throw new Error(`Unexpected method ${params.method}`);
+              }
+            },
           },
-        },
-      });
-      const clients = Reflect.get(
-        globalThis,
-        "createRendererHostClients",
-      )(() => ({ forHost: (id: string) => routes.get(id) ?? null }));
-      f.setContext(
-        thread ? "same-id-as-local-thread" : null,
-        clients.forHost(hostId),
-        hostId,
-        thread ? undefined : cwd,
-      );
-    }, hasThread);
+        });
+        const clients = Reflect.get(
+          globalThis,
+          "createRendererHostClients",
+        )(() => ({ forHost: (id: string) => routes.get(id) ?? null }));
+        f.setContext(
+          thread ? "same-id-as-local-thread" : null,
+          clients.forHost(hostId),
+          hostId,
+          thread ? undefined : cwd,
+        );
+      },
+      { thread: hasThread, sidebarWidth: width },
+    );
     const root = page.locator("[data-codexhost-git-sidebar]");
     await root.locator("[data-codexhost-git-sidebar-commits]").click();
     await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText(
@@ -1358,11 +1410,43 @@ for (const hasThread of [false, true]) {
       "title",
       "/remote/remote_codex-host",
     );
-    await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeDisabled();
+    await root.getByRole("button", { name: "关联仓库", exact: true }).click();
+    await expect(root.getByRole("textbox", { name: "目录路径" })).toHaveValue(
+      "/remote/remote_codex-host",
+    );
+    const directoryCalls = await page.evaluate(() =>
+      Reflect.get(globalThis, "gitSidebarFixture").sshCalls.filter(
+        ([origin, method]: [string, string]) =>
+          origin === "local" && method === "codexhost/ssh/git",
+      ),
+    );
+    expect(directoryCalls).toContainEqual([
+      "local",
+      "codexhost/ssh/git",
+      expect.objectContaining({
+        method: "codexhost/git/repository/directories",
+        params: expect.objectContaining({ cwd: "/remote/remote_codex-host" }),
+      }),
+    ]);
+    await root.getByRole("button", { name: "关闭目录选择" }).click();
+    await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+    await root.locator("[data-codexhost-git-sidebar-generate]").click();
+    await expect(root.locator("[data-codexhost-git-sidebar-message]")).toHaveValue(
+      "fix: remote SSH commit",
+    );
     await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: remote SSH commit");
     await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeEnabled();
+    const actions = root.locator(".codexhost-git-commit-actions");
+    const actionBounds = await actions.boundingBox();
+    if (!actionBounds) throw new Error("Git commit controls missing");
+    for (const button of await actions.locator("button").all()) {
+      const bounds = await button.boundingBox();
+      if (!bounds) throw new Error("Git commit action missing");
+      expect(bounds.x).toBeGreaterThanOrEqual(actionBounds.x);
+      expect(bounds.x + bounds.width).toBeLessThanOrEqual(actionBounds.x + actionBounds.width + 1);
+    }
     await page.screenshot({
-      path: `test-results/native-ssh-git-${hasThread ? "thread" : "draft"}.png`,
+      path: `test-results/native-ssh-git-${hasThread ? "thread" : "draft"}-${width}.png`,
     });
     await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
     await expect(root.locator(".codexhost-git-empty")).toHaveText("没有待提交的变更");

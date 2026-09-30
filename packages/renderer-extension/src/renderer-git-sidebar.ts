@@ -87,6 +87,7 @@ export const GIT_SIDEBAR_MERGE_ABORT_ATTRIBUTE = "data-codexhost-git-sidebar-mer
 
 const SIDEBAR_THREAD_ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
 const APP_SIDEBAR_SELECTOR = "#app-shell-sidebar";
+const SIDEBAR_RAIL_WIDTH = 46;
 const MIN_SIDEBAR_WIDTH = 180;
 const MAX_SIDEBAR_WIDTH = 520;
 const MIN_SIDEBAR_HEIGHT = 220;
@@ -300,19 +301,22 @@ export function installRendererGitSidebar(options: {
     ${gitButtonLoadingStyles}
     :host { display:block; position:absolute; z-index:4; inset:0; min-width:0; min-height:0; pointer-events:none; }
     .codexhost-git-shell { display:contents; color:var(--text-primary,inherit); }
-    .codexhost-git-rail { position:absolute; z-index:2; inset:0 auto 0 0; display:flex; width:38px; flex-direction:column; align-items:center; gap:6px; padding:8px 3px; background:var(--surface-primary,transparent); border-right:1px solid var(--border-default, color-mix(in srgb,currentColor 14%,transparent)); pointer-events:auto; }
-    .codexhost-git-rail button { display:grid; place-items:center; width:28px; height:28px; padding:0; color:inherit; background:transparent; border:0; border-radius:6px; cursor:pointer; opacity:.68; }
-    .codexhost-git-rail button:hover, .codexhost-git-rail button[aria-current="page"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
-    .codexhost-git-panel { position:absolute; inset:0 0 0 38px; display:flex; min-width:0; flex-direction:column; overflow:hidden; background:var(--surface-primary,inherit); pointer-events:auto; }
+    .codexhost-git-rail { position:absolute; z-index:2; inset:0 auto 0 0; display:flex; width:${SIDEBAR_RAIL_WIDTH}px; flex-direction:column; align-items:stretch; gap:2px; padding:5px 0; background:var(--surface-primary,transparent); border-right:1px solid var(--border-default, color-mix(in srgb,currentColor 18%,transparent)); pointer-events:auto; }
+    .codexhost-git-rail button { position:relative; display:grid; place-items:center; width:${SIDEBAR_RAIL_WIDTH}px; height:42px; padding:0; color:inherit; background:transparent; border:0; border-radius:0; cursor:pointer; opacity:.64; }
+    .codexhost-git-rail button::before { position:absolute; inset:7px auto 7px 0; width:2px; background:transparent; content:""; }
+    .codexhost-git-rail button:hover { background:color-mix(in srgb,currentColor 7%,transparent); opacity:1; }
+    .codexhost-git-rail button[aria-current="page"] { background:transparent; opacity:1; }
+    .codexhost-git-rail button[aria-current="page"]::before { background:var(--text-link,#007acc); }
+    .codexhost-git-panel { position:absolute; inset:0 0 0 ${SIDEBAR_RAIL_WIDTH}px; display:flex; min-width:0; flex-direction:column; overflow:hidden; background:var(--surface-primary,inherit); pointer-events:auto; }
     .codexhost-git-panel[hidden], .codexhost-git-head[hidden], .codexhost-git-branch[hidden], .codexhost-git-conflict[hidden], .codexhost-git-projects[hidden], .codexhost-git-workspace[hidden], .codexhost-git-commit-box[hidden], .codexhost-git-modules[hidden] { display:none; }
-    .codexhost-git-head { display:flex; align-items:center; min-height:38px; gap:4px; padding:5px 8px; font-size:12px; font-weight:600; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 12%,transparent)); }
-    .codexhost-git-heading { min-width:0; flex:1; padding-left:4px; }
-    .codexhost-git-project { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-    .codexhost-git-heading span { display:block; margin-top:2px; font-size:10px; font-weight:400; opacity:.6; }
-    .codexhost-git-head button { min-height:28px; padding:3px 8px; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; }
+    .codexhost-git-head { display:flex; align-items:center; min-height:36px; gap:2px; padding:4px 8px 4px 12px; font-size:11px; font-weight:600; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 14%,transparent)); }
+    .codexhost-git-heading { min-width:0; flex:1; padding:0; }
+    .codexhost-git-project { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+    .codexhost-git-heading span { display:block; margin-top:1px; font-size:10px; font-weight:400; letter-spacing:0; opacity:.58; }
+    .codexhost-git-head button { min-height:26px; padding:3px 6px; color:inherit; background:transparent; border:0; border-radius:2px; cursor:pointer; }
     .codexhost-git-head button:hover, .codexhost-git-head button[aria-selected="true"] { background:color-mix(in srgb,currentColor 10%,transparent); }
     .codexhost-git-head button:disabled { cursor:default; opacity:.4; }
-    .codexhost-git-branch { display:flex; gap:8px; padding:7px 10px; color:inherit; font-size:11px; opacity:.7; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
+    .codexhost-git-branch { display:flex; min-height:26px; align-items:center; gap:8px; padding:3px 12px; color:inherit; font-size:10px; opacity:.72; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
     .codexhost-git-conflict { display:flex; align-items:center; gap:8px; padding:6px 10px; color:inherit; font-size:11px; line-height:1.35; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); background:color-mix(in srgb,currentColor 7%,transparent); }
     .codexhost-git-conflict-text { min-width:0; flex:1; }
     .codexhost-git-conflict-actions { display:flex; flex:none; gap:4px; }
@@ -320,11 +324,14 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-conflict-actions button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 12%,transparent); }
     .codexhost-git-conflict-actions button:disabled { cursor:default; opacity:.4; }
     .codexhost-git-workspace { display:flex; min-height:0; flex:1; flex-direction:column; }
-    .codexhost-git-status-tabs { display:flex; align-items:center; min-height:32px; padding:2px 5px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
-    .codexhost-git-status-tab { display:flex; align-items:center; min-height:26px; gap:4px; padding:3px 7px; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; font-size:11px; opacity:.65; }
-    .codexhost-git-status-tab:hover, .codexhost-git-status-tab[aria-selected="true"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
+    .codexhost-git-status-tabs { display:flex; align-items:center; min-height:30px; padding:1px 6px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
+    .codexhost-git-status-tab { position:relative; display:flex; align-items:center; min-width:0; min-height:28px; gap:3px; padding:3px 4px; color:inherit; background:transparent; border:0; border-radius:0; cursor:pointer; font-size:10px; opacity:.66; }
+    .codexhost-git-status-tab:hover { background:color-mix(in srgb,currentColor 7%,transparent); opacity:1; }
+    .codexhost-git-status-tab[aria-selected="true"] { opacity:1; }
+    .codexhost-git-status-tab[aria-selected="true"]::after { position:absolute; right:6px; bottom:0; left:6px; height:1px; background:var(--text-link,#007acc); content:""; }
     .codexhost-git-status-tab[aria-selected="true"] { font-weight:600; }
-    .codexhost-git-status-tab span { min-width:14px; color:inherit; font-size:10px; text-align:right; opacity:.58; }
+    .codexhost-git-status-tab span { min-width:10px; color:inherit; font-size:10px; text-align:right; opacity:.58; }
+    .codexhost-git-status-tab span:first-child { min-width:0; white-space:nowrap; }
     .codexhost-git-tree-toggle { display:grid; place-items:center; width:26px; height:26px; margin-left:auto; padding:0; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; opacity:.62; }
     .codexhost-git-tree-toggle:hover, .codexhost-git-tree-toggle[aria-pressed="true"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
     .codexhost-git-list { display:flex; min-height:0; flex:1; overflow:auto; flex-direction:column; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
@@ -332,7 +339,7 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-directory:hover { background:color-mix(in srgb,currentColor 8%,transparent); }
     .codexhost-git-directory-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
     .codexhost-git-directory-count { color:inherit; font-size:10px; opacity:.5; }
-    .codexhost-git-change { box-sizing:border-box; display:grid; flex:none; grid-template-columns:minmax(0,1fr) 16px 22px; align-items:center; gap:4px; height:24px; padding:0 6px 0 10px; color:inherit; text-align:left; background:transparent; border:0; cursor:pointer; font-size:11px; }
+    .codexhost-git-change { box-sizing:border-box; display:grid; flex:none; grid-template-columns:minmax(0,1fr) 16px 22px; align-items:center; gap:4px; height:24px; padding:0 6px 0 12px; color:inherit; text-align:left; background:transparent; border:0; cursor:pointer; font-size:11px; }
     .codexhost-git-change:hover, .codexhost-git-change[aria-selected="true"] { background:color-mix(in srgb,currentColor 9%,transparent); }
     .codexhost-git-change span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .codexhost-git-status { min-width:16px; font-size:10px; font-weight:600; text-align:right; opacity:.72; }
@@ -359,16 +366,17 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-repository-change > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .codexhost-git-repository-commit { display:grid; gap:5px; padding:7px 8px; border-top:1px solid var(--border-default,color-mix(in srgb,currentColor 8%,transparent)); }
     .codexhost-git-repository-error { margin:0; padding:8px 10px; color:var(--text-link,inherit); font-size:10px; line-height:1.4; }
-    .codexhost-git-commit-box { display:grid; flex:none; gap:6px; padding:8px 9px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 12%,transparent)); }
-    .codexhost-git-message { box-sizing:border-box; width:100%; min-height:64px; max-height:150px; padding:7px 8px; resize:vertical; color:inherit; background:var(--surface-secondary,transparent); border:1px solid var(--border-default, color-mix(in srgb,currentColor 15%,transparent)); border-radius:6px; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-    .codexhost-git-commit-model { display:flex; min-width:0; gap:5px; }
-    .codexhost-git-commit-model select { min-width:0; flex:1; padding:4px 6px; color:inherit; background:var(--surface-primary,transparent); border:1px solid var(--border-default, color-mix(in srgb,currentColor 15%,transparent)); border-radius:5px; font-size:10px; }
-    .codexhost-git-commit-model button, .codexhost-git-commit-actions button { min-height:28px; padding:4px 7px; color:inherit; background:transparent; border:1px solid var(--border-default, color-mix(in srgb,currentColor 15%,transparent)); border-radius:5px; cursor:pointer; font-size:10px; }
+    .codexhost-git-commit-box { display:grid; flex:none; gap:6px; padding:8px 12px 10px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 14%,transparent)); }
+    .codexhost-git-message { box-sizing:border-box; width:100%; min-height:70px; max-height:150px; padding:7px 8px; resize:vertical; color:inherit; background:color-mix(in srgb,var(--surface-secondary,transparent) 86%,black 4%); border:1px solid var(--border-default, color-mix(in srgb,currentColor 22%,transparent)); border-radius:2px; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .codexhost-git-message:focus, .codexhost-git-commit-model select:focus { outline:1px solid var(--text-link,#007acc); outline-offset:-1px; }
+    .codexhost-git-commit-model { display:flex; min-width:0; gap:4px; }
+    .codexhost-git-commit-model select { min-width:0; flex:1; padding:4px 6px; color:inherit; background:var(--surface-primary,transparent); border:1px solid var(--border-default, color-mix(in srgb,currentColor 18%,transparent)); border-radius:2px; font-size:10px; }
+    .codexhost-git-commit-model button, .codexhost-git-commit-actions button { min-height:28px; padding:4px 7px; color:inherit; background:transparent; border:1px solid var(--border-default, color-mix(in srgb,currentColor 18%,transparent)); border-radius:2px; cursor:pointer; font-size:10px; }
     .codexhost-git-commit-model button:hover:not(:disabled), .codexhost-git-commit-actions button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 9%,transparent); }
-    .codexhost-git-commit-actions { display:flex; flex-wrap:wrap; gap:5px; }
-    .codexhost-git-commit-actions button { flex:1; white-space:nowrap; }
-    .codexhost-git-commit-actions button:last-child { flex:0 0 auto; }
-    .codexhost-git-commit-actions button[data-primary="true"] { color:var(--surface-primary,white); background:var(--text-primary,#111); border-color:transparent; }
+    .codexhost-git-commit-actions { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
+    .codexhost-git-commit-actions button { display:grid; place-items:center; min-width:0; padding:4px; white-space:nowrap; }
+    .codexhost-git-commit-actions button:not([data-primary="true"]) { border-color:transparent; }
+    .codexhost-git-commit-actions button[data-primary="true"] { grid-column:1 / -1; grid-row:1; color:white; background:#007acc; border-color:#007acc; }
     .codexhost-git-notice { min-height:0; margin:0; color:var(--text-link,inherit); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
   `;
   const shell = document.createElement("div");
@@ -404,7 +412,7 @@ export function installRendererGitSidebar(options: {
   projectName.className = "codexhost-git-project";
   projectName.setAttribute("data-codexhost-git-sidebar-project", "v1");
   const headText = document.createElement("span");
-  headText.textContent = "提交";
+  headText.textContent = "源代码管理";
   heading.append(projectName, headText);
   const refresh = iconButton(document, "刷新", "M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6");
   const review = iconButton(document, "审查", "M4 4h16v16H4zM12 4v16M7 8h2M15 12h2");
@@ -488,26 +496,22 @@ export function installRendererGitSidebar(options: {
   modelRow.append(model, generate);
   const commitActions = document.createElement("div");
   commitActions.className = "codexhost-git-commit-actions";
-  const stageAll = document.createElement("button");
-  stageAll.type = "button";
-  stageAll.textContent = "全部暂存";
+  const stageAll = iconButton(document, "全部暂存", "M12 5v14M5 12h14");
   stageAll.setAttribute(GIT_SIDEBAR_STAGE_ALL_ATTRIBUTE, "v1");
-  const commit = document.createElement("button");
-  commit.type = "button";
-  commit.textContent = "提交";
+  const commit = iconButton(document, "提交", "M20 6 9 17l-5-5");
   commit.setAttribute(GIT_SIDEBAR_COMMIT_ATTRIBUTE, "v1");
   const commitPush = document.createElement("button");
   commitPush.type = "button";
   commitPush.textContent = "提交并推送";
   commitPush.dataset.primary = "true";
   commitPush.setAttribute(GIT_SIDEBAR_COMMIT_PUSH_ATTRIBUTE, "v1");
-  const push = document.createElement("button");
-  push.type = "button";
-  push.textContent = "推送";
+  const push = iconButton(document, "推送", "M12 16V4M7 9l5-5 5 5M4 16v4h16v-4");
   push.setAttribute(GIT_SIDEBAR_PUSH_ATTRIBUTE, "v1");
-  const sync = document.createElement("button");
-  sync.type = "button";
-  sync.textContent = "拉取并同步";
+  const sync = iconButton(
+    document,
+    "拉取并同步",
+    "M20 5v6h-6M4 19v-6h6M5.6 8a7 7 0 0 1 11.6-2L20 11M4 13l2.8 5A7 7 0 0 0 18.4 16",
+  );
   sync.setAttribute(GIT_SIDEBAR_SYNC_ATTRIBUTE, "v1");
   commitActions.append(stageAll, commit, commitPush, push, sync);
   const notice = document.createElement("p");
@@ -524,6 +528,7 @@ export function installRendererGitSidebar(options: {
     getClient: () => options.getProjectSyncClient?.() ?? null,
     ...(options.signal ? { signal: options.signal } : {}),
   });
+  projectSyncView.panel.style.left = `${SIDEBAR_RAIL_WIDTH}px`;
   const warnings = document.createElement("p");
   warnings.className = "codexhost-git-notice";
   warnings.style.padding = "6px 9px";
@@ -931,7 +936,6 @@ export function installRendererGitSidebar(options: {
     projectSyncView.deactivate();
     head.hidden = false;
     branch.hidden = false;
-    headText.textContent = "提交";
     const workspacePath = current?.workspace ?? selectedRepository ?? context().cwd ?? "";
     projectName.textContent = workspacePath
       ? (workspacePath.split(/[/\\]/u).filter(Boolean).at(-1) ?? workspacePath)
@@ -1827,7 +1831,7 @@ export function installRendererGitSidebar(options: {
     next.container.style.position = "relative";
     next.content.style.height = "100%";
     next.content.style.minHeight = "0";
-    next.content.style.paddingLeft = "38px";
+    next.content.style.paddingLeft = `${SIDEBAR_RAIL_WIDTH}px`;
     next.container.append(root);
     render();
   };

@@ -2,12 +2,26 @@ import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bin
 import type { RendererModelClient } from "./renderer-model-client.js";
 import type { ModelRefreshOutcome } from "./renderer-model-refresh-summary.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
+import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 
 interface NativeModelCatalogRefresh {
   client: Pick<RendererModelClient, "buddyStatus" | "syncCodexCatalog">;
   hostId: string;
   trigger(): HTMLElement | null;
   isCurrent(): boolean;
+}
+
+// Buddy 状态只决定是否走供应商目录同步；缺少该能力的 Host 仍可刷新原生目录。
+async function readOptionalBuddyStatus(
+  client: Pick<RendererModelClient, "buddyStatus">,
+): Promise<Awaited<ReturnType<NonNullable<RendererModelClient["buddyStatus"]>>> | null> {
+  if (!client.buddyStatus) return null;
+  try {
+    return await client.buddyStatus();
+  } catch (error) {
+    if (error instanceof RendererMethodUnavailableError) return null;
+    throw error;
+  }
 }
 
 // 供应商同步与原生查询结束后，仍需等待 React 发布完整的新目录。
@@ -19,9 +33,13 @@ export async function refreshNativeModelCatalog({
 }: NativeModelCatalogRefresh): Promise<ModelRefreshOutcome> {
   try {
     if (!isCurrent()) return undefined;
-    if (!client.buddyStatus) throw new Error("Model refresh connection is unavailable");
-    const snapshot = await client.buddyStatus();
+    const snapshot = await readOptionalBuddyStatus(client);
     if (!isCurrent()) return undefined;
+    if (!snapshot) {
+      // 原生 SSH Host 等连接没有 Buddy Router，直接刷新该 Host 的原生模型目录。
+      await refreshNativeModels(trigger(), hostId);
+      return undefined;
+    }
     if (snapshot.settings.privateMode) throw new Error("隐私模式下不刷新在线模型目录。");
     if (!client.syncCodexCatalog) throw new Error("供应商模型同步不可用。");
     const synced = await client.syncCodexCatalog();

@@ -14,7 +14,7 @@ const { outputFiles } = await build({
       globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null } = {}) => {
         document.documentElement.lang = "zh-CN";
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
-        document.body.innerHTML = '<style>body{margin:0;font:14px/1.5 system-ui;background:light-dark(#fff,#202020);color:light-dark(#222,#eee)}aside{width:310px;padding:12px;background:light-dark(#fafafa,#252525);min-height:100vh;box-sizing:border-box}h2{font-size:14px;color:#888;margin:8px}button{color:inherit;cursor:pointer}section>div[role=listitem]{padding:10px 8px}.row{display:flex;gap:8px}.row>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row button{border:0;background:transparent}.thread{margin:8px 0 4px 22px;color:#888}nav{display:flex;gap:5px;padding:8px}nav button{border:1px solid #8885;border-radius:5px;padding:4px 8px;background:transparent}[role=menu]{position:fixed;top:170px;left:100px;z-index:10;background:light-dark(#fff,#292929);padding:6px;border:1px solid #8884;border-radius:8px;min-width:180px;box-shadow:0 4px 18px #0002}[role=menuitem]{padding:5px 8px;border-radius:4px}[role=menuitem]:focus{background:#8883;outline:none}footer{padding:12px;display:flex;gap:4px;flex-wrap:wrap}</style><aside id="app-shell-sidebar"><h2>项目</h2><nav><button id="all">全部</button><button id="active">进行中</button></nav><section id="projects"></section><footer><button id="rename">重命名公司项目</button><button id="rerender">重新渲染项目</button><button id="dispose">卸载扩展</button><button id="restart">重新安装扩展</button></footer></aside>';
+        document.body.innerHTML = '<style>body{margin:0;font:14px/1.5 system-ui;background:light-dark(#fff,#202020);color:light-dark(#222,#eee)}aside{width:310px;padding:12px;background:light-dark(#fafafa,#252525);min-height:100vh;box-sizing:border-box}h2{font-size:14px;color:#888;margin:8px}button{color:inherit;cursor:pointer}section>div[role=listitem]{padding:10px 8px}.row{display:flex;gap:8px}.row>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row button{border:0;background:transparent}.thread{margin:8px 0 4px 22px;color:#888}nav{display:flex;gap:5px;padding:8px}nav button{border:1px solid #8885;border-radius:5px;padding:4px 8px;background:transparent}[role=menu]{position:fixed;top:170px;left:100px;z-index:10;background:light-dark(#fff,#292929);padding:6px;border:1px solid #8884;border-radius:8px;min-width:180px;box-shadow:0 4px 18px #0002}[role=menuitem]{padding:5px 8px;border-radius:4px}[role=menuitem]:focus{background:#8883;outline:none}footer{padding:12px;display:flex;gap:4px;flex-wrap:wrap}</style><aside id="app-shell-sidebar"><h2>项目</h2><nav><button id="all">全部</button><button id="active">进行中</button></nav><section id="projects"></section><footer><button id="create" data-app-action-sidebar-project-create>创建项目</button><button id="rename">重命名公司项目</button><button id="rerender">重新渲染项目</button><button id="dispose">卸载扩展</button><button id="restart">重新安装扩展</button></footer></aside>';
         const projects = [
           { projectKind: "remote", hostId: "office", projectId: "one", label: "remote_company_okmy-scada" },
           { projectKind: "remote", hostId: "office", projectId: "two", label: "remote_zjarlin_codex-host" },
@@ -126,6 +126,17 @@ const { outputFiles } = await build({
         });
         let control = installProjectTabs(projectTabsOptions());
         globalThis.projectTabsHostState = () => structuredClone(hostConfig);
+        let createdProjects = 0;
+        document.querySelector("#create").onclick = () => {
+          createdProjects += 1;
+          projects.unshift({
+            projectKind: "remote",
+            hostId: "office",
+            projectId: "created-" + createdProjects,
+            label: "新建项目 " + createdProjects,
+          });
+          render();
+        };
         globalThis.restartProjectTabs = (clearLocal = false) => {
           control.dispose();
           if (clearLocal) localStorage.removeItem("codexhost.project-tabs.v1");
@@ -292,6 +303,27 @@ test("prefix tabs intersect native activity filters and survive row rerendering"
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page)).toContainText("other-project");
   expect(errors).toEqual([]);
+});
+
+test("creating a project while a custom tab is selected assigns it to that tab", async ({
+  page,
+}, info) => {
+  await setup(page, { persistentHost: true });
+  await category(page, "公司的项目").click();
+  await expect(rows(page)).toHaveCount(2);
+
+  await page.getByRole("button", { name: "创建项目", exact: true }).click();
+  await expect(rows(page)).toHaveCount(3);
+  await expect(rows(page)).toContainText("新建项目 1");
+  await page.screenshot({ path: info.outputPath("created-in-tab.png") });
+
+  await category(page, "项目").click();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).not.toContainText("新建项目 1");
+
+  await page.getByRole("button", { name: "重新安装扩展", exact: true }).click();
+  await category(page, "公司的项目").click();
+  await expect(rows(page)).toContainText("新建项目 1");
 });
 
 test("manual move overrides prefixes, survives rename/reinstall and restores automatic rules", async ({

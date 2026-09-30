@@ -49,6 +49,34 @@ describe("native SSH Git transport", () => {
     expect(sendLocal).not.toHaveBeenCalled();
   });
 
+  it("forwards repository directory browsing to the saved SSH host", async () => {
+    const send = vi.fn().mockRejectedValue({ code: -32601 });
+    const sendLocal = vi.fn().mockResolvedValue({
+      project: "/remote/project",
+      path: "/remote",
+      parent: "/",
+      entries: [{ name: "project", path: "/remote/project" }],
+      truncated: false,
+    });
+    const request = createRendererSshGitSender({
+      hostId: "ssh",
+      send,
+      sendLocal,
+      isCurrent: () => true,
+    });
+    await expect(
+      request("codexhost/git/repository/directories", {
+        cwd: "/remote/project",
+        path: "/remote",
+      }),
+    ).resolves.toMatchObject({ path: "/remote" });
+    expect(sendLocal).toHaveBeenCalledWith("codexhost/ssh/git", {
+      hostId: "ssh",
+      method: "codexhost/git/repository/directories",
+      params: { cwd: "/remote/project", path: "/remote" },
+    });
+  });
+
   it("keeps native extension support and unrelated methods on the original Host", async () => {
     const send = vi
       .fn()

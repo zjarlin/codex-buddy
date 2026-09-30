@@ -77,7 +77,7 @@ async function fixture() {
 it.skipIf(process.platform === "win32")(
   "executes status, content, stage, commit and push through the remote command transport",
   async () => {
-    const { directory, cwd, remote, workspace, git, execute } = await fixture();
+    const { directory, cwd, remote, runtime, workspace, git, execute } = await fixture();
     const file = "quote' $(echo bad).txt";
     await writeFile(path.join(cwd, file), "remote only\n");
     expect(await workspace.root(cwd)).toBe(cwd);
@@ -89,6 +89,8 @@ it.skipIf(process.platform === "win32")(
       base: "",
       binary: false,
     });
+    await mkdir(path.join(cwd, "src"));
+    expect(await runtime.listDirectories?.(cwd)).toContain("src");
     await workspace.stage(cwd, [file]);
     expect((await git(cwd, "diff", "--cached", "--name-only")).stdout.trim()).toBe(file);
     await workspace.unstage(cwd, [file]);

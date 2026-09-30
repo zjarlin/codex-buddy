@@ -10,6 +10,7 @@ const { outputFiles } = await build({
       import { mountModelShortcuts } from "./packages/renderer-extension/src/renderer-model-shortcuts.ts";
       import { nativeModelBinding } from "./packages/renderer-extension/src/renderer-native-model-binding.ts";
       import { refreshNativeModelCatalog } from "./packages/renderer-extension/src/renderer-native-model-refresh.ts";
+      import { RendererMethodUnavailableError } from "./packages/renderer-extension/src/renderer-request-sender.ts";
       const composer = document.querySelector("#composer");
       const trigger = document.querySelector("#native");
       const options = (ids) => ids.map((id) => ({model: {model: id, displayName: id}}));
@@ -57,7 +58,12 @@ const { outputFiles } = await build({
         },
       };
       const client = {
-        buddyStatus: async () => ({settings: {privateMode: config.privateMode === true}}),
+        buddyStatus: async () => {
+          if (config.noBuddy) {
+            throw new RendererMethodUnavailableError("codexhost/buddy/status", null);
+          }
+          return {settings: {privateMode: config.privateMode === true}};
+        },
         syncCodexCatalog: async () => {
           globalThis.syncs++;
           if (config.syncFailure) throw new Error("Provider synchronization failed");
@@ -191,6 +197,23 @@ test("an uncommitted catalog times out with real counts and permits a successful
   await page.evaluate(() => Reflect.get(globalThis, "commitRefresh")());
   await expect(menu.getByRole("status")).toContainText("同步 26 个");
   await expect(refresh).toBeEnabled();
+});
+
+test("a Host without Buddy Router still refreshes its native model catalog", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const { menu, refresh } = await openFixture(page);
+  await page.evaluate(() => Reflect.get(globalThis, "configureRefresh")({ noBuddy: true }));
+  await refresh.click();
+  await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "refetches").length)).toBe(1);
+  await page.evaluate(() => Reflect.get(globalThis, "commitRefresh")());
+  await expect(refresh).toBeEnabled();
+  await expect(menu.getByRole("status")).toHaveText("模型列表已刷新");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "syncs"))).toBe(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "nativeIds")())).toEqual(
+    Array.from({ length: 26 }, (_, i) => `model-${i}`),
+  );
+  expect(errors).toEqual([]);
 });
 
 test("provider sync failures and privacy mode leave the native catalog untouched", async ({

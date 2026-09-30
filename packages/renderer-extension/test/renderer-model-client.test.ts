@@ -115,6 +115,13 @@ describe("Renderer fixed Model request client", () => {
         { path: "/frontend", primary: false },
       ],
     };
+    const directories = {
+      project: "/backend",
+      path: "/srv",
+      parent: "/",
+      entries: [{ name: "frontend", path: "/srv/frontend" }],
+      truncated: false,
+    };
     const status = {
       workspace: "/frontend",
       branch: "main",
@@ -130,12 +137,16 @@ describe("Renderer fixed Model request client", () => {
     const sendRequest = vi
       .fn()
       .mockResolvedValueOnce(repositories)
+      .mockResolvedValueOnce(directories)
       .mockResolvedValueOnce(repositories)
       .mockResolvedValueOnce(repositories)
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(written);
     const client = createRendererModelClient([{ sendRequest }]);
     await expect(client?.listGitRepositories?.({ threadId })).resolves.toEqual(repositories);
+    await expect(
+      client?.listGitRepositoryDirectories?.({ threadId, path: "/srv" }),
+    ).resolves.toEqual(directories);
     await expect(client?.linkGitRepository?.(target)).resolves.toEqual(repositories);
     await expect(client?.unlinkGitRepository?.(target)).resolves.toEqual(repositories);
     await expect(client?.inspectGitStatus?.(target)).resolves.toMatchObject(status);
@@ -148,6 +159,7 @@ describe("Renderer fixed Model request client", () => {
     await expect(client?.writeWorkspaceFile?.(write)).resolves.toEqual(written);
     expect(sendRequest.mock.calls).toEqual([
       ["codexhost/git/repositories", { threadId }],
+      ["codexhost/git/repository/directories", { threadId, path: "/srv" }],
       ["codexhost/git/repository/link", target],
       ["codexhost/git/repository/unlink", target],
       ["codexhost/git/status", target],
@@ -526,6 +538,7 @@ describe("Renderer fixed Model request client", () => {
       "listCodexAccounts",
       "listGitMessageModels",
       "listGitRepositories",
+      "listGitRepositoryDirectories",
       "listGitSubmodules",
       "listHarnessAccountSources",
       "listHarnessAccounts",

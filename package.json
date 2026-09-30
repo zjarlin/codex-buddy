@@ -27,7 +27,7 @@
     "project-sync:relay": "node scripts/project-sync-relay.mjs",
     "install:local": "bash scripts/install-local.sh",
     "build": "npm run build:typescript && npm run build:renderer && npm run build:rust",
-    "build:typescript": "tsc -b && node packages/host-runtime/scripts/build-auto-model-routes-worker.mjs && node packages/host-runtime/scripts/build-ssh-git-message-worker.mjs && npm run build:plugins",
+    "build:typescript": "tsc -b && node packages/host-runtime/scripts/build-auto-model-routes-worker.mjs && node packages/host-runtime/scripts/build-ssh-git-message-worker.mjs && node packages/host-runtime/scripts/build-ssh-remote-projects-worker.mjs && npm run build:plugins",
     "build:plugins": "node scripts/release/harness-plugins.mjs --output packages/host-runtime/dist/plugins",
     "build:renderer": "npm run build --workspace=@codexhost/renderer-extension",
     "build:rust": "cargo build --locked --package codexhost-launcher --package codexhost-platform --package codexhost-shim --package codexhost-updater",

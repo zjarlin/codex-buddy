@@ -99,6 +99,7 @@
 | [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | q3 隐私输入区、复用网关目录、发送阻断与保护范围；处理敏感文本前阅读。 |
 | [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 模型目录热更新、手填 ID、持久 Pin、固定模型、自动规划、Auto routed 卡片与 System One 回合动作。 |
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
+| [`product/remote-shared-projects.md`](product/remote-shared-projects.md) | SSH 主机共享项目发现、身份隔离与原生项目／会话恢复。 |
 | [`product/project-actions.md`](product/project-actions.md) | 项目分类 Tab、前缀规则、手动归属，以及 Doubao 桌面客户端入口。 |
 | [`product/codex-accounts.md`](product/codex-accounts.md) | 设置页中的原生账号与额度、外部 Harness 不受 Codex 额度门限制、手动导入 Pi 及导入记录管理；修改账号 UI、发送额度门、查询或凭证导入链路时阅读。 |
 | [`product/codex-native-account-switching-design.md`](product/codex-native-account-switching-design.md) | 移除 Codex 多账号切换后的只读边界；修改 Codex 认证或账号路由时阅读。 |

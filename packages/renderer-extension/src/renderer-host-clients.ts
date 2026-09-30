@@ -7,6 +7,8 @@ import {
   TURN_ACTIONS_INSPECT_METHOD,
   TURN_ACTION_EXECUTE_METHOD,
   AUTO_MODEL_ROUTES_METHOD,
+  REMOTE_PROJECTS_INSPECT_METHOD,
+  REMOTE_PROJECTS_SYNC_METHOD,
   sshGitMethods,
 } from "@codexhost/shared-contracts";
 import { createRendererModelClient, type RendererModelClient } from "./renderer-model-client.js";
@@ -15,6 +17,7 @@ import { installRendererExternalSteering } from "./renderer-external-steering.js
 import type { RendererRequestOptions } from "./renderer-request-sender.js";
 import { createRendererSshGitSender } from "./renderer-ssh-git.js";
 import { createRendererSshAutoModelRoutesSender } from "./renderer-ssh-auto-model-routes.js";
+import { createRendererSshRemoteProjectsSender } from "./renderer-ssh-remote-projects.js";
 import { installRendererThreadArchive } from "./renderer-thread-archive.js";
 
 /** Model clients follow native connection identities, never the active Composer.
@@ -70,6 +73,7 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
       };
       const git = createRendererSshGitSender({ ...ssh, send: sendRequest });
       const auto = createRendererSshAutoModelRoutesSender({ ...ssh, send: sendRequest });
+      const remoteProjects = createRendererSshRemoteProjectsSender({ ...ssh, send: sendRequest });
       const actions = createRendererSshTurnActionsSender({
         ...ssh,
         send: sendRequest,
@@ -80,6 +84,8 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
         if (method === TURN_ACTIONS_INSPECT_METHOD || method === TURN_ACTION_EXECUTE_METHOD)
           return actions(method, params, options);
         if (method === AUTO_MODEL_ROUTES_METHOD) return auto(method, params, options);
+        if (method === REMOTE_PROJECTS_INSPECT_METHOD || method === REMOTE_PROJECTS_SYNC_METHOD)
+          return remoteProjects(method, params, options);
         if (gitMethods.has(method)) return git(method, params, options);
         return sendRequest(method, params, options);
       };

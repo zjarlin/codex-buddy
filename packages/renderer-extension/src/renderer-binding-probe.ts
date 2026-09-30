@@ -863,6 +863,23 @@ export function installRendererBindingProbe(
   const gitSidebar = installRendererGitSidebar({
     cache: gitCache,
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
+    getRemoteProjectsClient: () => {
+      const current = activeGitContext();
+      const hostId = current?.hostId;
+      const client =
+        hostId && hostId !== "local" && !hostId.startsWith("remote-control:")
+          ? modelClientForHost(hostId)
+          : null;
+      return client?.inspectRemoteProjects &&
+        client.syncRemoteProjects &&
+        client.importRemoteProject
+        ? {
+            inspectRemoteProjects: client.inspectRemoteProjects,
+            syncRemoteProjects: client.syncRemoteProjects,
+            importRemoteProject: client.importRemoteProject,
+          }
+        : null;
+    },
     getContext: () => {
       const current = activeGitContext();
       return current

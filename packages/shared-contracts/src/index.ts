@@ -606,5 +606,6 @@ export {
 export { SSH_GIT_METHOD, sshGitMethods, sshGitParamsSchema } from "./ssh-git.js";
 export type { SshGitParams } from "./ssh-git.js";
 export * from "./ssh-auto-model-routes.js";
+export * from "./remote-projects.js";
 
 export * from "./turn-actions.js";

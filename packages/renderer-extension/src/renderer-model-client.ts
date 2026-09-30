@@ -50,6 +50,8 @@ import {
   PROJECT_SYNC_ADD_METHOD,
   PROJECT_SYNC_BIND_METHOD,
   PROJECT_SYNC_CLONE_METHOD,
+  REMOTE_PROJECTS_INSPECT_METHOD,
+  REMOTE_PROJECTS_SYNC_METHOD,
   projectSyncSnapshotSchema,
   projectSyncInviteSchema,
   projectSyncPairParamsSchema,
@@ -59,6 +61,7 @@ import {
   projectSyncAddParamsSchema,
   projectSyncBindParamsSchema,
   projectSyncCloneParamsSchema,
+  remoteProjectsSnapshotSchema,
   type ProjectSyncSnapshot,
   type ProjectSyncInvite,
   type ProjectSyncPairParams,
@@ -68,6 +71,10 @@ import {
   type ProjectSyncAddParams,
   type ProjectSyncBindParams,
   type ProjectSyncCloneParams,
+  type RemoteProjectsInspectParams,
+  type RemoteProjectsSyncParams,
+  type RemoteProjectsSnapshot,
+  type RemoteProject,
   GIT_WORKFLOW_STATUS_METHOD,
   GIT_WORKFLOW_RUN_METHOD,
   gitWorkflowSnapshotSchema,
@@ -313,6 +320,7 @@ import {
   type RendererSessionImportClient,
 } from "./renderer-session-import-client.js";
 import { createNativeModelAvailability } from "./renderer-native-model-availability.js";
+import { restoreRemoteProject } from "./renderer-remote-project-restore.js";
 
 export const HARNESS_INSPECT_METHOD = "codexhost/harness/inspect";
 export const HARNESS_PLUGIN_LIST_METHOD = "codexhost/harness/plugins/list";
@@ -433,6 +441,11 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   addProjectSync?(input: ProjectSyncAddParams): Promise<ProjectSyncSnapshot>;
   bindProjectSync?(input: ProjectSyncBindParams): Promise<ProjectSyncSnapshot>;
   cloneProjectSync?(input: ProjectSyncCloneParams): Promise<ProjectSyncSnapshot>;
+  inspectRemoteProjects?(): Promise<RemoteProjectsSnapshot>;
+  syncRemoteProjects?(
+    input?: Omit<RemoteProjectsSyncParams, "hostId">,
+  ): Promise<RemoteProjectsSnapshot>;
+  importRemoteProject?(project: RemoteProject): Promise<void>;
   listGitRepositories?(input: GitRepositoriesParams): Promise<GitRepositories>;
   listGitRepositoryDirectories?(
     input: GitRepositoryDirectoriesParams,
@@ -822,6 +835,21 @@ export function createRendererModelClient(
           projectSyncCloneParamsSchema.parse(input),
         ),
       );
+    },
+    async inspectRemoteProjects(): Promise<RemoteProjectsSnapshot> {
+      return remoteProjectsSnapshotSchema.parse(
+        await manager.sendRequest(REMOTE_PROJECTS_INSPECT_METHOD, {}),
+      );
+    },
+    async syncRemoteProjects(
+      input: Omit<RemoteProjectsSyncParams, "hostId"> = {},
+    ): Promise<RemoteProjectsSnapshot> {
+      return remoteProjectsSnapshotSchema.parse(
+        await manager.sendRequest(REMOTE_PROJECTS_SYNC_METHOD, input),
+      );
+    },
+    async importRemoteProject(project: RemoteProject): Promise<void> {
+      await restoreRemoteProject((method, params) => manager.sendRequest(method, params), project);
     },
     async listGitRepositories(input: GitRepositoriesParams): Promise<GitRepositories> {
       return gitRepositoriesSchema.parse(

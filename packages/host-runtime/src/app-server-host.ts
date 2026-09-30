@@ -53,9 +53,12 @@ import {
   AUTO_MODEL_ROUTES_METHOD,
   SSH_AUTO_MODEL_ROUTES_METHOD,
   BUDDY_PRIVATE_METHOD,
+  REMOTE_PROJECTS_INSPECT_METHOD,
+  REMOTE_PROJECTS_SYNC_METHOD,
 } from "@codexhost/shared-contracts";
 import { readAutoModelRoutes } from "./auto-model-routes.js";
 import { readSshAutoModelRoutes } from "./ssh-auto-model-routes.js";
+import { inspectSshRemoteProjects, syncSshRemoteProjects } from "./ssh-remote-projects.js";
 import {
   BUDDY_MODELS_METHOD,
   BUDDY_CATALOG_SYNC_METHOD,
@@ -1373,6 +1376,27 @@ export class AppServerHost {
           await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         } catch (error) {
           await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
+      return;
+    }
+    if (
+      request.method === REMOTE_PROJECTS_INSPECT_METHOD ||
+      request.method === REMOTE_PROJECTS_SYNC_METHOD
+    ) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const input = {
+            params: request.params,
+            environment: this.#options.environment ?? process.env,
+          };
+          const result =
+            request.method === REMOTE_PROJECTS_SYNC_METHOD
+              ? await syncSshRemoteProjects(input)
+              : await inspectSshRemoteProjects(input);
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32090, errorMessage(error)));
         }
       });
       return;

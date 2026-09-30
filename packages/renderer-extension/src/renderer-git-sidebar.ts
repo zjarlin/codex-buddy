@@ -25,6 +25,10 @@ import {
   createRendererProjectSyncPanel,
   type RendererProjectSyncClient,
 } from "./renderer-project-sync-panel.js";
+import {
+  createRendererRemoteProjectsPanel,
+  type RendererRemoteProjectsClient,
+} from "./renderer-remote-projects-panel.js";
 
 export interface RendererGitClient extends Partial<GitRepositoryClient> {
   inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
@@ -65,6 +69,7 @@ export const GIT_SIDEBAR_RAIL_ATTRIBUTE = "data-codexhost-git-sidebar-rail";
 export const GIT_SIDEBAR_PANEL_ATTRIBUTE = "data-codexhost-git-sidebar-panel";
 export const GIT_SIDEBAR_PROJECTS_ATTRIBUTE = "data-codexhost-git-sidebar-projects";
 export const GIT_SIDEBAR_DEVICES_ATTRIBUTE = "data-codexhost-git-sidebar-devices";
+export const GIT_SIDEBAR_REMOTE_PROJECTS_ATTRIBUTE = "data-codexhost-git-sidebar-remote-projects";
 export const GIT_SIDEBAR_COMMITS_ATTRIBUTE = "data-codexhost-git-sidebar-commits";
 export const GIT_SIDEBAR_CHANGES_TAB_ATTRIBUTE = "data-codexhost-git-sidebar-changes-tab";
 export const GIT_SIDEBAR_STAGED_TAB_ATTRIBUTE = "data-codexhost-git-sidebar-staged-tab";
@@ -286,6 +291,7 @@ export function installRendererGitSidebar(options: {
   getContext(): RendererGitContext;
   cache?: RendererGitCache;
   getProjectSyncClient?(): RendererProjectSyncClient | null;
+  getRemoteProjectsClient?(): RendererRemoteProjectsClient | null;
   ownerDocument?: Document;
   signal?: AbortSignal;
 }): RendererGitSidebar {
@@ -395,11 +401,13 @@ export function installRendererGitSidebar(options: {
   commits.setAttribute(GIT_SIDEBAR_COMMITS_ATTRIBUTE, "v1");
   const devices = iconButton(document, "设备", "M4 5.5h16v11H4zM8.5 20h7M12 16.5V20");
   devices.setAttribute(GIT_SIDEBAR_DEVICES_ATTRIBUTE, "v1");
+  const remoteProjects = iconButton(document, "共享项目", "M4 6h16v12H4zM8 10h8M8 14h5");
+  remoteProjects.setAttribute(GIT_SIDEBAR_REMOTE_PROJECTS_ATTRIBUTE, "v1");
   const files = iconButton(document, "文件浏览器", "M4 5.5h6l1.5 2H20v11H4zM4 10h16");
   files.setAttribute(GIT_SIDEBAR_FILES_ATTRIBUTE, "v1");
   const terminal = iconButton(document, "终端", "M5 6l5 5-5 5M12 17h7");
   terminal.setAttribute(GIT_SIDEBAR_TERMINAL_ATTRIBUTE, "v1");
-  rail.append(projects, commits, devices, files, terminal);
+  rail.append(projects, commits, remoteProjects, devices, files, terminal);
   const panel = document.createElement("div");
   panel.className = "codexhost-git-panel";
   panel.setAttribute(GIT_SIDEBAR_PANEL_ATTRIBUTE, "v1");
@@ -529,6 +537,18 @@ export function installRendererGitSidebar(options: {
     ...(options.signal ? { signal: options.signal } : {}),
   });
   projectSyncView.panel.style.left = `${SIDEBAR_RAIL_WIDTH}px`;
+  const remoteProjectsView = createRendererRemoteProjectsPanel({
+    ownerDocument: document,
+    container: shadow,
+    getClient: () => options.getRemoteProjectsClient?.() ?? null,
+    importProject: async (project) => {
+      const client = options.getRemoteProjectsClient?.();
+      if (!client?.importRemoteProject) throw new Error("当前 Host 不支持项目恢复。");
+      await client.importRemoteProject(project);
+    },
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  remoteProjectsView.panel.style.left = `${SIDEBAR_RAIL_WIDTH}px`;
   const warnings = document.createElement("p");
   warnings.className = "codexhost-git-notice";
   warnings.style.padding = "6px 9px";
@@ -541,7 +561,7 @@ export function installRendererGitSidebar(options: {
   shadow.append(style, shell);
 
   let anchor: SidebarAnchor | null = null;
-  let view: "projects" | "commits" | "devices" = "projects";
+  let view: "projects" | "commits" | "devices" | "remote-projects" = "projects";
   let current: GitWorkspaceStatus | null = null;
   let workspaceRead = false;
   let workspaceError: Error | null = null;
@@ -918,10 +938,13 @@ export function installRendererGitSidebar(options: {
     else projects.removeAttribute("aria-current");
     if (view === "devices") devices.setAttribute("aria-current", "page");
     else devices.removeAttribute("aria-current");
+    if (view === "remote-projects") remoteProjects.setAttribute("aria-current", "page");
+    else remoteProjects.removeAttribute("aria-current");
     if (view === "commits") commits.setAttribute("aria-current", "page");
     else commits.removeAttribute("aria-current");
     if (view === "projects") {
       projectSyncView.deactivate();
+      remoteProjectsView.deactivate();
       syncOfficialPanelState();
       updateBusy();
       return;
@@ -929,11 +952,21 @@ export function installRendererGitSidebar(options: {
     if (view === "devices") {
       anchor.content.hidden = true;
       panel.hidden = true;
+      remoteProjectsView.deactivate();
       projectSyncView.activate();
       syncOfficialPanelState();
       return;
     }
+    if (view === "remote-projects") {
+      anchor.content.hidden = true;
+      panel.hidden = true;
+      projectSyncView.deactivate();
+      remoteProjectsView.activate();
+      syncOfficialPanelState();
+      return;
+    }
     projectSyncView.deactivate();
+    remoteProjectsView.deactivate();
     head.hidden = false;
     branch.hidden = false;
     const workspacePath = current?.workspace ?? selectedRepository ?? context().cwd ?? "";
@@ -1550,6 +1583,16 @@ export function installRendererGitSidebar(options: {
     },
     listenerOptions,
   );
+  remoteProjects.addEventListener(
+    "click",
+    () => {
+      cancelReview();
+      view = "remote-projects";
+      render();
+      remoteProjectsView.refresh();
+    },
+    listenerOptions,
+  );
   files.addEventListener(
     "click",
     () => {
@@ -1879,13 +1922,16 @@ export function installRendererGitSidebar(options: {
     syncContext() {
       if (syncContext()) {
         if (view === "projects") warmCache();
+        else if (view === "devices") projectSyncView.refresh();
+        else if (view === "remote-projects") remoteProjectsView.refresh();
         else void load();
       }
     },
     refresh() {
       syncContext();
       if (view === "devices") projectSyncView.refresh();
-      if (view !== "projects" && view !== "devices") void load();
+      else if (view === "remote-projects") remoteProjectsView.refresh();
+      else if (view !== "projects") void load();
     },
     dispose() {
       disposed = true;
@@ -1895,6 +1941,7 @@ export function installRendererGitSidebar(options: {
       nativeFileTreeLayout.dispose();
       nativeFilePanePlacement.dispose();
       projectSyncView.dispose();
+      remoteProjectsView.dispose();
       repositorySelector.dispose();
       if (anchor) restoreSidebarAnchor(anchor);
       root.remove();

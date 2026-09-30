@@ -184,6 +184,8 @@ describe("Renderer CDP Control Session", () => {
       ),
     ).toHaveLength(1);
     session.close();
+  });
+
   it("fails closed when CDP target discovery hangs past its timeout", async () => {
     const client = rendererClient();
     await expect(

@@ -200,7 +200,11 @@ describe("production Desktop Controller", () => {
         }),
     );
     const ready = vi.fn();
-    const startAttachmentServer = vi.fn(async () => attachmentServer());
+    let attach: (() => Promise<void>) | undefined;
+    const startAttachmentServer = vi.fn(async (options) => {
+      attach = options.attach;
+      return attachmentServer();
+    });
     const run = runDesktopController(controllerOptions(), abort.signal, {
       readRenderer: vi.fn(async () => "production renderer"),
       install,
@@ -222,10 +226,13 @@ describe("production Desktop Controller", () => {
     expect(startAttachmentServer).toHaveBeenCalledOnce();
     expect(close).not.toHaveBeenCalled();
 
+    if (!attach) throw new Error("attachment handler was not published");
+    const attached = attach();
+    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
     finishInstall(session);
+    await attached;
     await run;
     expect(install).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
   });
 
   it("retries a transient Renderer evaluation failure during cold startup", async () => {

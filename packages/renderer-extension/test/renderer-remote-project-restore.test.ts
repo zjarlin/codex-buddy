@@ -43,10 +43,14 @@ it("reuses an existing project by root and assigns imported Threads", async () =
 });
 
 it("does not forward malformed Thread IDs", async () => {
-  const request = vi.fn(async (_method: string, _params: unknown) => ({ data: [] }));
+  const request = vi.fn<(method: string, params: unknown) => Promise<{ data: never[] }>>(
+    async () => ({ data: [] }),
+  );
+  const thread = project.threads[0];
+  if (!thread) throw new Error("fixture project must include a Thread");
   await restoreRemoteProject(request, {
     ...project,
-    threads: [{ ...project.threads[0]!, id: "../../credentials" }],
+    threads: [{ ...thread, id: "../../credentials" }],
   });
   expect(request.mock.calls.at(-1)?.[1]).toMatchObject({ threads: [] });
 });

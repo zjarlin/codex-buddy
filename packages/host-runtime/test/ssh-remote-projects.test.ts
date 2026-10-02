@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { inspectSshRemoteProjects, syncSshRemoteProjects } from "../src/ssh-remote-projects.js";
+import { inspectSshRemoteProjects } from "../src/ssh-remote-projects.js";
 import {
   inspectRemoteProjectsOnHost,
   syncRemoteProjectsOnHost,

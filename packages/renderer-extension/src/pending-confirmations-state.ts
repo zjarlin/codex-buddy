@@ -72,22 +72,6 @@ export function pendingConfirmationStatus(value: unknown): PendingConfirmationSt
   return null;
 }
 
-function itemText(item: Record<string, unknown>): string {
-  if (item.type === "agentMessage") return text(item.text).trim();
-  const content = Array.isArray(item.content) ? item.content : [];
-  if (item.type === "userMessage") {
-    return content
-      .map((entry) => {
-        const value = record(entry);
-        return value?.type === "text" ? text(value.text) : "";
-      })
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-  return "";
-}
-
 export function pendingConfirmationSummary(
   turn: Pick<PendingConfirmationTurn, "items" | "error" | "status">,
 ): string {
@@ -310,8 +294,8 @@ export class PendingConfirmationsModel {
 
   confirm(entry: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">): boolean {
     const index = this.#entries.findIndex((candidate) => key(candidate) === key(entry));
-    if (index < 0 || this.#entries[index]?.state === "confirmed") return false;
-    const current = this.#entries[index]!;
+    const current = index < 0 ? undefined : this.#entries[index];
+    if (!current || current.state === "confirmed") return false;
     this.#entries[index] = {
       ...current,
       state: "confirmed",

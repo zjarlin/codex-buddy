@@ -145,22 +145,13 @@ function threadTitle(row: HTMLElement): string | null {
   return title?.textContent?.trim() || null;
 }
 
-function rowFor(entry: PendingConfirmationRecord): HTMLElement | null {
-  for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
-    const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
-    const value = threadIdFromSidebarRowElement(row);
-    if (!hostId || !value) continue;
-    if (hostId === entry.hostId && nativeThreadId(hostId, value) === entry.threadId) return row;
-  }
-  return null;
-}
-
 function activeThreadFromDom(): { hostId: string; threadId: string } | null {
   const rows = [...document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].filter(
     (row) => row.getAttribute(ACTIVE) === "true",
   );
   if (rows.length !== 1) return null;
-  const row = rows[0]!;
+  const row = rows[0];
+  if (!row) return null;
   const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
   const value = threadIdFromSidebarRowElement(row);
   return hostId && value ? { hostId, threadId: nativeThreadId(hostId, value) } : null;
@@ -284,11 +275,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   };
 
   const closeModal = (): void => {
-    dismissedEntryKey = visibleEntry
-      ? entryKey(visibleEntry)
-      : model.latestPending()
-        ? entryKey(model.latestPending()!)
-        : null;
+    const latest = model.latestPending();
+    dismissedEntryKey = visibleEntry ? entryKey(visibleEntry) : latest ? entryKey(latest) : null;
     expanded = false;
     visibleEntry = null;
     clearReadTimer();
@@ -351,11 +339,12 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   };
 
   const reconcileHost = async (hostId: string, client: RendererModelClient): Promise<void> => {
-    if (!client.requestThreadProjection) return;
+    const requestThreadProjection = client.requestThreadProjection;
+    if (!requestThreadProjection) return;
     let turnsPaginationSupported = true;
     let list: unknown;
     try {
-      list = await client.requestThreadProjection("thread/list", {
+      list = await requestThreadProjection("thread/list", {
         limit: RECONCILE_LIMIT,
         archived: false,
         sortKey: "updated_at",
@@ -364,7 +353,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     } catch {
       return;
     }
-    const rows = Array.isArray(record(list)?.data) ? (record(list)!.data as unknown[]) : [];
+    const listRecord = record(list);
+    const rows = Array.isArray(listRecord?.data) ? (listRecord.data as unknown[]) : [];
     let offset = 0;
     while (offset < rows.length) {
       const batch = rows.slice(offset, offset + RECONCILE_CONCURRENCY);
@@ -378,7 +368,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
           try {
             if (turnsPaginationSupported) {
               try {
-                result = await client.requestThreadProjection!("thread/turns/list", {
+                result = await requestThreadProjection("thread/turns/list", {
                   threadId: row.id,
                   limit: 1,
                   sortDirection: "desc",
@@ -386,13 +376,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 });
               } catch {
                 turnsPaginationSupported = false;
-                result = await client.requestThreadProjection!("thread/read", {
+                result = await requestThreadProjection("thread/read", {
                   threadId: row.id,
                   includeTurns: true,
                 });
               }
             } else {
-              result = await client.requestThreadProjection!("thread/read", {
+              result = await requestThreadProjection("thread/read", {
                 threadId: row.id,
                 includeTurns: true,
               });
@@ -401,12 +391,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
             return;
           }
           const page = record(result);
+          const thread = record(page?.thread);
           const turns = Array.isArray(page?.data)
             ? (page.data as unknown[])
-            : Array.isArray(record(page?.thread)?.turns)
-              ? (record(page?.thread)!.turns as unknown[])
+            : Array.isArray(thread?.turns)
+              ? (thread.turns as unknown[])
               : [];
-          const latest = page?.thread ? turns.at(-1) : turns[0];
+          const latest = thread ? turns.at(-1) : turns[0];
           const turn = record(latest);
           if (!turn || typeof turn.id !== "string" || !turn.id) return;
           const terminal =

@@ -167,8 +167,8 @@ function projectRoots(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
     const candidate = object(entry);
-    return typeof candidate?.path === "string" && path.isAbsolute(candidate.path)
-      ? [path.normalize(candidate.path)]
+    return typeof candidate?.path === "string" && path.posix.isAbsolute(candidate.path)
+      ? [path.posix.normalize(candidate.path)]
       : [];
   });
 }

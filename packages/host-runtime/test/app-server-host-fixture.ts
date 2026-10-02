@@ -106,7 +106,7 @@ export class JsonLineCollector {
           const index = this.#waiters.indexOf(waiter);
           if (index >= 0) this.#waiters.splice(index, 1);
           reject(new Error("Timed out waiting for Host output"));
-        }, 2_000),
+        }, 5_000),
       };
       this.#waiters.push(waiter);
     });

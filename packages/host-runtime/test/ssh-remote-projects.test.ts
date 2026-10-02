@@ -42,20 +42,13 @@ input.on("line", line => {
 `,
     { mode: 0o700 },
   );
-  const fakeCodex =
-    process.platform === "win32" ? path.join(root, "fake-codex.cmd") : fakeCodexScript;
-  if (process.platform === "win32") {
-    await writeFile(fakeCodex, `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.mjs" %*\r\n`, {
-      mode: 0o700,
-    });
-  }
   return {
     environment: {
       ...process.env,
       HOME: root,
       CODEX_HOME: home,
       CODEXHOST_DATA_DIR: data,
-      CODEXHOST_STOCK_CODEX_PATH: fakeCodex,
+      CODEXHOST_STOCK_CODEX_PATH: fakeCodexScript,
     },
     data,
   };

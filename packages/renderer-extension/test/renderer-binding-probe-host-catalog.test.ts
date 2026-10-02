@@ -37,6 +37,18 @@ vi.mock("../src/auto-route-card/index.js", () => ({
   installAutoRouteCards: () => ({ dispose: vi.fn() }),
 }));
 
+vi.mock("../src/turn-action-card/index.js", () => ({
+  installTurnActionCards: () => ({ dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-pending-confirmations.js", () => ({
+  installRendererPendingConfirmations: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-project-dashboard.js", () => ({
+  installRendererProjectDashboard: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
 vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
   installRendererSidebarStatusFilter: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
@@ -110,7 +122,7 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
       ...args: Parameters<typeof RendererComposerDom.mountComposerAgentControl>
     ) => {
       testState.selectModel = args[7];
-      testState.refreshModels = args[11];
+      testState.refreshModels = args[12];
       return {
         composer: testState.composer,
         composerId: "composer-1",

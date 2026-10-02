@@ -187,7 +187,9 @@ describe("pending confirmation state", () => {
   it("ignores corrupt storage and unknown versions", () => {
     expect(new PendingConfirmationsModel(memoryStorage("{bad")).entries()).toEqual([]);
     expect(
-      new PendingConfirmationsModel(memoryStorage(JSON.stringify({ version: 2, entries: [] }))).entries(),
+      new PendingConfirmationsModel(
+        memoryStorage(JSON.stringify({ version: 2, entries: [] })),
+      ).entries(),
     ).toEqual([]);
   });
 });

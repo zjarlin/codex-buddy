@@ -25,9 +25,9 @@ async function hostFixture(apiKey = "remote-secret-key") {
   const data = path.join(root, "codexhost-data");
   await mkdir(home, { recursive: true });
   await writeFile(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: apiKey }));
-  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeCodexScript = path.join(root, "fake-codex.mjs");
   await writeFile(
-    fakeCodex,
+    fakeCodexScript,
     `#!/usr/bin/env node
 import readline from "node:readline";
 const input = readline.createInterface({ input: process.stdin });
@@ -42,6 +42,13 @@ input.on("line", line => {
 `,
     { mode: 0o700 },
   );
+  const fakeCodex =
+    process.platform === "win32" ? path.join(root, "fake-codex.cmd") : fakeCodexScript;
+  if (process.platform === "win32") {
+    await writeFile(fakeCodex, `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.mjs" %*\r\n`, {
+      mode: 0o700,
+    });
+  }
   return {
     environment: {
       ...process.env,

@@ -154,7 +154,11 @@ export function installRendererSidebarUnread(options: {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const id = threadIdFromSidebarRowElement(row);
       const threadId = hostId && id?.startsWith(`${hostId}:`) ? id.slice(hostId.length + 1) : id;
-      const pending = !!(hostId && threadId && options.pendingConfirmations?.hasPending(hostId, threadId));
+      const pending = !!(
+        hostId &&
+        threadId &&
+        options.pendingConfirmations?.hasPending(hostId, threadId)
+      );
       const turn = hostId && threadId ? hosts.get(hostId)?.turns.get(threadId) : undefined;
       if (!pending && turn?.unread && visible && row.getAttribute(ACTIVE) === "true") {
         if (reading?.turn === turn && now - reading.since >= READ_DWELL_MS) {

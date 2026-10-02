@@ -834,7 +834,8 @@ export function installRendererBindingProbe(
     },
     activeThread: () => {
       for (const mounted of mountedByComposer.values()) {
-        if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0) continue;
+        if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0)
+          continue;
         const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
         const hostId = mounted.hostId ?? activeModelHostId();
         if (threadId && hostId) return { hostId, threadId };

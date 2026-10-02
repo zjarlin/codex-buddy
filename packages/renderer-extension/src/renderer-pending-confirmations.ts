@@ -104,7 +104,11 @@ function messages(locale: Locale) {
 
 function statusLabel(locale: Locale, status: PendingConfirmationRecord["status"]): string {
   const value = messages(locale);
-  return status === "completed" ? value.completed : status === "failed" ? value.failed : value.interrupted;
+  return status === "completed"
+    ? value.completed
+    : status === "failed"
+      ? value.failed
+      : value.interrupted;
 }
 
 function formatTime(value: number, locale: Locale): string {
@@ -121,7 +125,9 @@ function formatTime(value: number, locale: Locale): string {
   }
 }
 
-function entryKey(entry: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">): string {
+function entryKey(
+  entry: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">,
+): string {
   return `${entry.hostId}\u0000${entry.threadId}\u0000${entry.turnId}`;
 }
 
@@ -129,7 +135,9 @@ function sameEntry(
   left: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">,
   right: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">,
 ): boolean {
-  return left.hostId === right.hostId && left.threadId === right.threadId && left.turnId === right.turnId;
+  return (
+    left.hostId === right.hostId && left.threadId === right.threadId && left.turnId === right.turnId
+  );
 }
 
 function threadTitle(row: HTMLElement): string | null {
@@ -162,9 +170,10 @@ function itemSummary(threadId: string, title: string, hostId: string): string {
   return JSON.stringify([threadId, title, hostId]);
 }
 
-export function installRendererPendingConfirmations(
-  options: PendingConfirmationDomOptions,
-): { refresh(): void; dispose(): void } {
+export function installRendererPendingConfirmations(options: PendingConfirmationDomOptions): {
+  refresh(): void;
+  dispose(): void;
+} {
   const model = options.model ?? new PendingConfirmationsModel(window.localStorage);
   const hosts = new Map<string, HostSubscription>();
   const style = document.createElement("style");
@@ -261,7 +270,11 @@ export function installRendererPendingConfirmations(
     clearReadTimer();
     const changed = model.confirm(entry);
     silentEntries.delete(entryKey(entry));
-    if (changed && visibleEntry?.turnId === entry.turnId && visibleEntry.threadId === entry.threadId) {
+    if (
+      changed &&
+      visibleEntry?.turnId === entry.turnId &&
+      visibleEntry.threadId === entry.threadId
+    ) {
       visibleEntry = null;
       expanded = false;
       dismissedEntryKey = null;
@@ -271,7 +284,11 @@ export function installRendererPendingConfirmations(
   };
 
   const closeModal = (): void => {
-    dismissedEntryKey = visibleEntry ? entryKey(visibleEntry) : model.latestPending() ? entryKey(model.latestPending()!) : null;
+    dismissedEntryKey = visibleEntry
+      ? entryKey(visibleEntry)
+      : model.latestPending()
+        ? entryKey(model.latestPending()!)
+        : null;
     expanded = false;
     visibleEntry = null;
     clearReadTimer();
@@ -392,9 +409,22 @@ export function installRendererPendingConfirmations(
           const latest = page?.thread ? turns.at(-1) : turns[0];
           const turn = record(latest);
           if (!turn || typeof turn.id !== "string" || !turn.id) return;
-          const terminal = turn.status === "completed" || turn.status === "succeeded" || turn.status === "failed" || turn.status === "interrupted" || turn.status === "cancelled";
+          const terminal =
+            turn.status === "completed" ||
+            turn.status === "succeeded" ||
+            turn.status === "failed" ||
+            turn.status === "interrupted" ||
+            turn.status === "cancelled";
           if (!terminal) return;
-          if (model.entries().some((entry) => entry.hostId === hostId && entry.threadId === row.id && entry.turnId === turn.id)) return;
+          if (
+            model
+              .entries()
+              .some(
+                (entry) =>
+                  entry.hostId === hostId && entry.threadId === row.id && entry.turnId === turn.id,
+              )
+          )
+            return;
           const restored = model.upsert({
             hostId,
             threadId: row.id,
@@ -418,7 +448,9 @@ export function installRendererPendingConfirmations(
       hosts.set(hostId, state);
     }
     const discovered = options.getManager(hostId);
-    const manager = discovered?.addNotificationCallback ? (discovered as NotificationManager) : null;
+    const manager = discovered?.addNotificationCallback
+      ? (discovered as NotificationManager)
+      : null;
     if (state.manager !== manager) {
       state.dispose?.();
       state.dispose = null;
@@ -429,7 +461,8 @@ export function installRendererPendingConfirmations(
           current.dispose = manager.addNotificationCallback(
             ["turn/started", "turn/completed"],
             (notification) => {
-              if (disposed || current.manager !== manager || options.getManager(hostId) !== manager) return;
+              if (disposed || current.manager !== manager || options.getManager(hostId) !== manager)
+                return;
               const event = record(notification);
               const params = record(event?.params);
               const turn = record(params?.turn);
@@ -449,13 +482,16 @@ export function installRendererPendingConfirmations(
                 [...document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].find(
                   (candidate) =>
                     candidate.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) === hostId &&
-                    nativeThreadId(
-                      hostId,
-                      threadIdFromSidebarRowElement(candidate) ?? "",
-                    ) === threadId,
+                    nativeThreadId(hostId, threadIdFromSidebarRowElement(candidate) ?? "") ===
+                      threadId,
                 ) ?? null;
               const title = row ? threadTitle(row) : null;
-              const entry = model.link({ hostId, threadId, title: title || undefined, turn: turn ?? {} });
+              const entry = model.link({
+                hostId,
+                threadId,
+                title: title || undefined,
+                turn: turn ?? {},
+              });
               if (entry && !silentEntries.has(entryKey(entry))) {
                 expanded = true;
                 visibleEntry = entry;
@@ -521,9 +557,10 @@ export function installRendererPendingConfirmations(
     const active = options.activeThread() ?? activeThreadFromDom();
     const visible = !document.hidden && document.hasFocus();
     const target = active
-      ? model.pending().find(
-          (entry) => entry.hostId === active.hostId && entry.threadId === active.threadId,
-        ) ?? null
+      ? (model
+          .pending()
+          .find((entry) => entry.hostId === active.hostId && entry.threadId === active.threadId) ??
+        null)
       : null;
     if (!visible || !target) {
       clearReadTimer();
@@ -531,9 +568,19 @@ export function installRendererPendingConfirmations(
       return;
     }
     const now = performance.now();
-    if (!reading || reading.hostId !== target.hostId || reading.threadId !== target.threadId || reading.turnId !== target.turnId) {
+    if (
+      !reading ||
+      reading.hostId !== target.hostId ||
+      reading.threadId !== target.threadId ||
+      reading.turnId !== target.turnId
+    ) {
       clearReadTimer();
-      reading = { hostId: target.hostId, threadId: target.threadId, turnId: target.turnId, since: now };
+      reading = {
+        hostId: target.hostId,
+        threadId: target.threadId,
+        turnId: target.turnId,
+        since: now,
+      };
     }
     const remaining = READ_DWELL_MS - (now - reading.since);
     if (remaining <= 0) {
@@ -554,7 +601,10 @@ export function installRendererPendingConfirmations(
     expanded = true;
     const currentIndex = visibleEntry
       ? entries.findIndex(
-          (entry) => entry.hostId === visibleEntry?.hostId && entry.threadId === visibleEntry.threadId && entry.turnId === visibleEntry.turnId,
+          (entry) =>
+            entry.hostId === visibleEntry?.hostId &&
+            entry.threadId === visibleEntry.threadId &&
+            entry.turnId === visibleEntry.turnId,
         )
       : -1;
     visibleEntry = entries[(currentIndex + 1) % entries.length] ?? entries[0] ?? null;

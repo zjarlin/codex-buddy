@@ -99,8 +99,10 @@ export function pendingConfirmationSummary(
   if (agent) return compact(text(agent.text), 2_000);
   const error = record(turn.error);
   if (error) return compact(text(error.message) || text(error.code), 2_000);
-  if (pendingConfirmationStatus(turn.status) === "failed") return "会话执行失败，未返回可展示的结果。";
-  if (pendingConfirmationStatus(turn.status) === "interrupted") return "会话已中断，未返回可展示的结果。";
+  if (pendingConfirmationStatus(turn.status) === "failed")
+    return "会话执行失败，未返回可展示的结果。";
+  if (pendingConfirmationStatus(turn.status) === "interrupted")
+    return "会话已中断，未返回可展示的结果。";
   return "会话已完成，但未返回可展示的文字结果。";
 }
 
@@ -111,8 +113,7 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
   const threadId = text(entry.threadId);
   const turnId = text(entry.turnId);
   const status = pendingConfirmationStatus(entry.status);
-  const state =
-    entry.state === "confirmed" || entry.state === "pending" ? entry.state : null;
+  const state = entry.state === "confirmed" || entry.state === "pending" ? entry.state : null;
   if (!hostId || !threadId || !turnId || !status || !state) return null;
   return {
     hostId,
@@ -123,8 +124,7 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
     summary: compact(text(entry.summary), 2_000),
     completedAt: timestamp(entry.completedAt, 0),
     state,
-    confirmedAt:
-      state === "confirmed" ? timestamp(entry.confirmedAt, Date.now()) : null,
+    confirmedAt: state === "confirmed" ? timestamp(entry.confirmedAt, Date.now()) : null,
   };
 }
 
@@ -184,7 +184,9 @@ export class PendingConfirmationsModel {
       const value = record(decoded);
       if (value?.version !== 1 || !Array.isArray(value.entries)) return [];
       return prunePendingConfirmations(
-        value.entries.map(normalizeStored).filter((entry): entry is PendingConfirmationRecord => entry !== null),
+        value.entries
+          .map(normalizeStored)
+          .filter((entry): entry is PendingConfirmationRecord => entry !== null),
       );
     } catch {
       return [];
@@ -220,7 +222,8 @@ export class PendingConfirmationsModel {
 
   hasPending(hostId: string, threadId: string): boolean {
     return this.#entries.some(
-      (entry) => entry.state === "pending" && entry.hostId === hostId && entry.threadId === threadId,
+      (entry) =>
+        entry.state === "pending" && entry.hostId === hostId && entry.threadId === threadId,
     );
   }
 
@@ -278,7 +281,8 @@ export class PendingConfirmationsModel {
     if (existing) return existing;
     // A newer Turn supersedes the previous pending item for the same Thread.
     this.#entries = this.#entries.filter(
-      (entry) => key(entry) !== nextKey && !(threadKey(entry) === thread && entry.state === "pending"),
+      (entry) =>
+        key(entry) !== nextKey && !(threadKey(entry) === thread && entry.state === "pending"),
     );
     this.#entries.push(next);
     this.#entries = prunePendingConfirmations(this.#entries);

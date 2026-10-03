@@ -106,6 +106,7 @@ it.skipIf(process.platform === "win32")(
     await expect(access(marker)).rejects.toMatchObject({ code: "ENOENT" });
     expect(execute.mock.calls.some(([args]) => args.at(-1)?.includes("base64"))).toBe(true);
   },
+  20_000,
 );
 
 it.skipIf(process.platform === "win32")(

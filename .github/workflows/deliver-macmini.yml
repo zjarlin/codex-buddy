@@ -73,8 +73,8 @@ jobs:
           url="$(node -p "require('$release_dir/asset.json').url")"
           digest="$(node -p "require('$release_dir/asset.json').digest")"
           size="$(node -p "require('$release_dir/asset.json').size")"
-          curl --fail --location --retry 5 --retry-all-errors \
-            --output "$release_dir/$asset" "$url"
+          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" \
+            --pattern "$asset" --dir "$release_dir" --clobber
           actual_size="$(stat -f '%z' "$release_dir/$asset")"
           actual_digest="sha256:$(shasum -a 256 "$release_dir/$asset" | awk '{print $1}')"
           [[ "$actual_size" == "$size" ]] || {

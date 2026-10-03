@@ -1,4 +1,4 @@
-name: Deliver Codexhost to Mac mini
+name: Deliver CodexBuddy to Mac mini
 
 on:
   workflow_dispatch:
@@ -6,19 +6,19 @@ on:
       release_repository:
         description: "GitHub repository that owns the release"
         required: true
-        default: "BytePioneer-AI/codex-host"
+        default: "zjarlin/codex-buddy"
         type: string
       tag:
         description: "Stable release tag to install (for example v0.12.0)"
         required: true
-        default: "v0.12.0"
+        default: "v0.10.7"
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: codexhost-macmini-delivery
+  group: codexbuddy-macmini-delivery
   cancel-in-progress: false
 
 jobs:
@@ -41,8 +41,8 @@ jobs:
             exit 1
           }
           version="${RELEASE_TAG#v}"
-          asset="codexhost-${version}-macos-arm64.dmg"
-          release_dir="$RUNNER_TEMP/codexhost-macmini"
+          asset="codex-buddy-${version}-macos-arm64.dmg"
+          release_dir="$RUNNER_TEMP/codexbuddy-macmini"
           mkdir -p "$release_dir"
           node --input-type=module - "$asset" "$release_dir/asset.json" <<'JS'
           import { writeFile } from "node:fs/promises";
@@ -52,7 +52,7 @@ jobs:
             { headers: {
               accept: "application/vnd.github+json",
               authorization: `Bearer ${process.env.GH_TOKEN}`,
-              "user-agent": "codexhost-macmini-delivery",
+              "user-agent": "codexbuddy-macmini-delivery",
             } },
           );
           if (!response.ok) throw new Error(`GitHub release lookup failed: HTTP ${response.status}`);
@@ -93,8 +93,8 @@ jobs:
         run: |
           set -euo pipefail
           version="${VERSION#v}"
-          release_dir="$RUNNER_TEMP/codexhost-macmini"
-          asset="$release_dir/codexhost-${version}-macos-arm64.dmg"
+          release_dir="$RUNNER_TEMP/codexbuddy-macmini"
+          asset="$release_dir/codex-buddy-${version}-macos-arm64.dmg"
           mount_point="$release_dir/mount"
           staging="$release_dir/staging"
           backup_root="$HOME/Library/Application Support/codexhost/local-update-backups"
@@ -104,19 +104,19 @@ jobs:
             hdiutil detach "$mount_point" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          source_app="$mount_point/codexhost.app"
+          source_app="$mount_point/CodexBuddy.app"
           [[ -d "$source_app" ]] || {
-            echo "Installer does not contain codexhost.app" >&2
+            echo "Installer does not contain CodexBuddy.app" >&2
             exit 1
           }
-          ditto "$source_app" "$staging/codexhost.app"
-          installed_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$staging/codexhost.app/Contents/Info.plist")"
+          ditto "$source_app" "$staging/CodexBuddy.app"
+          installed_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$staging/CodexBuddy.app/Contents/Info.plist")"
           [[ "$installed_version" == "$version" ]] || {
             echo "Installer version mismatch: $installed_version" >&2
             exit 1
           }
-          codesign --verify --deep --strict "$staging/codexhost.app"
-          xattr -dr com.apple.quarantine "$staging/codexhost.app" 2>/dev/null || true
+          codesign --verify --deep --strict "$staging/CodexBuddy.app"
+          xattr -dr com.apple.quarantine "$staging/CodexBuddy.app" 2>/dev/null || true
           # Stop the whole stack. Killing only the launcher and shim leaves
           # orphaned desktop-controller/console-server helpers holding the
           # control port, which makes the next launcher refuse to start.
@@ -126,32 +126,32 @@ jobs:
           pkill -TERM -x ChatGPT 2>/dev/null || true
           pkill -TERM -x codexhost 2>/dev/null || true
           pkill -TERM -x codexhost-shim 2>/dev/null || true
-          pkill -TERM -f '/Applications/codexhost.app/Contents/Resources/app/desktop-controller.mjs' 2>/dev/null || true
-          pkill -TERM -f '/Applications/codexhost.app/Contents/Resources/app/console-server.mjs' 2>/dev/null || true
-          pkill -TERM -f '/Applications/codexhost.app/Contents/Resources/app/host-runtime.mjs' 2>/dev/null || true
+          pkill -TERM -f '/Applications/CodexBuddy.app/Contents/Resources/app/desktop-controller.mjs' 2>/dev/null || true
+          pkill -TERM -f '/Applications/CodexBuddy.app/Contents/Resources/app/console-server.mjs' 2>/dev/null || true
+          pkill -TERM -f '/Applications/CodexBuddy.app/Contents/Resources/app/host-runtime.mjs' 2>/dev/null || true
           for _ in {1..20}; do
             pgrep -x codexhost >/dev/null 2>&1 || pgrep -x codexhost-shim >/dev/null 2>&1 || break
             sleep 1
           done
-          if [[ -d /Applications/codexhost.app ]]; then
-            mv /Applications/codexhost.app \
-              "$backup_root/codexhost-$(date +%Y%m%d%H%M%S)-$(uuidgen).app"
+          if [[ -d /Applications/CodexBuddy.app ]]; then
+            mv /Applications/CodexBuddy.app \
+              "$backup_root/CodexBuddy-$(date +%Y%m%d%H%M%S)-$(uuidgen).app"
           fi
-          ditto "$staging/codexhost.app" /Applications/codexhost.app
+          ditto "$staging/CodexBuddy.app" /Applications/CodexBuddy.app
           # Launch outside the runner's tracking id; otherwise job cleanup
           # terminates the app as an orphan process at the end of the job.
-          env -u RUNNER_TRACKING_ID open -a /Applications/codexhost.app
+          env -u RUNNER_TRACKING_ID open -a /Applications/CodexBuddy.app
           for _ in {1..60}; do
-            pgrep -x codexhost >/dev/null 2>&1 && break
+            pgrep -f '/Applications/CodexBuddy.app/Contents/MacOS/codexhost' >/dev/null 2>&1 && break
             sleep 1
           done
-          pgrep -x codexhost >/dev/null 2>&1 || {
-            echo "codexhost did not start after installation" >&2
+          pgrep -f '/Applications/CodexBuddy.app/Contents/MacOS/codexhost' >/dev/null 2>&1 || {
+            echo "CodexBuddy did not start after installation" >&2
             exit 1
           }
-          observed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/codexhost.app/Contents/Info.plist)"
+          observed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/CodexBuddy.app/Contents/Info.plist)"
           [[ "$observed" == "$version" ]] || {
             echo "Installed application version mismatch: $observed" >&2
             exit 1
           }
-          echo "Installed codexhost ${version} on $(hostname)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Installed CodexBuddy ${version} on $(hostname)" >> "$GITHUB_STEP_SUMMARY"

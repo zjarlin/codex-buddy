@@ -25,7 +25,7 @@ jobs:
   deliver:
     name: Install release on Mac mini
     runs-on: [self-hosted, macOS, ARM64, macmini-delivery]
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       RELEASE_REPOSITORY: ${{ inputs.release_repository }}
       RELEASE_TAG: ${{ inputs.tag }}
@@ -73,8 +73,8 @@ jobs:
           url="$(node -p "require('$release_dir/asset.json').url")"
           digest="$(node -p "require('$release_dir/asset.json').digest")"
           size="$(node -p "require('$release_dir/asset.json').size")"
-          gh release download "$RELEASE_TAG" --repo "$RELEASE_REPOSITORY" \
-            --pattern "$asset" --dir "$release_dir" --clobber
+          curl --fail --location --http1.1 --retry 5 --retry-all-errors \
+            --retry-delay 5 --continue-at - --output "$release_dir/$asset" "$url"
           actual_size="$(stat -f '%z' "$release_dir/$asset")"
           actual_digest="sha256:$(shasum -a 256 "$release_dir/$asset" | awk '{print $1}')"
           [[ "$actual_size" == "$size" ]] || {
@@ -124,7 +124,9 @@ jobs:
               "$backup_root/codexhost-$(date +%Y%m%d%H%M%S)-$(uuidgen).app"
           fi
           ditto "$staging/codexhost.app" /Applications/codexhost.app
-          open -a /Applications/codexhost.app
+          # Launch outside the runner's tracking id; otherwise job cleanup
+          # terminates the app as an orphan process at the end of the job.
+          env -u RUNNER_TRACKING_ID open -a /Applications/codexhost.app
           for _ in {1..60}; do
             pgrep -f '/Applications/codexhost.app/Contents/MacOS/codexhost' >/dev/null && break
             sleep 1

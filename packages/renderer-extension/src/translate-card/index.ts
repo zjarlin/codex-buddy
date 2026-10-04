@@ -45,7 +45,9 @@ function findMessages(root: HTMLElement, threadId: string): Map<string, HTMLElem
   for (const turn of root.querySelectorAll<HTMLElement>("[data-turn-key]")) {
     const id = turn.getAttribute("data-turn-key")?.replace(/^history-content:turn:/, "");
     if (!id || id.startsWith("history-content:")) continue;
-    const resp = turn.querySelector<HTMLElement>(`[data-response-annotation-conversation="${threadId}"]`);
+    const resp = turn.querySelector<HTMLElement>(
+      `[data-response-annotation-conversation="${threadId}"]`,
+    );
     if (!resp?.getClientRects().length) continue;
     if (resp.querySelector(".markdown, .prose, [class*='message']")) map.set(id, resp);
   }
@@ -65,7 +67,13 @@ export function installTranslateCards(options: Options) {
     return n;
   }
 
-  async function doTranslate(turnId: string, anchor: HTMLElement, text: string, locale: string, client: RendererModelClient) {
+  async function doTranslate(
+    turnId: string,
+    anchor: HTMLElement,
+    text: string,
+    locale: string,
+    client: RendererModelClient,
+  ) {
     if (!client.translate) return;
     const existing = cards.get(turnId);
     existing?.abortController?.abort();
@@ -81,7 +89,10 @@ export function installTranslateCards(options: Options) {
     card.dataset.state = "loading";
     card.innerHTML = "";
     const hdr = el("div", "codexhost-translate-header");
-    hdr.append(createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }), el("span", "", msgs.translating));
+    hdr.append(
+      createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }),
+      el("span", "", msgs.translating),
+    );
     card.append(hdr);
     cards.set(turnId, { node: card, signature: "", abortController: ac });
 
@@ -97,13 +108,20 @@ export function installTranslateCards(options: Options) {
       card.dataset.state = "completed";
       card.innerHTML = "";
       const h2 = el("div", "codexhost-translate-header");
-      h2.append(createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }), el("span", "", msgs.translated(result.model, result.latencyMs)));
+      h2.append(
+        createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }),
+        el("span", "", msgs.translated(result.model, result.latencyMs)),
+      );
       card.append(h2);
       const content = el("div", "codexhost-translate-content", result.translated);
       card.append(content);
       const toggle = el("button", "codexhost-translate-toggle", msgs.showOriginal);
       let showTrans = true;
-      toggle.addEventListener("click", () => { showTrans = !showTrans; content.hidden = !showTrans; toggle.textContent = showTrans ? msgs.showOriginal : msgs.showTranslation; });
+      toggle.addEventListener("click", () => {
+        showTrans = !showTrans;
+        content.hidden = !showTrans;
+        toggle.textContent = showTrans ? msgs.showOriginal : msgs.showTranslation;
+      });
       card.append(toggle);
       cards.set(turnId, { node: card, signature: JSON.stringify([text, locale]) });
     } catch {
@@ -111,7 +129,10 @@ export function installTranslateCards(options: Options) {
       card.dataset.state = "error";
       card.innerHTML = "";
       const eh = el("div", "codexhost-translate-header codexhost-translate-error");
-      eh.append(createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }), el("span", "", msgs.failed));
+      eh.append(
+        createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }),
+        el("span", "", msgs.failed),
+      );
       const retry = el("button", "codexhost-translate-retry", msgs.retry);
       retry.addEventListener("click", () => void doTranslate(turnId, anchor, text, locale, client));
       eh.append(retry);
@@ -126,7 +147,11 @@ export function installTranslateCards(options: Options) {
     const locale = options.getLocale();
     const messages = findMessages(ctx.root, ctx.threadId);
     for (const [id, state] of cards) {
-      if (!state.node.isConnected || !messages.has(id)) { state.abortController?.abort(); state.node.remove(); cards.delete(id); }
+      if (!state.node.isConnected || !messages.has(id)) {
+        state.abortController?.abort();
+        state.node.remove();
+        cards.delete(id);
+      }
     }
     for (const [id, node] of messages) {
       if (cards.has(id)) continue;
@@ -142,7 +167,10 @@ export function installTranslateCards(options: Options) {
     dispose() {
       disposed = true;
       window.clearInterval(timer);
-      for (const s of cards.values()) { s.abortController?.abort(); s.node.remove(); }
+      for (const s of cards.values()) {
+        s.abortController?.abort();
+        s.node.remove();
+      }
       cards.clear();
       style.remove();
     },

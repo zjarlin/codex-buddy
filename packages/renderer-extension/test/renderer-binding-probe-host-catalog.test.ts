@@ -41,6 +41,9 @@ vi.mock("../src/auto-route-card/index.js", () => ({
 vi.mock("../src/turn-action-card/index.js", () => ({
   installTurnActionCards: () => ({ dispose: vi.fn() }),
 }));
+vi.mock("../src/translate-card/index.js", () => ({
+  installTranslateCards: () => ({ dispose: vi.fn() }),
+}));
 
 vi.mock("../src/renderer-pending-confirmations.js", () => ({
   installRendererPendingConfirmations: (options: { getLocale(): "zh-CN" | "en" }) => {

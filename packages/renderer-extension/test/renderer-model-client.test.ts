@@ -643,6 +643,7 @@ describe("Renderer fixed Model request client", () => {
       "syncProjectSync",
       "syncRemoteProjects",
       "threadOpenTarget",
+      "translate",
       "unlinkGitRepository",
       "unstageGitPaths",
       "updateGitSubmodule",

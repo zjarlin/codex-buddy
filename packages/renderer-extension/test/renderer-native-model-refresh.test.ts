@@ -85,54 +85,48 @@ function catalogFixture(before = ["kept", "removed"], after = ["kept", "added"])
 describe("provider catalog refresh", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("waits for a delayed React commit after refetch before reporting the full 26 models", async () => {
-    vi.useFakeTimers();
+  it("reports the upstream count and the overlap with the native menu", async () => {
     const ids = Array.from({ length: 26 }, (_, index) => `model-${index}`);
-    const { options, props, refetchQueries, commit } = catalogFixture(["model-0"], ids);
-    const completed = vi.fn();
-    const pending = refreshNativeModelCatalog(options).then(completed);
-    await vi.advanceTimersByTimeAsync(100);
+    const { options, props, refetchQueries } = catalogFixture(["model-0"], ids);
+    // 原生菜单当前已载入 model-0，供应商返回 26 个模型，交集为 1。
+    const outcome = await refreshNativeModelCatalog(options);
     expect(refetchQueries).toHaveBeenCalledOnce();
-    expect(completed).not.toHaveBeenCalled();
-    expect(props.onSelectModel).not.toHaveBeenCalled();
-    commit();
-    await vi.advanceTimersByTimeAsync(25);
-    await pending;
-    expect(completed).toHaveBeenCalledExactlyOnceWith({ returned: 26, synchronized: 26 });
+    expect(outcome).toEqual({ returned: 26, synchronized: 1 });
     expect(props.model).toBe("kept");
+    expect(props.onSelectModel).not.toHaveBeenCalled();
   });
 
-  it.each([{ after: ["kept"] }, { after: [] }])(
-    "waits for removed models to disappear, including an empty list: %j",
+  it.each([{ after: ["kept"] }, { after: ["kept", "removed", "new"] }])(
+    "counts synchronized models against the current native list: %j",
     async ({ after }) => {
-      vi.useFakeTimers();
-      const { options, commit } = catalogFixture(undefined, after);
-      const completed = vi.fn();
-      const pending = refreshNativeModelCatalog(options).then(completed);
-      await vi.advanceTimersByTimeAsync(75);
-      expect(completed).not.toHaveBeenCalled();
-      commit();
-      await vi.advanceTimersByTimeAsync(25);
-      await pending;
-      expect(completed).toHaveBeenCalledExactlyOnceWith({
-        returned: after.length,
-        synchronized: after.length,
-      });
+      const { options } = catalogFixture(undefined, after);
+      const outcome = await refreshNativeModelCatalog(options);
+      // 原生菜单保持 before=["kept","removed"]；与上游列表求交集。
+      const overlap = after.filter((id) => ["kept", "removed"].includes(id)).length;
+      expect(outcome).toEqual({ returned: after.length, synchronized: overlap });
     },
   );
 
-  it("reports the actual loaded count with a bounded retry error if React never updates", async () => {
-    vi.useFakeTimers();
-    const { options, props } = catalogFixture(["kept"], ["kept", "added"]);
-    const pending = refreshNativeModelCatalog(options);
-    const failed = expect(pending).rejects.toThrow(
-      "目录已同步但界面尚未更新，请重试刷新（供应商返回 2 个模型，界面已载入 1 个）。",
+  it("asks for a restart when upstream returns an empty list", async () => {
+    const { options } = catalogFixture(undefined, []);
+    await expect(refreshNativeModelCatalog(options)).rejects.toThrow(
+      "供应商返回 0 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。",
     );
-    await vi.advanceTimersByTimeAsync(2_000);
-    await failed;
+  });
+
+  it("reports the overlap without waiting for React when lists partially match", async () => {
+    const { options, props } = catalogFixture(["kept"], ["kept", "added"]);
+    const outcome = await refreshNativeModelCatalog(options);
+    expect(outcome).toEqual({ returned: 2, synchronized: 1 });
     expect(props.modelOptions).toHaveLength(1);
     expect(props.onSelectModel).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("asks for a restart when the native catalog shares no model with upstream", async () => {
+    const { options } = catalogFixture(["kept"], ["added", "other"]);
+    await expect(refreshNativeModelCatalog(options)).rejects.toThrow(
+      "供应商返回 2 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。",
+    );
   });
 
   it("keeps the prior list and does not refetch when provider synchronization fails", async () => {
@@ -182,7 +176,7 @@ describe("provider catalog refresh", () => {
     expect(refetchQueries).not.toHaveBeenCalled();
   });
 
-  it.each(["status", "sync", "refetch", "commit"] as const)(
+  it.each(["status", "sync", "refetch"] as const)(
     "stops reading the native control if the context changes during %s",
     async (stage) => {
       vi.useFakeTimers();

@@ -92,6 +92,7 @@ export interface ComposerAgentControl {
   picker: RendererAgentPickerControl;
   modelPicker: RendererModelPickerControl;
   modelShortcuts?: ReturnType<typeof mountModelShortcuts>;
+  onModelShortcutsViewChange?: (view: import("./renderer-model-shortcuts.js").ModelShortcutView, harnessId: string) => void;
   permissionModePicker: RendererPermissionModePickerControl;
   nativeModelControl: NativeModelControlState | null;
   nativePermissionModeControl: NativePermissionModeControlState | null;
@@ -712,6 +713,16 @@ export function mountComposerAgentControl(
     modelAvailability,
   );
   composer.before(modelShortcuts.root);
+  // Forward current model view into buddy interrupted panel without altering existing selection behavior.
+  let lastShortcutsHarnessId = "";
+  let shortcutsViewCallback: ((view: import("./renderer-model-shortcuts.js").ModelShortcutView, harnessId: string) => void) | undefined;
+  const originalShortcutsUpdate = modelShortcuts.update.bind(modelShortcuts);
+  modelShortcuts.update = ((...args: Parameters<typeof originalShortcutsUpdate>) => {
+    originalShortcutsUpdate(...args);
+    const [view, harnessId] = args;
+    if (harnessId && harnessId !== lastShortcutsHarnessId) lastShortcutsHarnessId = harnessId;
+    shortcutsViewCallback?.(view, lastShortcutsHarnessId);
+  }) as typeof originalShortcutsUpdate;
 
   const toolbar = sendButton.parentElement;
   const harnessCommands = mountRendererHarnessCommandControl(
@@ -752,6 +763,8 @@ export function mountComposerAgentControl(
     sendButton,
     sendDisabledBeforeSwitch: null,
   } satisfies ComposerAgentControl;
+  // Attach optional callback after construction to satisfy exactOptionalPropertyTypes.
+  (control as unknown as { onModelShortcutsViewChange?: typeof shortcutsViewCallback }).onModelShortcutsViewChange = shortcutsViewCallback;
   refreshTrailingClusterPlacement(control);
   refreshUsagePlacement(control);
   refreshCreditsPlacement(control);

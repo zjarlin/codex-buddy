@@ -243,6 +243,10 @@ const style = `
 [data-buddy-router] .buddy-interrupted-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 [data-buddy-router] .buddy-interrupted-toolbar b{flex:1;min-width:0}
 [data-buddy-router] .buddy-interrupted-toolbar button{border-radius:6px}
+[data-buddy-router] .buddy-interrupted-toolbar [data-buddy-resume-all]{font-weight:600;border-color:color-mix(in srgb,#508df2 65%,currentColor);background:color-mix(in srgb,#508df2 12%,transparent)}
+[data-buddy-router] .buddy-interrupted-model-resume{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
+[data-buddy-router] .buddy-interrupted-model-resume select,[data-buddy-router] .buddy-interrupted-model-resume input{min-width:0;max-width:220px}
+[data-buddy-router] .buddy-interrupted-model-input{border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:7px;padding:3px 6px;font-size:11px;height:26px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
 [data-buddy-router] .buddy-interrupted button:disabled{opacity:.55;cursor:default}
 [data-buddy-router] .buddy-interrupted-note{font-size:11px;opacity:.65}
 [data-buddy-router] .buddy-interrupted-list{display:flex;flex-direction:column;gap:4px;min-width:0}
@@ -280,7 +284,7 @@ export interface BuddyControlContext {
 export function installBuddyControl(
   getContext: () => BuddyControlContext | null,
   getLocale: () => "zh-CN" | "en",
-): { dispose(): void; refresh(): Promise<void>; refreshContext(): void } {
+): { dispose(): void; refresh(): Promise<void>; refreshContext(): void; setModelShortcutsView(view: import("../renderer-model-shortcuts.js").ModelShortcutView | null, harnessId: string): void } {
   const root = document.createElement("details");
   root.dataset.buddyRouter = "";
   const styles = document.createElement("style");
@@ -325,6 +329,8 @@ export function installBuddyControl(
   const inputArea = document.createElement("div");
   let inputKey = "";
   let inputClient: RendererModelClient | null = null;
+  let modelShortcutsView: import("../renderer-model-shortcuts.js").ModelShortcutView | null = null;
+  let modelHarnessId = "";
   routingPanel.append(controls, routingFields);
   taskPanel.append(inputArea, taskEmpty, fields, error, note, footer);
   panel.append(tabs, connectionNotice, routingPanel, interruptedPanel, taskPanel);
@@ -597,7 +603,12 @@ export function installBuddyControl(
       return;
     }
     connectionNotice.textContent = "";
-    interruptedControl.update(context?.client ?? null, snapshot.settings.privateMode);
+          interruptedControl.update(
+        context?.client ?? null,
+        snapshot?.settings.privateMode === true,
+        modelShortcutsView,
+        modelHarnessId,
+      );
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
     // 其他会话的决策不会改变当前控件，也不能打断正在编辑的设置。
     const signature = JSON.stringify([
@@ -879,9 +890,15 @@ export function installBuddyControl(
   };
   const poll = createVisiblePoll(document, 1200, () => void refresh());
   void refresh();
+  const setModelShortcutsView = (view: import("../renderer-model-shortcuts.js").ModelShortcutView | null, harnessId: string): void => {
+    modelShortcutsView = view;
+    modelHarnessId = harnessId;
+    render();
+  };
   return {
     refresh,
     refreshContext,
+    setModelShortcutsView,
     dispose() {
       disposed = true;
       poll.dispose();

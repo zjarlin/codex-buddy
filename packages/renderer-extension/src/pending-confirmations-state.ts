@@ -104,6 +104,44 @@ export function pendingConfirmationSummary(
   return "会话已完成，但未返回可展示的文字结果。";
 }
 
+// Codex names a Thread with a background Turn produced by its native
+// ThreadMetadataGenerationService. That Turn's only agent message is a small
+// JSON object such as {"title":"...","description":"..."}. It is internal
+// housekeeping rather than user-initiated work, so it must not enter the
+// pending-confirmation queue.
+const TITLE_GENERATION_FIELDS = new Set(["title", "description"]);
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/u.exec(value.trim());
+  const candidate = (fenced?.[1] ?? value).trim();
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) return null;
+  try {
+    return record(JSON.parse(candidate));
+  } catch {
+    return null;
+  }
+}
+
+function isTitleGenerationPayload(value: string): boolean {
+  const object = parseJsonObject(value);
+  if (!object) return false;
+  const keys = Object.keys(object);
+  if (keys.length === 0 || !keys.every((key) => TITLE_GENERATION_FIELDS.has(key))) return false;
+  if (!text(object.title).trim()) return false;
+  if (object.description !== undefined && typeof object.description !== "string") return false;
+  return true;
+}
+
+export function isMetadataTitleTurn(turn: Pick<PendingConfirmationTurn, "items">): boolean {
+  const items = Array.isArray(turn.items) ? turn.items : [];
+  const agent = items.findLast(
+    (value): value is Record<string, unknown> =>
+      record(value)?.type === "agentMessage" && text(record(value)?.text).trim().length > 0,
+  );
+  if (!agent) return false;
+  return isTitleGenerationPayload(text(agent.text));
+}
+
 function normalizeStored(value: unknown): PendingConfirmationRecord | null {
   const entry = record(value);
   if (!entry) return null;
@@ -261,6 +299,7 @@ export class PendingConfirmationsModel {
     const turnId = input.turnId.trim();
     const status = pendingConfirmationStatus(input.status);
     if (!hostId || !threadId || !turnId || !status) return null;
+    if (isMetadataTitleTurn(input)) return null;
     const next: PendingConfirmationRecord = {
       hostId,
       threadId,

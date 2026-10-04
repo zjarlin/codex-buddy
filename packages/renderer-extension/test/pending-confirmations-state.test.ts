@@ -4,6 +4,7 @@ import {
   PENDING_CONFIRMATIONS_LIMIT,
   PENDING_CONFIRMATIONS_STORAGE_KEY,
   PendingConfirmationsModel,
+  isMetadataTitleTurn,
   pendingConfirmationStatus,
   pendingConfirmationSummary,
   type PendingConfirmationStore,
@@ -189,5 +190,56 @@ describe("pending confirmation state", () => {
     expect(
       new PendingConfirmationsModel(memoryStorage(JSON.stringify({ version: 2, entries: [] }))).entries(),
     ).toEqual([]);
+  });
+
+  it("recognizes a thread title generation Turn from its JSON payload", () => {
+    expect(
+      isMetadataTitleTurn({
+        items: [
+          { type: "userMessage", content: [{ type: "text", text: "hi" }] },
+          {
+            type: "agentMessage",
+            text: '{"title":"修复无运行项目时态势异常","description":"排查并修复"}',
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isMetadataTitleTurn({
+        items: [{ type: "agentMessage", text: '```json\n{"title":"T"}\n```' }],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not treat ordinary results as thread title generation", () => {
+    expect(
+      isMetadataTitleTurn({
+        items: [{ type: "agentMessage", text: "{\"title\":\"T\",\"extra\":1}" }],
+      }),
+    ).toBe(false);
+    expect(
+      isMetadataTitleTurn({ items: [{ type: "agentMessage", text: "plain result" }] }),
+    ).toBe(false);
+    expect(isMetadataTitleTurn({ items: [] })).toBe(false);
+    expect(
+      isMetadataTitleTurn({
+        items: [{ type: "agentMessage", text: '{"title":"","description":"d"}' }],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps title generation Turns out of the pending queue", () => {
+    const model = new PendingConfirmationsModel(memoryStorage(), () => 100);
+    expect(
+      model.upsert({
+        hostId: "local",
+        threadId: "thread-a",
+        title: "未命名会话",
+        turnId: "title-turn",
+        status: "completed",
+        items: [{ type: "agentMessage", text: '{"title":"命名","description":"d"}' }],
+      }),
+    ).toBeNull();
+    expect(model.pending()).toEqual([]);
   });
 });

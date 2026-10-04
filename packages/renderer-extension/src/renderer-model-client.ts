@@ -206,8 +206,11 @@ import {
   type BuddyInterrupted,
   type ThreadArchiveCompletedResult,
   BUDDY_PRIVATE_METHOD,
+  BUDDY_TRANSLATE_METHOD,
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
+  buddyTranslateRequestSchema,
+  buddyTranslateResultSchema,
   type BuddyPrivateRequest,
   type BuddyPrivateSnapshot,
   BUDDY_MODELS_METHOD,
@@ -515,6 +518,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
+  translate?(input: { text: string; targetLocale: string }): Promise<{ translated: string; model: string; latencyMs: number }>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
   modelAvailability?(input: ModelAvailabilityParams): Promise<ModelAvailabilitySnapshot>;
@@ -540,6 +544,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     method: "thread/list" | "thread/turns/list" | "thread/read" | "thread/archive",
     params: unknown,
   ): Promise<unknown>;
+  /** Send one user message into an existing Thread and return the new Turn id.
+   * Uses the same native `turn/start` path the Composer and turn actions use, so
+   * official Threads and Host-projected external Harness Threads share one route. */
+  sendThreadMessage?(threadId: string, text: string): Promise<string>;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
   inspectHarness(
     input: HarnessInspectParams,
@@ -1168,6 +1176,15 @@ export function createRendererModelClient(
         await manager.sendRequest(BUDDY_PRIVATE_METHOD, params.data),
       );
     },
+    translate: async (input: { text: string; targetLocale: string }) => {
+      const params = buddyTranslateRequestSchema.safeParse(input);
+      if (!params.success) {
+        throw new Error("Invalid translate request");
+      }
+      return buddyTranslateResultSchema.parse(
+        await manager.sendRequest(BUDDY_TRANSLATE_METHOD, params.data),
+      );
+    },
     buddyStatus: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
     buddyInterrupted: async () =>
@@ -1282,6 +1299,17 @@ export function createRendererModelClient(
       params: unknown,
     ): Promise<unknown> {
       return manager.sendRequest(method, params);
+    },
+    async sendThreadMessage(threadId: string, text: string): Promise<string> {
+      const response = await manager.sendRequest(
+        NATIVE_TURN_START_METHOD,
+        { threadId, input: [{ type: "text", text }] },
+        { priority: "interactive" },
+      );
+      const turn = isRecord(response) && isRecord(response.turn) ? response.turn : null;
+      if (typeof turn?.id !== "string" || !turn.id)
+        throw new Error("Thread message did not return a Turn identity");
+      return turn.id;
     },
     async setIdleReleaseSettings(settings: IdleReleaseSettings): Promise<IdleReleaseSettings> {
       const params = idleReleaseSettingsSchema.parse(settings);

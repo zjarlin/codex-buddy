@@ -53,10 +53,12 @@ import {
   threadArchiveCompletedResultSchema,
 } from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
+import { BuddyTranslator } from "./buddy/translator.js";
 import {
   AUTO_MODEL_ROUTES_METHOD,
   SSH_AUTO_MODEL_ROUTES_METHOD,
   BUDDY_PRIVATE_METHOD,
+  BUDDY_TRANSLATE_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
 } from "@codexhost/shared-contracts";
@@ -704,6 +706,7 @@ export class AppServerHost {
     async () => !(await this.#buddy?.privateMode()),
   );
   #privateChat: BuddyPrivateChat | undefined;
+  #translator: BuddyTranslator | undefined;
   readonly #options: Required<
     Pick<AppServerHostOptions, "desktopInput" | "desktopOutput" | "diagnosticOutput">
   > &
@@ -908,6 +911,7 @@ export class AppServerHost {
     });
     if (options.buddyRouting) {
       this.#privateChat = new BuddyPrivateChat(environment);
+      this.#translator = new BuddyTranslator(environment);
       this.#buddy = new BuddyRouter({
         environment,
         activeWorkChanged: () => this.#signalActiveWorkChanged(),
@@ -1405,6 +1409,18 @@ export class AppServerHost {
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
+      }
+      return;
+    }
+    if (request.method === BUDDY_TRANSLATE_METHOD) {
+      try {
+        if (!this.#translator) {
+          throw new Error("当前 Host 不支持翻译功能；未配置 Buddy。");
+        }
+        const result = await this.#translator.translate(request.params);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32092, errorMessage(error)));
       }
       return;
     }

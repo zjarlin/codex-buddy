@@ -40,18 +40,26 @@ const { outputFiles } = await build({
         const callbacks = [];
         const requests = [];
         const opened = [];
+        const sent = [];
         const client = {
           requestThreadProjection: async (method, params) => {
             requests.push([method, params]);
             return {};
           },
+          sendThreadMessage: async (threadId, text) => {
+            sent.push([threadId, text]);
+            return "turn-follow-up";
+          },
         };
+        // A stable manager identity: connect() drops callbacks from a replaced
+        // manager, so returning a fresh object per call would silence the fixture.
+        const manager = { addNotificationCallback(methods, callback) {
+          callbacks.push(callback);
+          return () => {};
+        }};
         const control = installRendererPendingConfirmations({
           getClient: () => client,
-          getManager: () => ({ addNotificationCallback(methods, callback) {
-            callbacks.push(callback);
-            return () => {};
-          }}),
+          getManager: () => manager,
           getHostIds: () => ["local"],
           activeThread: () => {
             const active = document.querySelector('[data-app-action-sidebar-thread-active="true"]');
@@ -71,6 +79,7 @@ const { outputFiles } = await build({
           callbacks,
           requests,
           opened,
+          sent,
           complete(threadId, turnId, summary, status = "completed") {
             for (const callback of callbacks) callback({ method: "turn/completed", params: { threadId, turn: {
               id: turnId, status, items: [{ type: "agentMessage", text: summary }],
@@ -97,14 +106,28 @@ const { outputFiles } = await build({
 const bundle = outputFiles[0]?.text;
 if (!bundle) throw new Error("Pending confirmation fixture bundle is unavailable");
 
+// localStorage is unavailable on about:blank's opaque origin, so the fixture is
+// served from a real origin; /fixture.js carries the bundled renderer code.
+test.beforeEach(async ({ context }) => {
+  await context.route("https://codexhost.test/**", (route) =>
+    route.fulfill(
+      route.request().url().endsWith("/fixture.js")
+        ? { contentType: "application/javascript", body: bundle }
+        : {
+            contentType: "text/html",
+            body: '<!doctype html><body></body><script src="/fixture.js"></script>',
+          },
+    ),
+  );
+});
+
 test("completed non-current conversations open a modal and support read/archive actions", async ({
   page,
 }) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
-  await page.setContent("<!doctype html><body></body>");
-  await page.addScriptTag({ content: bundle });
+  await page.goto("https://codexhost.test/");
   await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
   const modal = page.locator("[data-codexhost-pending-confirmations]");
 
@@ -153,8 +176,7 @@ test("view action opens the source conversation and keeps the modal non-modal", 
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
-  await page.setContent("<!doctype html><body></body>");
-  await page.addScriptTag({ content: bundle });
+  await page.goto("https://codexhost.test/");
   await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
   await page.evaluate(() =>
     Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "查看结果。"),
@@ -172,8 +194,7 @@ test("a newer Turn replaces the old pending item and repeated completion stays i
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
-  await page.setContent("<!doctype html><body></body>");
-  await page.addScriptTag({ content: bundle });
+  await page.goto("https://codexhost.test/");
   await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
   await page.evaluate(() =>
     Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-1", "旧结果"),
@@ -201,4 +222,27 @@ test("a newer Turn replaces the old pending item and repeated completion stays i
   );
   expect(state).toHaveLength(1);
   expect(state[0]).toMatchObject({ turnId: "turn-2", summary: "新结果", state: "pending" });
+});
+
+test("composer input sends a follow-up into the pending conversation", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "结果。"),
+  );
+  await expect(modal).toBeVisible();
+  await modal.getByPlaceholder("输入续发内容…").fill("再补充一点");
+  await modal.getByRole("button", { name: "发送" }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").sent))
+    .toEqual([["thread-b", "再补充一点"]]);
+  // Sending reuses the open path so the user lands on the continuing conversation.
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened))
+    .toEqual([["thread-b", "local"]]);
+  await expect(modal).toBeHidden();
 });

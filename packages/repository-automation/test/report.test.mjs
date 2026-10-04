@@ -43,8 +43,8 @@ describe("short terminal CI comments", () => {
   });
   it("quotes a failed job's raw error, without translating or breaking fences", () => {
     const state = ci({ conclusion: "failure" });
-    state.jobs[2] = {
-      ...state.jobs[2],
+    state.jobs[1] = {
+      ...state.jobs[1],
       id: 3,
       conclusion: "failure",
       html_url: "https://github.com/example/codex-host/actions/runs/42/job/3",

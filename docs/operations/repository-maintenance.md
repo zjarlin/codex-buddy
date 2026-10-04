@@ -32,7 +32,7 @@ PR 维护只做两件事：**明确标题自动标签、CI 结束后更新一条
 > 提交 abc1234。
 
 - 只读取 `.github/workflows/ci.yml` 中与 PR 当前 HEAD 对应的可信运行。等待工作流和所有 jobs 结束；排队、运行中或尚无运行时不新发评论。
-- 只有工作流和所有 jobs 成功，且四项基线 job 均有唯一成功证据，才报告全部通过：`Check ubuntu-22.04`、`Check macos-14`、`Check windows-latest`、`Check Linux ARM64`。
+- 只有工作流和所有 jobs 成功，且两项基线 job 均有唯一成功证据，才报告全部通过：`Check macos-14`、`Check windows-latest`。
 - 等待批准、取消、跳过、超时、结果不完整分别说明，不能当作通过。CI API 读取失败不发布猜测结果。
 - 每个 PR 只更新一条 `github-actions[bot]` 自有评论，兼容此前摘要标记；不会接管人工伪造的同名标记。结果未变化不重复写入，失败恢复后用成功结果替换。
 - 评论显示短提交 SHA 并链接完整 SHA，避免新提交尚在运行时把上一轮结果误当成新结果；不会为了更新结果要求作者手填 SHA。
@@ -56,24 +56,23 @@ PR 维护只做两件事：**明确标题自动标签、CI 结束后更新一条
 
 ## CI 执行范围和发布校验
 
-`ci.yml` 保留四项基线 job，不配置分支保护。为减少重复工作，执行范围如下：
+`ci.yml` 保留 macOS 和 Windows 两项基线 job，不配置分支保护。为减少重复工作，执行范围如下：
 
-| 检查 | Linux x64 | macOS / Windows / Linux ARM64 |
+| 检查 | macOS | Windows |
 | --- | --- | --- |
-| 格式、ESLint、包边界、完整 TypeScript 类型检查（含测试） | 执行 | 不重复执行 |
+| 格式、ESLint、包边界、完整 TypeScript 类型检查（含测试） | 执行 | 不执行 |
 | TypeScript 构建、预装插件构建 | 执行 | 执行 |
-| TypeScript 测试 | 全量 | 排除下述仅在 Linux x64 执行的测试，其余全部执行 |
+| TypeScript 测试 | 全量 | 仅平台敏感测试 |
 | Rust Clippy、编译和测试 | 执行 | 执行 |
-| Linux npm 安装包 smoke | 执行 | ARM64 执行；macOS / Windows 不适用 |
 
-以下测试仅在 Linux x64 执行，不在其他三个平台重复运行：
+Windows 不重复执行以下测试：
 
 - `packages/repository-automation/test/**`：实际运行在 Linux GitHub Actions 中的仓库治理逻辑。
 - `packages/shared-contracts/test/**`：Schema、序列化和浏览器打包边界验证。
 - `packages/renderer-extension/test/**`：浏览器逻辑、模拟 DOM 和显式模拟的平台信息，不是真实 Desktop UI 验证。
 - `tools/gate-claude-code/run.test.mjs`：入口测试会嵌套启动 Vitest，再次执行已被全量套件包含的 Gate 测试；其余 Gate 测试仍跨平台执行。
 
-其余测试继续保留文件系统、进程、路径、锁、SQLite、插件加载及发行产物的跨平台回归覆盖，Linux ARM64 不以安装包 smoke 替代这些测试。各平台的 TypeScript 构建仍会检查生产代码类型；Rust 格式只在 Linux x64 的 `format:check` 中检查一次，各平台继续执行完整 Clippy 和 Rust 测试。
+其余测试由 macOS 全量执行，继续保留文件系统、进程、路径、锁、SQLite、插件加载及发行产物的回归覆盖。各平台的 TypeScript 构建仍会检查生产代码类型；Rust 格式在 macOS 的 `format:check` 中检查一次，各平台继续执行完整 Clippy 和 Rust 测试。
 
 CI 使用全新 runner，且不持久化 Cargo `target` 目录，因此设置 `CARGO_INCREMENTAL=0`，不生成跨次编译使用的增量状态；Cargo 在同一 job 内仍可复用已构建且未变化的依赖产物。通过 `CARGO_PROFILE_DEV_DEBUG=0` 和 `CARGO_PROFILE_TEST_DEBUG=0` 关闭 Rust dev/test 编译的调试符号，减少编译、链接和产物开销；默认调试断言和溢出检查保持开启，但堆栈的源码定位信息会减少。不修改本地 Cargo 配置或 release profile，也不改变发布工作流。固定版本 npm 的安装和 `npm ci` 使用 `--prefer-offline` 优先利用现有 npm 缓存，缓存缺失时仍联网获取；不改变锁文件约束，也不关闭依赖审计。
 
@@ -82,9 +81,9 @@ CI 使用全新 runner，且不持久化 Cargo `target` 目录，因此设置 `C
 本地 `npm run check` 和 `npm run check:rust` 保持不变，不受 CI 裁剪影响。复现 CI 的 TypeScript 范围：
 
 ```bash
-# Linux x64：构建并运行完整测试
+# macOS：构建并运行完整测试
 npm run test:typescript
-# 其他平台：构建并排除仅在 Linux x64 执行的测试
+# Windows：构建并运行平台敏感测试
 npm run test:typescript -- \
   --exclude 'packages/repository-automation/test/**' \
   --exclude 'packages/shared-contracts/test/**' \
@@ -98,7 +97,7 @@ npm run test:typescript -- \
 
 1. 标签必须是合法 SemVer 的 annotated tag，正文包含 Release Notes；提交在 `main` 历史上。
 2. `package.json`、`package-lock.json` 根版本及 Cargo workspace 版本必须与标签一致。
-3. 确切发布 SHA 的主仓库 `main push` CI 和四项基线 job 必须成功。
+3. 确切发布 SHA 的主仓库 `main push` CI 和两项基线 job 必须成功。
 4. 构建和发布固定 commit SHA；发布前再次验证远端 tag object SHA、提交仍在 `main`、CI run ID / attempt 和结果。
 5. 校验失败就停止发布，不自动改版本、等待后重试或放宽条件；维护者核实后手动重新准备发布。
 

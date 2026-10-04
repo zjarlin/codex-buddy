@@ -1,6 +1,7 @@
 import type { BuddyDecision, BuddySettings, BuddySnapshot } from "@codexhost/shared-contracts";
 import { createVisiblePoll } from "../renderer-visible-poll.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
 import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import { createInterruptedPanel } from "./interrupted-panel.js";
 import { plannerInputControl } from "./planner-input.js";
@@ -288,10 +289,7 @@ export function installBuddyControl(
   dispose(): void;
   refresh(): Promise<void>;
   refreshContext(): void;
-  setModelShortcutsView(
-    view: import("../renderer-model-shortcuts.js").ModelShortcutView | null,
-    harnessId: string,
-  ): void;
+  setModelShortcutsView(view: ModelShortcutView | null, harnessId: string): void;
 } {
   const root = document.createElement("details");
   root.dataset.buddyRouter = "";
@@ -337,7 +335,7 @@ export function installBuddyControl(
   const inputArea = document.createElement("div");
   let inputKey = "";
   let inputClient: RendererModelClient | null = null;
-  let modelShortcutsView: import("../renderer-model-shortcuts.js").ModelShortcutView | null = null;
+  let modelShortcutsView: ModelShortcutView | null = null;
   let modelHarnessId = "";
   routingPanel.append(controls, routingFields);
   taskPanel.append(inputArea, taskEmpty, fields, error, note, footer);
@@ -898,10 +896,7 @@ export function installBuddyControl(
   };
   const poll = createVisiblePoll(document, 1200, () => void refresh());
   void refresh();
-  const setModelShortcutsView = (
-    view: import("../renderer-model-shortcuts.js").ModelShortcutView | null,
-    harnessId: string,
-  ): void => {
+  const setModelShortcutsView = (view: ModelShortcutView | null, harnessId: string): void => {
     modelShortcutsView = view;
     modelHarnessId = harnessId;
     render();

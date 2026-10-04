@@ -42,6 +42,7 @@ import {
   type RendererUsageControl,
 } from "./renderer-usage-control.js";
 import type { RendererSettingsLocale } from "./settings/localization.js";
+import type { ModelShortcutView } from "./renderer-model-shortcuts.js";
 import { mountModelShortcuts } from "./renderer-model-shortcuts.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
 import type { RendererAdapterStatus } from "./versioned-renderer-adapter.js";
@@ -92,10 +93,7 @@ export interface ComposerAgentControl {
   picker: RendererAgentPickerControl;
   modelPicker: RendererModelPickerControl;
   modelShortcuts?: ReturnType<typeof mountModelShortcuts>;
-  onModelShortcutsViewChange?: (
-    view: import("./renderer-model-shortcuts.js").ModelShortcutView,
-    harnessId: string,
-  ) => void;
+  onModelShortcutsViewChange?: (view: ModelShortcutView, harnessId: string) => void;
   permissionModePicker: RendererPermissionModePickerControl;
   nativeModelControl: NativeModelControlState | null;
   nativePermissionModeControl: NativePermissionModeControlState | null;
@@ -718,9 +716,7 @@ export function mountComposerAgentControl(
   composer.before(modelShortcuts.root);
   // Forward current model view into buddy interrupted panel without altering existing selection behavior.
   let lastShortcutsHarnessId = "";
-  let shortcutsViewCallback:
-    | ((view: import("./renderer-model-shortcuts.js").ModelShortcutView, harnessId: string) => void)
-    | undefined;
+  let shortcutsViewCallback: ((view: ModelShortcutView, harnessId: string) => void) | undefined;
   const originalShortcutsUpdate = modelShortcuts.update.bind(modelShortcuts);
   modelShortcuts.update = ((...args: Parameters<typeof originalShortcutsUpdate>) => {
     originalShortcutsUpdate(...args);

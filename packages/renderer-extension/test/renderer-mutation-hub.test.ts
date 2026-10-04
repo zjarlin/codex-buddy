@@ -2,14 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getDomMutationHub } from "../src/renderer-mutation-hub.js";
 
-interface FakeRecord {
-  type: string;
-  target: unknown;
-  attributeName?: string | null;
-  addedNodes: Node[];
-  removedNodes: Node[];
-}
-
 class FakeMutationObserver {
   static instances: FakeMutationObserver[] = [];
   static lastConfig: MutationObserverInit | null = null;

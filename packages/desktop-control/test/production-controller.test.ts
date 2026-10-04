@@ -272,7 +272,7 @@ describe("production Desktop Controller", () => {
 
     expect(install).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
-    expect(sleep).toHaveBeenCalledWith(3_000, abort.signal);
+    expect(sleep).toHaveBeenCalledWith(0, abort.signal);
     expect(sleep).toHaveBeenCalledWith(250);
     expect(ready).toHaveBeenCalledWith({ schemaVersion: 2, state: "compatible", issues: [] });
     expect(close).toHaveBeenCalledOnce();
@@ -363,7 +363,7 @@ describe("production Desktop Controller", () => {
     expect(startAttachmentServer).toHaveBeenCalledOnce();
   });
 
-  it("installs on demand when attachment arrives during the startup stability delay", async () => {
+  it("installs on demand when attachment arrives before deferred startup installation", async () => {
     const abort = new AbortController();
     const activateDesktop = vi.fn(async () => 1);
     const close = vi.fn();
@@ -382,7 +382,7 @@ describe("production Desktop Controller", () => {
       return attachmentServer();
     });
     const sleep = vi.fn(async (milliseconds: number) => {
-      if (milliseconds === 3_000) {
+      if (milliseconds === 0) {
         await attach?.();
         abort.abort();
       }
@@ -452,12 +452,12 @@ describe("production Desktop Controller", () => {
     expect(secondClose).toHaveBeenCalledOnce();
   });
 
-  it("cancels deferred installation when shutdown arrives during the stability delay", async () => {
+  it("cancels deferred installation when shutdown arrives before startup installation", async () => {
     const abort = new AbortController();
     const install = vi.fn<DesktopControllerDependencies["install"]>();
     const ready = vi.fn();
     const sleep = vi.fn(async (milliseconds: number) => {
-      if (milliseconds === 3_000) abort.abort();
+      if (milliseconds === 0) abort.abort();
     });
 
     await runDesktopController(controllerOptions(), abort.signal, {
@@ -470,7 +470,7 @@ describe("production Desktop Controller", () => {
     });
 
     expect(ready).toHaveBeenCalledOnce();
-    expect(sleep).toHaveBeenCalledWith(3_000, abort.signal);
+    expect(sleep).toHaveBeenCalledWith(0, abort.signal);
     expect(install).not.toHaveBeenCalled();
   });
 });

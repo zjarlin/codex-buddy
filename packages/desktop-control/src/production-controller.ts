@@ -49,10 +49,10 @@ const RENDERER_CSP_BOOTSTRAP =
 const DESKTOP_CONTROLLER_READINESS_MAX_BYTES = 512;
 const TRANSIENT_INSTALL_ATTEMPTS = 3;
 const TRANSIENT_INSTALL_RETRY_MS = 250;
-const STARTUP_RENDERER_INSTALL_DELAY_MS = 3_000;
+const STARTUP_RENDERER_INSTALL_DELAY_MS = 0;
 const RECOVERY_RETRY_INITIAL_MS = 30_000;
 const RECOVERY_RETRY_MAX_MS = 300_000;
-// 默认在就绪发布后延迟注入，避开首屏提交；显式 attach 仍可提前恢复。
+// 默认在就绪发布后立即注入；显式 attach 仍可提前恢复。
 const INSTALL_RENDERER_ON_STARTUP = process.env.CODEXHOST_STARTUP_RENDERER_INSTALL === "1";
 const startupTraceStartedAt = Date.now();
 
@@ -350,7 +350,7 @@ export async function runDesktopController(
       issues: [],
     });
     if (!INSTALL_RENDERER_ON_STARTUP && !signal.aborted) {
-      startupTrace("waiting for Renderer startup stability");
+      startupTrace("starting deferred Renderer Session");
       await dependencies.sleep(STARTUP_RENDERER_INSTALL_DELAY_MS, signal);
       if (!signal.aborted) {
         await useSession(async () => {

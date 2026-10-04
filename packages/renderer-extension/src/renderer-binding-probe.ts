@@ -68,6 +68,7 @@ import {
 import { installReasoningTranscriptSoftWrap } from "./renderer-transcript-dom.js";
 import { installTranscriptAutoScroll } from "./renderer-transcript-scroll.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { resolveRendererSettingsLocale } from "./settings/localization.js";
 import { RendererCodexAccountState } from "./renderer-codex-account-state.js";
 import {
   createRendererCodexUsageGate,
@@ -770,6 +771,8 @@ export function installRendererBindingProbe(
   let adapterDispose: (() => void) | null = null;
   let applyAdapterAgent: ApplyAdapterAgent | null = null;
   let modelControl: RendererModelClient | null = null;
+  let rendererLocaleValue = resolveRendererSettingsLocale(window.navigator.languages);
+  const rendererLocale = (): "zh-CN" | "en" => rendererLocaleValue;
   const activeModelHostId = (): string | null => {
     if (!modelControl) return null;
     return modelControl.currentHostId ? modelControl.currentHostId() : "local";
@@ -806,16 +809,16 @@ export function installRendererBindingProbe(
   });
   const sidebarContinuation = installSidebarContinuation({
     getClient: (hostId) => modelClientForHost(hostId),
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
   });
   const pendingConfirmations = new PendingConfirmationsModel(window.localStorage);
   const sidebarUnread = installRendererSidebarUnread({
     getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
     pendingConfirmations,
   });
   const sidebarVisits = installRendererSidebarVisits({
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
   });
   const pendingConfirmationPanel = installRendererPendingConfirmations({
     getClient: (hostId) => modelClientForHost(hostId),
@@ -842,12 +845,12 @@ export function installRendererBindingProbe(
       }
       return null;
     },
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
     model: pendingConfirmations,
   });
   const sidebarStatusFilter = installRendererSidebarStatusFilter({
     getClient: (hostId) => modelClientForHost(hostId),
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
     hasPending: (hostId, threadId) => pendingConfirmations.hasPending(hostId, threadId),
   });
   const projectDashboard = installRendererProjectDashboard({
@@ -878,7 +881,7 @@ export function installRendererBindingProbe(
   });
   const threadActions = installRendererThreadActions({
     getClient: (hostId) => modelClientForHost(hostId),
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
   });
   const queuedTransfer = installRendererQueuedTransfer({
     getManager: (hostId) => {
@@ -886,11 +889,11 @@ export function installRendererBindingProbe(
       const manager: unknown = window.__codexhostHostRoutingV1?.forHost(hostId)?.manager;
       return isQueuedTransferManager(manager) ? manager : null;
     },
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
   });
   const projectActions = installRendererProjectActions({
     getClient: () => modelClientForHost("local"),
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    getLocale: rendererLocale,
   });
   // 原生预热发布各 Host 的当前草稿目录，供 Git 面板与命令目录共用。
   const draftWorkspaces = new Map<string, string>();
@@ -956,7 +959,7 @@ export function installRendererBindingProbe(
   });
   const gitBranchControl = installRendererGitBranchControl({
     cache: gitCache,
-    getLocale: () => settingsLifecycle.locale,
+    getLocale: rendererLocale,
     getContext: () => {
       const current = activeGitContext();
       if (!current?.threadId || !current.client?.inspectGitStatus) {
@@ -1024,12 +1027,14 @@ export function installRendererBindingProbe(
       return openRendererThread(threadId, { hostId, signal });
     },
     onLocaleChange() {
+      rendererLocaleValue = settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en";
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
       gitSidebar.refresh();
     },
   });
+  rendererLocaleValue = settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en";
   const projectTabs = installProjectTabs({
-    getLocale: () => settingsLifecycle.locale,
+    getLocale: rendererLocale,
     getClient: () => modelClientForHost("local"),
   });
   let adapterStatus: RendererAdapterStatus = {

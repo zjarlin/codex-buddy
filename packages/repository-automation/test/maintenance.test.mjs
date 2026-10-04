@@ -84,7 +84,7 @@ describe("PR labels and a single terminal CI result only", () => {
     const f = fixture();
     await f.run();
     const failure = ci({ conclusion: "failure", run_attempt: 2 });
-    failure.jobs[2] = { ...failure.jobs[2], id: 3, conclusion: "failure" };
+    failure.jobs[1] = { ...failure.jobs[1], id: 3, conclusion: "failure" };
     f.setCi(failure);
     await f.run();
     expect(f.getComments()[0].body).toContain("❌ Windows CI 失败");

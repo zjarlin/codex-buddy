@@ -2,6 +2,7 @@ import { installTurnActionCards } from "./turn-action-card/index.js";
 import { createSessionRouting } from "./renderer-session-routing.js";
 import { sessionDraftText } from "./renderer-session-targets.js";
 import { installAutoRouteCards } from "./auto-route-card/index.js";
+import { installTranslateCards } from "./translate-card/index.js";
 import { installRendererGitWorkflowControl } from "./renderer-git-workflow-control.js";
 import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installRendererSidebarUnread } from "./renderer-sidebar-unread.js";
@@ -68,6 +69,7 @@ import {
 import { installReasoningTranscriptSoftWrap } from "./renderer-transcript-dom.js";
 import { installTranscriptAutoScroll } from "./renderer-transcript-scroll.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import { resolveRendererSettingsLocale } from "./settings/localization.js";
 import { RendererCodexAccountState } from "./renderer-codex-account-state.js";
 import {
@@ -3056,7 +3058,7 @@ export function installRendererBindingProbe(
     return roots;
   };
 
-  const transferReplacedComposers = (mutations: MutationRecord[]): void => {
+  const transferReplacedComposers = (mutations: readonly MutationRecord[]): void => {
     const replacements = new Map<Node, { removed: Set<Element>; added: Set<Element> }>();
     for (const mutation of mutations) {
       if (mutation.type !== "childList") continue;
@@ -3209,21 +3211,27 @@ export function installRendererBindingProbe(
     notifySubmission(composer, "click");
   };
 
-  const mutationObserver = new MutationObserver((mutations) => {
-    const structural = mutations.filter((mutation) =>
-      mutationAffectsElements(mutation, BINDING_SURFACE_SELECTOR),
-    );
-    if (structural.length === 0) return;
-    transferReplacedComposers(structural);
-    // 忽略 codexhost 自身注入控件产生的 DOM 变更：它们由 scan 触发的
-    // reposition 写入，如果反过来再驱动 scan 就会形成 CPU 满载的自激循环。
-    const relevant = structural.filter((mutation) => {
-      const target =
-        mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
-      return target?.closest(RENDERER_INJECTED_CONTROL_SELECTOR) === null;
-    });
-    if (relevant.length === 0) return;
-    scheduleScan(relevant.some(mutationMayChangeComposerTarget));
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
+    attributeFilter: [
+      "hidden",
+      "aria-hidden",
+      "data-codex-composer-root",
+      "data-above-composer-conversation-id",
+    ],
+    test: (mutation) => mutationAffectsElements(mutation, BINDING_SURFACE_SELECTOR),
+    onMutate: (mutations) => {
+      transferReplacedComposers(mutations);
+      // 忽略 codexhost 自身注入控件产生的 DOM 变更：它们由 scan 触发的
+      // reposition 写入，如果反过来再驱动 scan 就会形成 CPU 满载的自激循环。
+      const relevant = mutations.filter((mutation) => {
+        const target =
+          mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
+        return target?.closest(RENDERER_INJECTED_CONTROL_SELECTOR) === null;
+      });
+      if (relevant.length === 0) return;
+      scheduleScan(relevant.some(mutationMayChangeComposerTarget));
+    },
   });
   const onHostRouteChange = (): void => {
     scheduleScan(true);
@@ -3285,17 +3293,6 @@ export function installRendererBindingProbe(
     }
     for (const mounted of mountedByComposer.values()) renderMounted(mounted);
   };
-  mutationObserver.observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: [
-      "hidden",
-      "aria-hidden",
-      "data-codex-composer-root",
-      "data-above-composer-conversation-id",
-    ],
-    childList: true,
-    subtree: true,
-  });
   document.addEventListener("beforeinput", onBeforeInput, true);
   document.addEventListener("submit", onSubmit, true);
   document.addEventListener("keydown", onKeyDown, true);
@@ -3490,6 +3487,35 @@ export function installRendererBindingProbe(
     },
   });
 
+  const translateCards = installTranslateCards({
+    getLocale: () => settingsLifecycle.locale,
+    getContext: () => {
+      for (const mounted of connectedComposers()) {
+        if (
+          mounted.ownershipStatus !== "ready" ||
+          controller.get(mounted.composer).agent !== "codex" ||
+          controller.isSwitching(mounted.composer) ||
+          !mounted.composer.getClientRects().length
+        )
+          continue;
+        const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
+        const hostId = mounted.hostId;
+        const client = modelClientForHostFrom(modelControl, hostId);
+        if (!threadId || !hostId || hostId !== activeModelHostId() || !client?.translate)
+          continue;
+        const root =
+          mounted.composer.closest<HTMLElement>('[data-app-shell-main-surface="default"]') ??
+          document.body;
+        return {
+          threadId,
+          root,
+          client,
+        };
+      }
+      return null;
+    },
+  });
+
   const api: RendererBindingProbeApi = {
     status() {
       const selections = connectedComposers().map((mounted) => ({
@@ -3608,11 +3634,12 @@ export function installRendererBindingProbe(
       adapterDispose = null;
       applyAdapterAgent = null;
       modelControl = null;
-      mutationObserver.disconnect();
+      stopObserving();
       if (scanFrame !== null) window.cancelAnimationFrame(scanFrame);
       disposeReasoningSoftWrap();
       disposeTranscriptAutoScroll();
       autoRouteCards.dispose();
+      translateCards.dispose();
       turnActionCards.dispose();
       sidebarContinuation.dispose();
       sidebarUnread.dispose();

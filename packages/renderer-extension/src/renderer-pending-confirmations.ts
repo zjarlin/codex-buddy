@@ -17,6 +17,7 @@ import {
   SIDEBAR_THREAD_ROW_SELECTOR,
   threadIdFromSidebarRowElement,
 } from "./renderer-sidebar-agent-icons.js";
+import { appendMarkdownBlocks } from "./markdown-renderer.js";
 
 type Locale = "zh-CN" | "en";
 type NotificationManager = {
@@ -111,6 +112,19 @@ function statusLabel(locale: Locale, status: PendingConfirmationRecord["status"]
       : value.interrupted;
 }
 
+
+function isRateLimited(entry: PendingConfirmationRecord): boolean {
+  if (entry.status !== "failed") return false;
+  const text = `${entry.summary} ${entry.title}`.toLowerCase();
+  return /429|rate[s-]*limit|quota|throttl|too many requests/i.test(text);
+}
+
+function statusTone(status: PendingConfirmationRecord["status"], rateLimited: boolean): "success" | "warning" | "error" | "neutral" {
+  if (status === "completed") return "success";
+  if (status === "failed") return rateLimited ? "warning" : "error";
+  return "neutral";
+}
+
 function formatTime(value: number, locale: Locale): string {
   if (!value) return "";
   try {
@@ -177,7 +191,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const body = document.createElement("div");
   const kind = document.createElement("span");
   const conversation = document.createElement("h3");
-  const summary = document.createElement("p");
+  const summary = document.createElement("div");
   const time = document.createElement("time");
   const actions = document.createElement("footer");
   const view = document.createElement("button");
@@ -209,7 +223,20 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-body{min-height:0;overflow:auto;padding:16px}
 [${MODAL}] .codexhost-pending-kind{display:inline-flex;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,CanvasText 9%,transparent);font-size:12px}
 [${MODAL}] .codexhost-pending-body h3{margin:10px 0 6px;font-size:17px;line-height:24px;overflow-wrap:anywhere}
-[${MODAL}] .codexhost-pending-summary{max-height:240px;margin:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:color-mix(in srgb,CanvasText 84%,transparent)}
+[${MODAL}] .codexhost-pending-summary{max-height:240px;margin:0;overflow:auto;overflow-wrap:anywhere;color:color-mix(in srgb,CanvasText 84%,transparent);font-size:13px;line-height:20px}
+[${MODAL}] .codexhost-pending-summary>:first-child{margin-top:0}
+[${MODAL}] .codexhost-pending-summary>:last-child{margin-bottom:0}
+[${MODAL}] .codexhost-pending-summary p,[${MODAL}] .codexhost-pending-summary ul,[${MODAL}] .codexhost-pending-summary ol,[${MODAL}] .codexhost-pending-summary pre,[${MODAL}] .codexhost-pending-summary blockquote{margin:6px 0}
+[${MODAL}] .codexhost-pending-summary ul,[${MODAL}] .codexhost-pending-summary ol{padding-left:20px}
+[${MODAL}] .codexhost-pending-summary li+li{margin-top:4px}
+[${MODAL}] .codexhost-pending-summary blockquote{padding:6px 10px;border-left:3px solid color-mix(in srgb,CanvasText 24%,transparent);background:color-mix(in srgb,CanvasText 6%,transparent)}
+[${MODAL}] .codexhost-pending-summary pre{padding:8px 10px;border-radius:4px;background:color-mix(in srgb,CanvasText 8%,transparent);overflow-x:auto}
+[${MODAL}] .codexhost-pending-summary code{font-family:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:12px}
+[${MODAL}] .codexhost-pending-summary :not(pre)>code{padding:1px 4px;border-radius:3px;background:color-mix(in srgb,CanvasText 10%,transparent)}
+[${MODAL}] .codexhost-pending-summary strong{font-weight:600;color:CanvasText}
+[${MODAL}] .codexhost-pending-summary a{color:Highlight;text-decoration:none}
+[${MODAL}] .codexhost-pending-summary a:hover{text-decoration:underline}
+[${MODAL}] .codexhost-pending-summary hr{border:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);margin:8px 0}
 [${MODAL}] .codexhost-pending-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
 [${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
@@ -325,8 +352,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     queue.hidden = entries.length <= 1;
     queue.textContent = entries.length > 1 ? copy.more(entries.length - 1) : "";
     kind.textContent = statusLabel(locale, entry.status);
+    kind.dataset.tone = statusTone(entry.status, isRateLimited(entry));
     conversation.textContent = entry.title || copy.unnamed;
-    summary.textContent = entry.summary;
+    summary.replaceChildren();
+    appendMarkdownBlocks(document, summary, entry.summary ?? "");
     time.textContent = formatTime(entry.completedAt, locale);
     view.textContent = copy.view;
     read.textContent = copy.read;

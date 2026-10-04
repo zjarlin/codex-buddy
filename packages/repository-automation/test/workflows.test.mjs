@@ -32,10 +32,11 @@ describe("workflow and form contracts", () => {
   it("keeps CI job names synchronized with the actual matrix", async () => {
     const workflow = await read(".github/workflows/ci.yml");
     expect(workflow).toContain("name: Check ${{ matrix.os }}");
-    for (const name of CI_JOBS.filter((value) => value !== "Check Linux ARM64")) {
+    for (const name of CI_JOBS) {
       expect(workflow).toContain(`- ${name.slice("Check ".length)}\n`);
     }
-    expect(workflow).toContain("name: Check Linux ARM64");
+    expect(workflow).not.toContain("ubuntu-22.04");
+    expect(workflow).not.toContain("ubuntu-22.04-arm");
   });
 
   it("cancels superseded PR runs without cancelling main release evidence", async () => {

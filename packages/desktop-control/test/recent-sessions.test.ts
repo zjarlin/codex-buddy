@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { recentCompletedSessions, type RecentSessionsRequest } from "../src/recent-sessions.js";
 
 describe("recent completed sessions", () => {
-  it("lists completed conversations across projects without model scoring", async () => {
+  it("lists stopped conversations across projects without model scoring", async () => {
     const rows = [
       { id: "a", cwd: "/one", name: "First" },
       { id: "b", cwd: "/two", name: "Second" },
@@ -26,6 +26,8 @@ describe("recent completed sessions", () => {
     expect(result.candidates.map((row) => [row.threadId, row.cwd, row.confidence])).toEqual([
       ["a", "/one", null],
       ["b", "/two", null],
+      // 最后一轮 failed 的会话同样已停止，可作为续接目标。
+      ["failed", "/one", null],
     ]);
     expect(
       request.mock.calls
@@ -38,7 +40,20 @@ describe("recent completed sessions", () => {
     );
   });
 
-  it("rejects a candidate that becomes active or has no confirmed completion", async () => {
+  it.each(["interrupted", "failed", "cancelled"])(
+    "keeps a stopped conversation whose last turn is %s",
+    async (status) => {
+      const request: RecentSessionsRequest = async (method) =>
+        method === "thread/list"
+          ? { result: { data: [{ id: "stopped", cwd: "/two", name: "Stopped" }] } }
+          : { result: { data: [{ status }] } };
+      expect(
+        (await recentCompletedSessions(request)).candidates.map((row) => row.threadId),
+      ).toEqual(["stopped"]);
+    },
+  );
+
+  it("rejects a candidate that becomes active or is still running", async () => {
     const request: RecentSessionsRequest = async (method) =>
       method === "thread/list"
         ? { result: { data: [{ id: "pending", cwd: "/two" }] } }

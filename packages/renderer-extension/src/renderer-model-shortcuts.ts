@@ -301,6 +301,7 @@ export function mountModelShortcuts(
       document.activeElement instanceof HTMLElement
         ? document.activeElement.dataset.favoriteModelId
         : undefined;
+    // 收藏菜单直接使用上游返回的模型列表；原生目录仅用于补充标签与禁用状态。
     const menuModels = new Map([
       ...view.models.map((model) => [model.id, model] as const),
       ...visibleModels

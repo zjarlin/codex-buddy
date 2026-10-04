@@ -1,3 +1,5 @@
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
+
 const SCROLLER = "[data-app-action-timeline-scroll]";
 const BOTTOM_THRESHOLD = 48;
 
@@ -141,25 +143,32 @@ export function installTranscriptAutoScroll(ownerDocument: Document): () => void
       else bindings.get(scroller)?.refresh();
     }
   };
-  const mutations = new MutationObserver((records) => {
-    for (const record of records) {
+  const stopObserving = getDomMutationHub(ownerDocument).subscribe({
+    kinds: ["childList"],
+    test: (record) => {
       const target = record.target instanceof Element ? record.target : record.target.parentElement;
       const scroller = target?.closest<HTMLElement>(SCROLLER);
-      if (scroller && bindings.has(scroller)) {
-        if (record.target === scroller) bindings.get(scroller)?.refresh();
-        continue;
-      }
-      const changed = [...record.addedNodes, ...record.removedNodes].some(
+      if (scroller && bindings.has(scroller)) return record.target === scroller;
+      return [...record.addedNodes, ...record.removedNodes].some(
         (node) =>
           node instanceof Element &&
           (node.matches(SCROLLER) || node.querySelector(SCROLLER) !== null),
       );
-      if (changed && !frame && !disposed) frame = ownerWindow.requestAnimationFrame(reconcile);
-    }
-  });
-  mutations.observe(ownerDocument.documentElement, {
-    childList: true,
-    subtree: true,
+    },
+    onMutate: (records) => {
+      let added = false;
+      for (const record of records) {
+        const target =
+          record.target instanceof Element ? record.target : record.target.parentElement;
+        const scroller = target?.closest<HTMLElement>(SCROLLER);
+        if (scroller && bindings.has(scroller)) {
+          bindings.get(scroller)?.refresh();
+          continue;
+        }
+        added = true;
+      }
+      if (added && !frame && !disposed) frame = ownerWindow.requestAnimationFrame(reconcile);
+    },
   });
   const onSubmission = (event: Event): void => {
     const composerId = event instanceof CustomEvent ? event.detail?.composerId : null;
@@ -177,7 +186,7 @@ export function installTranscriptAutoScroll(ownerDocument: Document): () => void
   reconcile();
   return () => {
     disposed = true;
-    mutations.disconnect();
+    stopObserving();
     if (frame) ownerWindow.cancelAnimationFrame(frame);
     ownerWindow.removeEventListener("codexhost:renderer-submission", onSubmission);
     for (const binding of bindings.values()) binding.dispose();

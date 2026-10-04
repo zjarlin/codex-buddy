@@ -9,6 +9,7 @@ import { createRendererAgentIcon, RENDERER_AGENT_LABELS } from "./renderer-agent
 import type { RendererModelClient } from "./renderer-model-client.js";
 import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 
 export const SIDEBAR_THREAD_ROW_ATTRIBUTE = "data-app-action-sidebar-thread-row";
 export const SIDEBAR_THREAD_ROW_SELECTOR = `[${SIDEBAR_THREAD_ROW_ATTRIBUTE}]`;
@@ -51,18 +52,33 @@ export function draftIdFromSidebarRowElement(element: HTMLElement): string | nul
   return taskKey.startsWith("client-new-thread:") ? taskKey : null;
 }
 
-export function threadIdFromSidebarRowElement(element: HTMLElement): string | null {
-  const attributes = sidebarThreadAttributes(element);
-  if (!attributes) return null;
-  const { taskKey, hostId, rowMarker } = attributes;
+// 同一行会被多个侧栏观察者重复解析（未读、查阅次数、状态筛选、Agent 图标、
+// 行操作、文件夹等各自全量扫描）。React 重用时同一个 DOM 元素身份与 fiber 对象
+// 都保持不变，只有 data-app-action-* 属性或 fiber 指针变化才代表会话身份改变，
+// 因此按「元素 + 属性指纹 + fiber 引用」缓存，把每次扫描中
+// O(行数 × fiber 深度) 的回溯降为一次。
+interface ThreadIdCacheEntry {
+  taskKey: string;
+  hostId: string;
+  rowMarker: string;
+  fiber: unknown;
+  value: string | null;
+}
+const threadIdCache = new WeakMap<HTMLElement, ThreadIdCacheEntry>();
 
+function resolveThreadIdFromSidebarRowElement(
+  element: HTMLElement,
+  taskKey: string,
+  hostId: string,
+  rowMarker: string,
+): { fiber: unknown; value: string | null } {
   const fiberNames = Object.getOwnPropertyNames(element).filter((name) =>
     name.startsWith("__reactFiber$"),
   );
   const fiberName = fiberNames[0];
-  if (fiberNames.length !== 1 || !fiberName) return null;
+  if (fiberNames.length !== 1 || !fiberName) return { fiber: null, value: null };
   const firstFiber = Object.getOwnPropertyDescriptor(element, fiberName)?.value;
-  if (!isRecord(firstFiber)) return null;
+  if (!isRecord(firstFiber)) return { fiber: null, value: null };
 
   const candidates = new Set<string>();
   let fiber: Record<string, unknown> | null = firstFiber;
@@ -82,7 +98,44 @@ export function threadIdFromSidebarRowElement(element: HTMLElement): string | nu
     }
     fiber = isRecord(fiber.return) ? fiber.return : null;
   }
-  return candidates.size === 1 ? (candidates.values().next().value ?? null) : null;
+  const value = candidates.size === 1 ? (candidates.values().next().value ?? null) : null;
+  return { fiber: firstFiber, value };
+}
+
+export function threadIdFromSidebarRowElement(element: HTMLElement): string | null {
+  const attributes = sidebarThreadAttributes(element);
+  if (!attributes) return null;
+  const { taskKey, hostId, rowMarker } = attributes;
+
+  const cached = threadIdCache.get(element);
+  if (
+    cached &&
+    cached.taskKey === taskKey &&
+    cached.hostId === hostId &&
+    cached.rowMarker === rowMarker
+  ) {
+    // fiber 指针仍需一致：React 卸载/重挂同一 DOM 节点或测试删除 fiber 时，
+    // 属性不变但会话身份已不可解析，此时必须重新回溯。
+    const current = currentSidebarRowFiber(element);
+    if (current === cached.fiber) return cached.value;
+  }
+
+  const { fiber, value } = resolveThreadIdFromSidebarRowElement(
+    element,
+    taskKey,
+    hostId,
+    rowMarker,
+  );
+  threadIdCache.set(element, { taskKey, hostId, rowMarker, fiber, value });
+  return value;
+}
+
+function currentSidebarRowFiber(element: HTMLElement): unknown {
+  const fiberNames = Object.getOwnPropertyNames(element).filter((name) =>
+    name.startsWith("__reactFiber$"),
+  );
+  if (fiberNames.length !== 1 || fiberNames[0] === undefined) return null;
+  return Object.getOwnPropertyDescriptor(element, fiberNames[0])?.value ?? null;
 }
 
 export function inspectRendererSidebarContract(
@@ -252,18 +305,14 @@ class BrowserSidebarAgentIconDom implements SidebarAgentIconDom {
   }
 
   observe(onChange: () => void): () => void {
-    const observer = new MutationObserver((records) => {
-      if (records.some((record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR))) {
-        onChange();
-      }
-    });
-    observer.observe(this.root, {
-      attributes: true,
+    const ownerDocument =
+      this.root instanceof Document ? this.root : (this.root.ownerDocument ?? document);
+    return getDomMutationHub(ownerDocument).subscribe({
+      kinds: ["childList", "attributes"],
       attributeFilter: [SIDEBAR_THREAD_ID_ATTRIBUTE, SIDEBAR_THREAD_HOST_ID_ATTRIBUTE],
-      childList: true,
-      subtree: true,
+      test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
+      onMutate: () => onChange(),
     });
-    return () => observer.disconnect();
   }
 
   clear(): void {

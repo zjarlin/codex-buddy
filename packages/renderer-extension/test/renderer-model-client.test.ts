@@ -627,6 +627,7 @@ describe("Renderer fixed Model request client", () => {
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
+      "sendThreadMessage",
       "setHarnessLaunchSettings",
       "setIdleReleaseSettings",
       "setProjectTabs",

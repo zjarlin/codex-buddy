@@ -622,6 +622,12 @@ export type {
   BuddyPrivateModel,
 } from "./buddy-private.js";
 export {
+  BUDDY_TRANSLATE_METHOD,
+  buddyTranslateRequestSchema,
+  buddyTranslateResultSchema,
+} from "./buddy-translate.js";
+export type { BuddyTranslateRequest, BuddyTranslateResult } from "./buddy-translate.js";
+export {
   GIT_WORKFLOW_STATUS_METHOD,
   GIT_WORKFLOW_RUN_METHOD,
   gitWorkflowSnapshotSchema,

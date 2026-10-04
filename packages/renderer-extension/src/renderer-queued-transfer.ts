@@ -4,6 +4,7 @@ import X from "lucide/dist/esm/icons/x.mjs";
 
 import { CODEX_COMPOSER_SELECTOR } from "./renderer-composer-dom.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   findComposerModelTarget,
   threadIdFromComposerModelTarget,
@@ -472,12 +473,11 @@ export function installRendererQueuedTransfer(options: {
     scheduled = true;
     queueMicrotask(scan);
   };
-  const observer = new MutationObserver((mutations) => {
-    if (mutations.some((mutation) => mutationAffectsElements(mutation, MORE_SELECTOR, false))) {
-      refresh();
-    }
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList"],
+    test: (mutation) => mutationAffectsElements(mutation, MORE_SELECTOR, false),
+    onMutate: () => refresh(),
   });
-  observer.observe(document.body, { childList: true, subtree: true });
   const onPointerDown = (event: PointerEvent): void => {
     if (!panel || !(event.target instanceof Node)) return;
     if (
@@ -493,7 +493,7 @@ export function installRendererQueuedTransfer(options: {
     refresh,
     dispose() {
       closed = true;
-      observer.disconnect();
+      stopObserving();
       document.removeEventListener("pointerdown", onPointerDown, true);
       close();
       for (const transfer of mounted.values()) transfer.remove();

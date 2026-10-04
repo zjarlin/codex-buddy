@@ -13,6 +13,7 @@ import {
 import type { RendererModelClient } from "./renderer-model-client.js";
 import type { ThreadFolderThreadMenu } from "./thread-folders/index.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   getSharedThreadTerminalPreferenceStore,
   type ThreadTerminalPreferenceStore,
@@ -55,7 +56,6 @@ type Locale = "zh-CN" | "en";
 interface RowEntry {
   slot: HTMLElement;
   trigger: HTMLButtonElement;
-  onContextMenu: (event: MouseEvent) => void;
 }
 
 interface TerminalSelection {
@@ -216,7 +216,6 @@ export function installRendererThreadActions(options: {
     const entry = mounted.get(row);
     if (!entry) return;
     entry.trigger.remove();
-    row.removeEventListener("contextmenu", entry.onContextMenu);
     mounted.delete(row);
   };
 
@@ -511,19 +510,10 @@ export function installRendererThreadActions(options: {
         for (const name of ["pointerdown", "mousedown", "keydown", "keyup"] as const) {
           trigger.addEventListener(name, (event) => event.stopPropagation());
         }
-        const onContextMenu = (event: MouseEvent): void => {
-          const currentHostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
-          const currentThreadId = currentHostId ? nativeThreadId(currentHostId, row) : null;
-          if (!currentHostId || !currentThreadId) return;
-          event.preventDefault();
-          event.stopPropagation();
-          closeMenu();
-          const menu = buildMenu(row, currentHostId, currentThreadId);
-          placeMenuAt(row, menu, trigger, event.clientX, event.clientY);
-        };
-        row.addEventListener("contextmenu", onContextMenu);
+        // 行级右键菜单由 Desktop 原生提供（重命名、置顶、归档等）。扩展只在
+        // 三点按钮里挂自己的菜单，绝不拦截原生 contextmenu。
         slot.append(trigger);
-        entry = { slot, trigger, onContextMenu };
+        entry = { slot, trigger };
         mounted.set(row, entry);
       }
       const label = menuLabel(options.getLocale());
@@ -555,16 +545,11 @@ export function installRendererThreadActions(options: {
   };
   const onWindowChange = (): void => closeMenu();
 
-  const observer = new MutationObserver((records) => {
-    if (records.some((record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR))) {
-      schedule();
-    }
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: [SIDEBAR_THREAD_ID_ATTRIBUTE, SIDEBAR_THREAD_HOST_ID_ATTRIBUTE],
+    test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
+    onMutate: () => schedule(),
   });
   document.addEventListener("pointerdown", onDocumentPointerDown, true);
   document.addEventListener("keydown", onKeyDown, true);
@@ -577,7 +562,7 @@ export function installRendererThreadActions(options: {
     refresh,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       document.removeEventListener("pointerdown", onDocumentPointerDown, true);
       document.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("resize", onWindowChange);

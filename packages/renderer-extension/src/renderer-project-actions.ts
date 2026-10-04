@@ -7,6 +7,7 @@ import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bin
 
 import type { RendererModelClient } from "./renderer-model-client.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   getSharedThreadTerminalPreferenceStore,
   type ThreadTerminalPreferenceStore,
@@ -350,21 +351,18 @@ export function installRendererProjectActions(options: {
     }
   };
 
-  const observer = new MutationObserver((records) => {
-    if (
-      scheduled ||
-      disposed ||
-      !records.some((record) => mutationAffectsElements(record, '[role="menu"]'))
-    ) {
-      return;
-    }
-    scheduled = true;
-    queueMicrotask(() => {
-      scheduled = false;
-      refresh();
-    });
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList"],
+    test: (record) => mutationAffectsElements(record, '[role="menu"]'),
+    onMutate: () => {
+      if (scheduled || disposed) return;
+      scheduled = true;
+      queueMicrotask(() => {
+        scheduled = false;
+        refresh();
+      });
+    },
   });
-  observer.observe(document.body, { childList: true, subtree: true });
   document.addEventListener("keydown", onKeyDown, true);
   refresh();
 
@@ -373,7 +371,7 @@ export function installRendererProjectActions(options: {
     dispose() {
       if (disposed) return;
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       document.removeEventListener("keydown", onKeyDown, true);
       for (const entry of mounted.values()) {
         for (const item of entry.items) item.remove();

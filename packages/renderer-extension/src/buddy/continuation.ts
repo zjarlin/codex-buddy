@@ -4,6 +4,7 @@ import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { createVisiblePoll } from "../renderer-visible-poll.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
@@ -14,13 +15,11 @@ import {
 
 type InterruptedThread = BuddyInterrupted["threads"][number];
 const marker = "data-buddy-sidebar-recovery";
-const runningMarker = "data-buddy-sidebar-running";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
 const stateMarker = "data-buddy-sidebar-state";
 
 // 覆盖原生状态槽的视觉内容，卸载时保留 React 管理的原始节点。
 const style = `
-[${runningMarker}]{background:color-mix(in srgb,#18a058 10%,transparent)!important;box-shadow:inset 3px 0 0 #18a058!important}
 [${recoverableMarker}]{background:color-mix(in srgb,#d99000 9%,transparent)!important;box-shadow:inset 3px 0 0 #d99000!important}
 [${stateMarker}="failed"]{background:color-mix(in srgb,#d64b3f 9%,transparent)!important;box-shadow:inset 3px 0 0 #d64b3f!important}
 [${stateMarker}="cancelled"]{background:color-mix(in srgb,#4b7bd6 9%,transparent)!important;box-shadow:inset 3px 0 0 #4b7bd6!important}
@@ -85,12 +84,10 @@ export function installSidebarContinuation(options: {
   };
   const clearRow = (row: HTMLElement) => {
     clear(row);
-    row.removeAttribute(runningMarker);
     row.removeAttribute(recoverableMarker);
     row.removeAttribute(stateMarker);
   };
   const decorate = (row: HTMLElement, running: boolean, thread: InterruptedThread | undefined) => {
-    row.toggleAttribute(runningMarker, running);
     row.toggleAttribute(recoverableMarker, !running && thread !== undefined);
     const state = running ? "running" : thread?.status;
     if (state && row.getAttribute(stateMarker) !== state) row.setAttribute(stateMarker, state);
@@ -288,16 +285,11 @@ export function installSidebarContinuation(options: {
     for (const state of hosts.values()) state.updatedAt = 0;
     schedule();
   };
-  const observer = new MutationObserver((records) => {
-    if (records.some((record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR))) {
-      schedule();
-    }
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE],
+    test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
+    onMutate: () => schedule(),
   });
   // DOM 变化负责重绑行；状态只按原有 15 秒有效期刷新，不再每 1.5 秒全量扫描。
   const poll = createVisiblePoll(document, 15_000, () => {
@@ -309,7 +301,7 @@ export function installSidebarContinuation(options: {
     refresh,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       poll.dispose();
       window.removeEventListener("focus", refresh);
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {

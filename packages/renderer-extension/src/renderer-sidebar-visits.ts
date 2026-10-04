@@ -1,4 +1,5 @@
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ID_ATTRIBUTE,
@@ -139,16 +140,11 @@ export function installRendererSidebarVisits(options: { getLocale(): "zh-CN" | "
     }
   }
 
-  const observer = new MutationObserver((records) => {
-    if (records.some((entry) => mutationAffectsElements(entry, SIDEBAR_THREAD_ROW_SELECTOR))) {
-      schedule();
-    }
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE, ACTIVE],
+    test: (mutation) => mutationAffectsElements(mutation, SIDEBAR_THREAD_ROW_SELECTOR),
+    onMutate: () => schedule(),
   });
   const onStorage = (event: StorageEvent): void => {
     if (event.key === null) {
@@ -166,7 +162,7 @@ export function installRendererSidebarVisits(options: { getLocale(): "zh-CN" | "
     refresh: schedule,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       window.removeEventListener("storage", onStorage);
       for (const row of mounted.keys()) {
         clear(row);

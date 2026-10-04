@@ -52,6 +52,28 @@ describe("session history on native SSH connections", () => {
     },
   );
 
+  it("includes stopped conversations whose last turn was interrupted", async () => {
+    const sendRequest = vi.fn(async (method: string, params: unknown) => {
+      if (method === SESSION_ROUTE_METHOD) throw unsupported(method);
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "interrupted", cwd: "/remote/project", name: "Interrupted history" },
+            { id: "running", cwd: "/remote/project", status: { type: "active" } },
+          ],
+        };
+      }
+      if (method === "thread/turns/list") {
+        expect(params).toMatchObject({ threadId: "interrupted", limit: 1 });
+        return { data: [{ status: "interrupted" }] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    expect(
+      (await clientFor(sendRequest)(input)).candidates.map(({ threadId }) => threadId),
+    ).toEqual(["interrupted"]);
+  });
+
   it("supports older native history and skips unsaved drafts", async () => {
     const sendRequest = vi.fn(async (method: string, params: unknown) => {
       if (method === SESSION_ROUTE_METHOD || method === "thread/turns/list") {

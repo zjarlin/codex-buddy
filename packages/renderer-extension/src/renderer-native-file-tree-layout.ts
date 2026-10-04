@@ -1,4 +1,5 @@
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 
 const PANE_ATTRIBUTE = "data-codexhost-native-file-tree-left";
 const HANDLE_ATTRIBUTE = "data-codexhost-native-file-tree-resizer";
@@ -107,19 +108,18 @@ export function installNativeFileTreeLayout(document: Document): { dispose(): vo
   };
 
   // 只改变视觉顺序；原生节点、React Provider、文件状态和尺寸持久化仍由官方维护。
-  const observer = new MutationObserver((records) => {
-    const changed = records.some((mutation) =>
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList"],
+    test: (mutation) =>
       [...mutation.addedNodes, ...mutation.removedNodes].some(
         (node) =>
           node instanceof Element &&
           (node.matches(SEPARATOR_SELECTOR) || node.querySelector(SEPARATOR_SELECTOR)),
       ),
-    );
-    if (changed && !frame) {
-      frame = ownerWindow.requestAnimationFrame(sync);
-    }
+    onMutate: () => {
+      if (!frame) frame = ownerWindow.requestAnimationFrame(sync);
+    },
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
 
   const pointerDown = (event: PointerEvent): void => {
     const separator =
@@ -180,7 +180,7 @@ export function installNativeFileTreeLayout(document: Document): { dispose(): vo
   sync();
   return {
     dispose() {
-      observer.disconnect();
+      stopObserving();
       ownerWindow.cancelAnimationFrame(frame);
       ownerWindow.removeEventListener("pointerdown", pointerDown, true);
       cancelDrag?.();

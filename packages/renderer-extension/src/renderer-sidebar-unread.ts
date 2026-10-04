@@ -3,6 +3,7 @@ import {
   type RendererHostRoute,
 } from "@codexhost/desktop-control/renderer-bindings";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import type { PendingConfirmationsModel } from "./pending-confirmations-state.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
@@ -235,15 +236,11 @@ export function installRendererSidebarUnread(options: {
     }
   }
 
-  const observer = new MutationObserver((records) => {
-    if (records.some((entry) => mutationAffectsElements(entry, SIDEBAR_THREAD_ROW_SELECTOR)))
-      schedule();
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE, ACTIVE],
+    test: (mutation) => mutationAffectsElements(mutation, SIDEBAR_THREAD_ROW_SELECTOR),
+    onMutate: () => schedule(),
   });
   window.addEventListener("focus", schedule);
   window.addEventListener("blur", schedule);
@@ -253,7 +250,7 @@ export function installRendererSidebarUnread(options: {
     refresh: schedule,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       window.removeEventListener("focus", schedule);
       window.removeEventListener("blur", schedule);
       document.removeEventListener("visibilitychange", schedule);

@@ -1,5 +1,14 @@
 import type { SessionRouteResult } from "@codexhost/shared-contracts";
 
+/** 原生历史里已停止的最末回合状态；运行中的 `inProgress` 不属于可续接目标。 */
+const stoppedTurnStatuses = new Set([
+  "completed",
+  "succeeded",
+  "interrupted",
+  "failed",
+  "cancelled",
+]);
+
 export type RecentSessionsRequest = (
   method: string,
   params: Record<string, string | number | boolean>,
@@ -18,7 +27,10 @@ function result(response: Awaited<ReturnType<RecentSessionsRequest>>): Record<st
   return object(response.result);
 }
 
-/** 近期列表来自原生历史；只有最后一轮已完成的会话才作为续接目标。 */
+/**
+ * 近期列表来自原生历史；最后一轮已停止（完成/中断/失败/取消）的会话都可作为续接目标，
+ * 因为它们不再运行且可直接输入。只有仍在运行的会话会被排除。
+ */
 export async function recentCompletedSessions(
   request: RecentSessionsRequest,
 ): Promise<SessionRouteResult> {
@@ -95,7 +107,8 @@ export async function recentCompletedSessions(
           const history = result(response);
           turn = object(Array.isArray(history.data) ? history.data[0] : null);
         }
-        if (turn.status !== "completed" && turn.status !== "succeeded") {
+        // 已停止且可直接输入的会话都可续接；inProgress 仍在运行，不能作为转移目标。
+        if (!stoppedTurnStatuses.has(String(turn.status))) {
           return null;
         }
         return {
@@ -118,5 +131,5 @@ export async function recentCompletedSessions(
       }
     }
   }
-  return { candidates, reason: "Recent completed conversations" };
+  return { candidates, reason: "Recent stopped conversations" };
 }

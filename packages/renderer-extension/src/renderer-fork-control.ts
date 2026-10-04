@@ -15,37 +15,101 @@ import {
 const RESPONSE_CONVERSATION_ATTRIBUTE = "data-response-annotation-conversation";
 const TURN_KEY_ATTRIBUTE = "data-content-search-turn-key";
 const OPEN_THREAD_TIMEOUT_MS = 5_000;
+const APP_SIDEBAR_SELECTOR = "#app-shell-sidebar";
+const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 
 function abortError(): Error {
   return Object.assign(new Error("Thread opening was aborted"), { name: "AbortError" });
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function reactAncestors(element: Element): Record<string, unknown>[] {
+  const key = Object.getOwnPropertyNames(element).find((name) => name.startsWith("__reactFiber$"));
+  if (!key) return [];
+  let fiber = record(Object.getOwnPropertyDescriptor(element, key)?.value);
+  const out: Record<string, unknown>[] = [];
+  for (let depth = 0; fiber && depth < 32; depth += 1) {
+    out.push(fiber);
+    fiber = record(fiber.return);
+  }
+  return out;
+}
+
+// Desktop 的原生线程列表按项目分页，只渲染每个项目的前若干行，其余行折叠在
+// 折叠的项目头或“展开显示”加载更多控件之后。待确认会话往往正落在这批未渲染
+// 的行里，因此打开目标线程前，必须先请求原生列表把这些行挂载出来，而不是只做
+// 一次行查询；否则“查看结果”会直接超时报“无法打开该会话”。
+const THREAD_LIST_REVEAL_LIMIT = 40;
+const THREAD_LIST_REVEAL_INTERVAL_MS = 120;
+
+function findSidebarRow(threadId: HostThreadId, options: { hostId?: string }): HTMLElement | null {
+  for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR) ?? []) {
+    if (
+      (options.hostId === undefined ||
+        row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) === options.hostId) &&
+      threadIdFromSidebarRowElement(row) === threadId
+    ) {
+      return row;
+    }
+  }
+  return null;
+}
+
+function sidebarRoot(): HTMLElement | null {
+  return document.querySelector?.(APP_SIDEBAR_SELECTOR) ?? null;
+}
+
+// 展开仍处于折叠状态的原生项目头，返回是否实际点击。
+function expandCollapsedProjects(sidebar: HTMLElement): boolean {
+  let clicked = false;
+  for (const header of sidebar.querySelectorAll<HTMLElement>(PROJECT_HEADER_SELECTOR)) {
+    if (header.getAttribute("aria-expanded") === "false") {
+      header.click();
+      clicked = true;
+    }
+  }
+  return clicked;
+}
+
+// 只识别原生列表的“加载更多”控件：它在 Fiber 上以 hasMoreItems + onExpandedChange
+// 暴露分页契约，加载到没有更多时自行置 hasMoreItems=false，因此点击到列表完整
+// 就会自然收敛，不会把已经完整的列表再来回折叠。
+function pagingButtons(sidebar: HTMLElement): HTMLButtonElement[] {
+  const buttons: HTMLButtonElement[] = [];
+  for (const button of sidebar.querySelectorAll<HTMLButtonElement>("button")) {
+    const paging = reactAncestors(button).some((fiber) => {
+      const props = record(fiber.memoizedProps);
+      return props?.hasMoreItems === true && typeof props.onExpandedChange === "function";
+    });
+    if (paging) buttons.push(button);
+  }
+  return buttons;
 }
 
 export function openRendererThread(
   threadId: HostThreadId,
   options: { hostId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
-  const find = (): HTMLElement | null => {
-    for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
-      if (
-        (options.hostId === undefined ||
-          row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) === options.hostId) &&
-        threadIdFromSidebarRowElement(row) === threadId
-      ) {
-        return row;
-      }
-    }
-    return null;
-  };
   if (options.signal?.aborted) return Promise.reject(abortError());
-  const current = find();
+  const current = findSidebarRow(threadId, options);
   if (current) {
     current.click();
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
     let settled = false;
+    let revealTimer: number | null = null;
+    let revealRounds = 0;
+    let pagingCursor = 0;
     const cleanup = (): void => {
       window.clearTimeout(timeout);
+      if (revealTimer !== null) window.clearTimeout(revealTimer);
+      revealTimer = null;
       observer.disconnect();
       options.signal?.removeEventListener("abort", onAbort);
     };
@@ -56,8 +120,32 @@ export function openRendererThread(
       row.click();
       resolve();
     };
+    // 每轮只请求一次原生分页，并按轮次限流：MutationObserver 会在原生列表每次
+    // 重渲染时触发，若直接在其中点击加载更多，会把 App server 请求队列打满。
+    const step = (): void => {
+      revealTimer = null;
+      if (settled) return;
+      const row = findSidebarRow(threadId, options);
+      if (row) {
+        finish(row);
+        return;
+      }
+      const sidebar = sidebarRoot();
+      if (sidebar && expandCollapsedProjects(sidebar)) {
+        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+        return;
+      }
+      if (!sidebar || revealRounds >= THREAD_LIST_REVEAL_LIMIT) return;
+      const buttons = pagingButtons(sidebar);
+      if (buttons.length === 0) return;
+      revealRounds += 1;
+      buttons[pagingCursor % buttons.length]?.click();
+      pagingCursor += 1;
+      revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+    };
     const observer = new MutationObserver(() => {
-      const row = find();
+      if (settled) return;
+      const row = findSidebarRow(threadId, options);
       if (row) finish(row);
     });
     const timeout = window.setTimeout(() => {
@@ -78,8 +166,7 @@ export function openRendererThread(
       onAbort();
       return;
     }
-    const row = find();
-    if (row) finish(row);
+    revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
   });
 }
 

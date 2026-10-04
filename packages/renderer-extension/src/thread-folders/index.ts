@@ -2,6 +2,8 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import Folder from "lucide/dist/esm/icons/folder.mjs";
 import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
 import type { ThreadFoldersConfig, ThreadFoldersState } from "@codexhost/shared-contracts";
+import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { projectKey, type SidebarProject } from "../project-tabs/model.js";
 import { rowProject } from "../project-tabs/native-binding.js";
 import { threadFolderMessages } from "./messages.js";
@@ -27,6 +29,7 @@ const BAR_ATTRIBUTE = "data-codexhost-thread-folders";
 const MANAGE_ATTRIBUTE = "data-codexhost-thread-folder-manage";
 const MOVE_ATTRIBUTE = "data-codexhost-thread-folder-move";
 const HIDDEN_ATTRIBUTE = "data-codexhost-thread-folder-hidden";
+const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id][data-sidebar-project-kind]";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 
@@ -541,22 +544,11 @@ export function installThreadFolders(options: {
     revision += 1;
     schedule();
   };
-  const observer = new MutationObserver((records) => {
-    if (
-      records.some(
-        (record) =>
-          !(record.target instanceof Node) ||
-          !(record.target instanceof Element) ||
-          record.target.closest(`[${BAR_ATTRIBUTE}]`) === null,
-      )
-    ) {
-      schedule();
-    }
-  });
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  // 只关心侧栏结构：refresh() 会对每个项目容器做 fiber 回溯（rowProject），
+  // 整页订阅会在聊天内容流水时反复触发。按侧栏子树收窄，并保留原有的
+  // 「排除自身注入 bar」判断。
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: [
       "data-sidebar-project-kind",
       "data-sidebar-project-container-id",
@@ -564,6 +556,11 @@ export function installThreadFolders(options: {
       "data-app-action-sidebar-thread-id",
       "data-app-action-sidebar-thread-host-id",
     ],
+    test: (record) =>
+      record.target instanceof Element &&
+      record.target.closest(`[${BAR_ATTRIBUTE}]`) === null &&
+      mutationAffectsElements(record, SIDEBAR_SCOPE),
+    onMutate: () => schedule(),
   });
   window.addEventListener("storage", onStorage);
   schedule();
@@ -573,7 +570,7 @@ export function installThreadFolders(options: {
     threadMenu,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       window.removeEventListener("storage", onStorage);
       dialog?.close();
       for (const entry of bars.values()) entry.bar.remove();

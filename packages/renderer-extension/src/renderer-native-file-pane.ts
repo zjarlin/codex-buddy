@@ -1,5 +1,6 @@
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 
 const TAB_SELECTOR = '[role="tab"]';
 const LAYOUT_ATTRIBUTE = "data-codexhost-native-file-pane-layout";
@@ -141,22 +142,17 @@ export function installNativeFilePanePlacement(document: Document): { dispose():
       }
     }
   };
-  const observer = new MutationObserver((records) => {
-    if (records.some((mutation) => mutationAffectsElements(mutation, TAB_SELECTOR))) {
-      schedule();
-    }
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: ["aria-selected"],
+    test: (mutation) => mutationAffectsElements(mutation, TAB_SELECTOR),
+    onMutate: () => schedule(),
   });
   sync();
   return {
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       ownerWindow.clearTimeout(timer);
       for (const element of document.querySelectorAll(`[${LAYOUT_ATTRIBUTE}]`)) {
         element.removeAttribute(LAYOUT_ATTRIBUTE);

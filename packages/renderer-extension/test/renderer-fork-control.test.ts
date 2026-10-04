@@ -254,6 +254,131 @@ describe("Renderer external Thread Fork control", () => {
     expect(disconnect).toHaveBeenCalledOnce();
   });
 
+  it("expands a collapsed sidebar project before opening a hidden Thread", async () => {
+    const rows: HTMLElement[] = [];
+    const target = sidebarRow("hidden-thread", "local");
+    const header = {
+      getAttribute: (name: string) => (name === "aria-expanded" ? "false" : null),
+      click: vi.fn(() => {
+        rows.push(target);
+      }),
+    } as unknown as HTMLElement;
+    // Desktop 原生列表的“展开显示”加载更多控件通过 Fiber 上的
+    // hasMoreItems/onExpandedChange 暴露分页契约，这里用同一契约驱动，
+    // 避免依赖具体 UI 文案或私有组件名。
+    const reveal = { click: vi.fn() } as unknown as HTMLButtonElement;
+    Object.defineProperty(reveal, "__reactFiber$test", {
+      value: {
+        memoizedProps: { expanded: true, hasMoreItems: true, onExpandedChange: vi.fn() },
+        return: null,
+      },
+    });
+    const sidebar = {
+      querySelectorAll: (selector: string) => {
+        if (selector === "[data-app-action-sidebar-project-row]") return [header];
+        if (selector === "button") return [reveal];
+        return [];
+      },
+    };
+    class FakeMutationObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector === "#app-shell-sidebar" ? sidebar : null),
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-thread-row]" ? rows : [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    await openRendererThread(hostThreadIdSchema.parse("hidden-thread"), {
+      hostId: "local",
+      timeoutMs: 60_000,
+    });
+
+    expect(header.click).toHaveBeenCalledOnce();
+    expect(target.click).toHaveBeenCalledOnce();
+  });
+
+  it("clicks the native load-more control to reveal a paginated Thread", async () => {
+    const rows: HTMLElement[] = [];
+    const target = sidebarRow("paged-thread", "local");
+    const onExpandedChange = vi.fn(() => rows.push(target));
+    const reveal = { click: onExpandedChange } as unknown as HTMLButtonElement;
+    Object.defineProperty(reveal, "__reactFiber$test", {
+      value: {
+        memoizedProps: { expanded: true, hasMoreItems: true, onExpandedChange },
+        return: null,
+      },
+    });
+    const sidebar = {
+      querySelectorAll: (selector: string) => (selector === "button" ? [reveal] : []),
+    };
+    class FakeMutationObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector === "#app-shell-sidebar" ? sidebar : null),
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-thread-row]" ? rows : [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    await openRendererThread(hostThreadIdSchema.parse("paged-thread"), {
+      hostId: "local",
+      timeoutMs: 60_000,
+    });
+
+    expect(reveal.click).toHaveBeenCalledOnce();
+    expect(target.click).toHaveBeenCalledOnce();
+  });
+
+  it("stops paginating once the native list has no more items", async () => {
+    const reveal = { click: vi.fn() } as unknown as HTMLButtonElement;
+    Object.defineProperty(reveal, "__reactFiber$test", {
+      value: {
+        memoizedProps: { expanded: true, hasMoreItems: false, onExpandedChange: vi.fn() },
+        return: null,
+      },
+    });
+    const sidebar = {
+      querySelectorAll: (selector: string) => (selector === "button" ? [reveal] : []),
+    };
+    class FakeMutationObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector === "#app-shell-sidebar" ? sidebar : null),
+      querySelectorAll: () => [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    const opening = openRendererThread(hostThreadIdSchema.parse("absent-thread"), {
+      hostId: "local",
+      timeoutMs: 40,
+    });
+
+    await expect(opening).rejects.toThrow("Thread did not appear in the sidebar");
+    expect(reveal.click).not.toHaveBeenCalled();
+  });
+
   it("resolves a Fork button only when DOM and Fiber identities agree", () => {
     expect(rendererForkTargetFromButton(forkButton())).toMatchObject({
       isProjectlessConversation: false,

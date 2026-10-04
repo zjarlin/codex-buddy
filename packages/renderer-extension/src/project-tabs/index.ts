@@ -19,10 +19,13 @@ import {
   projectMenu,
   rowProject,
 } from "./native-binding.js";
+import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { createRecentSectionCollapse } from "./recent-section.js";
 import { createProjectTabSearch } from "./search-picker.js";
 import { projectTabsStyle } from "./styles.js";
 
+const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const HIDDEN = "data-codexhost-project-tab-hidden";
 const MOVE = "data-codexhost-project-tab-move";
 const MENU_ITEMS = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]';
@@ -472,21 +475,10 @@ export function installProjectTabs(options: {
     revision += 1;
     refresh();
   };
-  const observer = new MutationObserver(() => {
-    if (scheduled || disposed) {
-      return;
-    }
-    scheduled = true;
-    queueMicrotask(() => {
-      scheduled = false;
-      refresh();
-    });
-  });
-  observer.observe(document.body, {
-    subtree: true,
-    childList: true,
-    characterData: true,
-    attributes: true,
+  // 只关心侧栏结构：整页订阅会在聊天内容流水时反复触发 refresh()，而 refresh
+  // 会对每个项目行做 fiber 回溯（committedReactAncestors）。按侧栏子树收窄。
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "characterData", "attributes"],
     attributeFilter: [
       "aria-label",
       "data-sidebar-project-kind",
@@ -495,6 +487,15 @@ export function installProjectTabs(options: {
       "data-app-action-sidebar-section-collapsed",
       "aria-expanded",
     ],
+    test: (record) => mutationAffectsElements(record, SIDEBAR_SCOPE),
+    onMutate: () => {
+      if (scheduled || disposed) return;
+      scheduled = true;
+      queueMicrotask(() => {
+        scheduled = false;
+        refresh();
+      });
+    },
   });
   document.addEventListener("keydown", onKeyDown, true);
   document.addEventListener("click", onProjectCreateClick, true);
@@ -504,7 +505,7 @@ export function installProjectTabs(options: {
     refresh,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("click", onProjectCreateClick, true);
       window.removeEventListener("storage", onStorage);

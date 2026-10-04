@@ -187,7 +187,7 @@ test("an uncommitted catalog times out with real counts and permits a successful
   await search.fill("model-");
   await refresh.click();
   await expect(menu.getByRole("status")).toHaveText(
-    "目录已同步但界面尚未更新，请重试刷新（供应商返回 26 个模型，界面已载入 3 个）。",
+    "供应商返回 26 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。",
   );
   await expect(refresh).toBeEnabled();
   await expect(search).toHaveValue("model-");

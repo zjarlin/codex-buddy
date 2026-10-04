@@ -306,13 +306,16 @@ export function installAutoRouteCards(options: {
     // 同一会话可以切换下一回合的模型，不能只在会话身份变化时更新选模状态。
     context = current;
     if (document.hidden || !context?.client.readAutoModelRoutes) return;
+    // 卡片直接挂在回合锚点内部，随原生 DOM 保持位置，不需要每个 tick 都
+    // 全量重扫 transcript（turnAnchors 会对每个回合做 getClientRects 强制布局）。
+    // 只有到达下次读取时间或读取已结束时才扫描并重新定位。
+    if (readingGeneration === generation || Date.now() < nextRead) return;
     const readRoutes = context.client.readAutoModelRoutes.bind(context.client);
     const visibleTurns = turnAnchors(context);
     for (const turnId of turnRecords.keys()) {
       if (!visibleTurns.has(turnId)) turnRecords.delete(turnId);
     }
     render();
-    if (readingGeneration === generation || Date.now() < nextRead) return;
     const requestContext = context;
     const requestGeneration = generation;
     readingGeneration = requestGeneration;

@@ -15,6 +15,7 @@ import type {
 } from "@codexhost/shared-contracts";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import { gitTargetKey, gitTargetParams, hasGitTarget } from "./renderer-git-target.js";
 import { RendererGitCache } from "./renderer-git-cache.js";
 import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
@@ -1896,38 +1897,31 @@ export function installRendererGitSidebar(options: {
     render();
   };
 
-  const observer = new MutationObserver((records) => {
-    if (
-      records.some((record) =>
-        mutationAffectsElements(record, `${APP_SIDEBAR_SELECTOR},${SIDEBAR_THREAD_ROW_SELECTOR}`),
-      )
-    ) {
-      mount();
-    }
-    // 消息中的复制、工具按钮不影响原生终端；只在候选按钮或已有锚点变化时重新定位。
-    const terminalChanged = records.some((record) => {
-      if (record.type === "attributes") {
-        return (
-          record.target === nativeTerminal ||
-          (record.target instanceof Element && matchesOfficialPanel(record.target, "terminal"))
-        );
-      }
-      return [...record.addedNodes, ...record.removedNodes].some(
-        (node) =>
-          node instanceof Element &&
-          ((nativeTerminal !== null && node.contains(nativeTerminal)) ||
-            officialPanelButton(node, "terminal")),
+  const sidebarOrRow = (record: MutationRecord): boolean =>
+    mutationAffectsElements(record, `${APP_SIDEBAR_SELECTOR},${SIDEBAR_THREAD_ROW_SELECTOR}`);
+  // 消息中的复制、工具按钮不影响原生终端；只在候选按钮或已有锚点变化时重新定位。
+  const terminalChanged = (record: MutationRecord): boolean => {
+    if (record.type === "attributes") {
+      return (
+        record.target === nativeTerminal ||
+        (record.target instanceof Element && matchesOfficialPanel(record.target, "terminal"))
       );
-    });
-    if (terminalChanged) {
-      syncOfficialPanelState();
     }
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+    return [...record.addedNodes, ...record.removedNodes].some(
+      (node) =>
+        node instanceof Element &&
+        ((nativeTerminal !== null && node.contains(nativeTerminal)) ||
+          officialPanelButton(node, "terminal")),
+    );
+  };
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: ["aria-label", "aria-pressed"],
+    test: (record) => sidebarOrRow(record) || terminalChanged(record),
+    onMutate: (records) => {
+      if (records.some(sidebarOrRow)) mount();
+      if (records.some(terminalChanged)) syncOfficialPanelState();
+    },
   });
   mount();
   const warmCache = (): void => {
@@ -1954,7 +1948,7 @@ export function installRendererGitSidebar(options: {
       disposed = true;
       clearTimeout(warmTimer);
       cache.clear();
-      observer.disconnect();
+      stopObserving();
       nativeFileTreeLayout.dispose();
       nativeFilePanePlacement.dispose();
       projectSyncView.dispose();

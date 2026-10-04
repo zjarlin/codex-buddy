@@ -124,7 +124,6 @@ for (const theme of ["light", "dark"] as const) {
     });
     await expect(row).toHaveAttribute("data-buddy-sidebar-state", "interrupted");
     await expect(row).toHaveCSS("box-shadow", "rgb(217, 144, 0) 3px 0px 0px 0px inset");
-    await expect(row).not.toHaveAttribute("data-buddy-sidebar-running", "");
     await expect(
       page.getByRole("button", { name: "会话已中断，点击恢复", exact: true }),
     ).toBeVisible();
@@ -250,27 +249,17 @@ test("sidebar recovery keeps the last successful state when discovery fails", as
       .querySelector("[data-app-action-sidebar-thread-row]")
       ?.setAttribute("data-app-action-sidebar-thread-active", "true");
   });
-  await expect(
-    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-running]"),
-  ).toHaveCount(0);
   await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
   await page.evaluate(() => {
     Reflect.set(globalThis, "discoveryFail", false);
     Reflect.set(globalThis, "running", true);
     Reflect.get(globalThis, "sidebar").refresh();
   });
+  // 进行中的会话只隐藏续接按钮，绿色状态条不再接管，转圈由原生状态槽负责。
   await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
   await expect(
-    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-running]"),
-  ).toHaveCount(1);
-  const runningStyle = await page
-    .locator("[data-app-action-sidebar-thread-row]")
-    .evaluate((row) => ({
-      background: getComputedStyle(row).backgroundColor,
-      boxShadow: getComputedStyle(row).boxShadow,
-    }));
-  expect(runningStyle.background).not.toBe("rgba(0, 0, 0, 0)");
-  expect(runningStyle.boxShadow).not.toBe("none");
+    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
+  ).toHaveCount(0);
   await page.screenshot({ path: "test-results/buddy-continuation-state.png" });
 });
 
@@ -462,14 +451,12 @@ test("sidebar state colors remain distinct in light and dark themes", async ({ p
   await row.evaluate((element) =>
     element.setAttribute("data-app-action-sidebar-thread-active", "true"),
   );
-  await expect(row).not.toHaveAttribute("data-buddy-sidebar-running", "");
   await page.evaluate(() => {
     Reflect.set(globalThis, "running", true);
     Reflect.get(globalThis, "sidebar").refresh();
   });
-  await expect(row).toHaveAttribute("data-buddy-sidebar-running", "");
-  const running = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
-  expect(running).not.toBe(recoverable);
+  // 进行中的会话不再有绿色状态条，只清除可恢复标记，转圈由原生状态槽负责。
+  await expect(row).not.toHaveAttribute("data-buddy-sidebar-recoverable", "");
   await page.screenshot({ path: "test-results/buddy-continuation-state-light.png" });
   await page.evaluate(() => {
     document.documentElement.style.colorScheme = "dark";
@@ -477,8 +464,7 @@ test("sidebar state colors remain distinct in light and dark themes", async ({ p
     document.documentElement.style.color = "#e5e7ec";
   });
   await expect(row).toHaveCSS("color", "rgb(229, 231, 236)");
-  const darkRunning = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
-  expect(darkRunning).not.toBe("rgba(0, 0, 0, 0)");
+  await expect(row).not.toHaveAttribute("data-buddy-sidebar-recoverable", "");
   await page.screenshot({ path: "test-results/buddy-continuation-state-dark.png" });
 });
 

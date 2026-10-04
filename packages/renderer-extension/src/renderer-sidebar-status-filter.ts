@@ -1,5 +1,6 @@
 import type { RendererModelClient } from "./renderer-model-client.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_SELECTOR,
@@ -245,21 +246,13 @@ export function installRendererSidebarStatusFilter(options: {
     poll.setActive(mode === "active" && rows.size > 0);
   }
 
-  const observer = new MutationObserver((records) => {
-    if (
-      records.some(
-        (record) =>
-          mutationAffectsElements(record, `${PROJECT_SELECTOR},${ROW_SELECTOR}`) ||
-          mutationAffectsElements(record, "#app-shell-sidebar", false),
-      )
-    )
-      schedule();
-  });
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList", "attributes"],
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, "data-app-action-sidebar-thread-id"],
+    test: (record) =>
+      mutationAffectsElements(record, `${PROJECT_SELECTOR},${ROW_SELECTOR}`) ||
+      mutationAffectsElements(record, "#app-shell-sidebar", false),
+    onMutate: () => schedule(),
   });
   const poll = createVisiblePoll(document, REFRESH_MS, schedule);
   const onFocus = () => {
@@ -272,7 +265,7 @@ export function installRendererSidebarStatusFilter(options: {
     refresh: onFocus,
     dispose() {
       disposed = true;
-      observer.disconnect();
+      stopObserving();
       poll.dispose();
       window.removeEventListener("focus", onFocus);
       for (const row of states.keys()) row.removeAttribute(HIDDEN_ATTRIBUTE);

@@ -186,17 +186,17 @@ const transfer = (page: Page) => page.getByRole("button", { name: "发送到其�
 const picker = (page: Page) => page.getByRole("dialog", { name: "发送到其他会话" });
 const closePicker = (page: Page) => picker(page).getByRole("button", { name: "关闭" });
 
-test("completed conversations lead, new conversations follow, and the header closes the picker", async ({
+test("resumable conversations lead, new conversations follow, and the header closes the picker", async ({
   page,
 }) => {
   await setup(page, { existing: true });
   await transfer(page).click();
   const panel = picker(page);
   await expect(panel).toBeVisible();
-  await expect(panel.getByText("继续已完成会话", { exact: true })).toBeVisible();
+  await expect(panel.getByText("继续可续接会话", { exact: true })).toBeVisible();
   await expect(panel.getByText("新建会话", { exact: true })).toBeVisible();
   const headings = await panel.locator(".codexhost-session-picker-heading").allTextContents();
-  expect(headings.indexOf("继续已完成会话")).toBeLessThan(headings.indexOf("新建会话"));
+  expect(headings.indexOf("继续可续接会话")).toBeLessThan(headings.indexOf("新建会话"));
   await expect(closePicker(page)).toHaveCSS("position", "absolute");
   await expect(closePicker(page)).toHaveCSS("width", "28px");
   await expect(closePicker(page)).toHaveCSS("height", "28px");

@@ -11,6 +11,8 @@ import {
   type ProjectDashboardTurnSummary,
   type ProjectDashboardMethod,
 } from "./renderer-project-dashboard-state.js";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import { createVisiblePoll } from "./renderer-visible-poll.js";
 
 export const PROJECT_DASHBOARD_ATTRIBUTE = "data-codexhost-project-dashboard";
@@ -574,21 +576,29 @@ export function installRendererProjectDashboard(options: {
   position();
   const poll = createVisiblePoll(document, REFRESH_MS, () => refresh());
   poll.setActive(false);
-  const observer = new MutationObserver(() => {
-    position();
-    const nextSurface = dashboardSurface();
-    if (open && surface && !surface.isConnected) {
-      open = false;
-      if (automatic) show();
-    } else if (open && surface !== nextSurface) {
-      show();
-    } else if (open) {
-      syncSurfaceBounds();
-    } else if (automatic) {
-      show();
-    }
+  // 聊天内容流水产生的子树变更与看板的位置/尺寸无关：位置由 header 结构决定，
+  // 尺寸由 surface 的 ResizeObserver 维护。只在 header 或主承载面结构变化时
+  // 才重算，避免每次 DOM 变更都触发 getBoundingClientRect 强制布局。
+  const stopObserving = getDomMutationHub(document).subscribe({
+    kinds: ["childList"],
+    test: (record) =>
+      mutationAffectsElements(record, APP_HEADER_SELECTOR) ||
+      mutationAffectsElements(record, MAIN_SURFACE_SELECTOR, false),
+    onMutate: () => {
+      position();
+      const nextSurface = dashboardSurface();
+      if (open && surface && !surface.isConnected) {
+        open = false;
+        if (automatic) show();
+      } else if (open && surface !== nextSurface) {
+        show();
+      } else if (open) {
+        syncSurfaceBounds();
+      } else if (automatic) {
+        show();
+      }
+    },
   });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
   if (automatic) show();
   return {
     refresh() {
@@ -600,7 +610,7 @@ export function installRendererProjectDashboard(options: {
       if (disposed) return;
       disposed = true;
       requestGeneration += 1;
-      observer.disconnect();
+      stopObserving();
       poll.dispose();
       trigger.removeEventListener("click", onclick);
       document.removeEventListener("click", onSidebarThreadClick, true);

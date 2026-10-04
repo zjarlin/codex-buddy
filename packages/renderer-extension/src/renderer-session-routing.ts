@@ -238,9 +238,12 @@ export function createSessionRouting<M extends SessionComposer>(options: {
           thread.cwd !== candidate.cwd ||
           (isRecord(thread.status) && thread.status.type === "active") ||
           !isRecord(turn) ||
-          !["completed", "succeeded"].includes(String(turn.status))
+          // 与候选筛选一致：已停止（完成/中断/失败/取消）的会话都可续接，仍运行的不可转移。
+          !["completed", "succeeded", "interrupted", "failed", "cancelled"].includes(
+            String(turn.status),
+          )
         ) {
-          throw new Error("目标会话已不处于完成状态，请重新选择");
+          throw new Error("目标会话已不处于可续接状态，请重新选择");
         }
         await transfer(
           draft,

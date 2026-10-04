@@ -209,8 +209,10 @@ class FakeDocument {
     this.listeners.get(name)?.delete(listener);
   }
 
-  dispatch(name: string, target: FakeElement): void {
-    for (const listener of this.listeners.get(name) ?? []) listener(new FakeEvent(name, target));
+  dispatch(name: string, target: FakeElement, event = new FakeEvent(name, target)): void {
+    for (const listener of this.listeners.get(name) ?? []) listener(event);
+    if (!event.propagationStopped && this.parentElement)
+      this.parentElement.dispatch(name, target, event);
   }
 }
 
@@ -552,29 +554,27 @@ describe("renderer thread actions", () => {
     installed.dispose();
   });
 
-  it("opens the same menu from a row right-click", async () => {
+  it("leaves the native row right-click menu untouched", () => {
     const document_ = installFakeBrowser();
     const row = sidebarRow(document_, "local", "thread-b");
     const client = clientWith(async () => ({ workspace: "/tmp/repo", terminal: "terminal" }));
+    // Desktop 原生行在捕获/冒泡阶段监听 contextmenu 打开自己的菜单。扩展必须让事件
+    // 继续传递，且不得 preventDefault，否则重命名、置顶、归档等原生项会消失。
+    const nativeContextMenu = vi.fn();
+    row.addEventListener("contextmenu", nativeContextMenu);
     const installed = installRendererThreadActions({
       getClient: () => client,
       getLocale: () => "zh-CN",
     });
     installed.refresh();
 
-    row.dispatch("contextmenu");
-    const portal = required(
-      document_.body.querySelector("[data-codexhost-thread-actions-menu]"),
-      "context menu was not opened",
-    );
-    const item = required(portal.querySelector("button"), "menu item was not rendered");
-    item.dispatch("click");
-    await settle();
+    const event = new FakeEvent("contextmenu", row);
+    row.dispatch("contextmenu", event);
 
-    expect(client.openThreadTerminal).toHaveBeenCalledWith({
-      threadId: "thread-b",
-      terminalId: "apple-terminal",
-    });
+    expect(nativeContextMenu).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(false);
+    expect(event.propagationStopped).toBe(false);
+    expect(document_.body.querySelector("[data-codexhost-thread-actions-menu]")).toBeNull();
     installed.dispose();
   });
 

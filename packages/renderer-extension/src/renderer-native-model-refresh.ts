@@ -47,27 +47,18 @@ export async function refreshNativeModelCatalog({
     await refreshNativeModels(trigger(), hostId);
     if (!isCurrent()) return undefined;
 
-    const expectedIds = new Set(synced.ids);
-    const deadline = Date.now() + 2_000;
-    while (isCurrent()) {
-      const models = nativeModelBinding(trigger())?.view.models;
-      const loadedIds = new Set(models?.map(({ id }) => id));
-      if (
-        models &&
-        loadedIds.size === expectedIds.size &&
-        [...expectedIds].every((id) => loadedIds.has(id))
-      ) {
-        return { returned: synced.returned, synchronized: loadedIds.size };
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        throw new Error(
-          `目录已同步但界面尚未更新，请重试刷新（供应商返回 ${synced.returned} 个模型，界面已载入 ${loadedIds.size} 个）。`,
-        );
-      }
-      await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remaining)));
+    // 收藏直接使用上游返回的模型列表；不再要求原生菜单与 catalog.json 完全一致。
+    // 若客户端强制依赖本地目录，运行时切换可能失败，此时由选择回调抛出错误并要求重启。
+    const models = nativeModelBinding(trigger())?.view.models;
+    const loadedIds = new Set(models?.map(({ id }) => id) ?? []);
+    const upstreamIds = new Set(synced.ids);
+    const synchronized = [...upstreamIds].filter((id) => loadedIds.has(id)).length;
+    if (synchronized === 0 && loadedIds.size > 0) {
+      throw new Error(
+        `供应商返回 ${synced.returned} 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。`,
+      );
     }
-    return undefined;
+    return { returned: synced.returned, synchronized };
   } catch (error) {
     // 已切换任务、Host 或 Harness 的请求不再向新目标发布状态。
     if (!isCurrent()) return undefined;

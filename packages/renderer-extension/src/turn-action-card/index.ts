@@ -295,7 +295,9 @@ export function installTurnActionCards(options: { getContext(): Context | null }
       reading === generation ||
       Date.now() < nextRead
     ) {
-      render();
+      // 节流期间不再每个 500ms 都跑一次全量 turnAnchors（对每个回合 getClientRects
+      // 会触发强制布局）。快照只在 fetch 完成后变化，fetch 路径自身会调用 render()；
+      // 卡片挂在回合锚点内部，锚点被原生虚拟化移除时卡片也随之脱离 DOM，无需再扫描。
       return;
     }
     const request = context;

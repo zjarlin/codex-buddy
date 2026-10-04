@@ -91,10 +91,10 @@ class FakeElement {
     this.listeners.get(name)?.delete(listener);
   }
 
-  dispatch(name: string, target: FakeElement = this): void {
-    const event = new FakeEvent(name, target);
+  dispatch(name: string, target: FakeElement = this, event = new FakeEvent(name, target)): void {
     for (const listener of this.listeners.get(name) ?? []) listener(event);
-    if (!event.propagationStopped && this.parentElement) this.parentElement.dispatch(name, target);
+    if (!event.propagationStopped && this.parentElement)
+      this.parentElement.dispatch(name, target, event);
   }
 
   contains(node: FakeElement): boolean {
@@ -211,8 +211,6 @@ class FakeDocument {
 
   dispatch(name: string, target: FakeElement, event = new FakeEvent(name, target)): void {
     for (const listener of this.listeners.get(name) ?? []) listener(event);
-    if (!event.propagationStopped && this.parentElement)
-      this.parentElement.dispatch(name, target, event);
   }
 }
 
@@ -569,7 +567,7 @@ describe("renderer thread actions", () => {
     installed.refresh();
 
     const event = new FakeEvent("contextmenu", row);
-    row.dispatch("contextmenu", event);
+    row.dispatch("contextmenu", row, event);
 
     expect(nativeContextMenu).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(false);

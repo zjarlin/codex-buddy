@@ -3958,7 +3958,10 @@ export class AppServerHost {
         } else if (request.method === GIT_REPOSITORY_DIRECTORIES_METHOD) {
           const params = gitRepositoryDirectoriesParamsSchema.parse(request.params);
           const cwd = await projectWorkspace(params);
-          result = await listGitRepositoryDirectories({ ...params, cwd }, { git, links, cwd });
+          result = await listGitRepositoryDirectories(
+            { ...params, cwd },
+            { git, links, cwd, paths: git.paths },
+          );
         } else {
           const params = gitRepositoryLinkParamsSchema.parse(request.params);
           const cwd = await projectWorkspace(params);

@@ -167,8 +167,8 @@ function projectRoots(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
     const candidate = object(entry);
-    return typeof candidate?.path === "string" && path.isAbsolute(candidate.path)
-      ? [path.normalize(candidate.path)]
+    return typeof candidate?.path === "string" && path.posix.isAbsolute(candidate.path)
+      ? [path.posix.normalize(candidate.path)]
       : [];
   });
 }
@@ -205,11 +205,16 @@ class AppServerClient {
   #buffer = "";
 
   constructor(command: string, environment: NodeJS.ProcessEnv) {
-    this.#child = spawn(command, ["app-server", "--listen", "stdio://"], {
-      env: environment,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    const script = command.endsWith(".mjs") ? command : null;
+    this.#child = spawn(
+      script ? process.execPath : command,
+      [...(script ? [script] : []), "app-server", "--listen", "stdio://"],
+      {
+        env: environment,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
     this.#child.stdout.setEncoding("utf8");
     this.#child.stdout.on("data", (chunk: string) => this.#receive(chunk));
     this.#child.stderr.resume();

@@ -97,7 +97,9 @@ const { outputFiles } = await build({
 const bundle = outputFiles[0]?.text;
 if (!bundle) throw new Error("Pending confirmation fixture bundle is unavailable");
 
-test("completed non-current conversations open a modal and support read/archive actions", async ({ page }) => {
+test("completed non-current conversations open a modal and support read/archive actions", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
@@ -107,57 +109,96 @@ test("completed non-current conversations open a modal and support read/archive 
   const modal = page.locator("[data-codexhost-pending-confirmations]");
 
   await expect(modal).toBeHidden();
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "B 会话已完成。"));
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      "B 会话已完成。",
+    ),
+  );
   await expect(modal).toBeVisible();
   await expect(modal).toContainText("B 会话已完成。");
   await expect(modal).toContainText("Task B");
 
   await page.getByRole("button", { name: "标为已读" }).click();
   await expect(modal).toBeHidden();
-  expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].state)).toBe("confirmed");
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].state,
+    ),
+  ).toBe("confirmed");
 
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-a", "turn-a", "当前会话结果。"));
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-a",
+      "turn-a",
+      "当前会话结果。",
+    ),
+  );
   await expect(modal).toBeHidden();
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b2", "归档结果。"));
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b2", "归档结果。"),
+  );
   await expect(modal).toBeVisible();
   await page.getByRole("button", { name: "归档" }).click();
   await expect(modal).toBeHidden();
-  expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").requests)).toContainEqual([
-    "thread/archive",
-    { threadId: "thread-b" },
-  ]);
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").requests),
+  ).toContainEqual(["thread/archive", { threadId: "thread-b" }]);
 });
 
-test("view action opens the source conversation and keeps the modal non-modal", async ({ page }) => {
+test("view action opens the source conversation and keeps the modal non-modal", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
   await page.setContent("<!doctype html><body></body>");
   await page.addScriptTag({ content: bundle });
   await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "查看结果。"));
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "查看结果。"),
+  );
   await page.getByRole("button", { name: "查看结果" }).click();
-  expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened)).toEqual([
-    ["thread-b", "local"],
-  ]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened)).toEqual(
+    [["thread-b", "local"]],
+  );
   await expect(page.locator("[data-codexhost-pending-confirmations]")).toBeHidden();
 });
 
-test("a newer Turn replaces the old pending item and repeated completion stays idempotent", async ({ page }) => {
+test("a newer Turn replaces the old pending item and repeated completion stays idempotent", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
   await page.setContent("<!doctype html><body></body>");
   await page.addScriptTag({ content: bundle });
   await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-1", "旧结果"));
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-1", "重复结果"));
-  expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries)).toHaveLength(1);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].summary)).toBe("旧结果");
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-1", "旧结果"),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-1", "重复结果"),
+  );
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries),
+  ).toHaveLength(1);
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].summary,
+    ),
+  ).toBe("旧结果");
 
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").start("thread-b", "turn-2"));
-  await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-2", "新结果"));
-  const state = await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries);
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").start("thread-b", "turn-2"),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-2", "新结果"),
+  );
+  const state = await page.evaluate(
+    () => Reflect.get(globalThis, "pendingConfirmations").state().entries,
+  );
   expect(state).toHaveLength(1);
   expect(state[0]).toMatchObject({ turnId: "turn-2", summary: "新结果", state: "pending" });
 });

@@ -328,7 +328,7 @@ describe("thread terminal", () => {
       unknown,
     ];
     expect(command).toBe("/usr/bin/osascript");
-    expect(arguments_[1]).toContain(`cd '${await realpath(directory)}'`);
+    expect(arguments_[1]).toContain(`cd '${(await realpath(directory)).replaceAll("\\", "\\\\")}'`);
     expect(arguments_[1]).not.toContain("resume");
     expect(result).toEqual({ workspace: await realpath(directory), terminal: "apple-terminal" });
 

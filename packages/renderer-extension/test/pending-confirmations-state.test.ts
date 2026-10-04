@@ -117,7 +117,8 @@ describe("pending confirmation state", () => {
       turnId: "turn-r",
       status: "completed",
       items: [{ type: "agentMessage", text: "done" }],
-    })!;
+    });
+    if (!entry) throw new Error("expected a pending confirmation");
     expect(model.confirm(entry)).toBe(true);
     expect(model.pending()).toEqual([]);
 
@@ -137,7 +138,8 @@ describe("pending confirmation state", () => {
       turnId: "turn-a",
       status: "completed",
       items: [{ type: "agentMessage", text: "done" }],
-    })!;
+    });
+    if (!entry) throw new Error("expected a pending confirmation");
     expect(model.confirm(entry)).toBe(true);
     expect(
       model.upsert({
@@ -188,7 +190,9 @@ describe("pending confirmation state", () => {
   it("ignores corrupt storage and unknown versions", () => {
     expect(new PendingConfirmationsModel(memoryStorage("{bad")).entries()).toEqual([]);
     expect(
-      new PendingConfirmationsModel(memoryStorage(JSON.stringify({ version: 2, entries: [] }))).entries(),
+      new PendingConfirmationsModel(
+        memoryStorage(JSON.stringify({ version: 2, entries: [] })),
+      ).entries(),
     ).toEqual([]);
   });
 

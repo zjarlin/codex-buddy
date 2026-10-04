@@ -24,8 +24,6 @@ export const REMOTE_PROJECTS_REFRESH_ATTRIBUTE = "data-codexhost-remote-projects
 export const REMOTE_PROJECTS_SYNC_ATTRIBUTE = "data-codexhost-remote-projects-sync";
 export const REMOTE_PROJECTS_IMPORT_ATTRIBUTE = "data-codexhost-remote-projects-import";
 
-type ImportProject = (project: RemoteProject) => Promise<void>;
-
 function button(document: Document, text: string): HTMLButtonElement {
   const element = document.createElement("button");
   element.type = "button";

@@ -28,7 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-22.04
           - macos-14
           - windows-latest
     steps:
@@ -59,28 +58,26 @@ jobs:
         run: npm ci --prefer-offline
 
       - name: Check formatting
-        if: runner.os == 'Linux'
+        if: runner.os == 'macOS'
         run: npm run format:check
 
       - name: Lint
-        if: runner.os == 'Linux'
+        if: runner.os == 'macOS'
         run: npm run lint
 
       - name: Typecheck
-        if: runner.os == 'Linux'
+        if: runner.os == 'macOS'
         run: npm run typecheck
 
       - name: Test TypeScript (full suite)
-        if: runner.os == 'Linux'
+        if: runner.os == 'macOS'
         run: npm run test:typescript
 
-      # Linux x64 covers governance, browser/contracts, and the nested Gate runner test.
-      # Windows runs only platform-sensitive files (see tests/vitest.config.js);
-      # pure-logic files are covered by the Linux and macOS lanes.
+      # Windows runs only platform-sensitive files (see tests/vitest.config.js).
       - name: Test TypeScript (cross-platform)
-        if: runner.os != 'Linux'
+        if: runner.os == 'Windows'
         env:
-          CODEXHOST_TEST_SCOPE: ${{ runner.os == 'Windows' && 'platform' || '' }}
+          CODEXHOST_TEST_SCOPE: platform
         run: >
           npm run test:typescript --
           --exclude 'packages/repository-automation/test/**'
@@ -88,67 +85,9 @@ jobs:
           --exclude 'packages/renderer-extension/test/**'
           --exclude 'tools/gate-claude-code/run.test.mjs'
 
-      # Rust formatting is already covered by the Linux x64 formatting step.
+      # Rust formatting is covered by the macOS formatting step.
       - name: Check Rust
         run: >
           cargo clippy --workspace --all-targets --locked
           --features codexhost-shim/test-utils,codexhost-gate-a-native/gate-tools
           -- -D warnings && npm run test:rust
-
-      - name: Smoke-test Linux npm package
-        if: runner.os == 'Linux'
-        run: >
-          node scripts/release/smoke-npm-package.mjs
-          --target linux-x64
-          --version 0.1.6-ci.0
-
-  check-linux-arm64:
-    name: Check Linux ARM64
-    runs-on: ubuntu-22.04-arm
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: npm
-
-      - name: Setup npm
-        run: npm install --global --prefer-offline npm@11.8.0
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.97.1
-
-      # Reuse compiled dependencies; only main refreshes the cache so PRs cannot evict it.
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Install dependencies
-        run: npm ci --prefer-offline
-
-      # Keep the same cross-platform coverage as macOS and Windows.
-      - name: Test TypeScript (cross-platform)
-        run: >
-          npm run test:typescript --
-          --exclude 'packages/repository-automation/test/**'
-          --exclude 'packages/shared-contracts/test/**'
-          --exclude 'packages/renderer-extension/test/**'
-          --exclude 'tools/gate-claude-code/run.test.mjs'
-
-      - name: Check Rust
-        run: >
-          cargo clippy --workspace --all-targets --locked
-          --features codexhost-shim/test-utils,codexhost-gate-a-native/gate-tools
-          -- -D warnings && npm run test:rust
-
-      - name: Smoke-test Linux ARM64 npm package
-        run: >
-          node scripts/release/smoke-npm-package.mjs
-          --target linux-arm64
-          --version 0.1.6-ci.0

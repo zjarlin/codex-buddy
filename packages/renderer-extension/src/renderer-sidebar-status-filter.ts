@@ -106,32 +106,35 @@ export function installRendererSidebarStatusFilter(options: {
     allButton.setAttribute("aria-pressed", String(mode === "all"));
     activeButton.setAttribute("aria-pressed", String(mode === "active"));
     pendingButton.setAttribute("aria-pressed", String(mode === "pending"));
-    pendingButton.title = chinese ? "只显示待确认的会话" : "Show only conversations awaiting confirmation";
-    const statusLabel = mode === "all"
-      ? ""
-      : pending > 0
-        ? chinese
-          ? "正在检查状态…"
-          : "Checking status…"
-        : failed > 0
+    pendingButton.title = chinese
+      ? "只显示待确认的会话"
+      : "Show only conversations awaiting confirmation";
+    const statusLabel =
+      mode === "all"
+        ? ""
+        : pending > 0
           ? chinese
-            ? "部分状态读取失败，稍后重试"
-            : "Some statuses unavailable; retrying"
-          : count === 0
+            ? "正在检查状态…"
+            : "Checking status…"
+          : failed > 0
             ? chinese
-              ? mode === "pending"
-                ? "没有待确认的会话"
-                : "没有进行中的会话"
-              : mode === "pending"
-                ? "No conversations awaiting confirmation"
-                : "No active conversations"
-            : chinese
-              ? mode === "pending"
-                ? `${count} 个待确认`
-                : `${count} 个进行中`
-              : mode === "pending"
-                ? `${count} awaiting confirmation`
-                : `${count} active`;
+              ? "部分状态读取失败，稍后重试"
+              : "Some statuses unavailable; retrying"
+            : count === 0
+              ? chinese
+                ? mode === "pending"
+                  ? "没有待确认的会话"
+                  : "没有进行中的会话"
+                : mode === "pending"
+                  ? "No conversations awaiting confirmation"
+                  : "No active conversations"
+              : chinese
+                ? mode === "pending"
+                  ? `${count} 个待确认`
+                  : `${count} 个进行中`
+                : mode === "pending"
+                  ? `${count} awaiting confirmation`
+                  : `${count} active`;
     if (status.textContent !== statusLabel) status.textContent = statusLabel;
   };
 

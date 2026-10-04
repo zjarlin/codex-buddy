@@ -1,5 +1,4 @@
 import {
-  REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
   remoteProjectsInspectParamsSchema,
   remoteProjectsSnapshotSchema,

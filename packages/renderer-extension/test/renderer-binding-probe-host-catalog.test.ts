@@ -30,6 +30,7 @@ const testState = vi.hoisted(() => ({
   modelTarget: ["conversation", "thread-a"] as readonly unknown[],
   gitContext: null as null | (() => RendererGitContext),
   gitSync: vi.fn(),
+  localeReads: [] as ("zh-CN" | "en")[],
   buddyContext: null as null | (() => BuddyControlContext | null),
 }));
 
@@ -37,36 +38,82 @@ vi.mock("../src/auto-route-card/index.js", () => ({
   installAutoRouteCards: () => ({ dispose: vi.fn() }),
 }));
 
+vi.mock("../src/turn-action-card/index.js", () => ({
+  installTurnActionCards: () => ({ dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-pending-confirmations.js", () => ({
+  installRendererPendingConfirmations: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
+}));
+
+vi.mock("../src/renderer-project-dashboard.js", () => ({
+  installRendererProjectDashboard: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
 vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
-  installRendererSidebarStatusFilter: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererSidebarStatusFilter: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-sidebar-unread.js", () => ({
-  installRendererSidebarUnread: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererSidebarUnread: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-sidebar-visits.js", () => ({
-  installRendererSidebarVisits: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererSidebarVisits: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-queued-transfer.js", () => ({
-  installRendererQueuedTransfer: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererQueuedTransfer: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/project-tabs/index.js", () => ({
-  installProjectTabs: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installProjectTabs: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
+}));
+
+vi.mock("../src/thread-folders/index.js", () => ({
+  installThreadFolders: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn(), threadMenu: {} };
+  },
 }));
 
 vi.mock("../src/buddy/continuation.js", () => ({
-  installSidebarContinuation: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installSidebarContinuation: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-thread-actions.js", () => ({
-  installRendererThreadActions: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererThreadActions: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-project-actions.js", () => ({
-  installRendererProjectActions: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+  installRendererProjectActions: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/renderer-git-sidebar.js", () => ({
@@ -83,7 +130,10 @@ vi.mock("../src/renderer-git-workflow-control.js", () => ({
 }));
 
 vi.mock("../src/renderer-git-branch-control.js", () => ({
-  installRendererGitBranchControl: () => ({ refreshContext: vi.fn(), dispose: vi.fn() }),
+  installRendererGitBranchControl: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refreshContext: vi.fn(), dispose: vi.fn() };
+  },
 }));
 
 vi.mock("../src/buddy/control.js", () => ({
@@ -110,7 +160,7 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
       ...args: Parameters<typeof RendererComposerDom.mountComposerAgentControl>
     ) => {
       testState.selectModel = args[7];
-      testState.refreshModels = args[11];
+      testState.refreshModels = args[12];
       return {
         composer: testState.composer,
         composerId: "composer-1",
@@ -237,7 +287,7 @@ function emptyInspection() {
   };
 }
 
-function installFakeBrowser(): void {
+function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   const listeners = new EventTarget();
   const composer = {
     isConnected: true,
@@ -257,6 +307,7 @@ function installFakeBrowser(): void {
   testState.editor = editor;
   testState.sendButton = sendButton;
   testState.renderedModelViews = [];
+  testState.localeReads = [];
   testState.selectModel = null;
   testState.getConnectionDiagnostics = null;
   testState.getSessionImportClient = null;
@@ -264,6 +315,7 @@ function installFakeBrowser(): void {
   testState.modelTarget = ["conversation", "thread-a"];
   testState.prewarmClears = 0;
   const window_ = {
+    navigator: { languages },
     addEventListener: listeners.addEventListener.bind(listeners),
     removeEventListener: listeners.removeEventListener.bind(listeners),
     dispatchEvent: listeners.dispatchEvent.bind(listeners),
@@ -316,6 +368,17 @@ afterEach(() => {
   api?.dispose();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
+});
+
+it("reads locale before settings lifecycle initialization", async () => {
+  installFakeBrowser(["zh-CN"]);
+  const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+
+  const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+
+  expect(testState.localeReads).toHaveLength(11);
+  expect(testState.localeReads.slice(0, 8)).toEqual(Array.from({ length: 8 }, () => "zh-CN"));
+  probe.dispose();
 });
 
 describe("Renderer binding Host-scoped Claude catalogs", () => {

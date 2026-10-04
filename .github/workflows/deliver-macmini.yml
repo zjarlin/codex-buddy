@@ -1,0 +1,157 @@
+name: Deliver CodexBuddy to Mac mini
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_repository:
+        description: "GitHub repository that owns the release"
+        required: true
+        default: "zjarlin/codex-buddy"
+        type: string
+      tag:
+        description: "Stable release tag to install (for example v0.12.0)"
+        required: true
+        default: "v0.10.7"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codexbuddy-macmini-delivery
+  cancel-in-progress: false
+
+jobs:
+  deliver:
+    name: Install release on Mac mini
+    runs-on: [self-hosted, macOS, ARM64, macmini-delivery]
+    timeout-minutes: 60
+    env:
+      RELEASE_REPOSITORY: ${{ inputs.release_repository }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Resolve and download installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Only stable release tags are supported" >&2
+            exit 1
+          }
+          version="${RELEASE_TAG#v}"
+          asset="codex-buddy-${version}-macos-arm64.dmg"
+          release_dir="$RUNNER_TEMP/codexbuddy-macmini"
+          mkdir -p "$release_dir"
+          node --input-type=module - "$asset" "$release_dir/asset.json" <<'JS'
+          import { writeFile } from "node:fs/promises";
+          const [assetName, output] = process.argv.slice(2);
+          const response = await fetch(
+            `https://api.github.com/repos/${process.env.RELEASE_REPOSITORY}/releases/tags/${process.env.RELEASE_TAG}`,
+            { headers: {
+              accept: "application/vnd.github+json",
+              authorization: `Bearer ${process.env.GH_TOKEN}`,
+              "user-agent": "codexbuddy-macmini-delivery",
+            } },
+          );
+          if (!response.ok) throw new Error(`GitHub release lookup failed: HTTP ${response.status}`);
+          const release = await response.json();
+          if (release.draft || release.prerelease) throw new Error("Release must be stable");
+          const matches = release.assets.filter((asset) => asset.name === assetName);
+          if (matches.length !== 1) throw new Error(`Expected exactly one ${assetName}`);
+          const asset = matches[0];
+          if (!/^sha256:[a-f0-9]{64}$/.test(asset.digest ?? "")) {
+            throw new Error("Release asset is missing a SHA-256 digest");
+          }
+          await writeFile(output, JSON.stringify({
+            url: asset.browser_download_url,
+            digest: asset.digest,
+            size: asset.size,
+          }));
+          JS
+          url="$(node -p "require('$release_dir/asset.json').url")"
+          digest="$(node -p "require('$release_dir/asset.json').digest")"
+          size="$(node -p "require('$release_dir/asset.json').size")"
+          curl --fail --location --http1.1 --retry 5 --retry-all-errors \
+            --retry-delay 5 --continue-at - --output "$release_dir/$asset" "$url"
+          actual_size="$(stat -f '%z' "$release_dir/$asset")"
+          actual_digest="sha256:$(shasum -a 256 "$release_dir/$asset" | awk '{print $1}')"
+          [[ "$actual_size" == "$size" ]] || {
+            echo "Downloaded installer size mismatch" >&2
+            exit 1
+          }
+          [[ "$actual_digest" == "$digest" ]] || {
+            echo "Downloaded installer digest mismatch" >&2
+            exit 1
+          }
+
+      - name: Install and verify application
+        shell: bash
+        env:
+          VERSION: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          release_dir="$RUNNER_TEMP/codexbuddy-macmini"
+          asset="$release_dir/codex-buddy-${version}-macos-arm64.dmg"
+          mount_point="$release_dir/mount"
+          staging="$release_dir/staging"
+          backup_root="$HOME/Library/Application Support/codexhost/local-update-backups"
+          mkdir -p "$mount_point" "$staging" "$backup_root"
+          hdiutil attach "$asset" -nobrowse -readonly -mountpoint "$mount_point"
+          cleanup() {
+            hdiutil detach "$mount_point" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          source_app="$mount_point/CodexBuddy.app"
+          [[ -d "$source_app" ]] || {
+            echo "Installer does not contain CodexBuddy.app" >&2
+            exit 1
+          }
+          ditto "$source_app" "$staging/CodexBuddy.app"
+          installed_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$staging/CodexBuddy.app/Contents/Info.plist")"
+          [[ "$installed_version" == "$version" ]] || {
+            echo "Installer version mismatch: $installed_version" >&2
+            exit 1
+          }
+          codesign --verify --deep --strict "$staging/CodexBuddy.app"
+          xattr -dr com.apple.quarantine "$staging/CodexBuddy.app" 2>/dev/null || true
+          # Stop the whole stack. Killing only the launcher and shim leaves
+          # orphaned desktop-controller/console-server helpers holding the
+          # control port, which makes the next launcher refuse to start.
+          # macOS codexhost also refuses to take over an already-running
+          # official Codex Desktop, so quit that instance first.
+          osascript -e 'quit app "ChatGPT"' >/dev/null 2>&1 || true
+          pkill -TERM -x ChatGPT 2>/dev/null || true
+          pkill -TERM -x codexhost 2>/dev/null || true
+          pkill -TERM -x codexhost-shim 2>/dev/null || true
+          pkill -TERM -f '/Applications/CodexBuddy.app/Contents/Resources/app/desktop-controller.mjs' 2>/dev/null || true
+          pkill -TERM -f '/Applications/CodexBuddy.app/Contents/Resources/app/console-server.mjs' 2>/dev/null || true
+          pkill -TERM -f '/Applications/CodexBuddy.app/Contents/Resources/app/host-runtime.mjs' 2>/dev/null || true
+          for _ in {1..20}; do
+            pgrep -x codexhost >/dev/null 2>&1 || pgrep -x codexhost-shim >/dev/null 2>&1 || break
+            sleep 1
+          done
+          if [[ -d /Applications/CodexBuddy.app ]]; then
+            mv /Applications/CodexBuddy.app \
+              "$backup_root/CodexBuddy-$(date +%Y%m%d%H%M%S)-$(uuidgen).app"
+          fi
+          ditto "$staging/CodexBuddy.app" /Applications/CodexBuddy.app
+          # Launch outside the runner's tracking id; otherwise job cleanup
+          # terminates the app as an orphan process at the end of the job.
+          env -u RUNNER_TRACKING_ID open -a /Applications/CodexBuddy.app
+          for _ in {1..60}; do
+            pgrep -f '/Applications/CodexBuddy.app/Contents/MacOS/codexhost' >/dev/null 2>&1 && break
+            sleep 1
+          done
+          pgrep -f '/Applications/CodexBuddy.app/Contents/MacOS/codexhost' >/dev/null 2>&1 || {
+            echo "CodexBuddy did not start after installation" >&2
+            exit 1
+          }
+          observed="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' /Applications/CodexBuddy.app/Contents/Info.plist)"
+          [[ "$observed" == "$version" ]] || {
+            echo "Installed application version mismatch: $observed" >&2
+            exit 1
+          }
+          echo "Installed CodexBuddy ${version} on $(hostname)" >> "$GITHUB_STEP_SUMMARY"

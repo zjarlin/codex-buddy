@@ -424,12 +424,16 @@ export class GitWorkspace {
     private readonly runtime?: GitWorkspaceRuntime,
   ) {}
 
+  get paths(): typeof path {
+    return this.runtime?.paths ?? path;
+  }
+
   #absoluteWorkspace(cwd: string): string {
-    return (this.runtime?.paths ?? path).resolve(cwd);
+    return this.paths.resolve(cwd);
   }
 
   #absoluteGitPath(cwd: string, filePath: string): string {
-    const paths = this.runtime?.paths ?? path;
+    const paths = this.paths;
     const workspace = this.#absoluteWorkspace(cwd);
     const absolute = paths.resolve(workspace, filePath);
     if (absolute !== workspace && !absolute.startsWith(`${workspace}${paths.sep}`)) {

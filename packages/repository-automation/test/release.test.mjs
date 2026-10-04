@@ -167,7 +167,7 @@ describe("release source and metadata", () => {
 });
 
 describe("exact-commit CI release gate", () => {
-  it("requires all four successful jobs for the exact main-push commit", () => {
+  it("requires all configured successful jobs for the exact main-push commit", () => {
     expect(assertReleaseCi(ci(), head)).toMatchObject({ ciRunId: 42, ciRunAttempt: 1 });
     expect(() => assertReleaseCi(ci(), oldHead)).toThrow("exact release commit");
     expect(() => assertReleaseCi(ci({ event: "pull_request" }), head)).toThrow("main push");

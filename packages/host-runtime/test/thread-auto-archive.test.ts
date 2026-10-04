@@ -1,19 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadAutoArchive, type ThreadAutoArchiveCandidate } from "../src/thread-auto-archive.js";
 
-function fixture(input: {
-  official?: ThreadAutoArchiveCandidate[];
-  external?: ThreadAutoArchiveCandidate[];
-  canOfficial?: boolean;
-  canExternal?: boolean;
-  allowed?: boolean;
-}) {
-  const listOfficial = vi.fn(async () => input.official ?? []);
-  const listExternal = vi.fn(async () => input.external ?? []);
-  const canArchiveOfficial = vi.fn(async () => input.canOfficial ?? true);
-  const canArchiveExternal = vi.fn(async () => input.canExternal ?? true);
-  const archiveOfficial = vi.fn(async () => undefined);
-  const archiveExternal = vi.fn(async () => undefined);
+function fixture(
+  input: {
+    official?: ThreadAutoArchiveCandidate[];
+    external?: ThreadAutoArchiveCandidate[];
+    canOfficial?: boolean;
+    canExternal?: boolean;
+    allowed?: boolean;
+  } = {},
+) {
+  const listOfficial = vi.fn<(cutoffSeconds: number) => Promise<ThreadAutoArchiveCandidate[]>>(
+    async () => input.official ?? [],
+  );
+  const listExternal = vi.fn<(cutoffSeconds: number) => Promise<ThreadAutoArchiveCandidate[]>>(
+    async () => input.external ?? [],
+  );
+  const canArchiveOfficial = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<boolean>>(
+    async () => input.canOfficial ?? true,
+  );
+  const canArchiveExternal = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<boolean>>(
+    async () => input.canExternal ?? true,
+  );
+  const archiveOfficial = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<void>>(
+    async () => undefined,
+  );
+  const archiveExternal = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<void>>(
+    async () => undefined,
+  );
   const diagnose = vi.fn();
   const service = new ThreadAutoArchive({
     listOfficial,

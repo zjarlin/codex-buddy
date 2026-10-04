@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { inspectSshRemoteProjects, syncSshRemoteProjects } from "../src/ssh-remote-projects.js";
+import { inspectSshRemoteProjects } from "../src/ssh-remote-projects.js";
 import {
   inspectRemoteProjectsOnHost,
   syncRemoteProjectsOnHost,
@@ -25,9 +25,9 @@ async function hostFixture(apiKey = "remote-secret-key") {
   const data = path.join(root, "codexhost-data");
   await mkdir(home, { recursive: true });
   await writeFile(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: apiKey }));
-  const fakeCodex = path.join(root, "fake-codex.mjs");
+  const fakeCodexScript = path.join(root, "fake-codex.mjs");
   await writeFile(
-    fakeCodex,
+    fakeCodexScript,
     `#!/usr/bin/env node
 import readline from "node:readline";
 const input = readline.createInterface({ input: process.stdin });
@@ -48,7 +48,7 @@ input.on("line", line => {
       HOME: root,
       CODEX_HOME: home,
       CODEXHOST_DATA_DIR: data,
-      CODEXHOST_STOCK_CODEX_PATH: fakeCodex,
+      CODEXHOST_STOCK_CODEX_PATH: fakeCodexScript,
     },
     data,
   };

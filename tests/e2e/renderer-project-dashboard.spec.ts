@@ -6,19 +6,20 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installRendererProjectDashboard } from "./packages/renderer-extension/src/renderer-project-dashboard.ts";
-      globalThis.setupProjectDashboard = () => {
+      globalThis.setupProjectDashboard = (options = {}) => {
+        const main = '<main data-app-shell-main-surface="default">Conversation</main>';
         document.body.innerHTML = \`
           <style>body{margin:0}header{position:fixed;inset:0 0 auto 0;height:44px;display:flex;align-items:center}main{position:fixed;inset:44px 0 0 180px}</style>
           <header data-pip-obstacle="app-shell-header"><div data-app-shell-header-obstacle="true">actions</div></header>
-          <main data-app-shell-main-surface="default">Conversation</main>
+          \${options.deferMain ? "" : main}
           <aside id="app-shell-sidebar"><button data-app-action-sidebar-thread-row data-app-action-sidebar-thread-host-id="local">row</button></aside>
         \`;
         const calls = [];
         const opened = [];
         const request = async (method, params) => {
           calls.push([method, params]);
-          if (method === "thread/list") return { data: [
-            { id: "thread-a", cwd: "/repo/codex-host", name: "实现盯盘", updatedAt: 1700000000000, status: { type: "active" } },
+          if (method === "thread/list") return { data: options.empty ? [] : [
+            { id: "thread-a", cwd: "/repo/codex-host", name: "实现盯盘", updatedAt: 1700000000000, status: { type: options.idleOnly ? "idle" : "active" } },
             { id: "thread-b", cwd: "/repo/docs", name: "更新文档", updatedAt: 1699999999000, status: { type: "idle" } },
           ] };
           if (params.threadId === "thread-a") return { data: [{
@@ -40,6 +41,9 @@ const { outputFiles } = await build({
           onOpenThread: (threadId, hostId) => opened.push([threadId, hostId]),
         });
         globalThis.projectDashboard = { control, calls, opened };
+        if (options.deferMain) {
+          setTimeout(() => document.body.insertAdjacentHTML("beforeend", main), 0);
+        }
       };
     `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -95,4 +99,26 @@ test("project dashboard shows result-focused projects and opens the source Threa
   await page.evaluate(() => Reflect.get(globalThis, "projectDashboard").control.dispose());
   await expect(trigger).toHaveCount(0);
   await expect(root).toHaveCount(0);
+});
+
+test("project dashboard remains visible for idle projects while the main workspace mounts", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await page.setContent("<!doctype html><body></body>");
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "setupProjectDashboard")({ deferMain: true, idleOnly: true }),
+  );
+
+  const root = page.locator("[data-codexhost-project-dashboard]");
+  await expect(root).toBeVisible();
+  await expect(root).toContainText("codex-host");
+  await expect(root).toContainText("0");
+  await expect(root).toContainText("运行中的会话");
+
+  const surface = page.locator("[data-codexhost-project-dashboard-surface]");
+  await expect(surface).toHaveAttribute("data-codexhost-project-dashboard-surface", "v1");
+  await expect(surface).toHaveAttribute("data-app-shell-main-surface", "default");
+  expect(await root.evaluate((element) => element.style.width)).toBe("920px");
 });

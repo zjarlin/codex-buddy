@@ -172,4 +172,33 @@ describe("project dashboard aggregation", () => {
     });
     expect(snapshot.errors).toContain("Bad: history unavailable");
   });
+
+  it("keeps idle projects visible when no Thread is running", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/list") {
+        return {
+          data: [
+            {
+              id: "idle-thread",
+              cwd: "/repo/idle-project",
+              name: "Idle result",
+              updatedAt: 1_700_000_500,
+              status: { type: "idle" },
+            },
+          ],
+        };
+      }
+      return { data: [turn({ id: "turn-idle", question: "等待处理", answer: "结果已保留。" })] };
+    });
+
+    const snapshot = await readProjectDashboard(request);
+
+    expect(snapshot.projects).toHaveLength(1);
+    expect(snapshot.projects[0]).toMatchObject({
+      label: "idle-project",
+      activeCount: 0,
+      completedCount: 1,
+    });
+    expect(snapshot.threads[0]).toMatchObject({ id: "idle-thread", active: false });
+  });
 });

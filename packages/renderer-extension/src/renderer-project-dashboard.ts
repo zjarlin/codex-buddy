@@ -415,22 +415,45 @@ export function installRendererProjectDashboard(options: {
   let snapshot: ProjectDashboardSnapshot | null = null;
   let failure: unknown = null;
   let automatic = true;
+  let resizeObserver: ResizeObserver | null = null;
+
+  const dashboardSurface = (): HTMLElement =>
+    document.querySelector<HTMLElement>(MAIN_SURFACE_SELECTOR) ??
+    document.body ??
+    document.documentElement;
 
   const syncSurfaceBounds = (): void => {
     if (!surface) return;
     const bounds = surface.getBoundingClientRect();
     const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
     const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-    const left = Math.max(0, bounds.left);
-    const top = Math.max(0, bounds.top);
-    const width = Math.max(0, Math.min(bounds.width, viewportWidth - left));
-    const height = Math.max(0, Math.min(bounds.height, viewportHeight - top));
+    const hasBounds = bounds.width > 0 && bounds.height > 0;
+    const headerBottom = document
+      .querySelector<HTMLElement>(APP_HEADER_SELECTOR)
+      ?.getBoundingClientRect().bottom;
+    const left = hasBounds ? Math.max(0, bounds.left) : 0;
+    const top = hasBounds
+      ? Math.max(0, bounds.top)
+      : Math.max(0, Math.min(headerBottom ?? 0, viewportHeight));
+    const width = hasBounds
+      ? Math.max(0, Math.min(bounds.width, viewportWidth - left))
+      : viewportWidth;
+    const height = hasBounds
+      ? Math.max(0, Math.min(bounds.height, viewportHeight - top))
+      : Math.max(0, viewportHeight - top);
     host.style.left = `${left}px`;
     host.style.top = `${top}px`;
     host.style.width = `${width}px`;
     host.style.height = `${height}px`;
     host.style.right = "auto";
     host.style.bottom = "auto";
+  };
+
+  const observeSurface = (next: HTMLElement): void => {
+    if (typeof ResizeObserver === "undefined") return;
+    resizeObserver ??= new ResizeObserver(() => syncSurfaceBounds());
+    resizeObserver.disconnect();
+    resizeObserver.observe(next);
   };
 
   const switchToChat = (): void => {
@@ -494,9 +517,9 @@ export function installRendererProjectDashboard(options: {
   };
   const show = (): void => {
     if (disposed) return;
-    const main = document.querySelector<HTMLElement>(MAIN_SURFACE_SELECTOR);
-    if (!main) return;
-    surface = main;
+    const nextSurface = dashboardSurface();
+    if (surface && surface !== nextSurface) surface.removeAttribute(DASHBOARD_SURFACE_ATTRIBUTE);
+    surface = nextSurface;
     surface.setAttribute(DASHBOARD_SURFACE_ATTRIBUTE, "v1");
     if (!dashboard) {
       dashboard = mountDashboard(host, {
@@ -520,9 +543,10 @@ export function installRendererProjectDashboard(options: {
         },
       });
     }
-    if (host.parentElement !== main) main.append(host);
+    if (host.parentElement !== surface) surface.append(host);
     host.hidden = false;
     syncSurfaceBounds();
+    observeSurface(surface);
     open = true;
     dashboard?.update(snapshot, failure);
     refresh();
@@ -552,9 +576,12 @@ export function installRendererProjectDashboard(options: {
   poll.setActive(false);
   const observer = new MutationObserver(() => {
     position();
+    const nextSurface = dashboardSurface();
     if (open && surface && !surface.isConnected) {
       open = false;
       if (automatic) show();
+    } else if (open && surface !== nextSurface) {
+      show();
     } else if (open) {
       syncSurfaceBounds();
     } else if (automatic) {
@@ -577,6 +604,8 @@ export function installRendererProjectDashboard(options: {
       poll.dispose();
       trigger.removeEventListener("click", onclick);
       document.removeEventListener("click", onSidebarThreadClick, true);
+      resizeObserver?.disconnect();
+      resizeObserver = null;
       trigger.remove();
       surface?.removeAttribute(DASHBOARD_SURFACE_ATTRIBUTE);
       dashboard?.dispose();

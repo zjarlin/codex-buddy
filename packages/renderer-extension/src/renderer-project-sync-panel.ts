@@ -35,6 +35,9 @@ export interface RendererProjectSyncPanel {
   dispose(): void;
 }
 
+type ProjectSyncProject = ProjectSyncSnapshot["projects"][number];
+type ProjectPathAction = { kind: "add" } | { kind: "bind" | "clone"; project: ProjectSyncProject };
+
 export const PROJECT_SYNC_PANEL_ATTRIBUTE = "data-codexhost-project-sync-panel";
 export const PROJECT_SYNC_INVITE_ATTRIBUTE = "data-codexhost-project-sync-invite";
 export const PROJECT_SYNC_CODE_ATTRIBUTE = "data-codexhost-project-sync-code";
@@ -93,7 +96,6 @@ export function createRendererProjectSyncPanel(options: {
   signal?: AbortSignal;
 }): RendererProjectSyncPanel {
   const document = options.ownerDocument;
-  const ownerWindow = document.defaultView ?? window;
   const listenerOptions = options.signal ? { signal: options.signal } : undefined;
   const panel = document.createElement("section");
   panel.className = "codexhost-project-sync-panel";
@@ -127,6 +129,10 @@ export function createRendererProjectSyncPanel(options: {
     .codexhost-project-sync-row-actions { display:flex; flex:none; gap:4px; }
     .codexhost-project-sync-input-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px; }
     .codexhost-project-sync-input { box-sizing:border-box; width:100%; min-width:0; height:27px; padding:3px 7px; color:inherit; background:var(--surface-secondary,transparent); border:1px solid var(--border-default,color-mix(in srgb,currentColor 16%,transparent)); border-radius:5px; font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .codexhost-project-sync-path-editor { display:flex; min-width:0; flex-direction:column; gap:5px; padding:6px 0; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 8%,transparent)); }
+    .codexhost-project-sync-path-editor[hidden] { display:none; }
+    .codexhost-project-sync-path-editor label { display:flex; min-width:0; flex-direction:column; gap:4px; font-size:10px; opacity:.72; }
+    .codexhost-project-sync-path-actions { display:flex; gap:4px; }
     .codexhost-project-sync-notice { margin:0; color:var(--text-link,inherit); font-size:10px; line-height:1.45; overflow-wrap:anywhere; }
     .codexhost-project-sync-notice[data-state="error"] { color:var(--color-text-danger,#ef4444); }
     .codexhost-project-sync-notice[data-state="success"] { color:var(--green,#3fa66a); }
@@ -182,8 +188,27 @@ export function createRendererProjectSyncPanel(options: {
   const projects = section(document, "项目列表");
   const addProject = actionButton(document, "添加本机项目");
   addProject.setAttribute(PROJECT_SYNC_ADD_ATTRIBUTE, "v1");
+  const pathEditor = document.createElement("form");
+  pathEditor.className = "codexhost-project-sync-path-editor";
+  pathEditor.hidden = true;
+  const pathLabel = document.createElement("label");
+  const pathLabelText = document.createElement("span");
+  const pathInput = document.createElement("input");
+  pathInput.className = "codexhost-project-sync-input";
+  pathInput.type = "text";
+  pathInput.autocomplete = "off";
+  pathInput.spellcheck = false;
+  pathLabel.append(pathLabelText, pathInput);
+  const pathActions = document.createElement("div");
+  pathActions.className = "codexhost-project-sync-path-actions";
+  const pathConfirm = actionButton(document, "确认");
+  pathConfirm.type = "submit";
+  const pathCancel = actionButton(document, "取消");
+  pathCancel.type = "button";
+  pathActions.append(pathConfirm, pathCancel);
+  pathEditor.append(pathLabel, pathActions);
   const projectList = document.createElement("div");
-  projects.append(addProject, projectList);
+  projects.append(addProject, pathEditor, projectList);
   const notice = document.createElement("p");
   notice.className = "codexhost-project-sync-notice";
   notice.setAttribute("role", "status");
@@ -196,6 +221,7 @@ export function createRendererProjectSyncPanel(options: {
   let disposed = false;
   let polling = false;
   let generation = 0;
+  let pathAction: ProjectPathAction | null = null;
 
   const setNotice = (message: string, state: "info" | "success" | "error" = "info"): void => {
     notice.textContent = message;
@@ -207,6 +233,28 @@ export function createRendererProjectSyncPanel(options: {
     for (const control of panel.querySelectorAll<HTMLButtonElement>("button")) {
       control.disabled = value;
     }
+  };
+
+  const closePathEditor = (): void => {
+    pathAction = null;
+    pathEditor.hidden = true;
+    pathInput.value = "";
+  };
+
+  const openPathEditor = (action: ProjectPathAction): void => {
+    if (busy || disposed) return;
+    pathAction = action;
+    pathLabelText.textContent =
+      action.kind === "add"
+        ? "本机 Git 仓库根目录"
+        : action.kind === "bind"
+          ? `绑定 ${action.project.name} 的已有仓库根目录`
+          : `克隆 ${action.project.name} 的目标父目录`;
+    pathInput.placeholder = action.kind === "clone" ? "目标父目录绝对路径" : "仓库根目录绝对路径";
+    pathInput.setAttribute("aria-label", pathLabelText.textContent);
+    pathEditor.hidden = false;
+    setNotice("");
+    pathInput.focus();
   };
 
   const render = (snapshot: ProjectSyncSnapshot): void => {
@@ -281,7 +329,10 @@ export function createRendererProjectSyncPanel(options: {
           void run(
             (client) => client.syncProjectSync({ peerId: peer.id }),
             "正在同步项目列表…",
-            (result) => `已同步，共 ${result.projects.length} 个项目。`,
+            (result) =>
+              result.projects.length
+                ? `已同步，共 ${result.projects.length} 个项目。`
+                : "已同步，共 0 个项目。请在任一端先添加本机 Git 仓库，再重试同步。",
           ),
         listenerOptions,
       );
@@ -301,7 +352,8 @@ export function createRendererProjectSyncPanel(options: {
     }
 
     projectList.replaceChildren();
-    if (!snapshot.projects.length) projectList.append(empty(document, "暂无项目"));
+    if (!snapshot.projects.length)
+      projectList.append(empty(document, "暂无项目。先添加一个本机 Git 仓库。"));
     for (const project of snapshot.projects) {
       const row = document.createElement("div");
       row.className = "codexhost-project-sync-project";
@@ -324,28 +376,12 @@ export function createRendererProjectSyncPanel(options: {
         const clone = actionButton(document, "克隆");
         bind.addEventListener(
           "click",
-          () => {
-            const pathValue = ownerWindow.prompt("选择已有仓库根目录", "");
-            if (!pathValue) return;
-            void run(
-              (client) => client.bindProjectSync({ remote: project.remote, path: pathValue }),
-              "正在绑定目录…",
-              `${project.name} 已绑定。`,
-            );
-          },
+          () => openPathEditor({ kind: "bind", project }),
           listenerOptions,
         );
         clone.addEventListener(
           "click",
-          () => {
-            const parent = ownerWindow.prompt("选择克隆目标父目录", "");
-            if (!parent) return;
-            void run(
-              (client) => client.cloneProjectSync({ remote: project.remote, parent }),
-              "正在克隆项目…",
-              `${project.name} 已克隆。`,
-            );
-          },
+          () => openPathEditor({ kind: "clone", project }),
           listenerOptions,
         );
         actions.append(bind, clone);
@@ -360,25 +396,27 @@ export function createRendererProjectSyncPanel(options: {
     operation: (client: RendererProjectSyncClient) => Promise<ProjectSyncSnapshot>,
     pendingMessage: string,
     successMessage: string | ((snapshot: ProjectSyncSnapshot) => string),
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const client = options.getClient();
     if (!client) {
       setNotice("本地 Host 不可用。", "error");
-      return;
+      return false;
     }
-    if (busy || disposed) return;
+    if (busy || disposed) return false;
     setBusy(true);
     setNotice(pendingMessage);
     try {
       const snapshot = await operation(client);
-      if (disposed) return;
+      if (disposed) return false;
       render(snapshot);
       setNotice(
         typeof successMessage === "function" ? successMessage(snapshot) : successMessage,
         "success",
       );
+      return true;
     } catch (error) {
       if (!disposed) setNotice(error instanceof Error ? error.message : String(error), "error");
+      return false;
     } finally {
       if (!disposed) setBusy(false);
     }
@@ -446,16 +484,42 @@ export function createRendererProjectSyncPanel(options: {
     },
     listenerOptions,
   );
-  addProject.addEventListener(
-    "click",
-    () => {
-      const pathValue = ownerWindow.prompt("选择 Git 仓库根目录", "");
-      if (!pathValue) return;
+  addProject.addEventListener("click", () => openPathEditor({ kind: "add" }), listenerOptions);
+  pathCancel.addEventListener("click", closePathEditor, listenerOptions);
+  pathEditor.addEventListener(
+    "submit",
+    (event) => {
+      event.preventDefault();
+      const action = pathAction;
+      const pathValue = pathInput.value.trim();
+      if (!action) return;
+      if (!pathValue) {
+        setNotice("请输入绝对路径。", "error");
+        return;
+      }
+      const operation =
+        action.kind === "add"
+          ? (client: RendererProjectSyncClient) => client.addProjectSync({ path: pathValue })
+          : action.kind === "bind"
+            ? (client: RendererProjectSyncClient) =>
+                client.bindProjectSync({ remote: action.project.remote, path: pathValue })
+            : (client: RendererProjectSyncClient) =>
+                client.cloneProjectSync({ remote: action.project.remote, parent: pathValue });
       void run(
-        (client) => client.addProjectSync({ path: pathValue }),
-        "正在添加项目…",
-        "项目已加入同步列表。",
-      );
+        operation,
+        action.kind === "add"
+          ? "正在添加项目…"
+          : action.kind === "bind"
+            ? "正在绑定目录…"
+            : "正在克隆项目…",
+        action.kind === "add"
+          ? "项目已加入同步列表。"
+          : action.kind === "bind"
+            ? `${action.project.name} 已绑定。`
+            : `${action.project.name} 已克隆。`,
+      ).then((succeeded) => {
+        if (succeeded) closePathEditor();
+      });
     },
     listenerOptions,
   );

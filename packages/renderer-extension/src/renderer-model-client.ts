@@ -190,6 +190,13 @@ import {
   projectTabsStateSchema,
   type ProjectTabsConfig,
   type ProjectTabsState,
+  THREAD_FOLDERS_GET_METHOD,
+  THREAD_FOLDERS_SET_METHOD,
+  threadFoldersConfigSchema,
+  threadFoldersGetParamsSchema,
+  threadFoldersStateSchema,
+  type ThreadFoldersConfig,
+  type ThreadFoldersState,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
   THREAD_ARCHIVE_COMPLETED_METHOD,
@@ -500,6 +507,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
   getProjectTabs?(): Promise<ProjectTabsState>;
   setProjectTabs?(config: ProjectTabsConfig): Promise<ProjectTabsState>;
+  getThreadFolders?(): Promise<ThreadFoldersState>;
+  setThreadFolders?(config: ThreadFoldersConfig): Promise<ThreadFoldersState>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   readThreadActivity?(threadId: string): Promise<boolean>;
   readAutoModelRoutes?(threadId: string, runId?: string): Promise<AutoModelRoutesResult>;
@@ -1132,6 +1141,22 @@ export function createRendererModelClient(
     async setProjectTabs(config: ProjectTabsConfig): Promise<ProjectTabsState> {
       return projectTabsStateSchema.parse(
         await manager.sendRequest(PROJECT_TABS_SET_METHOD, projectTabsConfigSchema.parse(config)),
+      );
+    },
+    async getThreadFolders(): Promise<ThreadFoldersState> {
+      return threadFoldersStateSchema.parse(
+        await manager.sendRequest(
+          THREAD_FOLDERS_GET_METHOD,
+          threadFoldersGetParamsSchema.parse({}),
+        ),
+      );
+    },
+    async setThreadFolders(config: ThreadFoldersConfig): Promise<ThreadFoldersState> {
+      return threadFoldersStateSchema.parse(
+        await manager.sendRequest(
+          THREAD_FOLDERS_SET_METHOD,
+          threadFoldersConfigSchema.parse(config),
+        ),
       );
     },
     buddyPrivate: async (input: BuddyPrivateRequest) => {

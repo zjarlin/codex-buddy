@@ -3,6 +3,8 @@ import {
   HARNESS_LAUNCH_SETTINGS_SET_METHOD,
   PROJECT_TABS_GET_METHOD,
   PROJECT_TABS_SET_METHOD,
+  THREAD_FOLDERS_GET_METHOD,
+  THREAD_FOLDERS_SET_METHOD,
   harnessIdSchema,
   harnessModelRefSchema,
   harnessPermissionModeIdSchema,
@@ -93,6 +95,31 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest.mock.calls).toEqual([
       [PROJECT_TABS_GET_METHOD, {}],
       [PROJECT_TABS_SET_METHOD, config],
+    ]);
+  });
+
+  it("reads and writes project-scoped Thread folders through the local Host contract", async () => {
+    const config = {
+      version: 1 as const,
+      projects: {
+        project: {
+          folders: [{ id: "todo", name: "待办" }],
+          assignments: { "thread-a": "todo" },
+          selected: "todo",
+        },
+      },
+    };
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ config: null })
+      .mockResolvedValueOnce({ config });
+    const client = createRendererModelClient([{ sendRequest }]);
+
+    await expect(client?.getThreadFolders?.()).resolves.toEqual({ config: null });
+    await expect(client?.setThreadFolders?.(config)).resolves.toEqual({ config });
+    expect(sendRequest.mock.calls).toEqual([
+      [THREAD_FOLDERS_GET_METHOD, {}],
+      [THREAD_FOLDERS_SET_METHOD, config],
     ]);
   });
 
@@ -539,6 +566,7 @@ describe("Renderer fixed Model request client", () => {
       "generateGitMessage",
       "getHarnessLaunchSettings",
       "getProjectTabs",
+      "getThreadFolders",
       "getThreadTerminalSettings",
       "importHarnessSession",
       "importRemoteProject",
@@ -603,6 +631,7 @@ describe("Renderer fixed Model request client", () => {
       "setIdleReleaseSettings",
       "setProjectTabs",
       "setThreadAutoArchiveSettings",
+      "setThreadFolders",
       "setThreadTerminalSettings",
       "stageGitPaths",
       "startUpdate",

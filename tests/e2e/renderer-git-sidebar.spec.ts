@@ -212,9 +212,21 @@ const { outputFiles } = await build({
             return structuredClone(snapshot);
           },
           removeProjectSyncPeer: async () => structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot),
-          addProjectSync: async () => structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot),
-          bindProjectSync: async () => structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot),
-          cloneProjectSync: async () => structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot),
+          addProjectSync: async ({ path }) => {
+            calls.push(["projectSync", "add", path]);
+            const snapshot = structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot);
+            snapshot.projects = [{ name: "repo", remote: "https://github.com/example/repo.git", localPath: path, state: "ready" }];
+            globalThis.gitSidebarFixture.projectSyncSnapshot = snapshot;
+            return structuredClone(snapshot);
+          },
+          bindProjectSync: async ({ remote, path }) => {
+            calls.push(["projectSync", "bind", remote, path]);
+            return structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot);
+          },
+          cloneProjectSync: async ({ remote, parent }) => {
+            calls.push(["projectSync", "clone", remote, parent]);
+            return structuredClone(globalThis.gitSidebarFixture.projectSyncSnapshot);
+          },
         };
         let activeContext = { threadId: hostThreadIdSchema.parse("thread-1"), hostId: "local", client };
         const nativeReviewCalls = [];
@@ -370,6 +382,23 @@ test("forwards files and terminal to the official UI and keeps project sync avai
     "aria-pressed",
     "true",
   );
+});
+
+test("adds a local project through the device panel without browser prompt", async ({ page }) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.getByRole("button", { name: "设备", exact: true }).click();
+  const devices = root.locator("[data-codexhost-project-sync-panel]");
+  await devices.getByRole("button", { name: "添加本机项目" }).click();
+  await devices.getByLabel("本机 Git 仓库根目录").fill("/repo");
+  await devices.getByRole("button", { name: "确认" }).click();
+  await expect(devices.getByText("repo", { exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls),
+  ).toContainEqual(["projectSync", "add", "/repo"]);
 });
 
 test("passes repository context to official review without fetching duplicate file contents", async ({

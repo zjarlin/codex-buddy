@@ -94,6 +94,20 @@ export {
   type ProjectTabsState,
 } from "./project-tabs.js";
 export {
+  THREAD_FOLDERS_GET_METHOD,
+  THREAD_FOLDERS_SET_METHOD,
+  UNASSIGNED_THREAD_FOLDER_ID,
+  threadFolderSchema,
+  threadFolderProjectSchema,
+  threadFoldersConfigSchema,
+  threadFoldersGetParamsSchema,
+  threadFoldersStateSchema,
+  type ThreadFolder,
+  type ThreadFolderProject,
+  type ThreadFoldersConfig,
+  type ThreadFoldersState,
+} from "./thread-folders.js";
+export {
   THREAD_WORKSPACE_OPEN_METHOD,
   threadWorkspaceOpenParamsSchema,
   threadWorkspaceOpenResultSchema,

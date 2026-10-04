@@ -11,6 +11,7 @@ import {
 } from "@codexhost/shared-contracts";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
+import type { ThreadFolderThreadMenu } from "./thread-folders/index.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import {
   getSharedThreadTerminalPreferenceStore,
@@ -137,6 +138,7 @@ export function installRendererThreadActions(options: {
   getClient(hostId: string): RendererModelClient | null;
   getLocale(): Locale;
   terminalPreference?: ThreadTerminalPreferenceStore;
+  threadFolders?: ThreadFolderThreadMenu;
 }): { refresh(): void; dispose(): void } {
   const styles = document.createElement("style");
   styles.textContent = style;
@@ -451,6 +453,7 @@ export function installRendererThreadActions(options: {
     if (vscode) menu.append(vscode);
     menu.append(copy);
     if (options.getClient(hostId)?.archiveCompletedThreads) menu.append(archive);
+    options.threadFolders?.decorate(menu, row, hostId, threadId, closeMenu);
     menu.append(error);
     return menu;
   };

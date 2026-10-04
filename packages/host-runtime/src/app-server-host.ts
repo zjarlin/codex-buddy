@@ -125,6 +125,11 @@ import {
   projectTabsConfigSchema,
   projectTabsGetParamsSchema,
   type ProjectTabsState,
+  THREAD_FOLDERS_GET_METHOD,
+  THREAD_FOLDERS_SET_METHOD,
+  threadFoldersConfigSchema,
+  threadFoldersGetParamsSchema,
+  type ThreadFoldersState,
   threadTerminalListParamsSchema,
   threadTerminalOpenParamsSchema,
   THREAD_WORKSPACE_OPEN_METHOD,
@@ -158,6 +163,7 @@ import { openProjectWorkspace, openThreadWorkspace } from "./thread-workspace.js
 import { createLauncherDoubaoOpener } from "./launcher-url-opener.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
 import { ProjectTabsSettingsStore } from "./project-tabs-settings.js";
+import { ThreadFoldersSettingsStore } from "./thread-folders-settings.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
 import { ProjectSyncPeer } from "./project-sync-peer.js";
@@ -752,6 +758,7 @@ export class AppServerHost {
   #desktopInputEnded = false;
   readonly #threadTerminalSettings: ThreadTerminalSettingsStore;
   readonly #projectTabsSettings: ProjectTabsSettingsStore;
+  readonly #threadFoldersSettings: ThreadFoldersSettingsStore;
   #liveCodexModels: LiveModelCatalog | undefined;
   #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
   readonly #modelAvailability: ModelAvailability;
@@ -791,6 +798,7 @@ export class AppServerHost {
     });
     this.#threadTerminalSettings = new ThreadTerminalSettingsStore(environment);
     this.#projectTabsSettings = new ProjectTabsSettingsStore(environment);
+    this.#threadFoldersSettings = new ThreadFoldersSettingsStore(environment);
     this.#projectSync = new ProjectSyncPeer(environment);
     this.#launchSettings = new HarnessLaunchSettingsStore(
       this.#options.pluginContext?.environment ?? environment,
@@ -1723,6 +1731,13 @@ export class AppServerHost {
     }
     if (request.method === PROJECT_TABS_GET_METHOD || request.method === PROJECT_TABS_SET_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleProjectTabsSettingsRequest(request));
+      return;
+    }
+    if (
+      request.method === THREAD_FOLDERS_GET_METHOD ||
+      request.method === THREAD_FOLDERS_SET_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleThreadFoldersSettingsRequest(request));
       return;
     }
     if (
@@ -3662,6 +3677,23 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32100, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleThreadFoldersSettingsRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      let result: ThreadFoldersState;
+      if (request.method === THREAD_FOLDERS_GET_METHOD) {
+        threadFoldersGetParamsSchema.parse(request.params);
+        result = await this.#threadFoldersSettings.load();
+      } else {
+        result = await this.#threadFoldersSettings.set(
+          threadFoldersConfigSchema.parse(request.params),
+        );
+      }
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32101, errorMessage(error).slice(0, 20_000)));
     }
   }
 

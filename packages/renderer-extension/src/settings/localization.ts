@@ -277,8 +277,11 @@ export interface RendererSettingsMessages {
     addPath: string;
     add: string;
     bind: string;
+    bindPath: string;
     clone: string;
     parent: string;
+    confirm: string;
+    cancel: string;
     missing: string;
     ready: string;
     empty: string;
@@ -584,8 +587,11 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     addPath: "Repository root on this computer",
     add: "Add project",
     bind: "Bind local folder",
+    bindPath: "Existing repository root",
     clone: "Clone",
     parent: "Destination parent folder",
+    confirm: "Confirm",
+    cancel: "Cancel",
     missing: "Not on this computer",
     ready: "Local",
     empty: "No projects yet.",
@@ -885,8 +891,11 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     addPath: "本机仓库根目录",
     add: "添加项目",
     bind: "绑定本机目录",
+    bindPath: "已有仓库根目录",
     clone: "克隆",
     parent: "目标父目录",
+    confirm: "确认",
+    cancel: "取消",
     missing: "本机未检出",
     ready: "本机可用",
     empty: "暂无项目。",

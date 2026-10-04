@@ -112,6 +112,7 @@ import {
 } from "./renderer-queued-transfer.js";
 import { installRendererProjectActions } from "./renderer-project-actions.js";
 import { installProjectTabs } from "./project-tabs/index.js";
+import { installThreadFolders } from "./thread-folders/index.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import { installRendererGitBranchControl } from "./renderer-git-branch-control.js";
 import { RendererGitCache } from "./renderer-git-cache.js";
@@ -834,7 +835,8 @@ export function installRendererBindingProbe(
     },
     activeThread: () => {
       for (const mounted of mountedByComposer.values()) {
-        if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0) continue;
+        if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0)
+          continue;
         const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
         const hostId = mounted.hostId ?? activeModelHostId();
         if (threadId && hostId) return { hostId, threadId };
@@ -874,10 +876,6 @@ export function installRendererBindingProbe(
         console.warn("[codexhost] Unable to open dashboard Thread", error);
       });
     },
-  });
-  const threadActions = installRendererThreadActions({
-    getClient: (hostId) => modelClientForHost(hostId),
-    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
   });
   const queuedTransfer = installRendererQueuedTransfer({
     getManager: (hostId) => {
@@ -1030,6 +1028,15 @@ export function installRendererBindingProbe(
   const projectTabs = installProjectTabs({
     getLocale: () => settingsLifecycle.locale,
     getClient: () => modelClientForHost("local"),
+  });
+  const threadFolders = installThreadFolders({
+    getLocale: () => settingsLifecycle.locale,
+    getClient: () => modelClientForHost("local"),
+  });
+  const threadActions = installRendererThreadActions({
+    getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    threadFolders: threadFolders.threadMenu,
   });
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
@@ -3220,6 +3227,7 @@ export function installRendererBindingProbe(
     sidebarVisits.refresh();
     sidebarStatusFilter.refresh();
     threadActions.refresh();
+    threadFolders.refresh();
     queuedTransfer.refresh();
     projectActions.refresh();
     projectTabs.refresh();
@@ -3608,6 +3616,7 @@ export function installRendererBindingProbe(
       sidebarStatusFilter.dispose();
       projectDashboard.dispose();
       threadActions.dispose();
+      threadFolders.dispose();
       queuedTransfer.dispose();
       projectActions.dispose();
       projectTabs.dispose();

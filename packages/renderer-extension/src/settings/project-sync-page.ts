@@ -47,17 +47,18 @@ function input(
   document: Document,
   label: string,
   placeholder = "",
-): { row: HTMLLabelElement; field: HTMLInputElement } {
+): { row: HTMLLabelElement; label: HTMLSpanElement; field: HTMLInputElement } {
   const row = document.createElement("label");
   row.className = "flex min-w-0 flex-col gap-1 text-xs text-settings-muted";
-  row.textContent = label;
+  const labelText = document.createElement("span");
+  labelText.textContent = label;
   const field = document.createElement("input");
   field.type = "text";
   field.placeholder = placeholder;
   field.className =
     "min-h-8 w-full min-w-0 rounded-md border border-settings-border bg-settings-panel px-2 text-sm text-settings-text outline-none focus-visible:border-settings-focus";
-  row.append(field);
-  return { row, field };
+  row.append(labelText, field);
+  return { row, label: labelText, field };
 }
 
 export function createProjectSyncPage(
@@ -226,30 +227,47 @@ export function createProjectSyncPage(
           if (project.state === "missing") {
             const bind = button(document, words.bind, "git");
             const clone = button(document, words.clone, "download");
-            bind.addEventListener(
-              "click",
-              () => {
-                const path = window.prompt(words.addPath);
-                if (path)
-                  void perform((client) =>
-                    client.bindProjectSync({ remote: project.remote, path }),
-                  );
-              },
-              { signal },
-            );
-            clone.addEventListener(
-              "click",
-              () => {
-                const parent = window.prompt(words.parent);
-                if (parent)
-                  void perform((client) =>
-                    client.cloneProjectSync({ remote: project.remote, parent }),
-                  );
-              },
-              { signal },
-            );
-            row.append(bind, clone);
-            rowControls.push(bind, clone);
+            const editor = document.createElement("form");
+            editor.className =
+              "flex min-w-0 basis-full flex-col gap-2 border-t border-settings-divider pt-2";
+            editor.hidden = true;
+            const path = input(document, words.addPath);
+            const actions = document.createElement("div");
+            actions.className = "flex flex-wrap gap-2";
+            const confirm = button(document, words.confirm, "check");
+            confirm.type = "submit";
+            const cancel = button(document, words.cancel, "close");
+            actions.append(confirm, cancel);
+            editor.append(path.row, actions);
+            let action: "bind" | "clone" | null = null;
+            const openEditor = (next: "bind" | "clone"): void => {
+              action = next;
+              path.label.textContent = next === "bind" ? words.bindPath : words.parent;
+              path.field.placeholder =
+                next === "bind" ? "仓库根目录绝对路径" : "目标父目录绝对路径";
+              editor.hidden = false;
+              path.field.focus();
+            };
+            bind.addEventListener("click", () => openEditor("bind"), { signal });
+            clone.addEventListener("click", () => openEditor("clone"), { signal });
+            cancel.addEventListener("click", () => {
+              editor.hidden = true;
+              path.field.value = "";
+              action = null;
+            });
+            editor.addEventListener("submit", (event) => {
+              event.preventDefault();
+              const pathValue = path.field.value.trim();
+              if (!action || !pathValue) return;
+              const currentAction = action;
+              void perform((client) =>
+                currentAction === "bind"
+                  ? client.bindProjectSync({ remote: project.remote, path: pathValue })
+                  : client.cloneProjectSync({ remote: project.remote, parent: pathValue }),
+              );
+            });
+            row.append(bind, clone, editor);
+            rowControls.push(bind, clone, confirm, cancel);
           }
           list.append(row);
         }

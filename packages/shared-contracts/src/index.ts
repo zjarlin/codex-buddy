@@ -610,12 +610,6 @@ export {
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
 } from "./buddy-private.js";
-export {
-  BUDDY_TRANSLATE_METHOD,
-  buddyTranslateRequestSchema,
-  buddyTranslateResultSchema,
-} from "./buddy-translate.js";
-export type { BuddyTranslateRequest, BuddyTranslateResult } from "./buddy-translate.js";
 export type {
   BuddyPrivateRequest,
   BuddyPrivateSnapshot,

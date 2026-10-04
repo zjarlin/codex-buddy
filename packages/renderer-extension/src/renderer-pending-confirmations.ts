@@ -112,14 +112,16 @@ function statusLabel(locale: Locale, status: PendingConfirmationRecord["status"]
       : value.interrupted;
 }
 
-
 function isRateLimited(entry: PendingConfirmationRecord): boolean {
   if (entry.status !== "failed") return false;
   const text = `${entry.summary} ${entry.title}`.toLowerCase();
   return /429|rate[s-]*limit|quota|throttl|too many requests/i.test(text);
 }
 
-function statusTone(status: PendingConfirmationRecord["status"], rateLimited: boolean): "success" | "warning" | "error" | "neutral" {
+function statusTone(
+  status: PendingConfirmationRecord["status"],
+  rateLimited: boolean,
+): "success" | "warning" | "error" | "neutral" {
   if (status === "completed") return "success";
   if (status === "failed") return rateLimited ? "warning" : "error";
   return "neutral";

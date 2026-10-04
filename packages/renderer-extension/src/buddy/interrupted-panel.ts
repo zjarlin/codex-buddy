@@ -39,7 +39,8 @@ const messages = {
     resuming: "Resuming…",
     resumeAll: "Resume all",
     resumeWithModel: "Resume with model ID",
-    resumeWithModelHint: "Reuse current model picker; specifying a model ID avoids repeated interruptions from auto selection.",
+    resumeWithModelHint:
+      "Reuse current model picker; specifying a model ID avoids repeated interruptions from auto selection.",
     resumeFailed: "Resume failed",
     unavailable: "Conversation recovery is unavailable on this connection.",
     waiting: "Waiting for connection status before allowing conversation recovery.",
@@ -250,7 +251,8 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     defaultOption.textContent = m.resumeWithModel;
     modelSelect.append(defaultOption);
     const view = state.modelView;
-    const favorites = view && state.harnessId ? readModelFavorites(state.harnessId) : new Set<string>();
+    const favorites =
+      view && state.harnessId ? readModelFavorites(state.harnessId) : new Set<string>();
     const catalog = new Map(view?.models.map((model) => [model.id, model.label] as const) ?? []);
     const candidates = [...favorites]
       .map((id) => ({ id, label: catalog.get(id) ?? id }))
@@ -285,7 +287,8 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     applyModel.textContent = chinese() ? "应用" : "Apply";
     applyModel.disabled = true;
     const updateApplyState = () => {
-      const value = modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value;
+      const value =
+        modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value;
       applyModel.disabled = !value || modelSelect.disabled;
     };
     modelSelect.addEventListener("change", () => {
@@ -300,7 +303,8 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     });
     modelInput.addEventListener("input", updateApplyState);
     applyModel.addEventListener("click", () => {
-      const value = modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value;
+      const value =
+        modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value;
       if (!value || applyModel.disabled) return;
       void resumeAll(value);
     });

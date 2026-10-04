@@ -3501,8 +3501,7 @@ export function installRendererBindingProbe(
         const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
         const hostId = mounted.hostId;
         const client = modelClientForHostFrom(modelControl, hostId);
-        if (!threadId || !hostId || hostId !== activeModelHostId() || !client?.translate)
-          continue;
+        if (!threadId || !hostId || hostId !== activeModelHostId() || !client?.translate) continue;
         const root =
           mounted.composer.closest<HTMLElement>('[data-app-shell-main-surface="default"]') ??
           document.body;

@@ -284,7 +284,15 @@ export interface BuddyControlContext {
 export function installBuddyControl(
   getContext: () => BuddyControlContext | null,
   getLocale: () => "zh-CN" | "en",
-): { dispose(): void; refresh(): Promise<void>; refreshContext(): void; setModelShortcutsView(view: import("../renderer-model-shortcuts.js").ModelShortcutView | null, harnessId: string): void } {
+): {
+  dispose(): void;
+  refresh(): Promise<void>;
+  refreshContext(): void;
+  setModelShortcutsView(
+    view: import("../renderer-model-shortcuts.js").ModelShortcutView | null,
+    harnessId: string,
+  ): void;
+} {
   const root = document.createElement("details");
   root.dataset.buddyRouter = "";
   const styles = document.createElement("style");
@@ -603,12 +611,12 @@ export function installBuddyControl(
       return;
     }
     connectionNotice.textContent = "";
-          interruptedControl.update(
-        context?.client ?? null,
-        snapshot?.settings.privateMode === true,
-        modelShortcutsView,
-        modelHarnessId,
-      );
+    interruptedControl.update(
+      context?.client ?? null,
+      snapshot?.settings.privateMode === true,
+      modelShortcutsView,
+      modelHarnessId,
+    );
     const decision = snapshot.decisions.find((d) => d.threadId === context?.threadId);
     // 其他会话的决策不会改变当前控件，也不能打断正在编辑的设置。
     const signature = JSON.stringify([
@@ -890,7 +898,10 @@ export function installBuddyControl(
   };
   const poll = createVisiblePoll(document, 1200, () => void refresh());
   void refresh();
-  const setModelShortcutsView = (view: import("../renderer-model-shortcuts.js").ModelShortcutView | null, harnessId: string): void => {
+  const setModelShortcutsView = (
+    view: import("../renderer-model-shortcuts.js").ModelShortcutView | null,
+    harnessId: string,
+  ): void => {
     modelShortcutsView = view;
     modelHarnessId = harnessId;
     render();

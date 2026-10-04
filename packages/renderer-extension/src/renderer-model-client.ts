@@ -518,7 +518,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   buddyContinue?(threadId: string, turnId: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
-  translate?(input: { text: string; targetLocale: string }): Promise<{ translated: string; model: string; latencyMs: number }>;
+  translate?(input: {
+    text: string;
+    targetLocale: string;
+  }): Promise<{ translated: string; model: string; latencyMs: number }>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
   modelAvailability?(input: ModelAvailabilityParams): Promise<ModelAvailabilitySnapshot>;

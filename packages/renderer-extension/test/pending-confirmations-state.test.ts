@@ -218,12 +218,12 @@ describe("pending confirmation state", () => {
   it("does not treat ordinary results as thread title generation", () => {
     expect(
       isMetadataTitleTurn({
-        items: [{ type: "agentMessage", text: "{\"title\":\"T\",\"extra\":1}" }],
+        items: [{ type: "agentMessage", text: '{"title":"T","extra":1}' }],
       }),
     ).toBe(false);
-    expect(
-      isMetadataTitleTurn({ items: [{ type: "agentMessage", text: "plain result" }] }),
-    ).toBe(false);
+    expect(isMetadataTitleTurn({ items: [{ type: "agentMessage", text: "plain result" }] })).toBe(
+      false,
+    );
     expect(isMetadataTitleTurn({ items: [] })).toBe(false);
     expect(
       isMetadataTitleTurn({

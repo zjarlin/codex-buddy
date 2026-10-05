@@ -1103,7 +1103,6 @@ export class AppServerHost {
     await this.#officialRuntime.close();
   }
 
-
   async #loadEmergencyProvider(home: string): Promise<void> {
     try {
       const raw = JSON.parse(await readFile(path.join(home, "emergency-provider.json"), "utf8"));
@@ -1142,7 +1141,12 @@ export class AppServerHost {
       emergencyApiKey: this.#emergencyApiKey!,
       diagnosticOutput: this.#options.diagnosticOutput,
     });
-    try { await proxy.start(); this.#emergencyProxy = proxy; } catch (error) { this.#diagnose(error); }
+    try {
+      await proxy.start();
+      this.#emergencyProxy = proxy;
+    } catch (error) {
+      this.#diagnose(error);
+    }
   }
 
   async #configureEmergencyProvider(input: {
@@ -1155,17 +1159,26 @@ export class AppServerHost {
     );
     await this.#loadEmergencyProvider(home);
     const key = input.apiKey === undefined ? this.#emergencyApiKey : input.apiKey?.trim() || null;
-    const baseURL = input.baseURL === undefined ? this.#emergencyBaseUrl : input.baseURL?.trim() || null;
+    const baseURL =
+      input.baseURL === undefined ? this.#emergencyBaseUrl : input.baseURL?.trim() || null;
     const enabled = input.enabled === undefined ? this.#emergencyEnabled : input.enabled;
     const file = path.join(home, "emergency-provider.json");
     await mkdir(home, { recursive: true });
     if (key || baseURL) {
       const temporary = `${file}.${randomUUID()}.tmp`;
-      await writeFile(temporary, JSON.stringify({
-        ...(key ? { apiKey: key } : {}),
-        ...(baseURL ? { baseURL } : {}),
-        enabled,
-      }, null, 2) + "\n", { mode: 0o600 });
+      await writeFile(
+        temporary,
+        JSON.stringify(
+          {
+            ...(key ? { apiKey: key } : {}),
+            ...(baseURL ? { baseURL } : {}),
+            enabled,
+          },
+          null,
+          2,
+        ) + "\n",
+        { mode: 0o600 },
+      );
       await rename(temporary, file);
     } else {
       await rm(file, { force: true });
@@ -1176,10 +1189,24 @@ export class AppServerHost {
     await this.#syncEmergencyProxy();
     if (this.#buddy) return this.#buddy.snapshot();
     return {
-      settings: { enabled: true, planning: true, privateMode: false, role: "auto", bypass: true, jev: true, systemOneModel: "typesafe/jev", plannerModel: null, executorModel: null },
-      models: [], decisions: [],
-      jevKeyConfigured: false, jevBaseUrl: null,
-      emergencyConfigured: Boolean(key), emergencyEnabled: Boolean(this.#emergencyEnabled), emergencyBaseUrl: baseURL,
+      settings: {
+        enabled: true,
+        planning: true,
+        privateMode: false,
+        role: "auto",
+        bypass: true,
+        jev: true,
+        systemOneModel: "typesafe/jev",
+        plannerModel: null,
+        executorModel: null,
+      },
+      models: [],
+      decisions: [],
+      jevKeyConfigured: false,
+      jevBaseUrl: null,
+      emergencyConfigured: Boolean(key),
+      emergencyEnabled: Boolean(this.#emergencyEnabled),
+      emergencyBaseUrl: baseURL,
     };
   }
 

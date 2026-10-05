@@ -465,9 +465,7 @@ export function installThreadFolders(options: {
       event.preventDefault();
       event.stopPropagation();
       // Dismiss the native menu
-      document.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       chooseFolder(project, projectKey(project), folderThreadId);
     });
 

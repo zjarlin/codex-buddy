@@ -14,7 +14,11 @@ export interface EmergencyProviderClient {
   }>;
 }
 
-const defaultResult = { emergencyConfigured: false, emergencyEnabled: false, emergencyBaseUrl: null };
+const defaultResult = {
+  emergencyConfigured: false,
+  emergencyEnabled: false,
+  emergencyBaseUrl: null,
+};
 
 export function createEmergencyProviderSettingsPage(
   messages: RendererSettingsMessages,
@@ -36,14 +40,16 @@ export function createEmergencyProviderSettingsPage(
 
       const description = document.createElement("p");
       description.className = "settings-description";
-      description.textContent = messages.emergencyProvider?.description ??
+      description.textContent =
+        messages.emergencyProvider?.description ??
         "When the primary upstream is unreachable, Codex automatically routes inference through this emergency provider.";
       root.append(description);
 
       const warning = document.createElement("p");
       warning.className = "settings-warning";
       warning.setAttribute("role", "note");
-      warning.textContent = messages.emergencyProvider?.warning ??
+      warning.textContent =
+        messages.emergencyProvider?.warning ??
         "⚠️ During failover, conversation content is sent to the emergency upstream.";
       root.append(warning);
 
@@ -61,10 +67,13 @@ export function createEmergencyProviderSettingsPage(
       const urlTitle = document.createElement("b");
       urlTitle.textContent = messages.emergencyProvider?.baseUrlLabel ?? "Base URL";
       const urlHint = document.createElement("small");
-      urlHint.textContent = messages.emergencyProvider?.baseUrlHint ?? "e.g. https://sub2api.shrimpman.top";
+      urlHint.textContent =
+        messages.emergencyProvider?.baseUrlHint ?? "e.g. https://sub2api.shrimpman.top";
       urlCopy.append(urlTitle, urlHint);
       const urlInput = document.createElement("input");
-      urlInput.type = "url"; urlInput.autocomplete = "off"; urlInput.spellcheck = false;
+      urlInput.type = "url";
+      urlInput.autocomplete = "off";
+      urlInput.spellcheck = false;
       urlInput.placeholder = "https://sub2api.shrimpman.top";
       urlInput.setAttribute("aria-label", messages.emergencyProvider?.baseUrlLabel ?? "Base URL");
       urlLabel.append(urlCopy, urlInput);
@@ -76,10 +85,14 @@ export function createEmergencyProviderSettingsPage(
       const keyTitle = document.createElement("b");
       keyTitle.textContent = messages.emergencyProvider?.apiKeyLabel ?? "API Key";
       const keyHint = document.createElement("small");
-      keyHint.textContent = messages.emergencyProvider?.apiKeyHint ?? "Stored on this Host only; never returned to the UI";
+      keyHint.textContent =
+        messages.emergencyProvider?.apiKeyHint ??
+        "Stored on this Host only; never returned to the UI";
       keyCopy.append(keyTitle, keyHint);
       const keyInput = document.createElement("input");
-      keyInput.type = "password"; keyInput.autocomplete = "off"; keyInput.spellcheck = false;
+      keyInput.type = "password";
+      keyInput.autocomplete = "off";
+      keyInput.spellcheck = false;
       keyInput.placeholder = messages.emergencyProvider?.apiKeyPlaceholder ?? "Paste API key";
       keyInput.setAttribute("aria-label", messages.emergencyProvider?.apiKeyLabel ?? "API Key");
       keyLabel.append(keyCopy, keyInput);
@@ -88,67 +101,136 @@ export function createEmergencyProviderSettingsPage(
       const enabledLabel = document.createElement("label");
       enabledLabel.className = "settings-field settings-field--checkbox";
       const enabledInput = document.createElement("input");
-      enabledInput.type = "checkbox"; enabledInput.checked = true;
+      enabledInput.type = "checkbox";
+      enabledInput.checked = true;
       const enabledText = document.createElement("span");
-      enabledText.textContent = messages.emergencyProvider?.enabledLabel ?? "Enable automatic failover";
+      enabledText.textContent =
+        messages.emergencyProvider?.enabledLabel ?? "Enable automatic failover";
       enabledLabel.append(enabledInput, enabledText);
       form.append(enabledLabel);
 
       const actions = document.createElement("div");
       actions.className = "settings-actions";
       const saveButton = document.createElement("button");
-      saveButton.type = "button"; saveButton.className = "settings-command-button";
-      saveButton.append(createRendererSettingsIcon("check", 16), messages.emergencyProvider?.save ?? "Save");
+      saveButton.type = "button";
+      saveButton.className = "settings-command-button";
+      saveButton.append(
+        createRendererSettingsIcon("check", 16),
+        messages.emergencyProvider?.save ?? "Save",
+      );
       const clearButton = document.createElement("button");
-      clearButton.type = "button"; clearButton.className = "settings-command-button settings-command-button--secondary";
-      clearButton.append(createRendererSettingsIcon("trash", 16), messages.emergencyProvider?.clear ?? "Clear");
+      clearButton.type = "button";
+      clearButton.className = "settings-command-button settings-command-button--secondary";
+      clearButton.append(
+        createRendererSettingsIcon("trash", 16),
+        messages.emergencyProvider?.clear ?? "Clear",
+      );
       actions.append(saveButton, clearButton);
       form.append(actions);
       root.append(form);
 
       let disposed = false;
-      context.signal.addEventListener("abort", () => { disposed = true; });
+      context.signal.addEventListener("abort", () => {
+        disposed = true;
+      });
 
       const renderStatus = (configured: boolean, enabled: boolean, baseUrl: string | null) => {
         if (disposed) return;
-        if (!configured) { status.textContent = messages.emergencyProvider?.statusNotConfigured ?? "Not configured"; status.setAttribute("role", "status"); return; }
+        if (!configured) {
+          status.textContent = messages.emergencyProvider?.statusNotConfigured ?? "Not configured";
+          status.setAttribute("role", "status");
+          return;
+        }
         const parts = [messages.emergencyProvider?.statusConfigured ?? "Configured"];
-        parts.push(enabled ? (messages.emergencyProvider?.statusEnabled ?? "failover active") : (messages.emergencyProvider?.statusDisabled ?? "failover disabled"));
+        parts.push(
+          enabled
+            ? (messages.emergencyProvider?.statusEnabled ?? "failover active")
+            : (messages.emergencyProvider?.statusDisabled ?? "failover disabled"),
+        );
         if (baseUrl) parts.push(baseUrl);
-        status.textContent = parts.join(" · "); status.setAttribute("role", "status");
+        status.textContent = parts.join(" · ");
+        status.setAttribute("role", "status");
       };
 
       const load = async () => {
         const client = getClient();
-        if (!client) { status.textContent = messages.emergencyProvider?.unavailable ?? "Host is unavailable"; return; }
+        if (!client) {
+          status.textContent = messages.emergencyProvider?.unavailable ?? "Host is unavailable";
+          return;
+        }
         try {
           const result = await (client.emergencyProvider?.({}) ?? Promise.resolve(defaultResult));
           if (disposed) return;
-          renderStatus(result.emergencyConfigured, result.emergencyEnabled, result.emergencyBaseUrl);
+          renderStatus(
+            result.emergencyConfigured,
+            result.emergencyEnabled,
+            result.emergencyBaseUrl,
+          );
           if (result.emergencyBaseUrl) urlInput.value = result.emergencyBaseUrl;
           enabledInput.checked = result.emergencyEnabled;
-        } catch (error) { if (disposed) return; status.textContent = error instanceof Error ? error.message : String(error); status.setAttribute("role", "alert"); }
+        } catch (error) {
+          if (disposed) return;
+          status.textContent = error instanceof Error ? error.message : String(error);
+          status.setAttribute("role", "alert");
+        }
       };
 
-      saveButton.addEventListener("click", () => { void (async () => {
-        const client = getClient(); if (!client || disposed) return;
-        const typedKey = keyInput.value.trim();
-        const config: { apiKey?: string; baseURL: string | null; enabled: boolean } = { baseURL: urlInput.value.trim() || null, enabled: enabledInput.checked };
-        if (typedKey) config.apiKey = typedKey;
-        try {
-          const result = await (client.emergencyProvider?.(config) ?? Promise.resolve(defaultResult));
-          keyInput.value = ""; if (!disposed) renderStatus(result.emergencyConfigured, result.emergencyEnabled, result.emergencyBaseUrl);
-        } catch (error) { if (!disposed) { status.textContent = error instanceof Error ? error.message : String(error); status.setAttribute("role", "alert"); } }
-      })(); });
+      saveButton.addEventListener("click", () => {
+        void (async () => {
+          const client = getClient();
+          if (!client || disposed) return;
+          const typedKey = keyInput.value.trim();
+          const config: { apiKey?: string; baseURL: string | null; enabled: boolean } = {
+            baseURL: urlInput.value.trim() || null,
+            enabled: enabledInput.checked,
+          };
+          if (typedKey) config.apiKey = typedKey;
+          try {
+            const result = await (client.emergencyProvider?.(config) ??
+              Promise.resolve(defaultResult));
+            keyInput.value = "";
+            if (!disposed)
+              renderStatus(
+                result.emergencyConfigured,
+                result.emergencyEnabled,
+                result.emergencyBaseUrl,
+              );
+          } catch (error) {
+            if (!disposed) {
+              status.textContent = error instanceof Error ? error.message : String(error);
+              status.setAttribute("role", "alert");
+            }
+          }
+        })();
+      });
 
-      clearButton.addEventListener("click", () => { void (async () => {
-        const client = getClient(); if (!client || disposed) return;
-        try {
-          const result = await (client.emergencyProvider?.({ apiKey: null, baseURL: null, enabled: false }) ?? Promise.resolve(defaultResult));
-          keyInput.value = ""; urlInput.value = ""; enabledInput.checked = false;
-          if (!disposed) renderStatus(result.emergencyConfigured, result.emergencyEnabled, result.emergencyBaseUrl);
-        } catch (error) { if (!disposed) { status.textContent = error instanceof Error ? error.message : String(error); status.setAttribute("role", "alert"); } }
-      })(); });
+      clearButton.addEventListener("click", () => {
+        void (async () => {
+          const client = getClient();
+          if (!client || disposed) return;
+          try {
+            const result = await (client.emergencyProvider?.({
+              apiKey: null,
+              baseURL: null,
+              enabled: false,
+            }) ?? Promise.resolve(defaultResult));
+            keyInput.value = "";
+            urlInput.value = "";
+            enabledInput.checked = false;
+            if (!disposed)
+              renderStatus(
+                result.emergencyConfigured,
+                result.emergencyEnabled,
+                result.emergencyBaseUrl,
+              );
+          } catch (error) {
+            if (!disposed) {
+              status.textContent = error instanceof Error ? error.message : String(error);
+              status.setAttribute("role", "alert");
+            }
+          }
+        })();
+      });
 
       void load();
       return undefined;

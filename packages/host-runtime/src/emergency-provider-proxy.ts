@@ -74,11 +74,17 @@ function sendUpstream(
         return;
       }
       if (!res.writableEnded) {
-        try { res.end(); } catch { /* ignore */ }
+        try {
+          res.end();
+        } catch {
+          /* ignore */
+        }
       }
       reject(err);
     });
-    upstream.on("timeout", () => { upstream.destroy(new Error("upstream timeout")); });
+    upstream.on("timeout", () => {
+      upstream.destroy(new Error("upstream timeout"));
+    });
     if (body.length > 0) upstream.write(body);
     upstream.end();
   });
@@ -103,8 +109,12 @@ export class EmergencyProviderProxy {
     this.#server = createServer((req, res) => void this.#handle(req, res));
   }
 
-  get port(): number | null { return this.#port; }
-  get endpoint(): string | null { return this.#port !== null ? `http://127.0.0.1:${this.#port}` : null; }
+  get port(): number | null {
+    return this.#port;
+  }
+  get endpoint(): string | null {
+    return this.#port !== null ? `http://127.0.0.1:${this.#port}` : null;
+  }
 
   async start(): Promise<number> {
     if (this.#closed) throw new Error("Emergency provider proxy is closed");
@@ -126,20 +136,29 @@ export class EmergencyProviderProxy {
     if (this.#closed) return;
     this.#closed = true;
     this.#port = null;
-    return new Promise((resolve) => { this.#server.close(() => resolve()); });
+    return new Promise((resolve) => {
+      this.#server.close(() => resolve());
+    });
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const requestId = randomUUID().slice(0, 8);
     const reqPath = req.url ?? "/";
     let body: Buffer;
-    try { body = await collectBody(req); } catch {
-      res.writeHead(400); res.end("Emergency provider proxy: failed to read request body"); return;
+    try {
+      body = await collectBody(req);
+    } catch {
+      res.writeHead(400);
+      res.end("Emergency provider proxy: failed to read request body");
+      return;
     }
 
     let primaryBase: string;
-    try { primaryBase = await this.#options.readPrimaryUrl(); } catch {
-      this.#diagnose(requestId, "failed to read primary upstream URL"); primaryBase = "";
+    try {
+      primaryBase = await this.#options.readPrimaryUrl();
+    } catch {
+      this.#diagnose(requestId, "failed to read primary upstream URL");
+      primaryBase = "";
     }
 
     const controller = new AbortController();
@@ -148,28 +167,57 @@ export class EmergencyProviderProxy {
     if (primaryBase) {
       const primaryAuth = req.headers.authorization ?? null;
       const primary = resolveUpstream(primaryBase, reqPath, primaryAuth, "primary");
-      const primarySignal = AbortSignal.any([controller.signal, AbortSignal.timeout(PRIMARY_CONNECT_TIMEOUT_MS)]);
+      const primarySignal = AbortSignal.any([
+        controller.signal,
+        AbortSignal.timeout(PRIMARY_CONNECT_TIMEOUT_MS),
+      ]);
       try {
         await sendUpstream(primary, req, res, primarySignal, body, this.#options.diagnosticOutput);
-        clearTimeout(timeout); return;
+        clearTimeout(timeout);
+        return;
       } catch (error) {
-        this.#diagnose(requestId, `primary failed (${(error as Error)?.message ?? "unknown"}), trying emergency`);
+        this.#diagnose(
+          requestId,
+          `primary failed (${(error as Error)?.message ?? "unknown"}), trying emergency`,
+        );
       }
     }
 
-    if (res.headersSent || res.writableEnded) { clearTimeout(timeout); return; }
+    if (res.headersSent || res.writableEnded) {
+      clearTimeout(timeout);
+      return;
+    }
     const emergency = resolveUpstream(
-      this.#options.emergencyBaseUrl, reqPath,
-      `Bearer ${this.#options.emergencyApiKey}`, "emergency",
+      this.#options.emergencyBaseUrl,
+      reqPath,
+      `Bearer ${this.#options.emergencyApiKey}`,
+      "emergency",
     );
     try {
-      await sendUpstream(emergency, req, res, controller.signal, body, this.#options.diagnosticOutput);
+      await sendUpstream(
+        emergency,
+        req,
+        res,
+        controller.signal,
+        body,
+        this.#options.diagnosticOutput,
+      );
     } catch (error) {
-      this.#diagnose(requestId, `emergency also failed (${(error as Error)?.message ?? "unknown"})`);
+      this.#diagnose(
+        requestId,
+        `emergency also failed (${(error as Error)?.message ?? "unknown"})`,
+      );
       if (!res.headersSent && !res.writableEnded) {
-        try { res.writeHead(502); res.end("Emergency provider proxy: all upstreams failed"); } catch { /* ended */ }
+        try {
+          res.writeHead(502);
+          res.end("Emergency provider proxy: all upstreams failed");
+        } catch {
+          /* ended */
+        }
       }
-    } finally { clearTimeout(timeout); }
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   #diagnose(requestId: string, message: string): void {

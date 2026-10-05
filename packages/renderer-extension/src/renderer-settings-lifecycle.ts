@@ -36,7 +36,8 @@ export interface RendererSettingsLifecycleOptions {
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
-  getEmergencyProviderClient?(): import("./settings/emergency-provider-page.js").EmergencyProviderClient | null;
+  getEmergencyProviderClient?():
+    import("./settings/emergency-provider-page.js").EmergencyProviderClient | null;
   getBuddyClient?(): RendererModelClient | null;
   getThreadTerminalClient?(): RendererThreadTerminalClient | null;
   openImportedThread?: RendererImportedThreadOpener;

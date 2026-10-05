@@ -859,13 +859,23 @@ export function renderComposerAgentControl(
     state.agent === "codex"
       ? nativeModelBinding(control.nativeModelControl?.element ?? null)
       : null;
+  // Cache successful native model view for fallback when binding temporarily fails.
+  // Clear cache when switching away from codex agent to avoid stale models.
+  const controlWithCache = control as ComposerAgentControl & {
+    cachedNativeModelView?: ModelShortcutView | undefined;
+  };
+  if (state.agent !== "codex") {
+    controlWithCache.cachedNativeModelView = undefined;
+  } else if (native?.view && native.view.models.length > 0) {
+    controlWithCache.cachedNativeModelView = native.view;
+  }
+  const cachedView = controlWithCache.cachedNativeModelView;
+  const effectiveView =
+    native?.view ?? (cachedView && cachedView.models.length > 0 ? cachedView : null);
   control.modelShortcuts?.update(
     {
-      ...(native?.view ?? {
-        models:
-          state.agent === "codex"
-            ? []
-            : (modelView.catalog?.models ?? []).map(({ ref, label }) => ({ id: ref.id, label })),
+      ...(effectiveView ?? {
+        models: (modelView.catalog?.models ?? []).map(({ ref, label }) => ({ id: ref.id, label })),
         selected: modelView.selected?.id,
         disabled: modelView.status === "loading" || modelView.status === "selecting",
         refreshing: state.agent !== "codex" && modelView.status === "loading",

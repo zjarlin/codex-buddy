@@ -107,6 +107,10 @@ fork 默认跳过上游 `@codexhost` npm 包发布，GitHub 安装包不依赖�
 
 标签推送使用标签提交里的工作流定义，新校验不会追溯改写旧标签的发布逻辑。这不是不可绕过的权限控制；未设置分支、标签或发布环境保护。
 
+安装包 Release 同时发布 codex-buddy-update.json，包含标签、更新说明、安装包 URL、字节数和 SHA-256；可信发布代码对准备上传的实际文件计算哈希。应用检查遇到 GitHub API 403/429 时，从 GitHub Releases 的 latest 下载地址读取该清单，不需要 API 配额或用户登录；仍校验仓库、版本、文件名和下载后的 SHA-256。清单缺失或无效时明确失败，不判定为最新版本。
+
+更新页先通过本地状态接口读取当前安装版本和安装方式，同时执行联网检查。联网请求失败或超时保留本地版本；旧 Host 不返回本地字段时，页面仍可使用检查结果。当前版本未知时显示“未知”，不能据此判断已是最新。
+
 ## 发布后投递到 MacBook
 
 `Release packages` 的正式 GitHub Release 发布成功后，`deliver-macbook` job 通过 `ssh macbook` 将 GitHub 当前 latest 的 Apple Silicon DMG 放到 `/Users/zjarlin/Downloads`。预发布和仅构建的 `Buddy macOS DMG` 不触发投递。旧流水线重跑时也读取当前 latest；下载过程中发布物被替换则报错，避免旧任务覆盖新版本。

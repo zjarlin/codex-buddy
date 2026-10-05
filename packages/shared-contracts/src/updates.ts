@@ -67,6 +67,8 @@ export const updateStartResultSchema = z.strictObject({
 });
 
 export const updateStatusResultSchema = z.strictObject({
+  currentVersion: updateSemanticVersionSchema.optional(),
+  installation: updateInstallationSchema.nullable().optional(),
   status: updateStatusSchema.nullable(),
 });
 

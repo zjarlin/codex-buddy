@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CODEXHOST_LATEST_RELEASE_URL,
+  CODEXHOST_UPDATE_MANIFEST_URL,
   compareSemanticVersions,
   expectedInstallerAssetName,
   fetchLatestGitHubRelease,
@@ -132,6 +133,51 @@ describe("GitHub Release update discovery", () => {
       CODEXHOST_LATEST_RELEASE_URL,
       expect.objectContaining({ redirect: "error" }),
     );
+  });
+
+  it.each([403, 429])(
+    "uses a verified installer manifest when the API returns %s",
+    async (status) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("rate limited", { status }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ schemaVersion: 1, ...release() })));
+      const result = await fetchLatestGitHubRelease({ fetch: fetchImpl });
+      expect(selectInstallerReleaseArtifact(result, "windows-x64").source.sha256).toBe(
+        "ab".repeat(32),
+      );
+      expect(fetchImpl.mock.calls[1]?.[0]).toBe(CODEXHOST_UPDATE_MANIFEST_URL);
+    },
+  );
+
+  it.each([
+    { schemaVersion: 2 },
+    { assets: [{ ...release().assets[0], digest: null }] },
+    {
+      assets: [
+        {
+          ...release().assets[0],
+          browser_download_url:
+            "https://github.com/zjarlin/codex-buddy/releases/download/v9.9.9/codex-buddy-1.2.3-windows-x64.exe",
+        },
+      ],
+    },
+  ])("rejects unverified or inconsistent update manifests", async (override) => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ schemaVersion: 1, ...release(), ...override })),
+      );
+    await expect(fetchLatestGitHubRelease({ fetch: fetchImpl })).rejects.toThrow();
+  });
+
+  it("bounds manifest response size", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 403 }))
+      .mockResolvedValueOnce(new Response("x".repeat(256 * 1024 + 1)));
+    await expect(fetchLatestGitHubRelease({ fetch: fetchImpl })).rejects.toThrow("size limit");
   });
 
   it("uses the authenticated GitHub CLI without exposing its token", async () => {

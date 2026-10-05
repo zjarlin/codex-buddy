@@ -263,7 +263,7 @@ function updatesPage(
         const name = document.createElement("span");
         name.textContent = label;
         const value = document.createElement("strong");
-        value.textContent = "-";
+        value.textContent = messages.updateVersionUnknown;
         item.append(name, value);
         metadata.append(item);
         return value;
@@ -506,7 +506,9 @@ function updatesPage(
 
       const renderCheck = (result: UpdateCheckResult, client: RendererUpdateClient): void => {
         currentVersionValue.textContent = `v${result.currentVersion}`;
-        latestVersionValue.textContent = result.latestVersion ? `v${result.latestVersion}` : "-";
+        latestVersionValue.textContent = result.latestVersion
+          ? `v${result.latestVersion}`
+          : messages.updateVersionUnknown;
         latestVersionValue.className = result.updateAvailable
           ? "settings-update-metadata__value--newer"
           : "";
@@ -602,7 +604,31 @@ function updatesPage(
         pending = true;
         renderPendingStatus(null, messages.updateChecking);
         return context.runLatest(
-          (signal) => runBoundedRendererUpdateRequest(() => client.checkUpdate(), signal),
+          async (signal) => {
+            let checkCompleted = false;
+            const localSignal = AbortSignal.any([signal, context.signal]);
+            void runBoundedRendererUpdateRequest(() => client.readUpdateStatus(), localSignal).then(
+              (local) => {
+                if (localSignal.aborted || checkCompleted) return;
+                if (local.currentVersion) {
+                  currentVersionValue.textContent = "v" + local.currentVersion;
+                }
+                if (local.installation !== undefined) {
+                  installationValue.textContent = installationLabel(local.installation, messages);
+                }
+              },
+              (error) => {
+                if (!localSignal.aborted)
+                  console.error("codexhost local version request failed", error);
+              },
+            );
+            const result = await runBoundedRendererUpdateRequest(
+              () => client.checkUpdate(),
+              signal,
+            );
+            checkCompleted = true;
+            return result;
+          },
           {
             success(result) {
               pending = false;

@@ -80,6 +80,13 @@ describe("workflow and form contracts", () => {
     expect(publishRelease).toContain("await verifyRelease(");
   });
 
+  it("publishes the update manifest alongside installers using trusted automation", async () => {
+    const workflow = await read(".github/workflows/release-packages.yml");
+    expect(workflow).toContain("./.release-automation/packages/repository-automation/index.mjs");
+    expect(workflow).toContain("createInstallerUpdateManifest");
+    expect(workflow).toContain('files+=("$RUNNER_TEMP/codex-buddy-update.json")');
+  });
+
   it("dispatches release CI and installer publication without a PAT", async () => {
     const workflow = await read(".github/workflows/auto-release-on-main.yml");
     expect(workflow).toContain("actions: write");

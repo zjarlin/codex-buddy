@@ -4,6 +4,10 @@ import { requireSemanticVersion } from "./status.js";
 export const CODEXHOST_LATEST_RELEASE_URL =
   "https://api.github.com/repos/zjarlin/codex-buddy/releases/latest";
 
+export const CODEXHOST_UPDATE_MANIFEST_URL =
+  "https://github.com/zjarlin/codex-buddy/releases/latest/download/codex-buddy-update.json";
+const UPDATE_MANIFEST_MAX_BYTES = 256 * 1024;
+
 const SHA256_DIGEST_PATTERN = /^sha256:([0-9a-f]{64})$/u;
 const RELEASE_NOTES_URL_PATTERN =
   /^https:\/\/github\.com\/zjarlin\/codex-buddy\/releases\/tag\/(v[0-9A-Za-z.+-]+)$/u;
@@ -100,6 +104,55 @@ export function parseLatestGitHubRelease(value: unknown): CodexhostLatestRelease
   });
 }
 
+async function fetchUpdateManifest(
+  options: GitHubReleaseFetchOptions,
+): Promise<CodexhostLatestRelease> {
+  const response = await (options.fetch ?? fetch)(CODEXHOST_UPDATE_MANIFEST_URL, {
+    redirect: "follow",
+    ...(options.signal ? { signal: options.signal } : {}),
+  });
+  if (!response.ok || !response.body) {
+    throw new Error("GitHub update manifest request failed with HTTP " + response.status);
+  }
+  if (response.url) {
+    const url = new URL(response.url);
+    if (url.protocol !== "https:" || url.username || url.password) {
+      throw new Error("GitHub update manifest redirected to an invalid URL");
+    }
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > UPDATE_MANIFEST_MAX_BYTES) {
+        await reader.cancel();
+        throw new Error("GitHub update manifest exceeds size limit");
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const manifest = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (manifest.schemaVersion !== 1) {
+    throw new Error("Unsupported update manifest schema");
+  }
+  const release = parseLatestGitHubRelease(manifest);
+  for (const asset of release.assets) {
+    if (
+      !SHA256_DIGEST_PATTERN.test(asset.digest ?? "") ||
+      asset.downloadUrl !== DOWNLOAD_URL_PREFIX + "v" + release.version + "/" + asset.name
+    ) {
+      throw new Error("Update manifest asset does not match its release or SHA-256");
+    }
+  }
+  return release;
+}
+
 export async function fetchLatestGitHubRelease(
   options: GitHubReleaseFetchOptions = {},
 ): Promise<CodexhostLatestRelease> {
@@ -113,6 +166,9 @@ export async function fetchLatestGitHubRelease(
     redirect: "error",
     ...(options.signal ? { signal: options.signal } : {}),
   });
+  if (response.status === 403 || response.status === 429) {
+    return fetchUpdateManifest(options);
+  }
   if (!response.ok)
     throw new Error(`GitHub latest Release request failed with HTTP ${response.status}`);
   return parseLatestGitHubRelease(await response.json());

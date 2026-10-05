@@ -265,7 +265,11 @@ export function createHostUpdateCoordinator(
       try {
         const context = await installedContext();
         await recoverUpdateOperationLock(context.common.stateDirectory);
-        return { status: await latestStatus(context) };
+        return {
+          currentVersion: context.metadata.version,
+          installation: context.installation.kind,
+          status: await latestStatus(context),
+        };
       } catch {
         return { status: null };
       }

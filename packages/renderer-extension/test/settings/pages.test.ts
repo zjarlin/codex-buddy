@@ -1261,6 +1261,7 @@ describe("Renderer Updates page", () => {
         startUpdate: vi.fn(() => request.promise),
         readUpdateStatus: vi
           .fn<() => Promise<{ status: UpdateStatus | null }>>()
+          .mockResolvedValueOnce({ status: null })
           .mockRejectedValueOnce(new RendererUpdateRequestTimeoutError())
           .mockResolvedValueOnce({ status: null })
           .mockResolvedValueOnce({ status: updateStatus("prepared") })
@@ -1302,7 +1303,7 @@ describe("Renderer Updates page", () => {
           expect(panel.dataset.updateState).toBe(phase);
         }
         expect(client.startUpdate).toHaveBeenCalledOnce();
-        expect(client.readUpdateStatus).toHaveBeenCalledTimes(5);
+        expect(client.readUpdateStatus).toHaveBeenCalledTimes(6);
         expect(document.defaultView.setTimeout).toHaveBeenCalledTimes(5);
         request.resolve({ status: updateStatus("prepared") });
         await vi.advanceTimersByTimeAsync(0);
@@ -1433,6 +1434,55 @@ describe("Renderer Updates page", () => {
 
     cleanup?.();
     scope.dispose();
+  });
+
+  it("shows local version while discovery is pending and keeps it after failure", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let rejectCheck!: (reason: Error) => void;
+    const check = new Promise<UpdateCheckResult>((_, reject) => {
+      rejectCheck = reject;
+    });
+    const client = {
+      checkUpdate: vi.fn(() => check),
+      startUpdate: vi.fn(),
+      readUpdateStatus: vi.fn(async () => ({
+        currentVersion: "0.10.29",
+        installation: "macos-dmg" as const,
+        status: null,
+      })),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("zh-CN"),
+      () => client,
+    ).find(({ id }) => id === "updates");
+    if (!page) throw new Error("Updates page is not registered");
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const cleanup = page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    try {
+      await vi.waitFor(() => expect(visibleText(content)).toContain("v0.10.29"));
+      expect(visibleText(content)).toContain("macOS DMG");
+      expect(elementWithClass(content, "settings-update-panel").dataset.updateState).toBe(
+        "pending",
+      );
+      rejectCheck(new Error("GitHub API unavailable"));
+      await vi.waitFor(() =>
+        expect(elementWithClass(content, "settings-update-panel").dataset.updateState).toBe(
+          "failed",
+        ),
+      );
+      expect(visibleText(content)).toContain("v0.10.29");
+      expect(visibleText(content)).not.toContain("当前已是最新版本");
+    } finally {
+      cleanup?.();
+      scope.dispose();
+      errorLog.mockRestore();
+    }
   });
 
   it("points to GitHub Releases without a retry or internal detail when the update request fails", async () => {

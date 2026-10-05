@@ -345,6 +345,23 @@ describe("Host update coordinator", () => {
     }
   });
 
+  it("reads the installed version without starting network discovery", async () => {
+    const fixture = await npmFixture();
+    const fetchLatest = vi.fn(async () => release());
+    const coordinator = createHostUpdateCoordinator({
+      ...fixture,
+      platform: "darwin",
+      architecture: "arm64",
+      fetchLatest,
+    });
+    await expect(coordinator.status()).resolves.toMatchObject({
+      currentVersion: "1.2.2",
+      installation: "npm",
+      status: null,
+    });
+    expect(fetchLatest).not.toHaveBeenCalled();
+  });
+
   it("keeps GitHub failures non-blocking and reports no same-version update", async () => {
     const fixture = await npmFixture();
     const failed = createHostUpdateCoordinator({

@@ -364,6 +364,18 @@ jobs:
             exit 1
           fi
 
+          node --input-type=module - "$RUNNER_TEMP/codex-buddy-update.json" "${files[@]}" <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          import { createInstallerUpdateManifest } from './.release-automation/packages/repository-automation/index.mjs';
+          const [destination, ...files] = process.argv.slice(2);
+          const notes = await readFile('release-metadata/release-notes.md', 'utf8');
+          const manifest = await createInstallerUpdateManifest({
+            repository: process.env.GITHUB_REPOSITORY, version: process.env.VERSION, notes, files,
+          });
+          await writeFile(destination, JSON.stringify(manifest) + '\n');
+          NODE
+          files+=("$RUNNER_TEMP/codex-buddy-update.json")
+
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             gh release upload "$TAG" "${files[@]}" --clobber --repo "${{ github.repository }}"
           else

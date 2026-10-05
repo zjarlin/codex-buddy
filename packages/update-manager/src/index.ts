@@ -14,6 +14,7 @@ export {
 } from "./distribution.js";
 export {
   CODEXHOST_LATEST_RELEASE_URL,
+  CODEXHOST_UPDATE_MANIFEST_URL,
   compareSemanticVersions,
   expectedInstallerAssetName,
   fetchLatestGitHubRelease,

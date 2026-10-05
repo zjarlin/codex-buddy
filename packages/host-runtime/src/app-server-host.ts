@@ -1137,8 +1137,8 @@ export class AppServerHost {
         const connection = await readConnection(home, this.#options.environment ?? process.env);
         return connection.url.origin + connection.url.pathname.replace(/\/models$/u, "");
       },
-      emergencyBaseUrl: this.#emergencyBaseUrl!,
-      emergencyApiKey: this.#emergencyApiKey!,
+      emergencyBaseUrl: this.#emergencyBaseUrl,
+      emergencyApiKey: this.#emergencyApiKey,
       diagnosticOutput: this.#options.diagnosticOutput,
     });
     try {

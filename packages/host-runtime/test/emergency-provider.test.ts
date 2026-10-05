@@ -13,7 +13,7 @@ describe("EmergencyProviderProxy", () => {
     await proxy?.close();
     proxy = undefined;
     if (upstreamServer) {
-      await new Promise<void>((resolve) => upstreamServer!.close(() => resolve()));
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
       upstreamServer = undefined;
     }
   });
@@ -27,7 +27,7 @@ describe("EmergencyProviderProxy", () => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
-    await new Promise<void>((resolve) => upstreamServer!.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => upstreamServer.listen(0, "127.0.0.1", resolve));
     const upstreamPort = (upstreamServer.address() as { port: number }).port;
 
     proxy = new EmergencyProviderProxy({

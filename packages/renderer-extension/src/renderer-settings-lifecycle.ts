@@ -1,4 +1,5 @@
 import type { LoadedSessionsClient } from "./settings/loaded-sessions-table.js";
+import type { EmergencyProviderClient } from "./settings/emergency-provider-page.js";
 import { readCodexLocaleSettings, type CodexLocaleSettings } from "./codex-locale-adapter.js";
 import {
   rendererSettingsMessages,
@@ -36,8 +37,7 @@ export interface RendererSettingsLifecycleOptions {
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
-  getEmergencyProviderClient?():
-    import("./settings/emergency-provider-page.js").EmergencyProviderClient | null;
+  getEmergencyProviderClient?(): EmergencyProviderClient | null;
   getBuddyClient?(): RendererModelClient | null;
   getThreadTerminalClient?(): RendererThreadTerminalClient | null;
   openImportedThread?: RendererImportedThreadOpener;

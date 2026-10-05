@@ -559,6 +559,7 @@ describe("Renderer fixed Model request client", () => {
       "configureProjectSyncGit",
       "continueGitMerge",
       "credentialImports",
+      "emergencyProvider",
       "executeThreadCommand",
       "executeTurnAction",
       "fetchGit",

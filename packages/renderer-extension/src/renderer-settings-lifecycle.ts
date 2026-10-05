@@ -36,6 +36,7 @@ export interface RendererSettingsLifecycleOptions {
   getSessionImportClient?(): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
+  getEmergencyProviderClient?(): import("./settings/emergency-provider-page.js").EmergencyProviderClient | null;
   getBuddyClient?(): RendererModelClient | null;
   getThreadTerminalClient?(): RendererThreadTerminalClient | null;
   openImportedThread?: RendererImportedThreadOpener;
@@ -88,6 +89,7 @@ export function installRendererSettingsLifecycle(
       },
       options.getLoadedSessionsClient ?? (() => null),
       options.getProjectSyncClient ?? (() => null),
+      options.getEmergencyProviderClient ?? (() => null),
       options.getThreadTerminalClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);

@@ -962,6 +962,7 @@ export function installRendererBindingProbe(
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getBuddyClient: () => modelControl,
+    getEmergencyProviderClient: () => modelControl,
     getLoadedSessionsClient: () => {
       const hostId = activeModelHostId();
       return hostId ? modelClientForHost(hostId) : null;

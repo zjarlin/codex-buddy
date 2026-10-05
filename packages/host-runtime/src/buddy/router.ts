@@ -273,6 +273,9 @@ export class BuddyRouter {
       decisions: [...this.#decisions.values()],
       jevKeyConfigured: this.#jev !== null,
       jevBaseUrl: this.#jevBaseUrl,
+      emergencyConfigured: false,
+      emergencyEnabled: false,
+      emergencyBaseUrl: null,
     };
   }
 

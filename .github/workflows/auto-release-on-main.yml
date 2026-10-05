@@ -14,14 +14,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tag:
-    name: Create next release tag
+  prepare:
+    name: Prepare next release
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
-      tag: ${{ steps.bump.outputs.tag }}
-      version: ${{ steps.bump.outputs.version }}
-      created: ${{ steps.bump.outputs.created }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      created: ${{ steps.release.outputs.created }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -29,8 +29,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Compute next patch tag
-        id: bump
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+
+      - name: Setup npm
+        run: npm install --global --prefer-offline npm@11.8.0
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline
+
+      - name: Compute next version and generate release notes
+        id: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -42,8 +53,10 @@ jobs:
           latest="$(git tag -l 'v*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
           if [ -z "$latest" ]; then
             base="0.0.0"
+            base_commit="$(git rev-list --max-parents=0 HEAD | tail -n1)"
           else
             base="${latest#v}"
+            base_commit="$(git rev-parse "${latest}^{commit}")"
           fi
 
           IFS='.' read -r major minor patch <<<"$base"
@@ -53,15 +66,47 @@ jobs:
 
           # Avoid duplicate tag races
           if git rev-parse -q --verify "refs/tags/${next_tag}" >/dev/null; then
-            echo "Tag ${next_tag} already exists; skipping creation."
+            echo "Tag ${next_tag} already exists; skipping."
             echo "tag=${next_tag}" >> "$GITHUB_OUTPUT"
             echo "version=${next_version}" >> "$GITHUB_OUTPUT"
             echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          git tag -a "${next_tag}" -m "Release ${next_tag}"
+          # Check if there are any commits since the last release tag
+          commit_count="$(git rev-list --count "${base_commit}..HEAD")"
+          if [ "$commit_count" -eq 0 ]; then
+            echo "No new commits since ${latest}; skipping release preparation."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "created=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Bump versions in package.json, package-lock.json, Cargo.toml, Cargo.lock
+          npm run release:prepare -- "$next_version"
+
+          # Generate release notes from commits since last release
+          notes_file="$(mktemp)"
+          {
+            echo "### Changes since ${latest:-initial}"
+            echo ""
+            git log --pretty=format:"- %s" "${base_commit}..HEAD"
+            echo ""
+            echo ""
+            echo "Validation: CI、格式、lint、边界、类型检查在发布提交上通过。"
+          } > "$notes_file"
+
+          # Commit version bump
+          git add package.json package-lock.json Cargo.toml Cargo.lock
+          git commit -m "chore(release): prepare ${next_version}"
+          git push origin HEAD
+
+          # Create annotated tag with release notes
+          git tag -a "$next_tag" -F "$notes_file"
           git push origin "refs/tags/${next_tag}"
+
+          rm -f "$notes_file"
 
           echo "tag=${next_tag}" >> "$GITHUB_OUTPUT"
           echo "version=${next_version}" >> "$GITHUB_OUTPUT"
@@ -69,7 +114,12 @@ jobs:
 
       - name: Summary
         run: |
-          echo "### Auto release tag" >> "$GITHUB_STEP_SUMMARY"
-          echo "- tag: \`${{ steps.bump.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- version: \`${{ steps.bump.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- created: \`${{ steps.bump.outputs.created }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Auto release preparation" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tag: \`${{ steps.release.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- version: \`${{ steps.release.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- created: \`${{ steps.release.outputs.created }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.release.outputs.created }}" = "true" ]; then
+            echo "> ⚠️ Tag pushed with \`GITHUB_TOKEN\`; \`release-packages.yml\` will **not** auto-trigger." >> "$GITHUB_STEP_SUMMARY"
+            echo "> Manually dispatch \`Release packages\` with tag \`${{ steps.release.outputs.tag }}\` and \`skip_npm=true\`." >> "$GITHUB_STEP_SUMMARY"
+          fi

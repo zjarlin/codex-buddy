@@ -386,7 +386,7 @@ jobs:
       !cancelled() && needs.publish-release.result == 'success' &&
       needs.prepare.outputs.prerelease == 'false'
     needs: [prepare, publish-release]
-    runs-on: [self-hosted, macbook-delivery]
+    runs-on: [self-hosted, macOS, ARM64, macmini-delivery]
     timeout-minutes: 10
     concurrency:
       group: macbook-installer-downloads

@@ -174,6 +174,15 @@ describe("exact-commit CI release gate", () => {
     expect(() => assertReleaseCi({ jobs: [] }, head)).toThrow("evidence");
   });
 
+  it("accepts exact release-tag dispatch CI while rejecting branch dispatch and stale SHA", () => {
+    const dispatched = ci({ event: "workflow_dispatch", head_branch: "v1.2.3" });
+    expect(assertReleaseCi(dispatched, head)).toMatchObject({ ciRunId: 42 });
+    expect(() => assertReleaseCi(dispatched, oldHead)).toThrow("exact release commit");
+    expect(() =>
+      assertReleaseCi(ci({ event: "workflow_dispatch", head_branch: "main" }), head),
+    ).toThrow("evidence");
+  });
+
   it.each(["failure", "cancelled", "skipped", "action_required", "timed_out", null])(
     "rejects %s CI even if an older run was green",
     (conclusion) => {

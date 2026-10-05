@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  actions: read
+  actions: write
 
 concurrency:
   group: auto-release-${{ github.ref_name }}
@@ -110,25 +110,31 @@ jobs:
             echo "Version files already at ${next_version}; tagging current HEAD."
           fi
 
-          # Use PAT if available to trigger downstream workflows; fall back to GITHUB_TOKEN
-          if [ -n "${{ secrets.RELEASE_PAT }}" ]; then
-            remote_url="https://x-access-token:${{ secrets.RELEASE_PAT }}@github.com/${{ github.repository }}.git"
-            git push "$remote_url" HEAD
-            git tag -a "$next_tag" -F "$notes_file"
-            git push "$remote_url" "refs/tags/${next_tag}"
-            echo "Pushed with RELEASE_PAT (downstream workflows will trigger)"
-          else
-            git push origin HEAD
-            git tag -a "$next_tag" -F "$notes_file"
-            git push origin "refs/tags/${next_tag}"
-            echo "Pushed with GITHUB_TOKEN (downstream workflows will NOT trigger)"
-          fi
+          # 使用内置令牌推送；后续工作流显式 dispatch，避免依赖 PAT 和重复发布。
+          git push origin HEAD
+          git tag -a "$next_tag" -F "$notes_file"
+          git push origin "refs/tags/${next_tag}"
 
           rm -f "$notes_file"
 
           echo "tag=${next_tag}" >> "$GITHUB_OUTPUT"
           echo "version=${next_version}" >> "$GITHUB_OUTPUT"
           echo "created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch exact-commit CI and installer release
+        if: steps.release.outputs.created == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo, workflow_id: 'ci.yml', ref: process.env.RELEASE_TAG,
+            });
+            await github.rest.actions.createWorkflowDispatch({
+              ...context.repo, workflow_id: 'release-packages.yml', ref: 'main',
+              inputs: { tag: process.env.RELEASE_TAG, skip_npm: true },
+            });
 
       - name: Summary
         run: |
@@ -138,11 +144,5 @@ jobs:
           echo "- created: \`${{ steps.release.outputs.created }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.release.outputs.created }}" = "true" ]; then
-            if [ -n "${{ secrets.RELEASE_PAT }}" ]; then
-              echo "> ✅ Pushed with \`RELEASE_PAT\`; \`release-packages.yml\` should auto-trigger." >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "> ⚠️ Pushed with \`GITHUB_TOKEN\`; downstream workflows will **not** auto-trigger." >> "$GITHUB_STEP_SUMMARY"
-              echo "> Add a \`RELEASE_PAT\` secret (repo-scoped PAT with \`contents: write\`) to enable automatic triggering," >> "$GITHUB_STEP_SUMMARY"
-              echo "> or manually dispatch \`Release packages\` with tag \`${{ steps.release.outputs.tag }}\` and \`skip_npm=true\`." >> "$GITHUB_STEP_SUMMARY"
-            fi
+            echo "> Dispatched CI at the release tag and GitHub installer publication with skip_npm=true." >> "$GITHUB_STEP_SUMMARY"
           fi

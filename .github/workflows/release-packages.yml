@@ -197,7 +197,7 @@ jobs:
 
   publish-npm:
     name: Publish npm registry packages
-    if: github.event_name != 'workflow_dispatch' || !inputs.skip_npm
+    if: github.repository == 'BytePioneer-AI/codex-host' && (github.event_name != 'workflow_dispatch' || !inputs.skip_npm)
     needs: [prepare, package]
     runs-on: ubuntu-latest
     permissions:
@@ -277,7 +277,8 @@ jobs:
       !cancelled() && needs.prepare.result == 'success' && needs.package.result == 'success' &&
       needs.prepare.outputs.npm_tag != 'test' &&
       (needs.publish-npm.result == 'success' ||
-      (github.event_name == 'workflow_dispatch' && inputs.skip_npm && needs.publish-npm.result == 'skipped'))
+      ((github.repository != 'BytePioneer-AI/codex-host' ||
+      (github.event_name == 'workflow_dispatch' && inputs.skip_npm)) && needs.publish-npm.result == 'skipped'))
     needs: [prepare, package, publish-npm]
     runs-on: ubuntu-latest
     permissions:

@@ -22,14 +22,13 @@ export async function readCi({ github, repo, sha, release = false, pr }) {
     ...repo,
     workflow_id: workflow.id,
     head_sha: sha,
-    ...(release ? { event: "push", branch: "main" } : {}),
   });
   const eligible = runs.filter((run) => {
     if (run.workflow_id !== workflow.id || run.head_sha !== sha) return false;
     if (release) {
       return (
-        run.event === "push" &&
-        run.head_branch === "main" &&
+        ((run.event === "push" && run.head_branch === "main") ||
+          (run.event === "workflow_dispatch" && /^v\d+\.\d+\.\d+$/u.test(run.head_branch))) &&
         run.head_repository?.full_name === `${repo.owner}/${repo.repo}`
       );
     }

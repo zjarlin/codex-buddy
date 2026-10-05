@@ -93,8 +93,14 @@ export async function readReleaseMetadata({ root, tag, expectedRefSha }) {
 }
 
 export function assertReleaseCi({ run, jobs }, sha) {
-  if (!run || run.head_sha !== sha || run.event !== "push" || run.head_branch !== "main") {
-    throw new Error("release requires CI evidence from a main push at the exact release commit");
+  const trustedTrigger =
+    run &&
+    ((run.event === "push" && run.head_branch === "main") ||
+      (run.event === "workflow_dispatch" && /^v\d+\.\d+\.\d+$/u.test(run.head_branch)));
+  if (!trustedTrigger || run.head_sha !== sha) {
+    throw new Error(
+      "release requires CI evidence from a main push or release tag dispatch at the exact release commit",
+    );
   }
   if (run.status !== "completed" || run.conclusion !== "success") {
     throw new Error(`release CI is not successful: ${run.conclusion ?? run.status}`);

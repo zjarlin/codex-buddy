@@ -97,11 +97,13 @@ npm run test:typescript -- \
 
 1. 标签必须是合法 SemVer 的 annotated tag，正文包含 Release Notes；提交在 `main` 历史上。
 2. `package.json`、`package-lock.json` 根版本及 Cargo workspace 版本必须与标签一致。
-3. 确切发布 SHA 的主仓库 `main push` CI 和两项基线 job 必须成功。
+3. 确切发布 SHA 的本仓库 `main push` 或版本标签 `workflow_dispatch` CI 和两项基线 job 必须成功；标签提交仍必须属于 `main` 历史。
 4. 构建和发布固定 commit SHA；发布前再次验证远端 tag object SHA、提交仍在 `main`、CI run ID / attempt 和结果。
 5. 校验失败就停止发布，不自动改版本、等待后重试或放宽条件；维护者核实后手动重新准备发布。
 
-npm 发布受阻时，可从默认分支手动运行 `Release packages`，指定原 annotated tag 并启用 `skip_npm`。该模式跳过 npm 发布，仍从标签的固定提交构建安装包，保留全部版本、Tag 和确切提交 CI 校验，通过后只发布 GitHub Release。无需移动或重建标签；默认发布仍要求 npm 发布成功。
+`main` 的每次代码推送由 `auto-release-on-main.yml` 自动递增 patch 版本、提交版本文件并创建 annotated tag。使用内置 `GITHUB_TOKEN` 推送，随后显式 dispatch 标签上的 CI 和默认分支上的 `Release packages`，不依赖 `RELEASE_PAT`。内置令牌的普通推送不触发其他工作流，显式 dispatch 保证版本提交接受 CI 检查后才发布安装包。
+
+fork 默认跳过上游 `@codexhost` npm 包发布，GitHub 安装包不依赖上游 npm 权限。npm 发布受阻时，也可从默认分支手动运行 `Release packages`，指定原 annotated tag 并启用 `skip_npm`。该模式跳过 npm 发布，仍从标签的固定提交构建安装包，保留全部版本、Tag 和确切提交 CI 校验，通过后只发布 GitHub Release。无需移动或重建标签；原仓库的默认发布仍要求 npm 发布成功。
 
 标签推送使用标签提交里的工作流定义，新校验不会追溯改写旧标签的发布逻辑。这不是不可绕过的权限控制；未设置分支、标签或发布环境保护。
 

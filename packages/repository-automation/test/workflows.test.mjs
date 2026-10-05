@@ -10,6 +10,7 @@ const read = (file) => readFile(path.join(root, file), "utf8");
 describe("workflow and form contracts", () => {
   it.each([
     ".github/workflows/ci.yml",
+    ".github/workflows/auto-release-on-main.yml",
     ".github/workflows/buddy-macos-dmg.yml",
     ".github/workflows/repository-maintenance.yml",
     ".github/workflows/release-packages.yml",
@@ -67,15 +68,26 @@ describe("workflow and form contracts", () => {
   it("allows explicit installer-only recovery without bypassing release prerequisites", async () => {
     const workflow = await read(".github/workflows/release-packages.yml");
     expect(workflow).toContain("skip_npm:");
-    expect(workflow).toContain("if: github.event_name != 'workflow_dispatch' || !inputs.skip_npm");
+    expect(workflow).toContain("github.repository == 'BytePioneer-AI/codex-host'");
+    expect(workflow).toContain("github.event_name != 'workflow_dispatch' || !inputs.skip_npm");
     const publishRelease = workflow.slice(workflow.indexOf("  publish-release:"));
     expect(publishRelease).toContain("needs.prepare.result == 'success'");
     expect(publishRelease).toContain("needs.package.result == 'success'");
     expect(publishRelease).toContain("needs.publish-npm.result == 'success'");
     expect(publishRelease).toContain(
-      "github.event_name == 'workflow_dispatch' && inputs.skip_npm && needs.publish-npm.result == 'skipped'",
+      "(github.event_name == 'workflow_dispatch' && inputs.skip_npm)) && needs.publish-npm.result == 'skipped'",
     );
     expect(publishRelease).toContain("await verifyRelease(");
+  });
+
+  it("dispatches release CI and installer publication without a PAT", async () => {
+    const workflow = await read(".github/workflows/auto-release-on-main.yml");
+    expect(workflow).toContain("actions: write");
+    expect(workflow).toContain("workflow_id: 'ci.yml', ref: process.env.RELEASE_TAG");
+    expect(workflow).toContain("workflow_id: 'release-packages.yml', ref: 'main'");
+    expect(workflow).toContain("skip_npm: true");
+    expect(workflow).not.toContain("secrets.RELEASE_PAT");
+    expect(await read(".github/workflows/ci.yml")).toContain("workflow_dispatch:");
   });
 
   it("keeps installer release CI to Apple Silicon macOS and Windows installers", async () => {

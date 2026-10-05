@@ -33,14 +33,26 @@ describe("live CI evidence and target routing", () => {
       expect.objectContaining({
         workflow_id: 1,
         head_sha: head,
-        event: "push",
-        branch: "main",
         per_page: 100,
       }),
     );
     expect(github.rest.actions.listJobsForWorkflowRun).toHaveBeenCalledWith(
       expect.objectContaining({ run_id: 43, filter: "latest", per_page: 100 }),
     );
+  });
+
+  it("accepts dispatched release-tag CI only from the owning repository", async () => {
+    const github = githubFixture([
+      ci({ event: "workflow_dispatch", head_branch: "v1.2.3" }).run,
+      ci({ id: 43, event: "workflow_dispatch", head_branch: "feature" }).run,
+      ci({
+        id: 44,
+        event: "workflow_dispatch",
+        head_branch: "v1.2.3",
+        head_repository: { full_name: "fork/codex-host" },
+      }).run,
+    ]);
+    expect((await readCi({ github, repo, sha: head, release: true })).run.id).toBe(42);
   });
 
   it("does not use foreign workflows, fork pushes, another commit, or PR CI as release evidence", async () => {

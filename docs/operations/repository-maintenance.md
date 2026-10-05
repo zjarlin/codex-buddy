@@ -115,7 +115,7 @@ fork 默认跳过上游 `@codexhost` npm 包发布，GitHub 安装包不依赖�
 
 `Release packages` 的正式 GitHub Release 发布成功后，`deliver-macbook` job 通过 `ssh macbook` 将 GitHub 当前 latest 的 Apple Silicon DMG 放到 `/Users/zjarlin/Downloads`。预发布和仅构建的 `Buddy macOS DMG` 不触发投递。旧流水线重跑时也读取当前 latest；下载过程中发布物被替换则报错，避免旧任务覆盖新版本。
 
-投递在带有 `self-hosted`、`macbook-delivery` 标签的内网 Runner 上执行，使用 prepare 阶段固定的可信自动化提交，仅需 GitHub `contents: read` 权限，无需安装项目依赖。Runner 运行账户必须能执行免交互的 `ssh macbook`，并预先配置该别名的地址、密钥和已验证的 `known_hosts`；GitHub 托管 Runner 无法直接访问 `192.168.31.75`。此专用 Runner 只用于投递，不用于 PR 构建。没有匹配的在线 Runner 时 job 会等待，不代表投递已成功。
+投递在带有 `self-hosted`、`macOS`、`ARM64`、`macmini-delivery` 标签的内网 Runner 上执行，使用 prepare 阶段固定的可信自动化提交，仅需 GitHub `contents: read` 权限，无需安装项目依赖。Runner 运行账户必须能执行免交互的 `ssh macbook`，并预先配置该别名的地址、密钥和已验证的 `known_hosts`；GitHub 托管 Runner 无法直接访问 `192.168.31.75`。此专用 Runner 只用于投递，不用于 PR 构建。没有匹配的在线 Runner 时 job 会等待，不代表投递已成功。迁移 Runner 标签后，取消仅剩旧投递步骤且等待旧标签的过期任务，释放 macbook-installer-downloads 并发组；不删除已发布 Release，最新任务继续读取当前 latest。
 
 MacBook 需要允许远程登录访问 Downloads。在“系统设置 → 通用 → 共享 → 远程登录”的详情中允许远程用户完全磁盘访问；如果 SSH 返回 `Operation not permitted`，需要在 MacBook 上完成该授权后重跑失败的投递 job。
 

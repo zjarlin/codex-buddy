@@ -40,6 +40,11 @@ describe("update runtime contracts", () => {
       expect(updateStartResultSchema.parse({ status })).toEqual({ status });
       expect(updateStatusResultSchema.parse({ status })).toEqual({ status });
       expect(updateStatusResultSchema.parse({ status: null })).toEqual({ status: null });
+      const installed = { status: null, currentVersion: "1.2.2", installation: "macos-dmg" };
+      expect(updateStatusResultSchema.parse(installed)).toEqual(installed);
+      expect(
+        updateStatusResultSchema.safeParse({ ...installed, currentVersion: "unknown" }).success,
+      ).toBe(false);
     },
   );
 

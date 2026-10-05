@@ -99,7 +99,8 @@ describe("platform packagers", () => {
     expect(workflow).not.toContain("softprops/action-gh-release");
     expect(workflow).not.toContain("codexhost-*.sha256");
     expect(workflow).not.toContain("checksums.txt");
-    expect(workflow).not.toContain("update.json");
+    expect(workflow).toContain("createInstallerUpdateManifest");
+    expect(workflow).toContain("codex-buddy-update.json");
     expect(releaseBuilder).not.toContain("checksumPath");
     expect(releaseBuilder).not.toContain("sha256=${result.checksum}");
     expect(releaseClient).toContain("assets");

@@ -184,6 +184,25 @@ export function installAutoRouteCards(options: {
     feedback = null;
   }
 
+  // 路由记录中的 started_at/updated_at 每次轮询都可能变化，但卡片的视觉结构
+  // （请求数、模型路径、状态、候选列表）在同一个回合内通常是稳定的。
+  // 用稳定签名避免卡片被反复重建导致下方按钮闪烁。
+  function stableRouteSignature(routes: AutoModelRoute[], locale: string, extra?: unknown): string {
+    return JSON.stringify([
+      locale,
+      extra,
+      routes.map((r) => [
+        r.request_id,
+        r.turn_id,
+        r.state,
+        r.selected_model,
+        r.resolved_model,
+        r.attempted_models,
+        r.candidates?.map((c) => [c.model, c.eligible, c.order, c.reason]),
+      ]),
+    ]);
+  }
+
   function renderFeedback(groups: AutoModelRoute[][]) {
     const composer = context?.composer;
     const latestGroup = groups
@@ -214,7 +233,9 @@ export function installAutoRouteCards(options: {
         : !result.supported
           ? unsupportedState
           : "waiting";
-    const signature = JSON.stringify([locale, state, latestGroup]);
+    const signature = latestGroup
+      ? stableRouteSignature(latestGroup, locale, state)
+      : JSON.stringify([locale, state]);
     if (feedback?.signature === signature && feedback.node.nextElementSibling === composer) return;
     let node: HTMLElement;
     if (latestGroup) {
@@ -273,7 +294,7 @@ export function installAutoRouteCards(options: {
       const anchor = anchors.get(turnId);
       if (!anchor) continue;
       const locale = options.getLocale();
-      const signature = JSON.stringify([group, locale, unavailable]);
+      const signature = stableRouteSignature(group, locale, unavailable);
       const existing = cards.get(turnId);
       if (existing?.signature === signature && existing.node.parentElement === anchor) continue;
       const previous =

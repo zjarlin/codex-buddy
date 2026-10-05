@@ -253,6 +253,29 @@ export function installTurnActionCards(options: { getContext(): Context | null }
     return node;
   }
 
+  // 只保留影响卡片结构的内容（动作列表、推荐动作、调用 ID/状态），
+  // 忽略 updated_at/updatedAt 等时间戳和 busy 抖动，避免按钮被反复重建而闪烁。
+  function stableSignature(snapshot: TurnActionsSnapshot, err: string): string {
+    const judgment = snapshot.recommendation;
+    return JSON.stringify([
+      err,
+      snapshot.sourceTurnId,
+      snapshot.latestTurnId,
+      snapshot.private,
+      snapshot.actions.map((a) => [a.actionId, a.version, a.enabled, a.disabledReason]),
+      judgment
+        ? [
+            judgment.state,
+            judgment.source,
+            judgment.model,
+            judgment.features,
+            judgment.actions.map((r) => [r.action_id, r.version, r.confidence, r.reason]),
+          ]
+        : null,
+      snapshot.invocations.map((i) => [i.invocationId, i.actionId, i.version, i.state, i.message]),
+    ]);
+  }
+
   function render() {
     if (!context || unsupported) return;
     const anchors = turnAnchors(context);
@@ -270,7 +293,7 @@ export function installTurnActionCards(options: { getContext(): Context | null }
         historyRead.delete(turnId);
         continue;
       }
-      const signature = JSON.stringify([snapshot, error]);
+      const signature = stableSignature(snapshot, error);
       let card = cards.get(turnId);
       // 正在填写参数时保留表单与焦点，执行端仍会重新校验真实上下文。
       if (!card || (card.signature !== signature && !card.node.shadowRoot?.querySelector("form"))) {

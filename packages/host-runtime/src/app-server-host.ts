@@ -1122,8 +1122,9 @@ export class AppServerHost {
   }
 
   async #syncEmergencyProxy(): Promise<void> {
-    const shouldRun = this.#emergencyEnabled && this.#emergencyBaseUrl && this.#emergencyApiKey;
-    if (!shouldRun) {
+    const emergencyBaseUrl = this.#emergencyBaseUrl;
+    const emergencyApiKey = this.#emergencyApiKey;
+    if (!this.#emergencyEnabled || !emergencyBaseUrl || !emergencyApiKey) {
       await this.#emergencyProxy?.close();
       this.#emergencyProxy = undefined;
       return;
@@ -1137,8 +1138,8 @@ export class AppServerHost {
         const connection = await readConnection(home, this.#options.environment ?? process.env);
         return connection.url.origin + connection.url.pathname.replace(/\/models$/u, "");
       },
-      emergencyBaseUrl: this.#emergencyBaseUrl,
-      emergencyApiKey: this.#emergencyApiKey,
+      emergencyBaseUrl,
+      emergencyApiKey,
       diagnosticOutput: this.#options.diagnosticOutput,
     });
     try {

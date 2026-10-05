@@ -52,10 +52,6 @@ vi.mock("../src/renderer-pending-confirmations.js", () => ({
   },
 }));
 
-vi.mock("../src/renderer-project-dashboard.js", () => ({
-  installRendererProjectDashboard: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
-}));
-
 vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
   installRendererSidebarStatusFilter: (options: { getLocale(): "zh-CN" | "en" }) => {
     testState.localeReads.push(options.getLocale());

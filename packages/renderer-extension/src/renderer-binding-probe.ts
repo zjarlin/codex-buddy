@@ -124,9 +124,7 @@ import {
   routeRendererHarnessCommandSelection,
 } from "./renderer-harness-command-claim.js";
 import { installRendererSettingsLifecycle } from "./renderer-settings-lifecycle.js";
-import { installRendererProjectDashboard } from "./renderer-project-dashboard.js";
 import { SIDEBAR_THREAD_HOST_ID_ATTRIBUTE } from "./renderer-sidebar-agent-icons.js";
-import { hostThreadIdSchema } from "@codexhost/shared-contracts";
 import { RENDERER_INJECTED_CONTROL_SELECTOR } from "./settings/trigger.js";
 import {
   installRendererDelegationMention,
@@ -855,32 +853,6 @@ export function installRendererBindingProbe(
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: rendererLocale,
     hasPending: (hostId, threadId) => pendingConfirmations.hasPending(hostId, threadId),
-  });
-  const projectDashboard = installRendererProjectDashboard({
-    getRequest: (hostId) => {
-      const client = modelClientForHost(hostId);
-      const request = client?.requestThreadProjection;
-      return request
-        ? (method: "thread/list" | "thread/turns/list", params: unknown) => request(method, params)
-        : null;
-    },
-    getHostIds: () => {
-      const hostIds = new Set<string>(["local"]);
-      for (const row of document.querySelectorAll<HTMLElement>(
-        `[${SIDEBAR_THREAD_HOST_ID_ATTRIBUTE}]`,
-      )) {
-        const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
-        if (hostId) hostIds.add(hostId);
-      }
-      const activeHostId = activeModelHostId();
-      if (activeHostId) hostIds.add(activeHostId);
-      return [...hostIds];
-    },
-    onOpenThread(threadId, hostId) {
-      void openRendererThread(hostThreadIdSchema.parse(threadId), { hostId }).catch((error) => {
-        console.warn("[codexhost] Unable to open dashboard Thread", error);
-      });
-    },
   });
   const queuedTransfer = installRendererQueuedTransfer({
     getManager: (hostId) => {
@@ -3563,7 +3535,6 @@ export function installRendererBindingProbe(
       adapterDispose = dispose ?? null;
       applyAdapterAgent = applyAgent ?? null;
       modelControl = nextModelControl ?? null;
-      projectDashboard.refresh();
       sidebarUnread.refresh();
       pendingConfirmationPanel.refresh();
       sidebarStatusFilter.refresh();
@@ -3645,7 +3616,6 @@ export function installRendererBindingProbe(
       pendingConfirmationPanel.dispose();
       sidebarVisits.dispose();
       sidebarStatusFilter.dispose();
-      projectDashboard.dispose();
       threadActions.dispose();
       threadFolders.dispose();
       queuedTransfer.dispose();

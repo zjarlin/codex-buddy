@@ -218,6 +218,7 @@ import {
   buddyCatalogSyncSchema,
   type BuddyCatalogSync,
   BUDDY_JEV_KEY_METHOD,
+  EMERGENCY_PROVIDER_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
@@ -530,6 +531,11 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   buddyJevKey?(config: {
     apiKey?: string | null | undefined;
     baseURL?: string | null | undefined;
+  }): Promise<BuddySnapshot>;
+  emergencyProvider?(config: {
+    apiKey?: string | null | undefined;
+    baseURL?: string | null | undefined;
+    enabled?: boolean;
   }): Promise<BuddySnapshot>;
   buddyCancel?(threadId: string): Promise<BuddySnapshot>;
   buddyAnswer?(input: BuddyAnswer): Promise<BuddySnapshot>;
@@ -1249,6 +1255,11 @@ export function createRendererModelClient(
       apiKey?: string | null | undefined;
       baseURL?: string | null | undefined;
     }) => buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_JEV_KEY_METHOD, config)),
+    emergencyProvider: async (config: {
+      apiKey?: string | null | undefined;
+      baseURL?: string | null | undefined;
+      enabled?: boolean;
+    }) => buddySnapshotSchema.parse(await manager.sendRequest(EMERGENCY_PROVIDER_METHOD, config)),
     buddyAnswer: async (input: BuddyAnswer) =>
       buddySnapshotSchema.parse(
         await manager.sendRequest(BUDDY_ANSWER_METHOD, buddyAnswerSchema.parse(input)),

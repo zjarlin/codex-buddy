@@ -32,6 +32,10 @@ import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
 import { createProjectSyncPage, type ProjectSyncClient } from "./project-sync-page.js";
+import {
+  createEmergencyProviderSettingsPage,
+  type EmergencyProviderClient,
+} from "./emergency-provider-page.js";
 
 export type {
   RendererConnectionAgentSnapshot,
@@ -76,6 +80,7 @@ function windowsInstallerDownloadUrl(window: Window | null | undefined, version:
 export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "connections",
   "accounts",
+  "emergency-provider",
   "project-sync",
   "session-import",
   "appearance",
@@ -627,11 +632,13 @@ export function createDefaultRendererSettingsPages(
     Promise.reject(new Error("Imported Thread navigation is unavailable")),
   getLoadedSessionsClient: () => LoadedSessionsClient | null = () => null,
   getProjectSyncClient: () => ProjectSyncClient | null = () => null,
+  getEmergencyProviderClient: () => EmergencyProviderClient | null = () => null,
   getThreadTerminalClient: () => RendererThreadTerminalClient | null = () => null,
 ): readonly RendererSettingsPageDefinition[] {
   return Object.freeze([
     createConnectionsSettingsPage(messages, getDiagnostics),
     createAccountsSettingsPage(messages, getAccountClient),
+    createEmergencyProviderSettingsPage(messages, getEmergencyProviderClient),
     createProjectSyncPage(messages, getProjectSyncClient),
     createSessionImportSettingsPage(messages, getSessionImportClient, openImportedThread),
     createAppearanceSettingsPage(messages, getLoadedSessionsClient, getThreadTerminalClient),

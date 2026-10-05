@@ -7,6 +7,7 @@ export const BUDDY_STATUS_METHOD = "codexhost/buddy/status";
 export const BUDDY_SETTINGS_METHOD = "codexhost/buddy/settings";
 export const BUDDY_CANCEL_METHOD = "codexhost/buddy/cancel";
 export const BUDDY_ANSWER_METHOD = "codexhost/buddy/answer";
+export const EMERGENCY_PROVIDER_METHOD = "codexhost/emergency/provider";
 export const buddyPlannerInputSchema = z.object({
   requestId: z.union([z.string(), z.number()]),
   questions: z
@@ -79,6 +80,16 @@ export const buddyJevKeySchema = z
   })
   .strict();
 export type BuddyJevKey = z.infer<typeof buddyJevKeySchema>;
+// 应急供应商连接配置：apiKey 与 baseURL 均可选；省略表示保持不变，null/空串表示清除该项。
+// enabled 控制是否启用故障转移反向代理（仅当已配置时生效）。
+export const emergencyProviderConfigSchema = z
+  .object({
+    apiKey: z.string().trim().max(400).nullable().optional(),
+    baseURL: z.string().trim().max(500).nullable().optional(),
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+export type EmergencyProviderConfig = z.infer<typeof emergencyProviderConfigSchema>;
 export const buddyCatalogSyncSchema = z.object({
   provider: z.string(),
   returned: z.number().int().nonnegative(),
@@ -157,6 +168,10 @@ export const buddySnapshotSchema = z.object({
   // 只回传“是否已配置”，绝不回传密钥本身；baseURL 不是密钥，可回传以便界面显示。
   jevKeyConfigured: z.boolean().default(false),
   jevBaseUrl: z.string().nullable().default(null),
+  // 应急供应商：只回传"是否已配置"和"是否启用"，不回传密钥；baseURL 可回传以便界面显示。
+  emergencyConfigured: z.boolean().default(false),
+  emergencyEnabled: z.boolean().default(false),
+  emergencyBaseUrl: z.string().nullable().default(null),
 });
 export const systemOneModelValues = ["typesafe/jev", "laya"] as const;
 export type BuddyModel = z.infer<typeof buddyModelSchema>;

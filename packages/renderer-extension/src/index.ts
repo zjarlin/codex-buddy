@@ -213,6 +213,7 @@ export type {
   RendererCodexAccountClient,
   RendererUpdateClient,
 } from "./settings/pages.js";
+export type { EmergencyProviderClient } from "./settings/emergency-provider-page.js";
 export {
   DEFAULT_RENDERER_SETTINGS_MESSAGES,
   RENDERER_SETTINGS_LANGUAGE_SELECTIONS,

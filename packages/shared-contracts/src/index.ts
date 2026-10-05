@@ -13,6 +13,7 @@ export {
   buddyCatalogSyncSchema,
   type BuddyCatalogSync,
   BUDDY_JEV_KEY_METHOD,
+  EMERGENCY_PROVIDER_METHOD,
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
@@ -26,6 +27,7 @@ export {
   buddySnapshotSchema,
   buddyDecisionSchema,
   buddyJevKeySchema,
+  emergencyProviderConfigSchema,
   buddyModelRefreshSchema,
 } from "./buddy-router.js";
 export type {
@@ -35,6 +37,7 @@ export type {
   BuddyModel,
   BuddyModelRefresh,
   BuddyJevKey,
+  EmergencyProviderConfig,
 } from "./buddy-router.js";
 export { buddyPlanSchema, buddyPlanTaskSchema, buddyPlanOutputSchema } from "./buddy-plan.js";
 export type { BuddyPlan, BuddyPlanTask } from "./buddy-plan.js";

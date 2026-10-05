@@ -42,6 +42,8 @@ import { recentCompletedSessions } from "@codexhost/desktop-control/renderer-bin
 import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { LiveModelCatalog } from "./buddy/live-model-catalog.js";
 import { ModelAvailability } from "./model-availability.js";
+import { EmergencyProviderProxy } from "./emergency-provider-proxy.js";
+import { readConnection } from "@codexhost/buddy-engine";
 import { MODEL_AVAILABILITY_METHOD } from "@codexhost/shared-contracts";
 import { InterruptedConversations } from "./buddy/continuation.js";
 import {
@@ -75,7 +77,10 @@ import {
   BUDDY_ANSWER_METHOD,
   buddyAnswerSchema,
   buddyJevKeySchema,
+  EMERGENCY_PROVIDER_METHOD,
+  emergencyProviderConfigSchema,
   type BuddyCatalogSync,
+  type BuddySnapshot,
 } from "@codexhost/shared-contracts";
 import {
   GIT_WORKFLOW_STATUS_METHOD,
@@ -194,6 +199,7 @@ import {
 } from "@codexhost/shared-contracts";
 import type { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
@@ -759,6 +765,10 @@ export class AppServerHost {
   readonly #desktopRequests = new DesktopRequestQueue();
   #drainActiveWorkOnInputEnd = false;
   #desktopInputEnded = false;
+  #emergencyProxy: EmergencyProviderProxy | undefined;
+  #emergencyBaseUrl: string | null = null;
+  #emergencyApiKey: string | null = null;
+  #emergencyEnabled = false;
   readonly #threadTerminalSettings: ThreadTerminalSettingsStore;
   readonly #projectTabsSettings: ProjectTabsSettingsStore;
   readonly #threadFoldersSettings: ThreadFoldersSettingsStore;
@@ -807,6 +817,7 @@ export class AppServerHost {
       this.#options.pluginContext?.environment ?? environment,
     );
     const permanentHome = path.resolve(environment.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
+    void this.#loadEmergencyProvider(permanentHome);
     this.#modelAvailability = new ModelAvailability({
       home: permanentHome,
       environment,
@@ -866,7 +877,7 @@ export class AppServerHost {
               ? options.createOfficialConnection()
               : spawnOfficialAppServerConnection({
                   stockCodexPath: this.#options.stockCodexPath,
-                  arguments: this.#options.arguments,
+                  arguments: this.#injectEmergencyProxyArgs(this.#options.arguments),
                   environment: {
                     ...officialEnvironment(environment),
                     CODEX_HOME: permanentHome,
@@ -1081,6 +1092,8 @@ export class AppServerHost {
   }
 
   async #closeOfficialRuntime(): Promise<void> {
+    await this.#emergencyProxy?.close();
+    this.#emergencyProxy = undefined;
     this.#gitWorkflow.close();
     await this.#projectSync.close();
     this.#buddy?.close();
@@ -1088,6 +1101,102 @@ export class AppServerHost {
     this.#nativeAccountObserver?.close();
     if (this.#ownsOfficialRuntimeScope) await this.#officialRuntimeScope.close();
     await this.#officialRuntime.close();
+  }
+
+
+  async #loadEmergencyProvider(home: string): Promise<void> {
+    try {
+      const raw = JSON.parse(await readFile(path.join(home, "emergency-provider.json"), "utf8"));
+      const key = typeof raw?.apiKey === "string" ? raw.apiKey.trim() : "";
+      const baseURL = typeof raw?.baseURL === "string" ? raw.baseURL.trim() : "";
+      const enabled = raw?.enabled !== false;
+      this.#emergencyApiKey = key || null;
+      this.#emergencyBaseUrl = baseURL || null;
+      this.#emergencyEnabled = Boolean(enabled && key && baseURL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.#diagnose(error);
+      this.#emergencyApiKey = null;
+      this.#emergencyBaseUrl = null;
+      this.#emergencyEnabled = false;
+    }
+    await this.#syncEmergencyProxy();
+  }
+
+  async #syncEmergencyProxy(): Promise<void> {
+    const shouldRun = this.#emergencyEnabled && this.#emergencyBaseUrl && this.#emergencyApiKey;
+    if (!shouldRun) {
+      await this.#emergencyProxy?.close();
+      this.#emergencyProxy = undefined;
+      return;
+    }
+    if (this.#emergencyProxy) return;
+    const home = path.resolve(
+      (this.#options.environment ?? process.env).CODEX_HOME ?? path.join(os.homedir(), ".codex"),
+    );
+    const proxy = new EmergencyProviderProxy({
+      readPrimaryUrl: async () => {
+        const connection = await readConnection(home, this.#options.environment ?? process.env);
+        return connection.url.origin + connection.url.pathname.replace(/\/models$/u, "");
+      },
+      emergencyBaseUrl: this.#emergencyBaseUrl!,
+      emergencyApiKey: this.#emergencyApiKey!,
+      diagnosticOutput: this.#options.diagnosticOutput,
+    });
+    try { await proxy.start(); this.#emergencyProxy = proxy; } catch (error) { this.#diagnose(error); }
+  }
+
+  async #configureEmergencyProvider(input: {
+    apiKey?: string | null | undefined;
+    baseURL?: string | null | undefined;
+    enabled?: boolean;
+  }): Promise<BuddySnapshot> {
+    const home = path.resolve(
+      (this.#options.environment ?? process.env).CODEX_HOME ?? path.join(os.homedir(), ".codex"),
+    );
+    await this.#loadEmergencyProvider(home);
+    const key = input.apiKey === undefined ? this.#emergencyApiKey : input.apiKey?.trim() || null;
+    const baseURL = input.baseURL === undefined ? this.#emergencyBaseUrl : input.baseURL?.trim() || null;
+    const enabled = input.enabled === undefined ? this.#emergencyEnabled : input.enabled;
+    const file = path.join(home, "emergency-provider.json");
+    await mkdir(home, { recursive: true });
+    if (key || baseURL) {
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      await writeFile(temporary, JSON.stringify({
+        ...(key ? { apiKey: key } : {}),
+        ...(baseURL ? { baseURL } : {}),
+        enabled,
+      }, null, 2) + "\n", { mode: 0o600 });
+      await rename(temporary, file);
+    } else {
+      await rm(file, { force: true });
+    }
+    this.#emergencyApiKey = key;
+    this.#emergencyBaseUrl = baseURL;
+    this.#emergencyEnabled = Boolean(enabled && key && baseURL);
+    await this.#syncEmergencyProxy();
+    if (this.#buddy) return this.#buddy.snapshot();
+    return {
+      settings: { enabled: true, planning: true, privateMode: false, role: "auto", bypass: true, jev: true, systemOneModel: "typesafe/jev", plannerModel: null, executorModel: null },
+      models: [], decisions: [],
+      jevKeyConfigured: false, jevBaseUrl: null,
+      emergencyConfigured: Boolean(key), emergencyEnabled: Boolean(this.#emergencyEnabled), emergencyBaseUrl: baseURL,
+    };
+  }
+
+  #injectEmergencyProxyArgs(args: string[]): string[] {
+    if (!this.#emergencyProxy?.endpoint) return args;
+    const endpoint = this.#emergencyProxy.endpoint;
+    const result: string[] = [];
+    let injected = false;
+    for (const arg of args) {
+      if (!injected && arg === "app-server") {
+        result.push("-c", `model_providers.OpenAIProxy.base_url="${endpoint}"`);
+        injected = true;
+      }
+      result.push(arg);
+    }
+    if (!injected) return ["-c", `model_providers.OpenAIProxy.base_url="${endpoint}"`, ...args];
+    return result;
   }
 
   disconnect(): void {
@@ -1573,6 +1682,16 @@ export class AppServerHost {
         if (request.method === BUDDY_SETTINGS_METHOD && snapshot.settings.privateMode) {
           this.#modelAvailability.close();
         }
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+      }
+      return;
+    }
+    if (request.method === EMERGENCY_PROVIDER_METHOD) {
+      try {
+        const parsed = emergencyProviderConfigSchema.parse(request.params);
+        const snapshot = await this.#configureEmergencyProvider(parsed);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32602, errorMessage(error)));

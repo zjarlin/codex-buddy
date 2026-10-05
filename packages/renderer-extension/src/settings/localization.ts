@@ -289,6 +289,12 @@ export interface RendererSettingsMessages {
     failure: string;
   };
   readonly pageLabels: Readonly<Record<DefaultRendererSettingsPageId, string>>;
+  readonly emergencyProvider?: {
+    description: string; warning: string; baseUrlLabel: string; baseUrlHint: string;
+    apiKeyLabel: string; apiKeyHint: string; apiKeyPlaceholder: string; enabledLabel: string;
+    save: string; clear: string; saved: string; statusNotConfigured: string;
+    statusConfigured: string; statusEnabled: string; statusDisabled: string; unavailable: string;
+  };
 }
 
 const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
@@ -606,6 +612,18 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     "session-import": "Session Import",
     updates: "Updates",
     about: "About",
+    "emergency-provider": "Emergency Provider",
+  }),
+  emergencyProvider: Object.freeze({
+    description: "When the primary upstream is unreachable, Codex automatically routes inference through this emergency provider. The API key is stored locally and never sent to the browser.",
+    warning: "⚠️ During failover, conversation content is sent to the emergency upstream. The proxy runs locally and does not persist data.",
+    baseUrlLabel: "Base URL", baseUrlHint: "e.g. https://sub2api.shrimpman.top",
+    apiKeyLabel: "API Key", apiKeyHint: "Stored on this Host only; never returned to the UI",
+    apiKeyPlaceholder: "Paste API key", enabledLabel: "Enable automatic failover",
+    save: "Save", clear: "Clear", saved: "Saved",
+    statusNotConfigured: "Not configured", statusConfigured: "Configured",
+    statusEnabled: "failover active", statusDisabled: "failover disabled",
+    unavailable: "Host is unavailable",
   }),
 });
 
@@ -910,6 +928,18 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     "session-import": "会话导入",
     updates: "更新",
     about: "关于",
+    "emergency-provider": "应急供应商",
+  }),
+  emergencyProvider: Object.freeze({
+    description: "当主上游不可达时，Codex 自动将推理请求路由到此应急供应商。API 密钥仅保存在本机，不会回传到界面。",
+    warning: "⚠️ 故障转移期间，对话内容会发送到应急上游。代理在本机运行，不持久化数据。",
+    baseUrlLabel: "网关地址", baseUrlHint: "例如 https://sub2api.shrimpman.top",
+    apiKeyLabel: "API 密钥", apiKeyHint: "仅保存在本机 Host，不回传浏览器",
+    apiKeyPlaceholder: "粘贴 API 密钥", enabledLabel: "启用自动故障转移",
+    save: "保存", clear: "清除", saved: "已保存",
+    statusNotConfigured: "未配置", statusConfigured: "已配置",
+    statusEnabled: "故障转移已启用", statusDisabled: "故障转移已禁用",
+    unavailable: "Host 不可用",
   }),
 });
 

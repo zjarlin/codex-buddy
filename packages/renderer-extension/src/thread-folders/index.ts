@@ -29,6 +29,8 @@ const BAR_ATTRIBUTE = "data-codexhost-thread-folders";
 const MANAGE_ATTRIBUTE = "data-codexhost-thread-folder-manage";
 const MOVE_ATTRIBUTE = "data-codexhost-thread-folder-move";
 const HIDDEN_ATTRIBUTE = "data-codexhost-thread-folder-hidden";
+const NATIVE_AUGMENTED_ATTRIBUTE = "data-codexhost-thread-folder-native-augmented";
+const CUSTOM_MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id][data-sidebar-project-kind]";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
@@ -384,6 +386,127 @@ export function installThreadFolders(options: {
     },
   };
 
+  // ── Native context menu augmentation ──────────────────────────────
+  // Append "移动到文件夹" to the native Codex Desktop right-click menu.
+  // We capture which thread row was right-clicked, then observe for the
+  // native menu element appearing in the DOM and append our item.
+  let pendingNativeRow: HTMLElement | null = null;
+  let nativeMenuObserver: MutationObserver | null = null;
+  let nativeMenuTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const cleanupNativeWatch = (): void => {
+    if (nativeMenuObserver) {
+      nativeMenuObserver.disconnect();
+      nativeMenuObserver = null;
+    }
+    if (nativeMenuTimer !== null) {
+      clearTimeout(nativeMenuTimer);
+      nativeMenuTimer = null;
+    }
+    pendingNativeRow = null;
+  };
+
+  const findNativeMenu = (): HTMLElement | null => {
+    // Native Codex menus are typically [role="menu"] portals rendered outside
+    // the sidebar. Skip our own custom thread-actions menu.
+    const candidates = document.querySelectorAll<HTMLElement>('[role="menu"]');
+    for (const candidate of candidates) {
+      if (candidate.hasAttribute(NATIVE_AUGMENTED_ATTRIBUTE)) continue;
+      if (candidate.hasAttribute(CUSTOM_MENU_ATTRIBUTE)) continue;
+      if (candidate.querySelector('[role="menuitem"]')) return candidate;
+    }
+    return null;
+  };
+
+  const augmentNativeMenu = (menu: HTMLElement, row: HTMLElement): void => {
+    const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
+    if (!hostId) return;
+    const folderThreadId = nativeThreadId(hostId, row);
+    const client = persistenceClient();
+    if (!folderThreadId || !client) return;
+    const project = projectForRow(row);
+    if (!project) return;
+
+    menu.setAttribute(NATIVE_AUGMENTED_ATTRIBUTE, "");
+    const m = threadFolderMessages(options.getLocale());
+
+    // Separator
+    const separator = document.createElement("div");
+    separator.setAttribute("role", "separator");
+    separator.style.cssText =
+      "height:1px;margin:4px 8px;background:color-mix(in srgb,currentColor 12%,transparent);";
+    menu.append(separator);
+
+    const item = document.createElement("button");
+    item.type = "button";
+    item.setAttribute("role", "menuitem");
+    item.setAttribute(MOVE_ATTRIBUTE, "");
+    item.title = m.move;
+    item.setAttribute("aria-label", m.move);
+    // Match typical native menu item styling; inherits font/color from menu
+    item.style.cssText =
+      "display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:5px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;";
+    item.addEventListener("mouseenter", () => {
+      item.style.background = "color-mix(in srgb,currentColor 12%,transparent)";
+    });
+    item.addEventListener("mouseleave", () => {
+      item.style.background = "transparent";
+    });
+
+    const icon = document.createElement("span");
+    icon.style.display = "inline-flex";
+    icon.style.alignItems = "center";
+    icon.append(createElement(Folder, { width: 15, height: 15, "aria-hidden": "true" }));
+    const text = document.createElement("span");
+    text.textContent = m.move;
+    item.append(icon, text);
+
+    item.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      // Dismiss the native menu
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+      chooseFolder(project, projectKey(project), folderThreadId);
+    });
+
+    menu.append(item);
+  };
+
+  const watchForNativeMenu = (): void => {
+    if (!pendingNativeRow) return;
+    const immediate = findNativeMenu();
+    if (immediate) {
+      augmentNativeMenu(immediate, pendingNativeRow);
+      cleanupNativeWatch();
+      return;
+    }
+    nativeMenuObserver = new MutationObserver(() => {
+      const menu = findNativeMenu();
+      if (menu && pendingNativeRow) {
+        augmentNativeMenu(menu, pendingNativeRow);
+        cleanupNativeWatch();
+      }
+    });
+    nativeMenuObserver.observe(document.body, { childList: true, subtree: true });
+    nativeMenuTimer = setTimeout(cleanupNativeWatch, 600);
+  };
+
+  const onSidebarContextMenu = (event: MouseEvent): void => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) return;
+    const row = target.closest<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR);
+    if (!row) return;
+    // Don't interfere with our own custom three-dot menu
+    if (target.closest(`[${CUSTOM_MENU_ATTRIBUTE}]`)) return;
+    pendingNativeRow = row;
+    requestAnimationFrame(watchForNativeMenu);
+  };
+
+  const sidebarEl = document.querySelector<HTMLElement>(SIDEBAR_SCOPE);
+  sidebarEl?.addEventListener("contextmenu", onSidebarContextMenu, { capture: true });
+
   const renderBar = (project: SidebarProject, entry: ProjectBarEntry): void => {
     const key = projectKey(project);
     const state = threadFolderProject(config, key);
@@ -571,6 +694,8 @@ export function installThreadFolders(options: {
     dispose() {
       disposed = true;
       stopObserving();
+      cleanupNativeWatch();
+      sidebarEl?.removeEventListener("contextmenu", onSidebarContextMenu, { capture: true });
       window.removeEventListener("storage", onStorage);
       dialog?.close();
       for (const entry of bars.values()) entry.bar.remove();

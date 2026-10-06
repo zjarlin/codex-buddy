@@ -73,16 +73,20 @@ for (const width of [390, 1200]) {
     const root = page.locator("[data-buddy-router]");
     await expect(root.locator("summary")).toContainText("当前连接不支持 Auto Router");
     await root.locator("summary").click();
-    await expect(root.getByRole("tab")).toHaveCount(3);
+    await expect(root.getByRole("tab")).toHaveCount(2);
     await expect(
       root.getByRole("status").filter({ hasText: "SSH 会话需在远端启用" }),
     ).toBeVisible();
-    await expect(root.locator(".buddy-interrupted")).toBeHidden();
-    await root.getByRole("tab", { name: "中断会话" }).click();
-    await expect(root.getByText("待恢复的远程会话")).toBeVisible();
+    await expect(page.locator("[data-buddy-recovery] .buddy-interrupted")).toBeVisible();
+    await expect(page.locator("[data-buddy-recovery]").getByText("待恢复的远程会话")).toBeVisible();
     await page.screenshot({ path: `test-results/buddy-connection-recovery-${width}.png` });
-    await root.getByRole("button", { name: "恢复", exact: true }).click();
-    await expect(root.getByText("暂无最近中断会话。")).toBeVisible();
+    await page
+      .locator("[data-buddy-recovery]")
+      .getByRole("button", { name: "恢复", exact: true })
+      .click();
+    await expect(
+      page.locator("[data-buddy-recovery]").getByText("暂无最近中断会话。"),
+    ).toBeVisible();
     expect(await page.evaluate(() => Reflect.get(globalThis, "requests"))).toContainEqual([
       "codexhost/buddy/continue",
       { threadId: "stalled", turnId: "failed" },
@@ -104,8 +108,7 @@ test("a native connection explains missing capabilities and rechecks a replaceme
   await page.addScriptTag({ content: browserBundle });
   const root = page.locator("[data-buddy-router]");
   await root.locator("summary").click();
-  await root.getByRole("tab", { name: "中断会话" }).click();
-  const recovery = root.locator(".buddy-interrupted");
+  const recovery = page.locator("[data-buddy-recovery] .buddy-interrupted");
   await expect(recovery).toContainText("当前连接不支持会话恢复。");
   await expect(recovery).toContainText("SSH 会话需在远端启用后重新连接。");
   await expect(recovery.getByRole("button")).toHaveCount(0);
@@ -143,16 +146,21 @@ test("transient status failure clears stale controls and recovers on the same co
   });
   await expect(root.getByRole("alert").filter({ hasText: "暂时无法连接" })).toBeVisible();
   await expect(root.getByRole("switch")).toHaveCount(0);
-  await root.getByRole("tab", { name: "中断会话" }).click();
-  await expect(root.locator(".buddy-interrupted").getByRole("button")).toHaveCount(0);
-  await expect(root.locator(".buddy-interrupted")).toContainText("连接状态尚未确认");
-  await expect(root.locator(".buddy-interrupted")).not.toContainText("当前连接不支持");
+  await expect(
+    page.locator("[data-buddy-recovery] .buddy-interrupted").getByRole("button"),
+  ).toHaveCount(0);
+  await expect(page.locator("[data-buddy-recovery] .buddy-interrupted")).toContainText(
+    "连接状态尚未确认",
+  );
+  await expect(page.locator("[data-buddy-recovery] .buddy-interrupted")).not.toContainText(
+    "当前连接不支持",
+  );
   await expect(root).not.toContainText("当前连接未提供 Auto Router");
   await page.evaluate(async () => {
     Reflect.set(globalThis, "failures", {});
     await Reflect.get(globalThis, "control").refresh();
   });
-  await expect(root.getByText("待恢复的远程会话")).toBeVisible();
+  await expect(page.locator("[data-buddy-recovery]").getByText("待恢复的远程会话")).toBeVisible();
   await expect(root.getByText("暂时无法连接")).toHaveCount(0);
 });
 
@@ -164,10 +172,16 @@ test("a missing continue method stops the batch and removes recovery actions", a
   await page.addScriptTag({ content: browserBundle });
   const root = page.locator("[data-buddy-router]");
   await root.locator("summary").click();
-  await root.getByRole("tab", { name: "中断会话" }).click();
-  await root.getByRole("button", { name: "全部继续 (1)", exact: true }).click();
-  await expect(root.locator(".buddy-interrupted")).toContainText("当前连接不支持会话恢复。");
-  await expect(root.locator(".buddy-interrupted").getByRole("button")).toHaveCount(0);
+  await page
+    .locator("[data-buddy-recovery]")
+    .getByRole("button", { name: "全部继续 (1)", exact: true })
+    .click();
+  await expect(page.locator("[data-buddy-recovery] .buddy-interrupted")).toContainText(
+    "当前连接不支持会话恢复。",
+  );
+  await expect(
+    page.locator("[data-buddy-recovery] .buddy-interrupted").getByRole("button"),
+  ).toHaveCount(0);
 });
 
 for (const action of ["settings", "save-key", "clear-key"] as const) {

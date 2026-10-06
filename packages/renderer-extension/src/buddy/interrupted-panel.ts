@@ -79,8 +79,7 @@ function session(client: RendererModelClient | null) {
 export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   const chinese = () => getLocale() === "zh-CN";
   const root = document.createElement("div");
-  root.className = "buddy-tab-panel";
-  root.dataset.buddyTabPanel = "interrupted";
+  root.className = "buddy-recovery-panel";
   let state = session(null);
   let privateMode = false;
   let disposed = false;

@@ -26,7 +26,6 @@ const messages = {
     routeGroup: "路由策略",
     modelGroup: "规划与执行模型",
     routingTab: "路由",
-    interruptedTab: "中断会话",
     taskTab: "任务详情",
     enabledHint: "接管普通请求；关闭后使用当前选定模型直接执行",
     privateHint: "只使用离线 q3 模型，优先于普通路由",
@@ -123,7 +122,6 @@ const messages = {
     routeGroup: "Routing",
     modelGroup: "Planning and execution models",
     routingTab: "Routing",
-    interruptedTab: "Interrupted",
     taskTab: "Task details",
     enabledHint: "Take over ordinary requests; off uses the selected model directly",
     privateHint: "Use offline q3 models and take priority over normal routing",
@@ -242,7 +240,7 @@ const style = `
 [data-buddy-router] .buddy-interrupted{grid-column:1/-1;display:flex;flex-direction:column;gap:5px;margin:5px 0}
 [data-buddy-router] .buddy-interrupted-heading{font-size:11px;font-weight:500}
 [data-buddy-router] .buddy-interrupted-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-[data-buddy-router] .buddy-interrupted-toolbar b{flex:1;min-width:0}
+[data-buddy-router] .buddy-interrupted-toolbar b{flex:1 0 auto;white-space:nowrap}
 [data-buddy-router] .buddy-interrupted-toolbar button{border-radius:6px}
 [data-buddy-router] .buddy-interrupted-toolbar [data-buddy-resume-all]{font-weight:600;border-color:color-mix(in srgb,#508df2 65%,currentColor);background:color-mix(in srgb,#508df2 12%,transparent)}
 [data-buddy-router] .buddy-interrupted-model-resume{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
@@ -294,7 +292,10 @@ export function installBuddyControl(
   const root = document.createElement("details");
   root.dataset.buddyRouter = "";
   const styles = document.createElement("style");
-  styles.textContent = style;
+  styles.textContent = style.replaceAll(
+    "[data-buddy-router]",
+    ":is([data-buddy-router],[data-buddy-recovery])",
+  );
   const summary = document.createElement("summary");
   const title = document.createElement("b");
   title.textContent = "Auto Router";
@@ -339,8 +340,11 @@ export function installBuddyControl(
   let modelHarnessId = "";
   routingPanel.append(controls, routingFields);
   taskPanel.append(inputArea, taskEmpty, fields, error, note, footer);
-  panel.append(tabs, connectionNotice, routingPanel, interruptedPanel, taskPanel);
+  panel.append(tabs, connectionNotice, routingPanel, taskPanel);
   root.append(styles, summary, panel);
+  const recovery = document.createElement("section");
+  recovery.dataset.buddyRecovery = "";
+  recovery.append(interruptedPanel);
   let disposed = false;
   let busy = false;
   let snapshot: BuddySnapshot | null = null;
@@ -348,7 +352,7 @@ export function installBuddyControl(
   let connectionEpoch = 0;
   let context: BuddyControlContext | null = null;
   let fingerprint = "";
-  let activeTab: "routing" | "interrupted" | "task" = "routing";
+  let activeTab: "routing" | "task" = "routing";
   const t = () => messages[getLocale()];
   const report = (failure: unknown): void => {
     error.textContent = failure instanceof Error ? failure.message : String(failure);
@@ -390,7 +394,6 @@ export function installBuddyControl(
     const m = t();
     const tabsConfig = [
       ["routing", m.routingTab],
-      ["interrupted", m.interruptedTab],
       ["task", m.taskTab],
     ] as const;
     if (tabs.childElementCount !== tabsConfig.length) {
@@ -421,7 +424,6 @@ export function installBuddyControl(
       tab.tabIndex = selected ? 0 : -1;
     }
     routingPanel.hidden = activeTab !== "routing";
-    interruptedPanel.hidden = activeTab !== "interrupted";
     taskPanel.hidden = activeTab !== "task";
   };
   const switchRow = (
@@ -853,11 +855,19 @@ export function installBuddyControl(
     if (!snapshot) render();
     poll.setActive(Boolean(next));
     if (!next) {
+      recovery.remove();
       root.remove();
       return;
     }
     if (root.parentElement !== next.anchor.parentElement) {
       next.anchor.before(root);
+    }
+    const shortcuts = Array.from(next.anchor.parentElement?.children ?? []).find((element) =>
+      element.hasAttribute("data-codexhost-model-shortcuts"),
+    );
+    const recoveryAnchor = shortcuts ?? root;
+    if (recovery.nextElementSibling !== recoveryAnchor) {
+      recoveryAnchor.before(recovery);
     }
   };
   const refresh = async (): Promise<void> => {
@@ -909,6 +919,7 @@ export function installBuddyControl(
       disposed = true;
       poll.dispose();
       interruptedControl.dispose();
+      recovery.remove();
       root.remove();
     },
   };

@@ -76,7 +76,10 @@ const { outputFiles } = await build({
       globalThis.buddyClient = client;
       globalThis.buddySnapshot = snapshot;
       const anchor = document.createElement("div");
-      document.body.replaceChildren(anchor);
+      const favorites = document.createElement("div");
+      favorites.dataset.codexhostModelShortcuts = "";
+      favorites.textContent = "收藏模型";
+      document.body.replaceChildren(favorites, anchor);
       globalThis.buddyControl = installBuddyControl(
         () => globalThis.buddyContextEnabled ? { anchor, threadId: globalThis.buddyThreadId, client: globalThis.buddyClient } : null,
         () => "zh-CN"
@@ -97,6 +100,30 @@ const { outputFiles } = await build({
 const browserBundle = outputFiles[0]?.text;
 if (!browserBundle) throw new Error("Buddy router panel bundle was not generated");
 
+for (const width of [390, 1200]) {
+  test(`recovery stays expanded above favorite models at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.setContent('<body style="font:14px system-ui"></body>');
+    await page.addScriptTag({ content: browserBundle });
+    const recovery = page.locator("[data-buddy-recovery]");
+    const router = page.locator("[data-buddy-router]");
+    await expect(router).not.toHaveAttribute("open");
+    await expect(recovery.getByRole("button", { name: "恢复", exact: true })).toBeVisible();
+    await expect(
+      page.locator("[data-buddy-recovery] + [data-codexhost-model-shortcuts]"),
+    ).toHaveCount(1);
+    await expect(recovery.locator("details, [role=tab]")).toHaveCount(0);
+    await router.locator("summary").click();
+    await page.getByRole("tab", { name: "任务详情" }).click();
+    await router.locator("summary").click();
+    await expect(recovery.getByRole("button", { name: "恢复", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    await page.screenshot({ path: `test-results/buddy-recovery-expanded-${width}.png` });
+  });
+}
+
 test("lists recently interrupted conversations and resumes them from the panel", async ({
   page,
 }) => {
@@ -106,9 +133,8 @@ test("lists recently interrupted conversations and resumes them from the panel",
   );
   await page.addScriptTag({ content: browserBundle });
   await page.locator("[data-buddy-router] summary").click();
-  await page.getByRole("tab", { name: "中断会话" }).click();
-  const group = page.locator("[data-buddy-router] .buddy-interrupted");
-  await expect(page.locator("[data-buddy-router]")).toContainText("最近中断会话");
+  const group = page.locator("[data-buddy-recovery] .buddy-interrupted");
+  await expect(page.locator("[data-buddy-recovery]")).toContainText("最近中断会话");
   await expect(group).toContainText("网络中断的会话");
   await expect(group).toContainText("已中断");
   await group.getByRole("button", { name: "恢复" }).click();
@@ -125,11 +151,9 @@ test("lists recently interrupted conversations and resumes them from the panel",
   ]);
   await page.getByRole("tab", { name: "路由" }).click();
   await page.getByRole("switch", { name: /Auto Router/ }).click();
-  await page.getByRole("tab", { name: "中断会话" }).click();
   await expect(group).toContainText("暂无最近中断会话。");
   await page.getByRole("tab", { name: "路由" }).click();
   await page.getByRole("switch", { name: /隐私/ }).click();
-  await page.getByRole("tab", { name: "中断会话" }).click();
   await expect(group).toContainText("隐私模式下不能续接普通会话。");
   await expect(group.getByRole("button")).toHaveCount(0);
 });
@@ -163,7 +187,6 @@ for (const width of [390, 1200]) {
         }
       };
     });
-    await page.getByRole("tab", { name: "中断会话" }).click();
     const group = page.locator(".buddy-interrupted");
     await group.getByRole("button", { name: "刷新中断会话" }).click();
     await expect(group.locator(".buddy-interrupted-item")).toHaveCount(3);
@@ -209,7 +232,6 @@ test("interrupted refresh preserves known rows on failure and reports unreadable
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });
   await page.locator("[data-buddy-router] summary").click();
-  await page.getByRole("tab", { name: "中断会话" }).click();
   const group = page.locator(".buddy-interrupted");
   await expect(group).toContainText("网络中断的会话");
   await page.evaluate(() => {
@@ -260,7 +282,6 @@ for (const stop of ["private", "host", "dispose"] as const) {
     await page.setContent("<body></body>");
     await page.addScriptTag({ content: browserBundle });
     await page.locator("[data-buddy-router] summary").click();
-    await page.getByRole("tab", { name: "中断会话" }).click();
     await page.evaluate(() => {
       const first = Reflect.get(globalThis, "buddyInterrupted")[0];
       Reflect.get(globalThis, "buddyInterrupted").push({

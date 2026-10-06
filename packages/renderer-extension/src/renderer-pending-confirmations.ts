@@ -2,6 +2,7 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import Archive from "lucide/dist/esm/icons/archive.mjs";
 import Check from "lucide/dist/esm/icons/check.mjs";
 import Eye from "lucide/dist/esm/icons/eye.mjs";
+import Send from "lucide/dist/esm/icons/send.mjs";
 import X from "lucide/dist/esm/icons/x.mjs";
 
 import { hostThreadIdSchema, type HostThreadId } from "@codexhost/shared-contracts";
@@ -79,6 +80,9 @@ function messages(locale: Locale) {
         read: "标为已读",
         archive: "归档",
         close: "关闭",
+        placeholder: "输入续发内容…",
+        send: "发送",
+        sendFailed: "发送失败，请重试。",
         archiveFailed: "归档失败，已保留待确认状态。",
         openFailed: "无法打开该会话，请从侧栏重试。",
         unnamed: "未命名会话",
@@ -94,6 +98,9 @@ function messages(locale: Locale) {
         read: "Mark read",
         archive: "Archive",
         close: "Close",
+        placeholder: "Type a follow-up message…",
+        send: "Send",
+        sendFailed: "Could not send. Try again.",
         archiveFailed: "Archive failed. The confirmation was kept.",
         openFailed: "Could not open the conversation. Retry from the sidebar.",
         unnamed: "Untitled conversation",
@@ -200,12 +207,18 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const read = document.createElement("button");
   const archive = document.createElement("button");
   const close = document.createElement("button");
+  const composer = document.createElement("div");
+  const input = document.createElement("textarea");
+  const send = document.createElement("button");
   const notice = document.createElement("p");
   let disposed = false;
   let renderedKey = "";
   let expanded = true;
   let visibleEntry: PendingConfirmationRecord | null = null;
   let dismissedEntryKey: string | null = null;
+  let sending = false;
+  let noticeMessage = "";
+  let inputEntryKey = "";
   const silentEntries = new Set<string>();
   let reading: { hostId: string; threadId: string; turnId: string; since: number } | null = null;
   let readTimer: number | null = null;
@@ -240,6 +253,11 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-summary a:hover{text-decoration:underline}
 [${MODAL}] .codexhost-pending-summary hr{border:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);margin:8px 0}
 [${MODAL}] .codexhost-pending-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
+[${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;margin-top:12px}
+[${MODAL}] .codexhost-pending-input{flex:1;min-height:36px;max-height:120px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit;resize:vertical}
+[${MODAL}] .codexhost-pending-input:focus-visible{outline:2px solid Highlight;outline-offset:1px}
+[${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:6px 11px;border:1px solid Highlight;border-radius:6px;background:Highlight;color:HighlightText;font:inherit;cursor:pointer}
+[${MODAL}] .codexhost-pending-send:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
 [${MODAL}] .codexhost-pending-actions button[data-primary="true"]{border-color:Highlight;background:Highlight;color:HighlightText}
@@ -261,7 +279,14 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   conversation.className = "codexhost-pending-conversation";
   summary.className = "codexhost-pending-summary";
   time.className = "codexhost-pending-time";
-  body.append(kind, conversation, summary, time);
+  composer.className = "codexhost-pending-composer";
+  input.className = "codexhost-pending-input";
+  input.rows = 2;
+  send.type = "button";
+  send.className = "codexhost-pending-send";
+  send.append(createElement(Send, { width: 15, height: 15, "aria-hidden": "true" }));
+  composer.append(input, send);
+  body.append(kind, conversation, summary, time, composer);
   view.type = read.type = archive.type = "button";
   view.dataset.primary = "true";
   view.append(createElement(Eye, { width: 15, height: 15, "aria-hidden": "true" }));
@@ -312,6 +337,31 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     render();
   };
 
+  const sendMessage = async (entry: PendingConfirmationRecord): Promise<void> => {
+    if (sending) return;
+    const value = input.value.trim();
+    if (!value) return;
+    const client = options.getClient(entry.hostId);
+    if (!client?.sendThreadMessage) {
+      noticeMessage = messages(locale).sendFailed;
+      render();
+      return;
+    }
+    sending = true;
+    noticeMessage = "";
+    render();
+    try {
+      await client.sendThreadMessage(entry.threadId, value);
+      sending = false;
+      input.value = "";
+      await open(entry);
+    } catch {
+      sending = false;
+      noticeMessage = messages(locale).sendFailed;
+      render();
+    }
+  };
+
   const render = (): void => {
     if (disposed) return;
     locale = options.getLocale();
@@ -346,7 +396,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       entry.status,
       entry.summary,
       entries.length,
-      notice.textContent,
+      noticeMessage,
+      sending,
     ].join("\u0000");
     if (key === renderedKey && !modal.hidden) return;
     renderedKey = key;
@@ -364,7 +415,19 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     archive.textContent = copy.archive;
     close.title = copy.close;
     close.setAttribute("aria-label", copy.close);
-    notice.textContent = "";
+    const entryIdentity = entryKey(entry);
+    if (inputEntryKey !== entryIdentity) {
+      inputEntryKey = entryIdentity;
+      input.value = "";
+      noticeMessage = "";
+    }
+    input.placeholder = copy.placeholder;
+    input.disabled = sending;
+    send.textContent = copy.send;
+    send.title = copy.send;
+    send.setAttribute("aria-label", copy.send);
+    send.disabled = sending;
+    notice.textContent = noticeMessage;
     view.disabled = read.disabled = archive.disabled = false;
     modal.hidden = false;
   };
@@ -543,7 +606,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   };
 
   const open = async (entry: PendingConfirmationRecord): Promise<void> => {
-    notice.textContent = "";
+    noticeMessage = "";
     try {
       await (options.openThread ?? openRendererThread)(hostThreadIdSchema.parse(entry.threadId), {
         hostId: entry.hostId,
@@ -553,24 +616,27 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       clearReadTimer();
       render();
     } catch {
-      notice.textContent = messages(locale).openFailed;
+      noticeMessage = messages(locale).openFailed;
+      render();
     }
   };
 
   const archiveEntry = async (entry: PendingConfirmationRecord): Promise<void> => {
     const client = options.getClient(entry.hostId);
     if (!client?.requestThreadProjection) {
-      notice.textContent = messages(locale).archiveFailed;
+      noticeMessage = messages(locale).archiveFailed;
+      render();
       return;
     }
     view.disabled = read.disabled = archive.disabled = true;
-    notice.textContent = "";
+    noticeMessage = "";
     try {
       await client.requestThreadProjection("thread/archive", { threadId: entry.threadId });
       confirm(entry);
     } catch {
-      notice.textContent = messages(locale).archiveFailed;
+      noticeMessage = messages(locale).archiveFailed;
       view.disabled = read.disabled = archive.disabled = false;
+      render();
     }
   };
 
@@ -635,6 +701,14 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     render();
   });
   close.addEventListener("click", closeModal);
+  send.addEventListener("click", () => {
+    if (visibleEntry) void sendMessage(visibleEntry);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    event.preventDefault();
+    if (visibleEntry) void sendMessage(visibleEntry);
+  });
   view.addEventListener("click", () => {
     if (visibleEntry) void open(visibleEntry);
   });

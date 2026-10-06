@@ -27,6 +27,8 @@ function manager(hostId: string) {
     if (method === "codexhost/harness/inspect") return ready;
     if (method === "codexhost/thread/inspect") return { owner: "codex", locked: true };
     if (method === "codexhost/settings/idle-release/set") return params;
+    if (method === "codexhost/update/status")
+      return { currentVersion: "9.9.9", installation: "macos-dmg", status: null };
     return { threadId: "thread-test", usage: null };
   });
   const requestClient = {
@@ -205,6 +207,20 @@ it.each(["local", remoteId])(
     }
   },
 );
+
+it("routes app updates to the local Host even when a remote Composer is active", async () => {
+  const { adapter, local, remote } = await setup(remoteId);
+  try {
+    expect(adapter.modelControl?.currentHostId?.()).toBe(remoteId);
+    await expect(adapter.modelControl?.readUpdateStatus?.()).resolves.toMatchObject({
+      currentVersion: "9.9.9",
+    });
+    expect(local.nativeSend).toHaveBeenCalledWith("codexhost/update/status", {});
+    expect(remote.nativeSend).not.toHaveBeenCalledWith("codexhost/update/status", {});
+  } finally {
+    adapter.dispose();
+  }
+});
 
 it("retires only a disconnected Host and rejects new requests on its captured client", async () => {
   const { adapter, managers } = await setup(remoteId);

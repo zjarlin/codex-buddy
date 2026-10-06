@@ -942,6 +942,17 @@ export function installCurrentRendererAdapter(): {
     if (!client) throw new Error("Renderer Model request manager is unavailable");
     return client;
   };
+  // 应用更新属于运行 Desktop 的本机，不能被路由到没有更新能力的远端 SSH Host。
+  // 设置页在原生页面（没有 Composer）打开时同样需要一个可用的本机 Host。
+  const appUpdateClientOrNull = (): RendererModelClient | null => {
+    if (disposed) return null;
+    return clients.forHost("local") ?? clients.forRoute(currentRequestRoute());
+  };
+  const appUpdateClient = (): RendererModelClient => {
+    const client = appUpdateClientOrNull();
+    if (!client) throw new Error("Renderer Model request manager is unavailable");
+    return client;
+  };
   const modelControl: RendererModelClient = Object.freeze({
     listGitRepositories: (
       input: Parameters<NonNullable<RendererModelClient["listGitRepositories"]>>[0],
@@ -1141,9 +1152,9 @@ export function installCurrentRendererAdapter(): {
       currentModelClient().selectThreadThinking(input),
     selectThreadPermissionMode: (input: ThreadPermissionModeSelectParams) =>
       currentModelClient().selectThreadPermissionMode(input),
-    checkUpdate: () => currentModelClient().checkUpdate(),
-    startUpdate: () => currentModelClient().startUpdate(),
-    readUpdateStatus: () => currentModelClient().readUpdateStatus(),
+    checkUpdate: () => appUpdateClient().checkUpdate(),
+    startUpdate: () => appUpdateClient().startUpdate(),
+    readUpdateStatus: () => appUpdateClient().readUpdateStatus(),
     inspectCodexAccountUsage: (
       input: Parameters<NonNullable<RendererModelClient["inspectCodexAccountUsage"]>>[0],
     ) => {

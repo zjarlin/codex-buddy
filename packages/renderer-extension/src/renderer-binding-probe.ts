@@ -958,7 +958,8 @@ export function installRendererBindingProbe(
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
-    getUpdateClient: () => modelControl,
+    // 更新页读取本机安装版本；Composer 指向远端 SSH Host 时不能把本机版本请求路由过去。
+    getUpdateClient: () => modelClientForHost("local"),
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getBuddyClient: () => modelControl,
@@ -2825,8 +2826,8 @@ export function installRendererBindingProbe(
         if (!isCurrent()) return undefined;
         summary = { synchronized: mounted.modelView.catalog?.models.length ?? 0 };
       }
-      if (!isCurrent() || !summary) return undefined;
-      if (reportToPicker || agent !== "codex") {
+      if (!isCurrent()) return undefined;
+      if (summary && (reportToPicker || agent !== "codex")) {
         mounted.shortcutRefreshReport = { before, summary };
       }
       renderMounted(mounted);

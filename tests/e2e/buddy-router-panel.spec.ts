@@ -32,6 +32,7 @@ const { outputFiles } = await build({
         { threadId: "stalled", turnId: "interrupted-turn", title: "网络中断的会话", status: "interrupted", owner: "codex" }
       ];
       globalThis.buddyContinueCalls = [];
+      globalThis.buddyInterruptedReads = 0;
       globalThis.buddyContinueFailure = true;
       const client = {
         buddyStatus: async () => {
@@ -58,7 +59,10 @@ const { outputFiles } = await build({
           snapshot.decisions[0].pendingInput = null;
           return structuredClone(snapshot);
         },
-        buddyInterrupted: async () => ({ threads: structuredClone(globalThis.buddyInterrupted), runningThreadIds: [], unreadable: 0 }),
+        buddyInterrupted: async () => {
+          globalThis.buddyInterruptedReads += 1;
+          return { threads: structuredClone(globalThis.buddyInterrupted), runningThreadIds: [], unreadable: 0 };
+        },
         buddyContinue: async (threadId, turnId) => {
           globalThis.buddyContinueCalls.push([threadId, turnId]);
           if (globalThis.buddyContinueFailure) throw new Error("网络不可用");
@@ -123,6 +127,24 @@ for (const width of [390, 1200]) {
     await page.screenshot({ path: `test-results/buddy-recovery-expanded-${width}.png` });
   });
 }
+
+test("interrupted list reads once per connection and then only on demand", async ({ page }) => {
+  await page.clock.install();
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  const group = page.locator("[data-buddy-recovery] .buddy-interrupted");
+  await expect(group).toContainText("网络中断的会话");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyInterruptedReads"))).toBe(1);
+  // 后台轮询不再触发中断列表读取。
+  await page.clock.runFor(60_000);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyInterruptedReads"))).toBe(1);
+  // 手动刷新仍然读取一次。
+  await group.getByRole("button", { name: "刷新中断会话" }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "buddyInterruptedReads")))
+    .toBe(2);
+  await expect(group).toContainText("网络中断的会话");
+});
 
 test("lists recently interrupted conversations and resumes them from the panel", async ({
   page,

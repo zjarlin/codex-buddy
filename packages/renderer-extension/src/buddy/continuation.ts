@@ -5,7 +5,6 @@ import type { RendererModelClient } from "../renderer-model-client.js";
 import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
-import { createVisiblePoll } from "../renderer-visible-poll.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ID_ATTRIBUTE,
@@ -207,7 +206,8 @@ export function installSidebarContinuation(options: {
         };
         hosts.set(hostId, state);
       }
-      if (!state.pending && Date.now() - state.updatedAt >= 15_000) void load(hostId, state);
+      // 只在从未读取或显式 refresh() 后读取一次；DOM 变化仅重绑行，不再定时轮询。
+      if (!state.pending && state.updatedAt === 0) void load(hostId, state);
       const thread = state.threads.get(threadId);
       const running = state.runningThreadIds.has(threadId);
       decorate(row, running, thread);
@@ -279,7 +279,6 @@ export function installSidebarContinuation(options: {
     for (const hostId of hosts.keys()) {
       if (!visibleHosts.has(hostId)) hosts.delete(hostId);
     }
-    poll.setActive(hosts.size > 0);
   }
   const refresh = () => {
     for (const state of hosts.values()) state.updatedAt = 0;
@@ -291,10 +290,8 @@ export function installSidebarContinuation(options: {
     test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
     onMutate: () => schedule(),
   });
-  // DOM 变化负责重绑行；状态只按原有 15 秒有效期刷新，不再每 1.5 秒全量扫描。
-  const poll = createVisiblePoll(document, 15_000, () => {
-    for (const [hostId, state] of hosts) void load(hostId, state);
-  });
+  // 中断发现的读取完全由事件驱动：连接绑定后读取一次，切换 Host 时通过 refresh()
+  // 重新读取，窗口重新聚焦时刷新；不再运行后台定时轮询。
   window.addEventListener("focus", refresh);
   schedule();
   return {
@@ -302,7 +299,6 @@ export function installSidebarContinuation(options: {
     dispose() {
       disposed = true;
       stopObserving();
-      poll.dispose();
       window.removeEventListener("focus", refresh);
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
         clearRow(row);

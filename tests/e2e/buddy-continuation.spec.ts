@@ -288,6 +288,23 @@ for (const statusMode of ["unsupported", "missing"]) {
   });
 }
 
+test("sidebar discovery runs once per connection without background polling", async ({ page }) => {
+  await page.clock.install();
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
+  const discoveries = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
+  expect(discoveries).toBe(1);
+  // 不再有定时轮询：长时间静置不产生新的中断列表读取。
+  await page.clock.runFor(60_000);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
+  // 切换 Host 触发的 refresh() 仍会重新读取一次。
+  await page.evaluate(() => Reflect.get(globalThis, "sidebar").refresh());
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "interruptedCalls")))
+    .toBe(discoveries + 1);
+});
+
 test("sidebar recovery disables an existing resume action after a router status error", async ({
   page,
 }) => {

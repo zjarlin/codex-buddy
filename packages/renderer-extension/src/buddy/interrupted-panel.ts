@@ -67,7 +67,7 @@ function session(client: RendererModelClient | null) {
     failures: new Map<string, string>(),
     loading: false,
     batch: false,
-    updatedAt: 0,
+    loaded: false,
     unreadable: 0,
     unavailable: false,
     error: "",
@@ -90,20 +90,13 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   const canResume = (target: typeof state) =>
     current(target) && !privateMode && !target.unavailable;
 
-  async function refresh(force = false): Promise<void> {
+  // 中断列表只在首次绑定连接或用户手动刷新时读取，不再后台轮询。
+  async function refresh(): Promise<void> {
     const target = state;
-    if (
-      document.hidden ||
-      !canResume(target) ||
-      !target.client?.buddyInterrupted ||
-      target.loading ||
-      target.batch ||
-      (!force && Date.now() - target.updatedAt < 15_000)
-    ) {
+    if (!canResume(target) || !target.client?.buddyInterrupted || target.loading || target.batch) {
       return;
     }
     target.loading = true;
-    target.updatedAt = Date.now();
     target.error = "";
     render();
     try {
@@ -227,7 +220,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     reload.append(createElement(RefreshCw, { width: 14, height: 14, "aria-hidden": "true" }));
     reload.disabled = state.loading || state.batch;
     reload.addEventListener("click", () => {
-      void refresh(true);
+      void refresh();
     });
     const all = document.createElement("button");
     all.type = "button";
@@ -362,11 +355,17 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       if (privacy !== privateMode) {
         privateMode = privacy;
         epoch += 1;
+        // 退出隐私模式后重新读取一次，避免保留过期列表。
+        state.loaded = false;
       }
       if (modelView !== undefined) state.modelView = modelView;
       if (harnessId !== undefined) state.harnessId = harnessId;
       render();
-      void refresh();
+      // 首次绑定连接时读取一次；之后仅依赖手动刷新，不再后台轮询。
+      if (!state.loaded && canResume(state) && state.client?.buddyInterrupted) {
+        state.loaded = true;
+        void refresh();
+      }
     },
     refresh,
     dispose() {

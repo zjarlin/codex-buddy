@@ -62,7 +62,7 @@ function rendererUserAgentData(navigator: Navigator): RendererUserAgentData | un
   return (navigator as Navigator & { userAgentData?: RendererUserAgentData }).userAgentData;
 }
 
-function isWindowsRenderer(window: Window | null | undefined): boolean {
+export function isWindowsRenderer(window: Window | null | undefined): boolean {
   const navigator = window?.navigator;
   if (!navigator) return false;
   const identity = `${rendererUserAgentData(navigator)?.platform ?? ""} ${navigator.platform ?? ""} ${navigator.userAgent}`;
@@ -93,7 +93,9 @@ export type DefaultRendererSettingsPageId = (typeof DEFAULT_RENDERER_SETTINGS_PA
 export interface RendererUpdateClient {
   checkUpdate(): Promise<UpdateCheckResult>;
   startUpdate(): Promise<UpdateStartResult>;
+  restartUpdate?(): Promise<UpdateStartResult>;
   readUpdateStatus(): Promise<UpdateStatusResult>;
+  subscribeUpdateStatus?(listener: (result: UpdateStatusResult) => void): () => void;
 }
 
 export type { ProjectSyncClient } from "./project-sync-page.js";
@@ -135,14 +137,15 @@ function installationLabel(
 }
 
 function isPendingStatus(status: UpdateStatus | null): boolean {
-  return status !== null && status.phase !== "succeeded" && status.phase !== "failed";
+  return status !== null && !["succeeded", "failed", "ready-to-restart"].includes(status.phase);
 }
 
-function statusMessage(
+export function statusMessage(
   status: UpdateStatus | null,
   messages: RendererSettingsMessages,
 ): string | null {
   if (!status) return null;
+  if (status.phase === "ready-to-restart") return messages.updateReadyToRestart;
   if (status.phase === "succeeded") return messages.updateSucceeded;
   if (status.phase === "failed") return status.error ?? messages.updateFailed;
   if (status.phase === "waiting-for-exit") return messages.updateWaitingForExit;
@@ -154,7 +157,7 @@ function statusMessage(
   return messages.updatePreparing;
 }
 
-function formatUpdateBytes(value: number): string {
+export function formatUpdateBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   const units = ["KB", "MB", "GB"];
   let scaled = value;
@@ -417,6 +420,7 @@ function updatesPage(
 
       const scheduleStatusPoll = (client: RendererUpdateClient, resetAttempts = false): void => {
         clearPoll();
+        if (client.subscribeUpdateStatus) return;
         if (resetAttempts) pollAttempts = 0;
         if (pollAttempts >= 320) {
           renderPendingStatus(null, messages.updateRequestTimeout, "failed");
@@ -456,23 +460,63 @@ function updatesPage(
         panel.replaceChildren();
         panel.append(createPanelHead(document, viewPhase, message));
         setManualFallback(viewPhase === "failed");
-        if (
-          status?.phase === "downloading" &&
-          status.totalBytes !== undefined &&
-          status.downloadedBytes !== undefined
-        ) {
+        const client = getClient();
+        const restartUpdate = client?.restartUpdate?.bind(client);
+        if (status?.phase === "ready-to-restart" && client && restartUpdate) {
+          const restart = document.createElement("button");
+          restart.type = "button";
+          restart.className = "settings-command-button";
+          restart.append(createRendererSettingsIcon("refresh", 16), messages.updateRestart);
+          restart.addEventListener("click", () => {
+            if (pending) return;
+            pending = true;
+            restart.disabled = true;
+            void context.runLatest(
+              (signal) => runBoundedRendererUpdateRequest(restartUpdate, signal),
+              {
+                success(result) {
+                  pending = false;
+                  renderPendingStatus(
+                    result.status,
+                    statusMessage(result.status, messages) ?? messages.updateRestarting,
+                  );
+                  if (isPendingStatus(result.status)) scheduleStatusPoll(client, true);
+                },
+                failure(error) {
+                  pending = false;
+                  renderPendingStatus(status, messages.updateReadyToRestart);
+                  const detail = document.createElement("p");
+                  detail.className = "settings-update-error";
+                  detail.textContent =
+                    error instanceof Error ? error.message : messages.updateFailed;
+                  panel.append(detail);
+                },
+              },
+            );
+          });
+          panel.append(createPanelActions(document, restart));
+        }
+        if (status?.phase === "failed" && client && !windows) {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.className = "settings-command-button";
+          retry.append(createRendererSettingsIcon("refresh", 16), messages.updateRetry);
+          retry.addEventListener("click", () => start(client));
+          panel.append(createPanelActions(document, retry));
+        }
+        if (status?.phase === "downloading") {
           const progress = document.createElement("progress");
           progress.className = "settings-update-progress";
-          progress.max = status.totalBytes;
-          progress.value = Math.min(status.downloadedBytes, status.totalBytes);
           progress.setAttribute("aria-label", messages.updateDownloading);
           const detail = document.createElement("span");
           detail.className = "settings-update-progress-detail";
-          const percent = Math.min(
-            100,
-            Math.round((status.downloadedBytes / status.totalBytes) * 1000) / 10,
-          );
-          detail.textContent = `${percent}% · ${formatUpdateBytes(status.downloadedBytes)} / ${formatUpdateBytes(status.totalBytes)}`;
+          const downloaded = status.downloadedBytes ?? 0;
+          if (status.totalBytes !== undefined && status.totalBytes > 0) {
+            progress.max = status.totalBytes;
+            progress.value = Math.min(downloaded, status.totalBytes);
+            const percent = Math.min(100, Math.round((downloaded / status.totalBytes) * 1000) / 10);
+            detail.textContent = `${percent}% · ${formatUpdateBytes(downloaded)} / ${formatUpdateBytes(status.totalBytes)}`;
+          } else detail.textContent = formatUpdateBytes(downloaded);
           panel.append(progress, detail);
         }
       };
@@ -526,9 +570,9 @@ function updatesPage(
         }
         if (result.releaseNotesUrl) releaseLink.href = result.releaseNotesUrl;
         const operationMessage = statusMessage(result.status, messages);
-        if (isPendingStatus(result.status)) {
+        if (isPendingStatus(result.status) || result.status?.phase === "ready-to-restart") {
           renderPendingStatus(result.status, operationMessage ?? messages.updatePreparing);
-          scheduleStatusPoll(client, true);
+          if (isPendingStatus(result.status)) scheduleStatusPoll(client, true);
           return;
         }
         const actionableStatus =
@@ -576,7 +620,7 @@ function updatesPage(
           const update = document.createElement("button");
           update.type = "button";
           update.className = "settings-command-button";
-          update.append(createRendererSettingsIcon("updates", 16), messages.updateAndRestart);
+          update.append(createRendererSettingsIcon("download", 16), messages.updateDownload);
           update.addEventListener("click", () => start(client));
           buttons.push(update);
         }
@@ -642,8 +686,18 @@ function updatesPage(
         );
       };
 
+      const unsubscribe = getClient()?.subscribeUpdateStatus?.((result) => {
+        if (context.signal.aborted || !result.status) return;
+        renderPendingStatus(
+          result.status,
+          statusMessage(result.status, messages) ?? messages.updatePreparing,
+        );
+      });
       void load();
-      return clearPoll;
+      return () => {
+        clearPoll();
+        unsubscribe?.();
+      };
     },
   });
 }

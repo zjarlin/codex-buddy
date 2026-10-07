@@ -114,7 +114,10 @@ fn pending_update_at(
     }
     match status.phase.as_str() {
         "prepared" | "waiting-for-exit" => {}
-        "downloading" | "installing" | "restarting" | "succeeded" | "failed" => return Ok(None),
+        "downloading" | "ready-to-restart" | "installing" | "restarting" | "succeeded"
+        | "failed" => {
+            return Ok(None);
+        }
         _ => return Err(invalid("active update status phase is invalid")),
     }
 
@@ -330,11 +333,13 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     use super::STATUS_FILE;
-    use super::{ACTIVE_UPDATE_LOCK_FILE, PendingUpdate, waiting_for_launcher_exit_at};
+    use super::{
+        ACTIVE_UPDATE_LOCK_FILE, PendingUpdate, pending_update_at, waiting_for_launcher_exit_at,
+    };
     #[cfg(target_os = "macos")]
     use super::{
-        atomic_replace_file, pending_startable_update_at, pending_update_at,
-        transfer_lock_to_updater, wait_for_updater_ready,
+        atomic_replace_file, pending_startable_update_at, transfer_lock_to_updater,
+        wait_for_updater_ready,
     };
 
     fn fixture_directory(label: &str) -> PathBuf {
@@ -401,6 +406,38 @@ mod tests {
                 .canonicalize()
                 .expect("canonical request fixture"),
         }
+    }
+
+    #[test]
+    fn downloaded_update_does_not_start_before_restart_confirmation() {
+        let fixture = fixture_directory("downloaded-update");
+        let root = fixture.join("updates");
+        fs::create_dir(&root).expect("create update root");
+        let launcher = fixture.join("codexhost");
+        fs::write(&launcher, b"launcher").expect("write launcher fixture");
+        let pending = write_pending_update(&root, &launcher, 42);
+        fs::write(
+            &pending.status_path,
+            json!({ "schemaVersion": 1, "phase": "ready-to-restart" }).to_string(),
+        )
+        .expect("write ready status");
+        assert!(
+            pending_update_at(&root, 42, &launcher)
+                .expect("inspect ready update")
+                .is_none()
+        );
+        assert!(!waiting_for_launcher_exit_at(&root, 42, &launcher).expect("inspect exit state"));
+        fs::write(
+            &pending.status_path,
+            json!({ "schemaVersion": 1, "phase": "prepared" }).to_string(),
+        )
+        .expect("write confirmed status");
+        assert!(
+            pending_update_at(&root, 42, &launcher)
+                .expect("inspect confirmed update")
+                .is_some()
+        );
+        fs::remove_dir_all(fixture).expect("remove downloaded update fixture");
     }
 
     #[cfg(target_os = "macos")]

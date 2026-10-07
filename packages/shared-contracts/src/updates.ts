@@ -9,6 +9,7 @@ export const updateInstallationSchema = z.enum(["npm", "windows-installer", "mac
 export const updatePhaseSchema = z.enum([
   "prepared",
   "downloading",
+  "ready-to-restart",
   "waiting-for-exit",
   "installing",
   "restarting",

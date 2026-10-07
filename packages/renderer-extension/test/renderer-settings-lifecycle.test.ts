@@ -6,6 +6,13 @@ const triggerRefresh = vi.fn(() => true);
 const triggerSetUpdateAvailable = vi.fn();
 const shellClose = vi.fn();
 
+vi.mock("../src/settings/update-notification.js", () => ({
+  installRendererUpdateNotification: vi.fn(() => ({
+    refresh: vi.fn(() => false),
+    dispose: vi.fn(),
+  })),
+}));
+
 vi.mock("../src/codex-locale-adapter.js", () => ({
   readCodexLocaleSettings: vi.fn(async () => ({ preferredLocale: "en" })),
 }));

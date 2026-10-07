@@ -40,6 +40,7 @@ export {
   THREAD_USAGE_INSPECT_METHOD,
   UPDATE_CHECK_METHOD,
   UPDATE_START_METHOD,
+  UPDATE_RESTART_METHOD,
   UPDATE_STATUS_METHOD,
   createRendererModelClient,
 } from "./renderer-model-client.js";

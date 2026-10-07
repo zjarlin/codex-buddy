@@ -412,6 +412,7 @@ function nativeLatestTurnId(value: unknown): string | null {
 }
 export const UPDATE_CHECK_METHOD = "codexhost/update/check";
 export const UPDATE_START_METHOD = "codexhost/update/start";
+export const UPDATE_RESTART_METHOD = "codexhost/update/restart";
 export const UPDATE_STATUS_METHOD = "codexhost/update/status";
 export const CODEX_ACCOUNT_LIST_METHOD = "codexhost/account/list";
 export const CODEX_ACCOUNT_REFRESH_METHOD = "codexhost/account/refresh";
@@ -580,6 +581,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   ): Promise<HarnessConfigurationState>;
   checkUpdate(): Promise<UpdateCheckResult>;
   startUpdate(): Promise<UpdateStartResult>;
+  restartUpdate(): Promise<UpdateStartResult>;
   readUpdateStatus(): Promise<UpdateStatusResult>;
   inspectCodexAccountUsage?(input: CodexAccountUsageParams): Promise<CodexAccountUsageResult>;
   listHarnessAccountSources?(): Promise<HarnessAccountSourceListResult>;
@@ -1470,6 +1472,10 @@ export function createRendererModelClient(
         updateEmptyParamsSchema.parse({}),
       );
       return updateStatusResultSchema.parse(result);
+    },
+    async restartUpdate(): Promise<UpdateStartResult> {
+      const result = await manager.sendRequest(UPDATE_RESTART_METHOD, {});
+      return updateStartResultSchema.parse(result);
     },
     async inspectCodexAccountUsage(
       input: CodexAccountUsageParams,

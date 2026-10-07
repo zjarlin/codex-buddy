@@ -228,6 +228,11 @@ export interface RendererSettingsMessages {
   readonly updateAvailable: string;
   readonly updateWindowsManualRequired: string;
   readonly updateAndRestart: string;
+  readonly updateDownload: string;
+  readonly updateReadyToRestart: string;
+  readonly updateRestart: string;
+  readonly updateLater: string;
+  readonly updateNotificationTitle: string;
   readonly updateChecking: string;
   readonly updateDownloading: string;
   readonly updatePreparing: string;
@@ -547,6 +552,11 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateWindowsManualRequired:
     "Automatic updates are unavailable on Windows. Update manually below.",
   updateAndRestart: "Update",
+  updateDownload: "Download update",
+  updateReadyToRestart: "Update ready. Restart to install.",
+  updateRestart: "Restart and update",
+  updateLater: "Later",
+  updateNotificationTitle: "Codex Buddy update",
   updateChecking: "Checking for updates...",
   updateDownloading: "Downloading update...",
   updatePreparing: "Preparing update...",
@@ -875,6 +885,11 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateAvailable: "有新版本可用。",
   updateWindowsManualRequired: "Windows 暂不支持自动更新，请在下方手动更新。",
   updateAndRestart: "更新",
+  updateDownload: "下载更新",
+  updateReadyToRestart: "更新已就绪，重启后安装。",
+  updateRestart: "重启更新",
+  updateLater: "稍后",
+  updateNotificationTitle: "Codex Buddy 更新",
   updateChecking: "正在检查更新...",
   updateDownloading: "正在下载更新...",
   updatePreparing: "正在准备更新...",

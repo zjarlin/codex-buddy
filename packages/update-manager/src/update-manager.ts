@@ -35,6 +35,7 @@ export interface CommonUpdateOptions {
   runtimeDescriptorPath: string;
   updaterExecutable: string;
   stateDirectory: string;
+  deferRestart?: boolean;
   onPrepared?(info: PreparedUpdateInfo): void | Promise<void>;
 }
 
@@ -84,6 +85,7 @@ export interface BackgroundUpdateManager {
   ): Promise<PreparedBackgroundUpdate>;
   prepareMacOsDmg(options: MacOsDmgUpdateOptions): Promise<PreparedBackgroundUpdate>;
   start(prepared: PreparedBackgroundUpdate): StartedBackgroundUpdate;
+  confirmRestart(prepared: PreparedBackgroundUpdate): Promise<void>;
   readStatus(statusPath: string): Promise<BackgroundUpdateStatus | null>;
 }
 
@@ -116,6 +118,7 @@ interface InternalRequest {
 }
 
 interface PreparedCommonUpdate {
+  deferRestart: boolean;
   version: string;
   launcherPid: number;
   launcherExecutable: string;
@@ -217,6 +220,7 @@ export function createBackgroundUpdateManager(
   const spawnUpdater = dependencies.spawnUpdater ?? defaultSpawnUpdater;
   const now = dependencies.now ?? Date.now;
   const preparedRequests = new Set<string>();
+  const startableRequests = new Set<string>();
 
   async function writeStatusSnapshot(
     statusPath: string,
@@ -335,6 +339,7 @@ export function createBackgroundUpdateManager(
     await writePrivateJson(statusPath, preparedStatus(version, installation, now()));
     await options.onPrepared?.({ version, installation, statusPath });
     return {
+      deferRestart: options.deferRestart === true,
       version,
       launcherPid,
       launcherExecutable,
@@ -389,12 +394,23 @@ export function createBackgroundUpdateManager(
       status_path: common.statusPath,
       installation,
     };
+    if (common.deferRestart) {
+      await writeStatusSnapshot(
+        common.statusPath,
+        statusSnapshot(common.version, installation.kind, "ready-to-restart"),
+      );
+    }
     await writePrivateJson(common.requestPath, request);
     await writeStatusSnapshot(
       common.statusPath,
-      statusSnapshot(common.version, installation.kind, "prepared"),
+      statusSnapshot(
+        common.version,
+        installation.kind,
+        common.deferRestart ? "ready-to-restart" : "prepared",
+      ),
     );
     preparedRequests.add(common.requestPath);
+    if (!common.deferRestart) startableRequests.add(common.requestPath);
     return Object.freeze({
       version: common.version,
       installation: installation.kind,
@@ -406,6 +422,20 @@ export function createBackgroundUpdateManager(
   }
 
   return Object.freeze({
+    async confirmRestart(prepared: PreparedBackgroundUpdate): Promise<void> {
+      if (!preparedRequests.has(prepared.requestPath)) {
+        throw new Error("background update was not prepared by this manager");
+      }
+      const status = parseUpdateStatus(JSON.parse(await readFile(prepared.statusPath, "utf8")));
+      if (status.phase !== "ready-to-restart" || status.version !== prepared.version) {
+        throw new Error("background update is not ready to restart");
+      }
+      await writeStatusSnapshot(
+        prepared.statusPath,
+        statusSnapshot(prepared.version, prepared.installation, "prepared"),
+      );
+      startableRequests.add(prepared.requestPath);
+    },
     async prepareNpm(options: NpmUpdateOptions): Promise<PreparedBackgroundUpdate> {
       const common = await prepareCommon(options, "npm");
       try {
@@ -468,11 +498,18 @@ export function createBackgroundUpdateManager(
     },
 
     start(prepared: PreparedBackgroundUpdate): StartedBackgroundUpdate {
+      if (
+        preparedRequests.has(prepared.requestPath) &&
+        !startableRequests.has(prepared.requestPath)
+      ) {
+        throw new Error("background update requires restart confirmation");
+      }
       if (!preparedRequests.delete(prepared.requestPath)) {
         throw new Error(
           "background update was not prepared by this manager or was already started",
         );
       }
+      startableRequests.delete(prepared.requestPath);
       const child = spawnUpdater(prepared.helperPath, prepared.requestPath);
       if (child.pid === undefined)
         throw new Error("background Updater did not report a process ID");

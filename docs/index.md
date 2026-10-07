@@ -130,7 +130,7 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
-| [`operations/repository-maintenance.md`](operations/repository-maintenance.md) | PR 标签、CI 评论、发布校验、应用更新下载镜像与 MacBook 安装包投递；修改更新或仓库自动化时阅读。 |
+| [`operations/repository-maintenance.md`](operations/repository-maintenance.md) | PR 标签、CI 评论、发布校验、应用内更新提示与下载镜像、MacBook 安装包投递；修改更新或仓库自动化时阅读。 |
 
 ## 待评估方案与问题调查
 

@@ -1251,6 +1251,45 @@ describe("Renderer Codex Accounts page", () => {
 });
 
 describe("Renderer Updates page", () => {
+  it("offers an explicit restart for a ready update without polling or redownloading", async () => {
+    const client = {
+      checkUpdate: vi.fn(async () => updateCheck(updateStatus("ready-to-restart"))),
+      startUpdate: vi.fn(),
+      restartUpdate: vi.fn(async () => ({ status: updateStatus("waiting-for-exit") })),
+      readUpdateStatus: vi.fn(async () => ({ status: updateStatus("ready-to-restart") })),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("zh-CN"),
+      () => client,
+    ).find(({ id }) => id === "updates");
+    if (!page) throw new Error("Updates page is not registered");
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const cleanup = page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+    await vi.waitFor(() => expect(visibleNotesText(content)).toContain("重启更新"));
+    expect(document.defaultView.setTimeout).not.toHaveBeenCalled();
+    expect(client.restartUpdate).not.toHaveBeenCalled();
+    const restart = descendants(content).find(
+      (element) => element.tagName === "button" && visibleNotesText(element).includes("重启更新"),
+    );
+    if (!restart) throw new Error("Restart action is not rendered");
+    restart.dispatch("click");
+    restart.dispatch("click");
+    await vi.waitFor(() =>
+      expect(elementWithClass(content, "settings-update-panel").dataset.updateState).toBe(
+        "waiting-for-exit",
+      ),
+    );
+    expect(client.restartUpdate).toHaveBeenCalledOnce();
+    expect(client.startUpdate).not.toHaveBeenCalled();
+    cleanup?.();
+    scope.dispose();
+  });
   it.each(["succeeded", "failed"] as const)(
     "keeps polling after start/status timeouts until the Host reports %s",
     async (terminalPhase) => {

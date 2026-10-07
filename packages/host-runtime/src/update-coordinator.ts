@@ -20,6 +20,7 @@ import {
   type BackgroundUpdateStatus,
   type CodexhostLatestRelease,
   type InstalledUpdateContext,
+  type PreparedBackgroundUpdate,
 } from "@codexhost/update-manager";
 
 const ERROR_MAX_LENGTH = 500;
@@ -27,6 +28,7 @@ const ERROR_MAX_LENGTH = 500;
 export interface HostUpdateCoordinator {
   check(signal?: AbortSignal): Promise<UpdateCheckResult>;
   start(): Promise<UpdateStartResult>;
+  restart(): Promise<UpdateStartResult>;
   status(): Promise<UpdateStatusResult>;
 }
 
@@ -89,6 +91,8 @@ export function createHostUpdateCoordinator(
       return authenticated ?? fetchLatestGitHubRelease({ signal: requestSignal });
     });
   let candidate: CodexhostLatestRelease | null = null;
+  let preparation: Promise<PreparedBackgroundUpdate> | null = null;
+  let restartRequest: Promise<UpdateStartResult> | null = null;
 
   async function latestStatus(context: InstalledUpdateContext): Promise<UpdateStatus | null> {
     const discovered = await discoverLatestUpdateStatus(context.common.stateDirectory);
@@ -219,13 +223,14 @@ export function createHostUpdateCoordinator(
           await lock.setStatusPath(info.statusPath);
           resolvePrepared(info);
         };
-        const prepareAndStart = async (): Promise<void> => {
+        const prepareDownload = async (): Promise<PreparedBackgroundUpdate> => {
           try {
             let prepared;
             if (context.installation.kind === "npm") {
               prepared = await manager.prepareNpm({
                 ...context.installation.options,
                 version: release.version,
+                deferRestart: true,
                 onPrepared,
               });
             } else {
@@ -239,23 +244,27 @@ export function createHostUpdateCoordinator(
                   ? await manager.prepareWindowsInstaller({
                       ...context.installation.options,
                       version: release.version,
+                      deferRestart: true,
                       artifact,
                       onPrepared,
                     })
                   : await manager.prepareMacOsDmg({
                       ...context.installation.options,
                       version: release.version,
+                      deferRestart: true,
                       artifact,
                       onPrepared,
                     });
             }
-            if (platform !== "darwin") manager.start(prepared);
+            return prepared;
           } catch (error) {
             await lock.release();
             rejectPrepared(error);
+            throw error;
           }
         };
-        void prepareAndStart();
+        preparation = prepareDownload();
+        void preparation.catch(() => undefined);
         const prepared = await preparedReady;
         const status = await manager.readStatus(prepared.statusPath);
         if (!status) throw new Error("Background update did not create status");
@@ -264,6 +273,28 @@ export function createHostUpdateCoordinator(
         await lock.release();
         throw error;
       }
+    },
+
+    async restart(): Promise<UpdateStartResult> {
+      if (restartRequest) return restartRequest;
+      const restart = async (): Promise<UpdateStartResult> => {
+        const context = await installedContext();
+        const status = await latestStatus(context);
+        if (!preparation || status?.phase !== "ready-to-restart") {
+          throw new Error("No downloaded update is ready to restart");
+        }
+        const prepared = await preparation;
+        await manager.confirmRestart(prepared);
+        if (platform !== "darwin") manager.start(prepared);
+        const confirmed = await manager.readStatus(prepared.statusPath);
+        if (!confirmed) throw new Error("Confirmed update status is missing");
+        return { status: publicStatus(confirmed) };
+      };
+      restartRequest = restart().catch((error: unknown) => {
+        restartRequest = null;
+        throw error;
+      });
+      return restartRequest;
     },
 
     async status(): Promise<UpdateStatusResult> {

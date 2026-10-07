@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   inspectRendererSettingsContract,
   installRendererSettingsRailTrigger,
+  installRendererUpdateRailTrigger,
   mountRendererSettingsTrigger,
 } from "../../src/settings/trigger.js";
 
@@ -142,6 +143,36 @@ function stubRailDocument(current: () => FakeElement): Document {
 }
 
 describe("Renderer settings navigation rail trigger", () => {
+  it("keeps settings and update icons in stable order across DOM reconciliation", () => {
+    const rail = createFakeRail();
+    const document = stubRailDocument(() => rail.rail);
+    try {
+      const settings = installRendererSettingsRailTrigger({
+        available: true,
+        onOpen: vi.fn(),
+        ownerDocument: document,
+      });
+      const update = installRendererUpdateRailTrigger({ ownerDocument: document, onOpen: vi.fn() });
+      update.setState(true, "Download update");
+      update.refresh();
+      const insert = vi.spyOn(rail.destinations, "insertBefore");
+      for (let index = 0; index < 50; index++) {
+        settings.refresh();
+        update.refresh();
+      }
+      expect(insert).not.toHaveBeenCalled();
+      expect(rail.destinations.children).toEqual([
+        rail.home,
+        settings.root,
+        update.root,
+        rail.more,
+      ]);
+      update.dispose();
+      settings.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("badges the icon for updates and opens the Updates page directly", () => {
     const document = stubRailDocument(() => createFakeRail().rail);
     try {

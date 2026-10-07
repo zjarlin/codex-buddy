@@ -156,7 +156,7 @@ describe("Host update coordinator", () => {
     await coordinator.check();
     await coordinator.start();
     await vi.waitFor(async () => {
-      expect(await coordinator.status()).toMatchObject({ status: { phase: "prepared" } });
+      expect(await coordinator.status()).toMatchObject({ status: { phase: "ready-to-restart" } });
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://mirror.example.test/" + url);
@@ -232,11 +232,13 @@ describe("Host update coordinator", () => {
       updateAvailable: true,
       installationAvailable: true,
     });
+    await expect(coordinator.restart()).rejects.toThrow("No downloaded update");
+    await coordinator.start();
+    await vi.waitFor(async () =>
+      expect(await coordinator.status()).toMatchObject({ status: { phase: "ready-to-restart" } }),
+    );
     await expect(coordinator.start()).resolves.toMatchObject({
-      status: { version: "1.2.3", installation: "npm", phase: "prepared" },
-    });
-    await expect(coordinator.start()).resolves.toMatchObject({
-      status: { version: "1.2.3", phase: "prepared" },
+      status: { version: "1.2.3", phase: "ready-to-restart" },
     });
     const home = fixture.environment.HOME;
     if (!home) throw new Error("fixture HOME is missing");
@@ -252,6 +254,9 @@ describe("Host update coordinator", () => {
     await vi.waitFor(async () =>
       expect(await readFile(updaterRequestPath, "utf8")).not.toEqual(""),
     );
+    expect(spawnUpdater).not.toHaveBeenCalled();
+    await expect(coordinator.restart()).resolves.toMatchObject({ status: { phase: "prepared" } });
+    await coordinator.restart();
     expect(spawnUpdater).not.toHaveBeenCalled();
   });
 
@@ -310,6 +315,7 @@ describe("Host update coordinator", () => {
         totalBytes: bytes.length,
       }),
     );
+    await expect(coordinator.restart()).rejects.toThrow("No downloaded update");
     unblockDownload();
     const home = fixture.environment.HOME;
     if (!home) throw new Error("fixture HOME is missing");
@@ -324,8 +330,9 @@ describe("Host update coordinator", () => {
     );
     await vi.waitFor(async () => expect(await readFile(requestPath, "utf8")).not.toEqual(""));
     await expect(coordinator.status()).resolves.toMatchObject({
-      status: { phase: "prepared", version: "1.2.3", installation: "macos-dmg" },
+      status: { phase: "ready-to-restart", version: "1.2.3", installation: "macos-dmg" },
     });
+    await expect(coordinator.restart()).resolves.toMatchObject({ status: { phase: "prepared" } });
   });
 
   it("ignores a prepared status without an active operation lock", async () => {

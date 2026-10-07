@@ -1818,6 +1818,7 @@ export class AppServerHost {
     if (
       request.method === "codexhost/update/check" ||
       request.method === "codexhost/update/start" ||
+      request.method === "codexhost/update/restart" ||
       request.method === "codexhost/update/status"
     ) {
       this.#dispatchDesktopRequest(() => this.#handleUpdateRequest(request));
@@ -3522,7 +3523,11 @@ export class AppServerHost {
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
       }
-      const result = updateStartResultSchema.parse(await coordinator.start());
+      const result = updateStartResultSchema.parse(
+        request.method === "codexhost/update/restart"
+          ? await coordinator.restart()
+          : await coordinator.start(),
+      );
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32091, errorMessage(error).slice(0, 500)));

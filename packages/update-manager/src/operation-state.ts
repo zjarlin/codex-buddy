@@ -68,7 +68,23 @@ export async function discoverLatestUpdateStatus(
       // Malformed local state is not authoritative for a later operation.
     }
   }
-  candidates.sort((left, right) => right.status.updatedAt - left.status.updatedAt);
+  let activeStatusPath: string | null = null;
+  const lockPath = path.join(stateDirectory, LOCK_FILE);
+  if (await regularFile(lockPath)) {
+    try {
+      const lock = JSON.parse(await readFile(lockPath, "utf8")) as Record<string, unknown>;
+      if (typeof lock.statusPath === "string") activeStatusPath = path.normalize(lock.statusPath);
+    } catch {
+      // 损坏或刚被释放的锁不替代已验证的状态文件。
+    }
+  }
+  // 同一秒内重试时，活动锁指向的操作优先于历史失败记录。
+  candidates.sort(
+    (left, right) =>
+      Number(right.statusPath === activeStatusPath) -
+        Number(left.statusPath === activeStatusPath) ||
+      right.status.updatedAt - left.status.updatedAt,
+  );
   return candidates[0] ?? null;
 }
 

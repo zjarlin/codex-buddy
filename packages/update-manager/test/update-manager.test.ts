@@ -82,6 +82,41 @@ function downloader(bytes: Buffer) {
 }
 
 describe("background update manager", () => {
+  it("does not start a downloaded installer until restart is confirmed", async () => {
+    const root = await temporaryDirectory();
+    const bytes = Buffer.from("deferred-artifact");
+    const spawnUpdater = vi.fn(() => ({ pid: 777 }) as ReturnType<typeof spawn>);
+    const manager = createBackgroundUpdateManager({
+      platform: "darwin",
+      download: downloader(bytes),
+      spawnUpdater,
+    });
+    const prepared = await manager.prepareMacOsDmg({
+      ...(await commonOptions(root)),
+      deferRestart: true,
+      artifact: {
+        url: "https://downloads.example.test/codexhost.dmg",
+        sha256: sha256(bytes),
+        size: bytes.length,
+      },
+      appPath: path.join(root, "CodexBuddy.app"),
+    });
+    await expect(manager.readStatus(prepared.statusPath)).resolves.toMatchObject({
+      phase: "ready-to-restart",
+    });
+    expect(() => manager.start(prepared)).toThrow("restart confirmation");
+    expect(spawnUpdater).not.toHaveBeenCalled();
+    await expect(createBackgroundUpdateManager().confirmRestart(prepared)).rejects.toThrow(
+      "not prepared by this manager",
+    );
+    await manager.confirmRestart(prepared);
+    await expect(manager.readStatus(prepared.statusPath)).resolves.toMatchObject({
+      phase: "prepared",
+    });
+    await expect(manager.confirmRestart(prepared)).rejects.toThrow("not ready to restart");
+    manager.start(prepared);
+    expect(spawnUpdater).toHaveBeenCalledOnce();
+  });
   it("prepares and starts an exact npm update request", async () => {
     const root = await temporaryDirectory();
     const common = await commonOptions(root);

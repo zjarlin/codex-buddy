@@ -6,6 +6,7 @@ export type BackgroundUpdateInstallation = "npm" | "windows-installer" | "macos-
 export type BackgroundUpdatePhase =
   | "prepared"
   | "downloading"
+  | "ready-to-restart"
   | "waiting-for-exit"
   | "installing"
   | "restarting"
@@ -68,6 +69,7 @@ export function parseUpdateStatus(value: unknown): BackgroundUpdateStatus {
     ![
       "prepared",
       "downloading",
+      "ready-to-restart",
       "waiting-for-exit",
       "installing",
       "restarting",

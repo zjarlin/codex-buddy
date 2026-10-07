@@ -1443,6 +1443,15 @@ describe("AppServerHost HarnessAdapter projection", () => {
         },
       })),
       status: vi.fn(async () => ({ status: null })),
+      restart: vi.fn(async () => ({
+        status: {
+          version: "1.2.3",
+          installation: "npm" as const,
+          phase: "prepared" as const,
+          updatedAt: 10,
+          error: null,
+        },
+      })),
     };
     const fixture = createFixture({ updateCoordinator });
 
@@ -1464,6 +1473,11 @@ describe("AppServerHost HarnessAdapter projection", () => {
       fixture.collector.waitFor((message) => requestId(message, 21)),
     ).resolves.toMatchObject({ result: { status: { phase: "prepared" } } });
     expect(updateCoordinator.start).toHaveBeenCalledOnce();
+    writeRequest(fixture.desktopInput, { id: 25, method: "codexhost/update/restart", params: {} });
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 25)),
+    ).resolves.toMatchObject({ result: { status: { phase: "prepared" } } });
+    expect(updateCoordinator.restart).toHaveBeenCalledOnce();
     await stopFixture(fixture);
   });
 

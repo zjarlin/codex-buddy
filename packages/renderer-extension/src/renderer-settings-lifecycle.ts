@@ -26,9 +26,8 @@ import {
 } from "./settings/trigger.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
 import type { RendererThreadTerminalClient } from "./settings/terminal-controls.js";
-
-const UPDATE_CHECK_TIMEOUT_MS = 5_000;
-const UPDATE_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000] as const;
+import { createRendererUpdateController } from "./settings/update-controller.js";
+import { installRendererUpdateNotification } from "./settings/update-notification.js";
 
 export interface RendererSettingsLifecycleOptions {
   getUpdateClient?(): RendererUpdateClient | null;
@@ -59,13 +58,12 @@ export function installRendererSettingsLifecycle(
   let shell: RendererSettingsShell | null = null;
   let trigger: RendererSettingsRailTriggerControl | null = null;
   let systemOneModel: SystemOneModelHeaderControl | null = null;
+  let updateNotification: ReturnType<typeof installRendererUpdateNotification> | null = null;
+  const updates = createRendererUpdateController(
+    options.getUpdateClient ?? (() => null),
+    ownerWindow,
+  );
   let localeRequest: Promise<void> | null = null;
-  let checkedUpdateClient: RendererUpdateClient | null = null;
-  let retryUpdateClient: RendererUpdateClient | null = null;
-  let updateRetryTimer: number | null = null;
-  let updateRetryAttempt = 0;
-  let updateCheckGeneration = 0;
-  let updateAvailable = false;
   let openGeneration = 0;
   let disposed = false;
 
@@ -76,7 +74,7 @@ export function installRendererSettingsLifecycle(
     const messages = rendererSettingsMessages(locale);
     const definitions = createDefaultRendererSettingsPages(
       messages,
-      options.getUpdateClient ?? (() => null),
+      () => (updates.available ? updates : null),
       options.getConnectionDiagnostics ?? (() => null),
       options.getAccountClient ?? (() => null),
       options.getSessionImportClient ?? (() => null),
@@ -109,7 +107,14 @@ export function installRendererSettingsLifecycle(
         });
       },
     });
-    nextTrigger.setUpdateAvailable(updateAvailable);
+    updateNotification = installRendererUpdateNotification({
+      controller: updates,
+      messages,
+      ownerWindow,
+      openSettings(button) {
+        nextShell.openSettings(button, "updates");
+      },
+    });
     systemOneModel = installSystemOneModelHeaderControl({
       getClient: options.getBuddyClient ?? (() => null),
       getLocale: () => (locale === "zh-CN" ? "zh-CN" : "en"),
@@ -130,6 +135,7 @@ export function installRendererSettingsLifecycle(
     trigger?.dispose();
     shell?.dispose();
     systemOneModel?.dispose();
+    updateNotification?.dispose();
     trigger = null;
     shell = null;
     const mounted = mount();
@@ -164,79 +170,9 @@ export function installRendererSettingsLifecycle(
     return request;
   };
 
-  const clearUpdateRetry = (): void => {
-    if (updateRetryTimer === null) return;
-    ownerWindow.clearTimeout(updateRetryTimer);
-    updateRetryTimer = null;
-  };
-
-  const scheduleUpdateRetry = (client: RendererUpdateClient): void => {
-    if (disposed || updateRetryTimer !== null) return;
-    const delay = UPDATE_RETRY_DELAYS_MS[updateRetryAttempt];
-    if (delay === undefined) return;
-    updateRetryAttempt += 1;
-    updateRetryTimer = ownerWindow.setTimeout(() => {
-      updateRetryTimer = null;
-      if (disposed || options.getUpdateClient?.() !== client) return;
-      refreshUpdateIndicator();
-    }, delay);
-  };
-
-  const checkUpdateWithTimeout = (client: RendererUpdateClient) =>
-    new Promise<Awaited<ReturnType<RendererUpdateClient["checkUpdate"]>>>((resolve, reject) => {
-      const timeout = ownerWindow.setTimeout(
-        () => reject(new Error("Update indicator check timed out")),
-        UPDATE_CHECK_TIMEOUT_MS,
-      );
-      void client.checkUpdate().then(
-        (result) => {
-          ownerWindow.clearTimeout(timeout);
-          resolve(result);
-        },
-        (error: unknown) => {
-          ownerWindow.clearTimeout(timeout);
-          reject(error);
-        },
-      );
-    });
-
-  const refreshUpdateIndicator = (): void => {
-    const client = options.getUpdateClient?.() ?? null;
-    if (!client || checkedUpdateClient === client) return;
-    if (retryUpdateClient !== client) {
-      clearUpdateRetry();
-      retryUpdateClient = client;
-      updateRetryAttempt = 0;
-    } else if (updateRetryTimer !== null) {
-      return;
-    }
-    checkedUpdateClient = client;
-    const generation = ++updateCheckGeneration;
-    void checkUpdateWithTimeout(client)
-      .then((result) => {
-        if (disposed || generation !== updateCheckGeneration) return;
-        updateAvailable = result.updateAvailable;
-        trigger?.setUpdateAvailable(updateAvailable);
-        if (result.error === null) {
-          updateRetryAttempt = 0;
-          clearUpdateRetry();
-          return;
-        }
-        checkedUpdateClient = null;
-        scheduleUpdateRetry(client);
-      })
-      .catch(() => {
-        if (disposed || generation !== updateCheckGeneration || checkedUpdateClient !== client) {
-          return;
-        }
-        checkedUpdateClient = null;
-        scheduleUpdateRetry(client);
-      });
-  };
-
   mount();
   void refreshLocale();
-  refreshUpdateIndicator();
+  updates.refreshBinding();
 
   return {
     get locale() {
@@ -247,22 +183,24 @@ export function installRendererSettingsLifecycle(
       // scan 只负责重新定位控件。System One 的数据由挂载时和显式 refresh 拉取，
       // 避免 MutationObserver 驱动的 scan 反复触发 buddyStatus 请求。
       const systemOneRefreshed = systemOneModel?.reposition?.() ?? false;
-      refreshUpdateIndicator();
-      return refreshed || systemOneRefreshed;
+      updates.refreshBinding();
+      const updateRefreshed = updateNotification?.refresh() ?? false;
+      return refreshed || systemOneRefreshed || updateRefreshed;
     },
     dispose() {
       if (disposed) return;
       disposed = true;
       openGeneration += 1;
-      updateCheckGeneration += 1;
       lifecycleController.abort();
-      clearUpdateRetry();
+      updates.dispose();
+      updateNotification?.dispose();
       systemOneModel?.dispose();
       trigger?.dispose();
       shell?.dispose();
       systemOneModel = null;
       trigger = null;
       shell = null;
+      updateNotification = null;
     },
   };
 }

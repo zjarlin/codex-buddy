@@ -1154,6 +1154,7 @@ export function installCurrentRendererAdapter(): {
       currentModelClient().selectThreadPermissionMode(input),
     checkUpdate: () => appUpdateClient().checkUpdate(),
     startUpdate: () => appUpdateClient().startUpdate(),
+    restartUpdate: () => appUpdateClient().restartUpdate(),
     readUpdateStatus: () => appUpdateClient().readUpdateStatus(),
     inspectCodexAccountUsage: (
       input: Parameters<NonNullable<RendererModelClient["inspectCodexAccountUsage"]>>[0],

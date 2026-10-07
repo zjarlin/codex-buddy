@@ -106,6 +106,7 @@ function clientWith(
     selectThreadPermissionMode: vi.fn(),
     checkUpdate: vi.fn(),
     startUpdate: vi.fn(),
+    restartUpdate: vi.fn(),
     readUpdateStatus: vi.fn(),
     listCodexAccounts: vi.fn(),
     refreshCodexAccounts: vi.fn(),

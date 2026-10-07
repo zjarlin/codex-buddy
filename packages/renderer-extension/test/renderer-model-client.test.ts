@@ -36,6 +36,7 @@ import {
   TURN_COMPLETED_METHOD,
   UPDATE_CHECK_METHOD,
   UPDATE_START_METHOD,
+  UPDATE_RESTART_METHOD,
   UPDATE_STATUS_METHOD,
   createRendererModelClient,
   createThreadUsageSubscriptionRelay,
@@ -77,6 +78,21 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("confirms restart only through the fixed update method with an empty payload", async () => {
+    const sendRequest = vi.fn(async () => ({
+      status: {
+        version: "1.2.3",
+        installation: "macos-dmg",
+        phase: "prepared",
+        updatedAt: 1,
+        error: null,
+      },
+    }));
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic update client was not created");
+    await expect(client.restartUpdate()).resolves.toMatchObject({ status: { phase: "prepared" } });
+    expect(sendRequest).toHaveBeenCalledWith(UPDATE_RESTART_METHOD, {});
+  });
   it("reads and writes project tabs through the local Host contract", async () => {
     const config = {
       version: 2 as const,
@@ -623,6 +639,7 @@ describe("Renderer fixed Model request client", () => {
       "rejectProjectSync",
       "removeProjectSyncPeer",
       "requestThreadProjection",
+      "restartUpdate",
       "routeSession",
       "runGitWorkflow",
       "selectThreadModel",

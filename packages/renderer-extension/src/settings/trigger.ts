@@ -1,4 +1,4 @@
-import { createRendererSettingsBrandIcon } from "./icons.js";
+import { createRendererSettingsBrandIcon, createRendererSettingsIcon } from "./icons.js";
 import {
   DEFAULT_RENDERER_SETTINGS_MESSAGES,
   type RendererSettingsMessages,
@@ -6,9 +6,10 @@ import {
 import type { RendererModelClient } from "../renderer-model-client.js";
 
 export const SETTINGS_TRIGGER_ATTRIBUTE = "data-codexhost-settings-trigger";
+export const UPDATE_TRIGGER_ATTRIBUTE = "data-codexhost-update-trigger";
 const SYSTEM_ONE_TRIGGER_ATTRIBUTE = "data-codexhost-system-one-model";
 /** 由 codexhost 注入、不属于 Desktop 原生结构的 header 控件。 */
-export const RENDERER_INJECTED_CONTROL_SELECTOR = `[${SETTINGS_TRIGGER_ATTRIBUTE}],[${SYSTEM_ONE_TRIGGER_ATTRIBUTE}]`;
+export const RENDERER_INJECTED_CONTROL_SELECTOR = `[${SETTINGS_TRIGGER_ATTRIBUTE}],[${SYSTEM_ONE_TRIGGER_ATTRIBUTE}],[${UPDATE_TRIGGER_ATTRIBUTE}]`;
 export const SETTINGS_HEADER_SURFACE_SELECTOR =
   '[data-testid="app-shell-header-context-menu-surface"]';
 const SETTINGS_APPLICATION_HEADER_SELECTOR = 'header[data-pip-obstacle="app-shell-header"]';
@@ -75,7 +76,11 @@ function findRailInsertionPoint(rail: HTMLElement): RendererSettingsRailInsertio
   const column = [...rail.children].find(hasDestination) as HTMLElement | undefined;
   if (!column) return null;
   const last = [...column.children]
-    .filter((child) => !child.hasAttribute(SETTINGS_TRIGGER_ATTRIBUTE))
+    .filter(
+      (child) =>
+        !child.hasAttribute(SETTINGS_TRIGGER_ATTRIBUTE) &&
+        !child.hasAttribute(UPDATE_TRIGGER_ATTRIBUTE),
+    )
     .at(-1);
   return { parent: column, before: last && !hasDestination(last) ? last : null };
 }
@@ -503,11 +508,15 @@ export function installRendererSettingsRailTrigger(options: {
       );
       trigger.setUpdateAvailable(updateAvailable);
     }
+    const updateTrigger = [...insertionPoint.parent.children].find((child) =>
+      child.hasAttribute(UPDATE_TRIGGER_ATTRIBUTE),
+    );
+    const before = updateTrigger ?? insertionPoint.before;
     if (
       trigger.root.parentElement !== insertionPoint.parent ||
-      trigger.root.nextSibling !== insertionPoint.before
+      trigger.root.nextSibling !== before
     ) {
-      insertionPoint.parent.insertBefore(trigger.root, insertionPoint.before);
+      insertionPoint.parent.insertBefore(trigger.root, before);
     }
     return true;
   };
@@ -527,6 +536,67 @@ export function installRendererSettingsRailTrigger(options: {
       disposed = true;
       trigger?.dispose();
       trigger = null;
+    },
+  };
+}
+
+export function installRendererUpdateRailTrigger(options: {
+  ownerDocument: Document;
+  onOpen(button: HTMLButtonElement): void;
+}) {
+  const root = options.ownerDocument.createElement("div");
+  root.setAttribute(UPDATE_TRIGGER_ATTRIBUTE, "");
+  root.style.display = "none";
+  const button = options.ownerDocument.createElement("button");
+  button.type = "button";
+  button.setAttribute("aria-haspopup", "dialog");
+  Object.assign(button.style, {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "36px",
+    height: "36px",
+    padding: "0",
+    border: "0",
+    borderRadius: "8px",
+    color: "light-dark(#287bde, #66aaf9)",
+    background: "light-dark(#eaf2fd, #1b304b)",
+    cursor: "pointer",
+    outlineOffset: "2px",
+    flex: "0 0 auto",
+  });
+  button.append(createRendererSettingsIcon("updates", 20));
+  root.append(button);
+  const onClick = (event: MouseEvent): void => {
+    event.stopPropagation();
+    options.onOpen(button);
+  };
+  button.addEventListener("click", onClick);
+  let disposed = false;
+  return {
+    root,
+    button,
+    refresh(): boolean {
+      if (disposed) return false;
+      const point = findRendererSettingsRailInsertionPoint(options.ownerDocument);
+      if (!point) {
+        root.remove();
+        return false;
+      }
+      if (root.parentElement !== point.parent || root.nextSibling !== point.before) {
+        point.parent.insertBefore(root, point.before);
+      }
+      return true;
+    },
+    setState(visible: boolean, title: string): void {
+      root.style.display = visible ? "flex" : "none";
+      button.title = title;
+      button.setAttribute("aria-label", title);
+    },
+    dispose(): void {
+      disposed = true;
+      button.removeEventListener("click", onClick);
+      root.remove();
     },
   };
 }

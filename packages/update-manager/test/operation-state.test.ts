@@ -39,6 +39,20 @@ async function status(
 }
 
 describe("update operation state", () => {
+  it("prefers the active retry when status timestamps are identical", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codexhost-update-retry-"));
+    roots.push(root);
+    await status(root, "update-aaa-failed", "failed", 20);
+    const activePath = await status(root, "update-zzz-active", "prepared", 20);
+    const lock = await acquireUpdateOperationLock(root);
+    if (!lock) throw new Error("operation lock was not acquired");
+    await lock.setStatusPath(activePath);
+    await expect(discoverLatestUpdateStatus(root)).resolves.toMatchObject({
+      statusPath: activePath,
+      status: { phase: "prepared" },
+    });
+    await lock.release();
+  });
   it("discovers the latest valid status and ignores malformed state", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codexhost-update-state-"));
     roots.push(root);

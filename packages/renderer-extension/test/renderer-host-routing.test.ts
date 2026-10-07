@@ -29,6 +29,16 @@ function manager(hostId: string) {
     if (method === "codexhost/settings/idle-release/set") return params;
     if (method === "codexhost/update/status")
       return { currentVersion: "9.9.9", installation: "macos-dmg", status: null };
+    if (method === "codexhost/update/restart")
+      return {
+        status: {
+          version: "9.9.10",
+          installation: "macos-dmg",
+          phase: "prepared",
+          updatedAt: 1,
+          error: null,
+        },
+      };
     return { threadId: "thread-test", usage: null };
   });
   const requestClient = {
@@ -217,6 +227,9 @@ it("routes app updates to the local Host even when a remote Composer is active",
     });
     expect(local.nativeSend).toHaveBeenCalledWith("codexhost/update/status", {});
     expect(remote.nativeSend).not.toHaveBeenCalledWith("codexhost/update/status", {});
+    await adapter.modelControl?.restartUpdate?.();
+    expect(local.nativeSend).toHaveBeenCalledWith("codexhost/update/restart", {});
+    expect(remote.nativeSend).not.toHaveBeenCalledWith("codexhost/update/restart", {});
   } finally {
     adapter.dispose();
   }

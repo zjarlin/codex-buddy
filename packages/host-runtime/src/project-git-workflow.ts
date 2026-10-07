@@ -95,14 +95,20 @@ export class ProjectGitWorkflow {
   }
 
   #project(threadId: string): Promise<string | null> {
-    let project = this.#threads.get(threadId);
-    if (!project) {
-      project = this.options.project(threadId).catch((error) => {
+    const cached = this.#threads.get(threadId);
+    if (cached) return cached;
+    // 会话项目目录可能不是 Git 仓库：解析结果为空时不缓存，关联仓库后重新解析。
+    const project = this.options
+      .project(threadId)
+      .then((workspace) => {
+        if (!workspace) this.#threads.delete(threadId);
+        return workspace;
+      })
+      .catch((error) => {
         this.#threads.delete(threadId);
         throw error;
       });
-      this.#threads.set(threadId, project);
-    }
+    this.#threads.set(threadId, project);
     return project;
   }
 

@@ -117,7 +117,16 @@ export class TurnActionRecommendations {
         }
         if (!response.ok) {
           await response.body?.cancel();
-          throw new Error("推荐接口不可用");
+          // 旧网关和不支持旁路推荐的 Provider 都应回退到已注册动作。
+          if (
+            response.status === 401 ||
+            response.status === 403 ||
+            response.status === 404 ||
+            response.status === 405 ||
+            response.status === 422
+          )
+            return null;
+          throw new Error(`推荐接口不可用 (${response.status})`);
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error("推荐响应为空");
@@ -134,12 +143,14 @@ export class TurnActionRecommendations {
         } finally {
           await reader.cancel();
         }
-        return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+        if (parsed && typeof parsed === "object" && "data" in parsed) {
+          const data = (parsed as { data?: unknown }).data;
+          return Array.isArray(data) ? (data[0] ?? null) : (data ?? null);
+        }
+        return parsed;
       };
-      const raw = (await request(false)) as { data?: unknown[] } | null;
-      if (!raw) return terminal("unsupported");
-      if (!Array.isArray(raw.data)) throw new Error("推荐响应无效");
-      let value: unknown = raw.data[0];
+      let value = await request(false);
       if (!value && generate) value = await request(true);
       if (!value) return terminal("unsupported");
       const parsed = turnActionRecommendationSchema.parse(value);

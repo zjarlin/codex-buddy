@@ -48,11 +48,15 @@ const THREAD_LIST_REVEAL_LIMIT = 40;
 const THREAD_LIST_REVEAL_INTERVAL_MS = 120;
 
 function findSidebarRow(threadId: HostThreadId, options: { hostId?: string }): HTMLElement | null {
+  const matchesThreadId = (value: string | null): boolean => {
+    if (value === threadId) return true;
+    return options.hostId !== undefined && value === `${options.hostId}:${threadId}`;
+  };
   for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR) ?? []) {
     if (
       (options.hostId === undefined ||
         row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) === options.hostId) &&
-      threadIdFromSidebarRowElement(row) === threadId
+      matchesThreadId(threadIdFromSidebarRowElement(row))
     ) {
       return row;
     }

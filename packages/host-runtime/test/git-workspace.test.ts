@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -147,6 +147,18 @@ describe("GitWorkspace", () => {
       name: "GitWorkspaceError",
       message: "当前目录不是 Git 仓库。",
     });
+  });
+
+  it("returns no repository root for a directory whose subdirectories hold repositories", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codexhost-multi-repo-"));
+    cleanup.push(directory);
+    const child = path.join(directory, "child");
+    await execFileAsync("git", ["init", "-q", child]);
+    const workspace = new GitWorkspace(testGitEnvironment);
+
+    // 目录本身不是仓库时不是错误：调用方继续处理子目录或已关联仓库。
+    await expect(workspace.root(directory)).resolves.toBeNull();
+    await expect(workspace.root(child)).resolves.toBe(await realpath(child));
   });
 
   it("identifies missing directories without treating missing Git or permissions as missing directories", async () => {

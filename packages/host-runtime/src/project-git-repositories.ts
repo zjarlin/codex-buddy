@@ -10,6 +10,7 @@ export interface ProjectGitRepository {
 }
 
 // 沿用已关联仓库和声明的子模块边界，不递归扫描任意目录或自动初始化子模块。
+// 会话项目目录本身可能不是 Git 仓库（仓库位于子目录或来自关联记录），此时跳过主目录而不是报错。
 export async function readProjectGitRepositories(
   workspace: string,
   links: GitRepositoryLinks,
@@ -48,6 +49,7 @@ export async function readProjectGitRepositories(
     }
   };
   for (const repository of known.repositories) {
+    if (repository.primary && !(await git.root(repository.path))) continue;
     await read(repository.path, repository.primary ? "primary" : "linked", workspace);
   }
   return [...repositories.values()];

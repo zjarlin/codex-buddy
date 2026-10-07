@@ -1643,6 +1643,89 @@ describe("AppServerHost project Git workflow", () => {
     }
   });
 
+  it("treats a project directory that is not itself a repository as the scope of its linked repositories", async () => {
+    const directory = realpathSync.native(
+      mkdtempSync(path.join(tmpdir(), "codexhost-project-plain-directory-")),
+    );
+    const backend = path.join(directory, "backend");
+    execFileSync("git", ["init", "-q", backend]);
+    writeFileSync(path.join(backend, "app.txt"), "pending change\n");
+    const fixture = createFixture({
+      environment: { CODEXHOST_GIT_AUTO_PUSH: "1", CODEX_HOME: path.join(directory, "home") },
+    });
+    try {
+      const threadId = await startExternalThread(fixture, "codexhost/pi-native", 1, {
+        cwd: directory,
+      });
+      let id = 100;
+      const rpc = async (gitMethod: string, params: JsonObject = {}) => {
+        const request = ++id;
+        writeRequest(fixture.desktopInput, {
+          id: request,
+          method: gitMethod,
+          params: { threadId, ...params },
+        });
+        return fixture.collector.waitFor((message) => requestId(message, request));
+      };
+      const ok = async (gitMethod: string, params: JsonObject = {}) => {
+        const response = await rpc(gitMethod, params);
+        expect(response).not.toHaveProperty("error");
+        return response.result as JsonObject;
+      };
+      // 会话项目目录不是仓库：报“不是 Git 项目”而不是原始 git 错误，并允许关联目录内的仓库。
+      expect(await ok("codexhost/git/repositories")).toMatchObject({
+        project: directory,
+        repositories: [{ path: directory, primary: true }],
+      });
+      writeRequest(fixture.desktopInput, {
+        id: ++id,
+        method: "codexhost/git/workflow/status",
+        params: { threadId },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, id)),
+      ).resolves.toMatchObject({
+        result: { workspace: null, message: "当前任务的项目不是 Git 仓库" },
+      });
+      expect(await ok("codexhost/git/repository/link", { repository: backend })).toMatchObject({
+        repositories: [
+          { path: directory, primary: true },
+          { path: backend, primary: false },
+        ],
+      });
+      writeRequest(fixture.desktopInput, {
+        id: ++id,
+        method: "codexhost/git/workflow/status",
+        params: { threadId },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, id)),
+      ).resolves.toMatchObject({ result: { workspace: directory, phase: "idle" } });
+      // 工作流以会话项目目录为项目范围，仓库清单只包含关联仓库。
+      fixture.official.stdin.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n").filter(Boolean)) {
+          const request = JSON.parse(line) as JsonObject;
+          if (request.method === "thread/list") {
+            writeRequest(fixture.official.stdout, {
+              id: requiredMessageId(request),
+              result: { data: [], nextCursor: null },
+            });
+          }
+        }
+      });
+      const session = fixture.adapter.sessions[0];
+      if (!session) throw new Error("外部 Harness 会话未创建");
+      const execute = vi.spyOn(session, "execute");
+      expect(await ok("codexhost/git/workflow/run")).toMatchObject({ phase: "running" });
+      expect(execute.mock.calls.at(-1)?.[0]).toMatchObject({
+        input: [{ type: "text", text: expect.stringContaining(backend) }],
+      });
+    } finally {
+      await stopFixture(fixture);
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
   it.each(["native", "external"])(
     "waits for project tasks and shares automatic/manual execution through %s",
     async (executor) => {

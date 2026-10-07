@@ -43,12 +43,12 @@ export function withThreadFolders(
   const ids = new Set(folders.map((folder) => folder.id));
   const selected =
     current.selected === null
-      ? null
-      : current.selected === UNASSIGNED_THREAD_FOLDER_ID && folders.length > 0
+      ? (folders.length > 0 ? UNASSIGNED_THREAD_FOLDER_ID : null)
+      : current.selected === UNASSIGNED_THREAD_FOLDER_ID
         ? current.selected
         : ids.has(current.selected)
           ? current.selected
-          : null;
+          : UNASSIGNED_THREAD_FOLDER_ID;
   return withThreadFolderProject(config, projectKey, {
     folders,
     assignments: Object.fromEntries(
@@ -75,9 +75,13 @@ export function withThreadFolderAssignment(
 }
 
 export function selectedThreadFolder(project: ThreadFolderProject): string | null {
-  if (project.selected === null) return null;
+  if (project.selected === null) {
+    return project.folders.length > 0 ? UNASSIGNED_THREAD_FOLDER_ID : null;
+  }
   if (project.selected === UNASSIGNED_THREAD_FOLDER_ID) return project.selected;
-  return project.folders.some((folder) => folder.id === project.selected) ? project.selected : null;
+  return project.folders.some((folder) => folder.id === project.selected)
+    ? project.selected
+    : UNASSIGNED_THREAD_FOLDER_ID;
 }
 
 export function parseThreadFolders(raw: string | null): ThreadFoldersConfig {

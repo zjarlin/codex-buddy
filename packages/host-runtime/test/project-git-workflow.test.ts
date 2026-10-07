@@ -231,6 +231,17 @@ describe("Project Git workflow", () => {
     });
   });
 
+  it("re-resolves a project directory that is not a Git repository once repositories are linked", async () => {
+    const f = fixture();
+    f.projects.delete("a");
+    f.workflow.forget("a");
+
+    // 目录不是仓库时结果为空，不缓存；关联仓库后同一任务应当拿到新的项目范围。
+    expect(await f.workflow.inspect("a")).toMatchObject({ workspace: null });
+    f.projects.set("a", "/linked");
+    expect(await f.workflow.inspect("a")).toMatchObject({ workspace: "/linked" });
+  });
+
   it("re-resolves a changed project for the same task", async () => {
     const f = fixture();
     expect(await f.workflow.inspect("a")).toMatchObject({ workspace: "/repo" });

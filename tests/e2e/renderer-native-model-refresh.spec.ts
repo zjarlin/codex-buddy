@@ -153,7 +153,9 @@ test("native commit adds all 26 models then removes stale models while preservin
     "aria-pressed",
     "true",
   );
-  await expect(page.locator('[data-model-shortcut="old-a"]')).toContainText("目录未列出");
+  await expect(page.locator('[data-model-shortcut="old-a"] [data-model-missing-hint]')).toHaveCount(
+    0,
+  );
   await expect(menu.getByRole("button", { name: "收藏 model-25", exact: true })).toBeVisible();
 
   await page.evaluate(() =>
@@ -180,18 +182,54 @@ test("native commit adds all 26 models then removes stale models while preservin
   expect(errors).toEqual([]);
 });
 
-test("an uncommitted catalog times out with real counts and permits a successful retry", async ({
+test("a missing favorite automatically synchronizes and waits for the native commit", async ({
+  page,
+}) => {
+  const { menu, search, refresh } = await openFixture(page);
+  await search.fill("model-25");
+  await menu.getByRole("button", { name: "Pin 此 ID", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "refetches").length)).toBe(1);
+  await expect(refresh).toHaveAttribute("aria-busy", "true");
+  await expect(search).toBeEnabled();
+  const chip = page.locator('[data-model-shortcut="model-25"]');
+  await expect(chip).toBeEnabled();
+  await expect(chip.locator("[data-model-missing-hint]")).toHaveCount(0);
+  await page.evaluate(() => Reflect.get(globalThis, "commitRefresh")());
+  await expect(refresh).toBeEnabled();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "outcomes"))).toEqual([
+    { returned: 26, synchronized: 26 },
+  ]);
+  await expect(search).toHaveValue("model-25");
+  await expect(menu.getByRole("status")).not.toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "selections"))).toEqual([]);
+});
+
+test("refresh publishes an empty native catalog without removing favorites", async ({ page }) => {
+  const { menu, refresh } = await openFixture(page);
+  await menu.getByRole("button", { name: "收藏 old-a", exact: true }).click();
+  await page.evaluate(() => Reflect.get(globalThis, "configureRefresh")({ ids: [] }));
+  await refresh.click();
+  await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "refetches").length)).toBe(1);
+  await page.evaluate(() => Reflect.get(globalThis, "commitRefresh")());
+  await expect(refresh).toBeEnabled();
+  await expect(menu.getByRole("status")).toContainText("远程返回 0 个，同步 0 个");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "nativeIds")())).toEqual([]);
+  await expect(page.locator('[data-model-shortcut="old-a"]')).toBeEnabled();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refetches"))).toHaveLength(1);
+});
+
+test("an uncommitted catalog reports real partial counts and permits a successful retry", async ({
   page,
 }) => {
   const { menu, search, refresh } = await openFixture(page);
   await search.fill("model-");
   await refresh.click();
-  await expect(menu.getByRole("status")).toHaveText(
-    "供应商返回 26 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。",
-  );
+  await expect(menu.getByRole("status")).toHaveText("远程返回 26 个，同步 1 个");
   await expect(refresh).toBeEnabled();
   await expect(search).toHaveValue("model-");
-  expect(await page.evaluate(() => Reflect.get(globalThis, "outcomes"))).toEqual([]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "outcomes"))).toEqual([
+    { returned: 26, synchronized: 1 },
+  ]);
   await refresh.click();
   await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "refetches").length)).toBe(2);
   await page.evaluate(() => Reflect.get(globalThis, "commitRefresh")());

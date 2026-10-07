@@ -122,6 +122,16 @@ export class GitWorkspaceError extends Error {
   }
 }
 
+/**
+ * git 的英文错误在 `runGit` 中被本地化，因此这里同时匹配原始文案与本地化文案。
+ * 目录不在任何 Git 仓库内时，调用方应继续处理子目录或已关联仓库，而不是把读取失败当成错误。
+ */
+export function isMissingGitRepository(error: unknown): boolean {
+  return (
+    error instanceof GitWorkspaceError && /not a git repository|不是 Git 仓库/u.test(error.message)
+  );
+}
+
 // 仅识别目录已删除或路径不再是目录；权限、Git 可执行文件和仓库损坏错误不能跳过。
 export function isMissingGitDirectory(error: unknown): boolean {
   if (error instanceof GitWorkspaceError) {
@@ -499,7 +509,7 @@ export class GitWorkspace {
       ]);
       return (this.runtime?.realpath ?? realpath)(result.stdout.trim());
     } catch (error) {
-      if (error instanceof GitWorkspaceError && /not a git repository/u.test(error.message)) {
+      if (isMissingGitRepository(error)) {
         return null;
       }
       throw error;

@@ -114,7 +114,7 @@ function forkButton(
   return button;
 }
 
-function sidebarRow(threadId: string, hostId: string) {
+function sidebarRow(threadId: string, hostId: string, conversationId = threadId) {
   const attributes = {
     "data-app-action-sidebar-thread-row": "row-marker",
     "data-app-action-sidebar-thread-id": `${hostId}:${threadId}`,
@@ -127,7 +127,7 @@ function sidebarRow(threadId: string, hostId: string) {
   Object.defineProperty(row, "__reactFiber$test", {
     value: {
       memoizedProps: {
-        conversationId: threadId,
+        conversationId,
         dataAttributes: attributes,
       },
       return: null,
@@ -164,6 +164,19 @@ describe("Renderer external Thread Fork control", () => {
     });
 
     await openRendererThread(hostThreadIdSchema.parse("remote-thread"));
+
+    expect(remote.click).toHaveBeenCalledOnce();
+  });
+
+  it("opens a Remote Host row whose Fiber carries the Host prefix", async () => {
+    const hostId = "remote-ssh-discovered:okm252";
+    const remote = sidebarRow("remote-thread", hostId, `${hostId}:remote-thread`);
+    vi.stubGlobal("document", {
+      querySelectorAll: () => [remote],
+      documentElement: {},
+    });
+
+    await openRendererThread(hostThreadIdSchema.parse("remote-thread"), { hostId });
 
     expect(remote.click).toHaveBeenCalledOnce();
   });

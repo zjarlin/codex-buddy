@@ -144,7 +144,7 @@ test("tabs expose mixed results, missing catalog IDs, reasons and keyboard focus
   await expect(tab(page, "不可用 (1)")).toBeVisible();
   await expect(tab(page, "未探测 (1)")).toBeVisible();
   const missing = menu(page).locator('[data-favorite-model-id="catalog-missing"]');
-  await expect(missing).toContainText("目录未列出");
+  await expect(missing.locator("[data-model-missing-hint]")).toHaveCount(0);
   await missing.click();
   await expect(missing).toHaveAttribute("aria-pressed", "true");
   await expect(missing).toBeFocused();

@@ -151,6 +151,8 @@ export function mountModelShortcuts(
   let menuSignature = "";
   let selecting = false;
   let refreshing = false;
+  let autoRefreshing = false;
+  const attemptedMissingIds = new Set<string>();
   let failure: string | undefined;
   let success: string | undefined;
   let generation = 0;
@@ -182,7 +184,7 @@ export function mountModelShortcuts(
   };
 
   const render = (): void => {
-    const busy = refreshing || view.refreshing === true;
+    const busy = refreshing || autoRefreshing || view.refreshing === true;
     const favorites = readModelFavorites(harness);
     probeState.update({
       enabled: view.supportsAvailabilityProbe === true,
@@ -248,7 +250,7 @@ export function mountModelShortcuts(
           button.textContent = model.label;
           button.title = model.id;
           button.setAttribute("aria-label", model.label);
-          if (!catalog.has(model.id)) {
+          if (!catalog.has(model.id) && !view.supportsCustomModel) {
             button.append(missingHint());
           }
           button.setAttribute("aria-pressed", String(view.selected === model.id));
@@ -342,7 +344,7 @@ export function mountModelShortcuts(
             label.append(hint);
             button.title = `${model.id}\n${reason}`;
           }
-          if (!catalog.has(model.id)) {
+          if (!catalog.has(model.id) && !view.supportsCustomModel) {
             button.append(missingHint());
           }
           return button;
@@ -463,35 +465,61 @@ export function mountModelShortcuts(
     writeModelFavorites(harness, favorites);
     render();
   });
-  for (const button of refreshButtons) {
-    button.addEventListener("click", async () => {
-      if (!onRefresh || button.disabled) return;
-      const request = generation;
-      refreshing = true;
-      failure = undefined;
-      success = undefined;
-      render();
-      try {
-        const before = view.models;
-        const outcome = await onRefresh();
-        if (request === generation) {
-          success = outcome
-            ? modelRefreshMessage(summarizeModelRefresh(before, view.models, outcome), chinese)
-            : modelRefreshFallbackMessage(chinese);
-        }
-      } catch (cause) {
-        if (request === generation)
-          failure = cause instanceof Error ? cause.message : String(cause);
-      } finally {
-        if (request === generation) {
-          refreshing = false;
-          render();
-        }
+  const refreshModels = async (automatic: boolean): Promise<void> => {
+    if (!onRefresh || refreshing || autoRefreshing) return;
+    const request = generation;
+    if (automatic) autoRefreshing = true;
+    else refreshing = true;
+    failure = undefined;
+    success = undefined;
+    render();
+    try {
+      const before = view.models;
+      const outcome = await onRefresh();
+      if (request === generation && !automatic) {
+        success = outcome
+          ? modelRefreshMessage(summarizeModelRefresh(before, view.models, outcome), chinese)
+          : modelRefreshFallbackMessage(chinese);
       }
+    } catch (cause) {
+      if (request === generation) failure = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      if (request === generation) {
+        refreshing = false;
+        autoRefreshing = false;
+        if (!automatic) {
+          const catalog = new Set(view.models.map(({ id }) => id));
+          for (const id of readModelFavorites(harness)) {
+            if (!catalog.has(id)) attemptedMissingIds.add(id);
+          }
+        }
+        render();
+        recoverMissingFavorites();
+      }
+    }
+  };
+  const recoverMissingFavorites = (): void => {
+    if (!onRefresh || isDisabled() || autoRefreshing || probeState.probing) return;
+    const catalog = new Set(view.models.map(({ id }) => id));
+    const missing = [...readModelFavorites(harness)].filter(
+      (id) => !catalog.has(id) && !attemptedMissingIds.has(id),
+    );
+    if (!missing.length) return;
+    // 同一上下文中的缺失 ID 只同步一次，不因重绘或上游永久移除而循环请求。
+    for (const id of missing) attemptedMissingIds.add(id);
+    void refreshModels(true);
+  };
+  for (const button of refreshButtons) {
+    button.addEventListener("click", () => {
+      if (!button.disabled) void refreshModels(false);
     });
   }
-  window.addEventListener(MODEL_FAVORITES_CHANGED, render);
-  window.addEventListener("storage", render);
+  const favoritesChanged = (): void => {
+    render();
+    recoverMissingFavorites();
+  };
+  window.addEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
+  window.addEventListener("storage", favoritesChanged);
   return {
     root,
     update(next: ModelShortcutView, harnessId: string, locale: string, contextId = harnessId) {
@@ -503,6 +531,8 @@ export function mountModelShortcuts(
         success = undefined;
         selecting = false;
         refreshing = false;
+        autoRefreshing = false;
+        attemptedMissingIds.clear();
         harness = harnessId;
         context = contextId;
         signature = "";
@@ -523,12 +553,13 @@ export function mountModelShortcuts(
           : "Search models…";
       search.setAttribute("aria-label", search.placeholder);
       render();
+      recoverMissingFavorites();
     },
     dispose() {
       generation++;
       probeState.reset();
-      window.removeEventListener(MODEL_FAVORITES_CHANGED, render);
-      window.removeEventListener("storage", render);
+      window.removeEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
+      window.removeEventListener("storage", favoritesChanged);
       menu.remove();
       root.remove();
     },

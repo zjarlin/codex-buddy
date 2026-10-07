@@ -126,6 +126,27 @@ test("concurrent Host connections retain separate links and unlink leaves reposi
   expect((await links.unlink(backend, mobile)).repositories).toHaveLength(1);
 });
 
+test("reads only the linked repositories when the project directory is not itself a repository", async () => {
+  const { directory, repository, links, workspace } = await fixture();
+  const backend = await repository("backend");
+  const frontend = await repository("frontend");
+
+  // 项目目录不是仓库：主目录不作为仓库，只沿用目录内已关联的仓库。
+  expect(await readProjectGitRepositories(directory, links, workspace)).toEqual([]);
+
+  await links.link(directory, backend);
+  await links.link(directory, frontend);
+  expect(
+    (await readProjectGitRepositories(directory, links, workspace)).map((entry) => [
+      entry.kind,
+      entry.status.workspace,
+    ]),
+  ).toEqual([
+    ["linked", backend],
+    ["linked", frontend],
+  ]);
+});
+
 test("rejects invalid targets and does not authorize a linked path retargeted to another repository", async () => {
   const { directory, repository, links } = await fixture();
   const backend = await repository("backend");

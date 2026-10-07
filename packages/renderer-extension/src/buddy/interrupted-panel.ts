@@ -5,7 +5,7 @@ import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
-import { readModelFavorites } from "../renderer-model-favorites.js";
+import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "../renderer-model-favorites.js";
 
 type InterruptedThread = BuddyInterrupted["threads"][number];
 const messages = {
@@ -85,6 +85,11 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   let disposed = false;
   let epoch = 0;
   let fingerprint = "";
+  let selectedModelId = "";
+  let customModelId = "";
+  const favoritesChanged = (): void => render();
+  window.addEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
+  window.addEventListener("storage", favoritesChanged);
 
   const current = (target: typeof state) => !disposed && state === target;
   const canResume = (target: typeof state) =>
@@ -121,7 +126,11 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     }
   }
 
-  async function resume(target: typeof state, thread: InterruptedThread): Promise<void> {
+  async function resume(
+    target: typeof state,
+    thread: InterruptedThread,
+    modelId?: string,
+  ): Promise<void> {
     const key = keyFor(thread);
     if (
       !canResume(target) ||
@@ -135,7 +144,11 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     target.failures.delete(key);
     render();
     try {
-      await target.client.buddyContinue(thread.threadId, thread.turnId);
+      if (modelId) {
+        await target.client.buddyContinue(thread.threadId, thread.turnId, modelId);
+      } else {
+        await target.client.buddyContinue(thread.threadId, thread.turnId);
+      }
       target.continued.add(key);
       target.threads = target.threads.filter((candidate) => keyFor(candidate) !== key);
     } catch (failure) {
@@ -156,11 +169,9 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     render();
     try {
       // 只处理点击时的列表；逐条提交，切换连接或开启隐私后停止剩余请求。
-      // TODO: wire modelId into buddyContinue when Host supports per-resume model override.
-      void modelId;
       for (const thread of candidates) {
         if (!canResume(target) || epoch !== startedAtEpoch) break;
-        await resume(target, thread);
+        await resume(target, thread, modelId);
       }
     } finally {
       target.batch = false;
@@ -170,6 +181,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
 
   function render(): void {
     const m = messages[getLocale()];
+    const favoriteIds = state.harnessId ? [...readModelFavorites(state.harnessId)] : [];
     const signature = JSON.stringify([
       getLocale(),
       privateMode,
@@ -181,6 +193,9 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       state.error,
       state.unreadable,
       state.unavailable,
+      state.modelView,
+      state.harnessId,
+      favoriteIds,
       [...state.pending],
       [...state.failures],
     ]);
@@ -243,8 +258,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     defaultOption.textContent = m.resumeWithModel;
     modelSelect.append(defaultOption);
     const view = state.modelView;
-    const favorites =
-      view && state.harnessId ? readModelFavorites(state.harnessId) : new Set<string>();
+    const favorites = new Set(favoriteIds);
     const catalog = new Map(view?.models.map((model) => [model.id, model.label] as const) ?? []);
     const candidates = [...favorites]
       .map((id) => ({ id, label: catalog.get(id) ?? id }))
@@ -264,6 +278,12 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     customOption.value = "__custom__";
     customOption.textContent = chinese() ? "手动输入模型 ID…" : "Enter model ID…";
     modelSelect.append(customOption);
+    const candidateIds = new Set(candidates.map(({ id }) => id));
+    modelSelect.value = candidateIds.has(selectedModelId)
+      ? selectedModelId
+      : customModelId
+        ? "__custom__"
+        : "";
     modelSelect.disabled =
       state.loading || state.batch || state.pending.size > 0 || state.threads.length === 0;
     const modelInput = document.createElement("input");
@@ -271,32 +291,37 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     modelInput.className = "buddy-interrupted-model-input";
     modelInput.placeholder = chinese() ? "粘贴或输入模型 ID" : "Paste or type a model ID";
     modelInput.setAttribute("aria-label", m.resumeWithModel);
-    modelInput.hidden = true;
+    modelInput.hidden = modelSelect.value !== "__custom__";
+    modelInput.value = customModelId;
     modelInput.disabled = modelSelect.disabled;
     const applyModel = document.createElement("button");
     applyModel.type = "button";
     applyModel.dataset.buddyResumeWithModel = "";
     applyModel.textContent = chinese() ? "应用" : "Apply";
     applyModel.disabled = true;
+    const selectedModel = (): string =>
+      modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value.trim();
     const updateApplyState = () => {
-      const value =
-        modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value;
-      applyModel.disabled = !value || modelSelect.disabled;
+      applyModel.disabled = !selectedModel() || modelSelect.disabled;
     };
     modelSelect.addEventListener("change", () => {
+      selectedModelId = modelSelect.value === "__custom__" ? "" : modelSelect.value;
       if (modelSelect.value === "__custom__") {
         modelInput.hidden = false;
         modelInput.focus();
       } else {
         modelInput.hidden = true;
+        customModelId = "";
         modelInput.value = "";
       }
       updateApplyState();
     });
-    modelInput.addEventListener("input", updateApplyState);
+    modelInput.addEventListener("input", () => {
+      customModelId = modelInput.value.trim();
+      updateApplyState();
+    });
     applyModel.addEventListener("click", () => {
-      const value =
-        modelSelect.value === "__custom__" ? modelInput.value.trim() : modelSelect.value;
+      const value = selectedModel();
       if (!value || applyModel.disabled) return;
       void resumeAll(value);
     });
@@ -330,7 +355,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       button.disabled = state.batch || state.pending.has(key);
       const target = state;
       button.addEventListener("click", () => {
-        void resume(target, thread);
+        void resume(target, thread, selectedModel() || undefined);
       });
       item.append(copy, button);
       list.append(item);
@@ -370,6 +395,8 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     refresh,
     dispose() {
       disposed = true;
+      window.removeEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
+      window.removeEventListener("storage", favoritesChanged);
       root.remove();
     },
   };

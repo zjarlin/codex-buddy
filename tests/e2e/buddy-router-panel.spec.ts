@@ -63,8 +63,8 @@ const { outputFiles } = await build({
           globalThis.buddyInterruptedReads += 1;
           return { threads: structuredClone(globalThis.buddyInterrupted), runningThreadIds: [], unreadable: 0 };
         },
-        buddyContinue: async (threadId, turnId) => {
-          globalThis.buddyContinueCalls.push([threadId, turnId]);
+        buddyContinue: async (threadId, turnId, model) => {
+          globalThis.buddyContinueCalls.push([threadId, turnId, model]);
           if (globalThis.buddyContinueFailure) throw new Error("网络不可用");
           globalThis.buddyInterrupted = globalThis.buddyInterrupted.filter(thread => thread.threadId !== threadId);
         },
@@ -84,10 +84,14 @@ const { outputFiles } = await build({
       favorites.dataset.codexhostModelShortcuts = "";
       favorites.textContent = "收藏模型";
       document.body.replaceChildren(favorites, anchor);
+      globalThis.setBuddyModelShortcuts = (harnessId = "codex") => {
+        globalThis.buddyControl.setModelShortcutsView({ models: [{ id: "gpt-5.6", label: "GPT-5.6" }], supportsCustomModel: true }, harnessId);
+      };
       globalThis.buddyControl = installBuddyControl(
         () => globalThis.buddyContextEnabled ? { anchor, threadId: globalThis.buddyThreadId, client: globalThis.buddyClient } : null,
         () => "zh-CN"
       );
+      globalThis.setBuddyModelShortcuts();
       globalThis.setBuddyDecision = async (decision) => {
         snapshot.decisions = [decision];
         await globalThis.buddyControl.refresh();
@@ -156,20 +160,22 @@ test("lists recently interrupted conversations and resumes them from the panel",
   await page.addScriptTag({ content: browserBundle });
   await page.locator("[data-buddy-router] summary").click();
   const group = page.locator("[data-buddy-recovery] .buddy-interrupted");
+  const modelSelect = group.getByRole("combobox", { name: "以某模型 ID 继续" });
+  await modelSelect.selectOption("gpt-5.6");
   await expect(page.locator("[data-buddy-recovery]")).toContainText("最近中断会话");
   await expect(group).toContainText("网络中断的会话");
   await expect(group).toContainText("已中断");
   await group.getByRole("button", { name: "恢复" }).click();
   await expect(group).toContainText("恢复失败: 网络不可用");
   expect(await page.evaluate(() => Reflect.get(globalThis, "buddyContinueCalls"))).toEqual([
-    ["stalled", "interrupted-turn"],
+    ["stalled", "interrupted-turn", "gpt-5.6"],
   ]);
   await page.evaluate(() => Reflect.set(globalThis, "buddyContinueFailure", false));
   await group.getByRole("button", { name: "恢复" }).click();
   await expect(group).toContainText("暂无最近中断会话。");
   expect(await page.evaluate(() => Reflect.get(globalThis, "buddyContinueCalls"))).toEqual([
-    ["stalled", "interrupted-turn"],
-    ["stalled", "interrupted-turn"],
+    ["stalled", "interrupted-turn", "gpt-5.6"],
+    ["stalled", "interrupted-turn", "gpt-5.6"],
   ]);
   await page.getByRole("tab", { name: "路由" }).click();
   await page.getByRole("switch", { name: /Auto Router/ }).click();
@@ -201,8 +207,9 @@ for (const width of [390, 1200]) {
       Reflect.get(globalThis, "buddyClient").buddyContinue = async (
         threadId: string,
         turnId: string,
+        model?: string,
       ) => {
-        Reflect.get(globalThis, "buddyContinueCalls").push([threadId, turnId]);
+        Reflect.get(globalThis, "buddyContinueCalls").push([threadId, turnId, model]);
         if (threadId === "failed" && Reflect.get(globalThis, "buddyContinueFailure")) {
           await new Promise((resolve) => Reflect.set(globalThis, "finishBatchFirst", resolve));
           throw new Error("网络不可用");
@@ -228,9 +235,9 @@ for (const width of [390, 1200]) {
     await expect(group.locator(".buddy-interrupted-item")).toHaveCount(1);
     await expect(group).toContainText("恢复失败: 网络不可用");
     expect(await page.evaluate(() => Reflect.get(globalThis, "buddyContinueCalls"))).toEqual([
-      ["failed", "failed-turn"],
-      ["interrupted", "interrupted-turn"],
-      ["cancelled", "cancelled-turn"],
+      ["failed", "failed-turn", undefined],
+      ["interrupted", "interrupted-turn", undefined],
+      ["cancelled", "cancelled-turn", undefined],
     ]);
     // 服务端列表短暂滞后时，已经确认恢复的回合不能重新进入批量队列。
     await group.getByRole("button", { name: "刷新中断会话" }).click();
@@ -314,8 +321,9 @@ for (const stop of ["private", "host", "dispose"] as const) {
       Reflect.get(globalThis, "buddyClient").buddyContinue = async (
         threadId: string,
         turnId: string,
+        model?: string,
       ) => {
-        Reflect.get(globalThis, "buddyContinueCalls").push([threadId, turnId]);
+        Reflect.get(globalThis, "buddyContinueCalls").push([threadId, turnId, model]);
         await new Promise((resolve) => Reflect.set(globalThis, "finishResume", resolve));
       };
     });
@@ -343,7 +351,7 @@ for (const stop of ["private", "host", "dispose"] as const) {
       await expect(page.locator(".buddy-interrupted")).toContainText("隐私模式");
     else await expect(page.locator(".buddy-interrupted")).toContainText("暂无最近中断会话。");
     expect(await page.evaluate(() => Reflect.get(globalThis, "buddyContinueCalls"))).toEqual([
-      ["stalled", "interrupted-turn"],
+      ["stalled", "interrupted-turn", undefined],
     ]);
   });
 }

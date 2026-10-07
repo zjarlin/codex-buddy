@@ -516,7 +516,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   readThreadActivity?(threadId: string): Promise<boolean>;
   readAutoModelRoutes?(threadId: string, runId?: string): Promise<AutoModelRoutesResult>;
-  buddyContinue?(threadId: string, turnId: string): Promise<void>;
+  buddyContinue?(threadId: string, turnId: string, model?: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   translate?(input: {
@@ -556,7 +556,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   /** Send one user message into an existing Thread and return the new Turn id.
    * Uses the same native `turn/start` path the Composer and turn actions use, so
    * official Threads and Host-projected external Harness Threads share one route. */
-  sendThreadMessage?(threadId: string, text: string): Promise<string>;
+  sendThreadMessage?(threadId: string, text: string, model?: string): Promise<string>;
   forkThread(input: ExternalThreadForkParams): Promise<ExternalThreadForkResult>;
   inspectHarness(
     input: HarnessInspectParams,
@@ -1226,8 +1226,12 @@ export function createRendererModelClient(
       }
       return status.type === "active";
     },
-    buddyContinue: async (threadId: string, turnId: string) => {
-      await manager.sendRequest(BUDDY_CONTINUE_METHOD, { threadId, turnId });
+    buddyContinue: async (threadId: string, turnId: string, model?: string) => {
+      await manager.sendRequest(BUDDY_CONTINUE_METHOD, {
+        threadId,
+        turnId,
+        ...(model ? { model } : {}),
+      });
     },
     archiveCompletedThreads: async (threadId: string) =>
       threadArchiveCompletedResultSchema.parse(
@@ -1317,10 +1321,10 @@ export function createRendererModelClient(
     ): Promise<unknown> {
       return manager.sendRequest(method, params);
     },
-    async sendThreadMessage(threadId: string, text: string): Promise<string> {
+    async sendThreadMessage(threadId: string, text: string, model?: string): Promise<string> {
       const response = await manager.sendRequest(
         NATIVE_TURN_START_METHOD,
-        { threadId, input: [{ type: "text", text }] },
+        { threadId, input: [{ type: "text", text }], ...(model ? { model } : {}) },
         { priority: "interactive" },
       );
       const turn = isRecord(response) && isRecord(response.turn) ? response.turn : null;

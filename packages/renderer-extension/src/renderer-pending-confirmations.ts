@@ -19,6 +19,7 @@ import {
   threadIdFromSidebarRowElement,
 } from "./renderer-sidebar-agent-icons.js";
 import { appendMarkdownBlocks } from "./markdown-renderer.js";
+import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "./renderer-model-favorites.js";
 
 type Locale = "zh-CN" | "en";
 type NotificationManager = {
@@ -80,6 +81,9 @@ function messages(locale: Locale) {
         read: "标为已读",
         archive: "归档",
         close: "关闭",
+        model: "续发模型",
+        currentModel: "使用原模型",
+        modelLoading: "正在读取收藏模型…",
         placeholder: "输入续发内容…",
         send: "发送",
         sendFailed: "发送失败，请重试。",
@@ -98,6 +102,9 @@ function messages(locale: Locale) {
         read: "Mark read",
         archive: "Archive",
         close: "Close",
+        model: "Follow-up model",
+        currentModel: "Use current model",
+        modelLoading: "Loading favorite models…",
         placeholder: "Type a follow-up message…",
         send: "Send",
         sendFailed: "Could not send. Try again.",
@@ -184,6 +191,10 @@ function itemSummary(threadId: string, title: string, hostId: string): string {
   return JSON.stringify([threadId, title, hostId]);
 }
 
+function modelThreadKey(entry: Pick<PendingConfirmationRecord, "hostId" | "threadId">): string {
+  return entry.hostId + "\u0000" + entry.threadId;
+}
+
 export function installRendererPendingConfirmations(options: PendingConfirmationDomOptions): {
   refresh(): void;
   dispose(): void;
@@ -208,6 +219,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const archive = document.createElement("button");
   const close = document.createElement("button");
   const composer = document.createElement("div");
+  const modelSelect = document.createElement("select");
   const input = document.createElement("textarea");
   const send = document.createElement("button");
   const notice = document.createElement("p");
@@ -219,6 +231,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   let sending = false;
   let noticeMessage = "";
   let inputEntryKey = "";
+  let modelEntryKey = "";
+  let modelOptionsKey = "";
+  const modelChoices = new Map<string, { harnessId: string; models: string[] } | null>();
+  const modelRequests = new Set<string>();
   const silentEntries = new Set<string>();
   let reading: { hostId: string; threadId: string; turnId: string; since: number } | null = null;
   let readTimer: number | null = null;
@@ -254,6 +270,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-summary hr{border:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);margin:8px 0}
 [${MODAL}] .codexhost-pending-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
 [${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;margin-top:12px}
+[${MODAL}] .codexhost-pending-composer{flex-wrap:wrap}
+[${MODAL}] .codexhost-pending-model{flex:0 1 180px;min-width:130px;max-width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit}
 [${MODAL}] .codexhost-pending-input{flex:1;min-height:36px;max-height:120px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit;resize:vertical}
 [${MODAL}] .codexhost-pending-input:focus-visible{outline:2px solid Highlight;outline-offset:1px}
 [${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:6px 11px;border:1px solid Highlight;border-radius:6px;background:Highlight;color:HighlightText;font:inherit;cursor:pointer}
@@ -280,12 +298,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   summary.className = "codexhost-pending-summary";
   time.className = "codexhost-pending-time";
   composer.className = "codexhost-pending-composer";
+  modelSelect.className = "codexhost-pending-model";
   input.className = "codexhost-pending-input";
   input.rows = 2;
   send.type = "button";
   send.className = "codexhost-pending-send";
   send.append(createElement(Send, { width: 15, height: 15, "aria-hidden": "true" }));
-  composer.append(input, send);
+  composer.append(modelSelect, input, send);
   body.append(kind, conversation, summary, time, composer);
   view.type = read.type = archive.type = "button";
   view.dataset.primary = "true";
@@ -309,6 +328,31 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     if (readTimer !== null) window.clearTimeout(readTimer);
     readTimer = null;
     reading = null;
+  };
+
+  const ensureModelChoices = (entry: PendingConfirmationRecord): void => {
+    const key = entry.hostId + "\u0000" + entry.threadId;
+    if (modelChoices.has(key) || modelRequests.has(key)) return;
+    const client = options.getClient(entry.hostId);
+    if (!client?.inspectThread) {
+      modelChoices.set(key, null);
+      return;
+    }
+    modelRequests.add(key);
+    void client
+      .inspectThread({ threadId: hostThreadIdSchema.parse(entry.threadId) })
+      .then((inspection) => {
+        const harnessId = inspection.owner === "codex" ? "codex" : inspection.harnessId;
+        modelChoices.set(key, {
+          harnessId,
+          models: [...readModelFavorites(harnessId)],
+        });
+      })
+      .catch(() => modelChoices.set(key, null))
+      .finally(() => {
+        modelRequests.delete(key);
+        render();
+      });
   };
 
   const confirm = (entry: PendingConfirmationRecord): boolean => {
@@ -347,11 +391,16 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       render();
       return;
     }
+    const selectedModel = modelSelect.value.trim();
     sending = true;
     noticeMessage = "";
     render();
     try {
-      await client.sendThreadMessage(entry.threadId, value);
+      if (selectedModel) {
+        await client.sendThreadMessage(entry.threadId, value, selectedModel);
+      } else {
+        await client.sendThreadMessage(entry.threadId, value);
+      }
       sending = false;
       input.value = "";
       await open(entry);
@@ -388,6 +437,14 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     }
     const entry = visibleEntry ?? latest;
     visibleEntry = entry;
+    const modelKey = modelThreadKey(entry);
+    ensureModelChoices(entry);
+    const modelChoice = modelChoices.get(modelKey) ?? null;
+    const modelChoiceSignature = modelChoice
+      ? modelChoice.models.join("\u0001")
+      : modelRequests.has(modelKey)
+        ? "loading"
+        : "unavailable";
     const key = [
       locale,
       entry.hostId,
@@ -398,6 +455,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       entries.length,
       noticeMessage,
       sending,
+      modelChoiceSignature,
     ].join("\u0000");
     if (key === renderedKey && !modal.hidden) return;
     renderedKey = key;
@@ -421,6 +479,42 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       input.value = "";
       noticeMessage = "";
     }
+    const modelOptionsKeyForEntry = modelKey + "\u0000" + modelChoiceSignature + "\u0000" + locale;
+    if (modelEntryKey !== modelKey) {
+      modelEntryKey = modelKey;
+      modelSelect.value = "";
+      modelOptionsKey = "";
+    }
+    if (modelOptionsKey !== modelOptionsKeyForEntry) {
+      const selectedModel = modelSelect.value;
+      modelSelect.replaceChildren();
+      const current = document.createElement("option");
+      current.value = "";
+      current.textContent = copy.currentModel;
+      modelSelect.append(current);
+      for (const id of modelChoice?.models ?? []) {
+        const option = document.createElement("option");
+        option.value = id;
+        option.textContent = id;
+        option.title = id;
+        modelSelect.append(option);
+      }
+      if (!modelChoice && modelRequests.has(modelKey)) {
+        const loading = document.createElement("option");
+        loading.value = "__loading__";
+        loading.disabled = true;
+        loading.textContent = copy.modelLoading;
+        modelSelect.append(loading);
+      }
+      modelSelect.value = [...modelSelect.options].some((option) => option.value === selectedModel)
+        ? selectedModel
+        : "";
+      modelOptionsKey = modelOptionsKeyForEntry;
+    }
+    modelSelect.hidden = !modelChoice || modelChoice.models.length === 0;
+    modelSelect.disabled = sending;
+    modelSelect.title = copy.model;
+    modelSelect.setAttribute("aria-label", copy.model);
     input.placeholder = copy.placeholder;
     input.disabled = sending;
     send.textContent = copy.send;
@@ -735,11 +829,19 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     renderedKey = "";
     render();
   };
+  const onModelFavoritesChanged = (): void => {
+    for (const choice of modelChoices.values()) {
+      if (choice) choice.models = [...readModelFavorites(choice.harnessId)];
+    }
+    renderedKey = "";
+    render();
+  };
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("focus", onFocus);
   window.addEventListener("blur", onBlur);
   document.addEventListener("visibilitychange", onBlur);
   window.addEventListener("storage", onStorage);
+  window.addEventListener(MODEL_FAVORITES_CHANGED, onModelFavoritesChanged);
   const unsubscribeModel = model.subscribe(() => {
     renderedKey = "";
     render();
@@ -773,6 +875,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("visibilitychange", onBlur);
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener(MODEL_FAVORITES_CHANGED, onModelFavoritesChanged);
       modal.remove();
       style.remove();
     },

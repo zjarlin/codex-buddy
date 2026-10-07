@@ -36,7 +36,11 @@ export type BuddyAnswer = z.infer<typeof buddyAnswerSchema>;
 export const BUDDY_INTERRUPTED_METHOD = "codexhost/buddy/interrupted";
 export const BUDDY_CONTINUE_METHOD = "codexhost/buddy/continue";
 export const buddyContinueSchema = z
-  .object({ threadId: z.string().min(1), turnId: z.string().min(1) })
+  .object({
+    threadId: z.string().min(1),
+    turnId: z.string().min(1),
+    model: z.string().trim().min(1).max(512).optional(),
+  })
   .strict();
 export const buddyInterruptedSchema = z.object({
   threads: z

@@ -41,13 +41,16 @@ const { outputFiles } = await build({
         const requests = [];
         const opened = [];
         const sent = [];
+        globalThis.sentMessages = sent;
+        localStorage.setItem("codexhost.model-favorites.v1:codex", JSON.stringify(["gpt-5.6"]));
         const client = {
+          inspectThread: async () => ({ owner: "codex", locked: true }),
           requestThreadProjection: async (method, params) => {
             requests.push([method, params]);
             return {};
           },
-          sendThreadMessage: async (threadId, text) => {
-            sent.push([threadId, text]);
+          sendThreadMessage: async (threadId, text, model) => {
+            sent.push([threadId, text, model]);
             return "turn-follow-up";
           },
         };
@@ -235,11 +238,14 @@ test("composer input sends a follow-up into the pending conversation", async ({ 
     Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "结果。"),
   );
   await expect(modal).toBeVisible();
+  const modelSelect = modal.getByRole("combobox", { name: "续发模型" });
+  await expect(modelSelect).toBeVisible();
+  await modelSelect.selectOption("gpt-5.6");
   await modal.getByPlaceholder("输入续发内容…").fill("再补充一点");
   await modal.getByRole("button", { name: "发送" }).click();
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").sent))
-    .toEqual([["thread-b", "再补充一点"]]);
+    .toEqual([["thread-b", "再补充一点", "gpt-5.6"]]);
   // Sending reuses the open path so the user lands on the continuing conversation.
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened))

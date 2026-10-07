@@ -117,6 +117,68 @@ const openShortcuts = async (page: Page) => {
   await page.addScriptTag({ content: bundle });
 };
 
+test("missing favorites recover automatically without blocking selection or probing", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("codexhost.model-favorites.v1:codex", '["gamma"]');
+  });
+  await openShortcuts(page);
+  const chip = page.locator('[data-model-shortcut="gamma"]');
+  await expect(chip).toBeEnabled();
+  await expect(chip.locator("[data-model-missing-hint]")).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
+  await chip.click();
+  await expect(page.locator("#native")).toHaveText("gamma");
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
+  await expect(chip).toHaveAccessibleName("GPT Gamma");
+  await expect(chip).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("[data-model-shortcuts-refresh]").first()).toBeEnabled();
+  await page.evaluate(() => Reflect.get(globalThis, "setView")({}));
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
+  await page.screenshot({ path: "test-results/model-shortcuts-auto-recovery.png" });
+});
+
+test("permanently missing favorites do not loop and automatic failures permit manual retry", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("codexhost.model-favorites.v1:codex", '["Custom/Only"]');
+  });
+  await openShortcuts(page);
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(true));
+  await expect(page.locator("[data-codexhost-model-shortcuts] [role=status]:visible")).toHaveText(
+    "Refresh unavailable",
+  );
+  await page.evaluate(() => Reflect.get(globalThis, "setView")({}));
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
+  const refresh = page.locator("[data-model-shortcuts-refresh]").first();
+  await refresh.click();
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
+  await expect(refresh).toBeEnabled();
+  await page.evaluate(() => Reflect.get(globalThis, "setView")({}));
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(2);
+  await expect(page.locator('[data-model-shortcut="Custom/Only"]')).toBeEnabled();
+});
+
+test("automatic recovery discards errors after switching context", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("codexhost.model-favorites.v1:codex", '["gamma"]');
+  });
+  await openShortcuts(page);
+  await page.evaluate(() => {
+    const finishOldRefresh = Reflect.get(globalThis, "finishRefresh");
+    Reflect.get(globalThis, "changeContext")("next-thread");
+    finishOldRefresh(true);
+  });
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(2);
+  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
+  await expect(page.locator('[data-model-shortcut="gamma"]')).toHaveAccessibleName("GPT Gamma");
+  await expect(page.locator("[data-codexhost-model-shortcuts] [role=status]:visible")).toHaveCount(
+    0,
+  );
+});
+
 test("manual IDs preserve case and slashes, pin without selecting, and survive reload", async ({
   page,
 }) => {
@@ -155,7 +217,7 @@ test("manual IDs preserve case and slashes, pin without selecting, and survive r
   await page.addScriptTag({ content: bundle });
   const chip = page.locator('[data-model-shortcut="Vendor/Model-A:Latest"]');
   await expect(chip).toBeVisible();
-  await expect(chip).toContainText("目录未列出");
+  await expect(chip.locator("[data-model-missing-hint]")).toHaveCount(0);
   await chip.click();
   await expect(chip).toHaveAttribute("aria-pressed", "true");
   expect(
@@ -178,7 +240,7 @@ test("catalog removal preserves native pins and empty catalogs still allow manua
   await page.evaluate(() => Reflect.get(globalThis, "setModels")(["deepseek-b", "locked"]));
   const removedPin = page.locator('[data-model-shortcut="gpt-a"]');
   await expect(removedPin).toHaveAccessibleName("gpt-a");
-  await expect(removedPin).toContainText("目录未列出");
+  await expect(removedPin.locator("[data-model-missing-hint]")).toHaveCount(0);
   await expect(menu.getByRole("button", { name: "取消收藏 gpt-a", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await removedPin.click();

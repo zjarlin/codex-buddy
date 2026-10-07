@@ -714,17 +714,6 @@ export function mountComposerAgentControl(
     modelAvailability,
   );
   composer.before(modelShortcuts.root);
-  // Forward current model view into buddy interrupted panel without altering existing selection behavior.
-  let lastShortcutsHarnessId = "";
-  let shortcutsViewCallback: ((view: ModelShortcutView, harnessId: string) => void) | undefined;
-  const originalShortcutsUpdate = modelShortcuts.update.bind(modelShortcuts);
-  modelShortcuts.update = ((...args: Parameters<typeof originalShortcutsUpdate>) => {
-    originalShortcutsUpdate(...args);
-    const [view, harnessId] = args;
-    if (harnessId && harnessId !== lastShortcutsHarnessId) lastShortcutsHarnessId = harnessId;
-    shortcutsViewCallback?.(view, lastShortcutsHarnessId);
-  }) as typeof originalShortcutsUpdate;
-
   const toolbar = sendButton.parentElement;
   const harnessCommands = mountRendererHarnessCommandControl(
     toolbar ?? composer,
@@ -745,7 +734,7 @@ export function mountComposerAgentControl(
   }
 
   if (!toolbar) composer.append(modelPicker.root, picker.root);
-  const control = {
+  const control: ComposerAgentControl = {
     composer,
     composerId,
     root: picker.root,
@@ -763,11 +752,17 @@ export function mountComposerAgentControl(
     sessionTransfer,
     sendButton,
     sendDisabledBeforeSwitch: null,
-  } satisfies ComposerAgentControl;
-  // Attach optional callback after construction to satisfy exactOptionalPropertyTypes.
-  (
-    control as unknown as { onModelShortcutsViewChange?: typeof shortcutsViewCallback }
-  ).onModelShortcutsViewChange = shortcutsViewCallback;
+  };
+  // Forward the effective shortcut view only after the control object exists; callers use
+  // the public callback to project this view into Host-owned controls.
+  let lastShortcutsHarnessId = "";
+  const originalShortcutsUpdate = modelShortcuts.update.bind(modelShortcuts);
+  modelShortcuts.update = ((...args: Parameters<typeof originalShortcutsUpdate>) => {
+    originalShortcutsUpdate(...args);
+    const [view, harnessId] = args;
+    if (harnessId && harnessId !== lastShortcutsHarnessId) lastShortcutsHarnessId = harnessId;
+    control.onModelShortcutsViewChange?.(view, lastShortcutsHarnessId);
+  }) as typeof originalShortcutsUpdate;
   refreshTrailingClusterPlacement(control);
   refreshUsagePlacement(control);
   refreshCreditsPlacement(control);

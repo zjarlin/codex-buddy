@@ -77,6 +77,32 @@ it("reads persisted recommendations before generating, coalesces polling and sen
   expect(JSON.stringify(request)).not.toContain("secret");
   expect(request).not.toHaveProperty("prompt");
 });
+it.each([
+  ["array", () => ({ data: [] })],
+  ["object", () => ({ data: null })],
+])("falls back to generation for an empty %s response", async (_name, response) => {
+  const f = await fixture();
+  const fetch = vi.fn(async (_url: URL, options: RequestInit) =>
+    options.method === "GET" ? Response.json(response()) : Response.json(f.value),
+  );
+  vi.stubGlobal("fetch", fetch);
+  f.service.inspect(f.input, true);
+  await vi.waitFor(() => expect(f.service.inspect(f.input, true).state).toBe("completed"));
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(fetch.mock.calls[1]?.[1].method).toBe("POST");
+});
+it.each([401, 403, 422])(
+  "treats HTTP %s as unsupported recommendation capability",
+  async (status) => {
+    const f = await fixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status })),
+    );
+    f.service.inspect(f.input, true);
+    await vi.waitFor(() => expect(f.service.inspect(f.input, true).state).toBe("unsupported"));
+  },
+);
 it.each(["thread", "turn", "action"])("rejects mismatched %s results", async (kind) => {
   const f = await fixture();
   if (kind === "thread") f.value.session_id = "019ccb31-9520-7120-bc17-556e9a92d861";

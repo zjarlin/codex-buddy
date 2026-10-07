@@ -190,8 +190,8 @@ export class InterruptedConversations {
     threadId: string,
     turnId: string,
     options?: {
-      signal: AbortSignal;
-      model: string;
+      signal?: AbortSignal;
+      model?: string;
       collaborationMode?: JsonObject;
       context?: JsonObject;
     },
@@ -200,7 +200,7 @@ export class InterruptedConversations {
     this.#pending.add(threadId);
     try {
       await this.#checkAllowed();
-      options?.signal.throwIfAborted();
+      options?.signal?.throwIfAborted();
       const verify = async () => {
         const { thread, turn } = await this.#read(threadId);
         if (this.busy(threadId) || object(thread.status).type === "active")
@@ -210,26 +210,19 @@ export class InterruptedConversations {
         }
       };
       await verify();
-      options?.signal.throwIfAborted();
+      options?.signal?.throwIfAborted();
       // 原生 resume 恢复会话配置，不覆盖模型、权限或工作目录。
       result(await this.request("thread/resume", { threadId }));
       await verify();
       await this.#checkAllowed();
-      options?.signal.throwIfAborted();
+      options?.signal?.throwIfAborted();
       const response = result(
         await this.request("turn/start", {
           ...options?.context,
           threadId,
           input: [{ type: "text", text: continuation }],
-          ...(options
-            ? {
-                model: options.model,
-                effort: null,
-                ...(options.collaborationMode
-                  ? { collaborationMode: options.collaborationMode }
-                  : {}),
-              }
-            : {}),
+          ...(options?.model ? { model: options.model, effort: null } : {}),
+          ...(options?.collaborationMode ? { collaborationMode: options.collaborationMode } : {}),
         }),
       );
       const accepted = object(response.turn).id;

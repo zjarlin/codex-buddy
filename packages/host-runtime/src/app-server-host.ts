@@ -267,6 +267,7 @@ import {
   updateStatusResultSchema,
   type AccountCreditsSnapshot,
   type HarnessModelRef,
+  type HarnessModelSelectionState,
   type HarnessPermissionModeId,
   type HarnessThinkingOptionId,
   type HostInteractionId,
@@ -788,7 +789,7 @@ export class AppServerHost {
     this.#gitWorkflow = new ProjectGitWorkflow({
       ...(options.gitWorkflowGroup ? { group: options.gitWorkflowGroup } : {}),
       project: async (threadId) =>
-        this.#gitWorkspace.root(await this.#gitWorkspaceForThread(threadId)),
+        this.#projectGitRoot(await this.#gitWorkspaceForThread(threadId)),
       activeThreads: () => this.#projectActiveThreads(),
       repositories: (cwd) =>
         readProjectGitRepositories(cwd, this.#gitRepositoryLinks, this.#gitWorkspace),
@@ -1510,7 +1511,11 @@ export class AppServerHost {
         if (request.method === BUDDY_CONTINUE_METHOD) {
           const params = buddyContinueSchema.parse(request.params);
           this.#buddy?.cancel(params.threadId);
-          await this.#interrupted.continue(params.threadId, params.turnId);
+          await this.#interrupted.continue(
+            params.threadId,
+            params.turnId,
+            params.model ? { model: params.model } : undefined,
+          );
           await this.#writer.json(rpcEnvelope(request, { result: {} }));
         } else {
           await this.#writer.json(
@@ -3626,17 +3631,7 @@ export class AppServerHost {
         commands: { commands: [] },
       };
     }
-    if (
-      !privateMode &&
-      (await this.#gitWorkspace.root(cwd).catch((error: unknown) => {
-        if (
-          error instanceof GitWorkspaceError &&
-          /not a git repository|不是 Git 仓库/u.test(error.message)
-        )
-          return null;
-        throw error;
-      }))
-    ) {
+    if (!privateMode && (await this.#projectGitRoot(cwd))) {
       const repositories = await readProjectGitRepositories(
         cwd,
         this.#gitRepositoryLinks,
@@ -3762,6 +3757,15 @@ export class AppServerHost {
     const cwd = thread && typeof thread.cwd === "string" ? thread.cwd.trim() : "";
     if (!cwd) throw new GitWorkspaceError("当前任务没有可用的工作区路径。");
     return cwd;
+  }
+
+  // 会话项目目录本身可能不是 Git 仓库：仓库可能在子目录里（由关联记录提供）。
+  // 主目录不是仓库时，只有存在已关联仓库才把该目录当作项目范围，避免把任意目录当成项目。
+  async #projectGitRoot(cwd: string): Promise<string | null> {
+    const root = await this.#gitWorkspace.root(cwd);
+    if (root) return root;
+    const linked = await this.#gitRepositoryLinks.list(cwd);
+    return linked.repositories.length > 1 ? this.#gitWorkspace.realpath(cwd) : null;
   }
 
   async #handleWorkspaceFilesRequest(request: JsonRpcRequest): Promise<void> {
@@ -4749,6 +4753,65 @@ export class AppServerHost {
     }
   }
 
+  async #selectExternalThreadModel(
+    thread: ExternalThread,
+    model: HarnessModelRef,
+  ): Promise<HarnessModelSelectionState> {
+    if (!thread.session.capabilities.configuration.selectModel) {
+      throw new Error("External Harness does not support Model selection");
+    }
+    const beforeRevision = thread.stateObserver.revision;
+    const result = await thread.session.execute({ type: "model.select", model });
+    if (!result.ok) throw new Error(result.error.message);
+    const state = await thread.stateObserver.waitForChange(beforeRevision);
+    const projected = harnessModelSelectionStateSchema.parse({
+      ...(state.effectiveModel ? { effectiveModel: state.effectiveModel } : {}),
+      ...(state.resolvedModelLabel ? { resolvedModelLabel: state.resolvedModelLabel } : {}),
+      ...(state.effectiveThinkingOptionId
+        ? { effectiveThinkingOptionId: state.effectiveThinkingOptionId }
+        : {}),
+      ...(state.availableThinkingOptions
+        ? { availableThinkingOptions: state.availableThinkingOptions }
+        : {}),
+      ...(state.effectivePermissionModeId
+        ? { effectivePermissionModeId: state.effectivePermissionModeId }
+        : {}),
+    });
+    if (!projected.effectiveModel)
+      throw new Error("Harness Session did not report an effective Model");
+    thread.requestedModel = projected.effectiveModel;
+    const previousSelection = decodeExternalTransportSelection(
+      thread.harnessId,
+      thread.transportModelId,
+    );
+    const transportModelId = encodeExternalTransportSelection(thread.harnessId, {
+      ...(previousSelection ?? {}),
+      model: projected.effectiveModel,
+      ...(projected.effectiveThinkingOptionId
+        ? { thinkingOptionId: projected.effectiveThinkingOptionId }
+        : {}),
+      ...(projected.effectivePermissionModeId
+        ? { permissionModeId: projected.effectivePermissionModeId }
+        : {}),
+    });
+    thread.transportModelId = transportModelId;
+    try {
+      thread.record = await this.#repository.setTransportModelId(
+        thread.record.hostThreadId,
+        transportModelId,
+      );
+    } catch (error) {
+      this.#diagnose(error);
+    }
+    thread.thread = externalThreadValue({
+      record: { ...thread.record, transportModelId },
+      turns: thread.turns,
+      sessionId: thread.sessionId,
+      running: thread.running,
+    });
+    return projected;
+  }
+
   async #selectThreadModel(request: JsonRpcRequest): Promise<void> {
     const params = threadModelSelectParamsSchema.safeParse(request.params);
     if (!params.success) {
@@ -4767,43 +4830,12 @@ export class AppServerHost {
       );
       return;
     }
-    if (!thread.session.capabilities.configuration.selectModel) {
-      await this.#writer.json(
-        rpcError(request, -32078, "External Harness does not support Model selection"),
-      );
-      return;
-    }
-    const beforeRevision = thread.stateObserver.revision;
-    const result = await thread.session.execute({
-      type: "model.select",
-      model: params.data.model,
-    });
-    if (!result.ok) {
-      await this.#writer.json(rpcError(request, -32078, result.error.message));
-      return;
-    }
     try {
-      const state = await thread.stateObserver.waitForChange(beforeRevision);
-      const projected = harnessModelSelectionStateSchema.parse({
-        ...(state.effectiveModel ? { effectiveModel: state.effectiveModel } : {}),
-        ...(state.resolvedModelLabel ? { resolvedModelLabel: state.resolvedModelLabel } : {}),
-        ...(state.effectiveThinkingOptionId
-          ? { effectiveThinkingOptionId: state.effectiveThinkingOptionId }
-          : {}),
-        ...(state.availableThinkingOptions
-          ? { availableThinkingOptions: state.availableThinkingOptions }
-          : {}),
-        ...(state.effectivePermissionModeId
-          ? { effectivePermissionModeId: state.effectivePermissionModeId }
-          : {}),
-      });
-      if (!projected.effectiveModel) {
-        throw new Error("Harness Session did not report an effective Model");
-      }
+      const projected = await this.#selectExternalThreadModel(thread, params.data.model);
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(projected) }));
     } catch (error) {
       await this.#writer.json(
-        rpcError(request, -32078, `Model state was not confirmed: ${errorMessage(error)}`),
+        rpcError(request, -32078, "Model state was not confirmed: " + errorMessage(error)),
       );
     }
   }
@@ -5587,18 +5619,29 @@ export class AppServerHost {
     }
     const params = requestObject(request);
     if (typeof params.model === "string") {
-      let route: ReturnType<typeof decodeCreateRoute>;
+      let selection: ReturnType<typeof decodeExternalTransportSelection>;
       try {
-        route = decodeCreateRoute({ id: request.id, method: "thread/start", params });
+        selection = decodeExternalTransportSelection(thread.harnessId, params.model);
       } catch (error) {
         await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
         return;
       }
-      if (route?.harnessId !== "codex" && route?.harnessId !== thread.harnessId) {
-        await this.#writer.json(
-          rpcError(request, -32602, "Turn Model carrier does not belong to the Thread Harness"),
-        );
-        return;
+      if (selection === null) {
+        const model = harnessModelRefSchema.safeParse({ id: params.model });
+        if (!model.success) {
+          await this.#writer.json(
+            rpcError(request, -32602, "Turn Model does not belong to the Thread Harness"),
+          );
+          return;
+        }
+        try {
+          await this.#selectExternalThreadModel(thread, model.data);
+        } catch (error) {
+          await this.#writer.json(
+            rpcError(request, -32078, "Turn Model could not be selected: " + errorMessage(error)),
+          );
+          return;
+        }
       }
     }
     let text: string;

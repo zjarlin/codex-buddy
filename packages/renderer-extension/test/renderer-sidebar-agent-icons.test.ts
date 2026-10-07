@@ -353,7 +353,8 @@ describe("Renderer sidebar Agent ownership", () => {
     row.id = "new-thread";
     dom.change();
     await settle();
-    expect(row.agent).toBe("pi");
+    expect(row.agent).toBeNull();
+    expect(client.listThreadOwnership).toHaveBeenCalledTimes(1);
 
     resolveOld?.({
       threads: [
@@ -407,7 +408,11 @@ describe("Renderer sidebar Agent ownership", () => {
             new RendererMethodUnavailableError("codexhost/thread/ownership/list", { code: -32601 }),
           ),
       );
-      const control = installRendererSidebarAgentIcons({ getClient: () => client, dom });
+      const control = installRendererSidebarAgentIcons({
+        getClient: () => client,
+        ownershipClient: () => client,
+        dom,
+      });
       await vi.runAllTimersAsync();
       expect(client.listThreadOwnership).toHaveBeenCalledTimes(1);
       expect(vi.getTimerCount()).toBe(0);
@@ -534,6 +539,79 @@ describe("Renderer sidebar Agent ownership", () => {
       control.dispose();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("does not bypass failure backoff or its retry budget on Renderer refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const dom = new FakeDom([new FakeRow("pi-thread")]);
+      const client = clientWith(
+        vi.fn().mockRejectedValue(new Error("App server request queue is full")),
+      );
+      const control = installRendererSidebarAgentIcons({
+        getClient: () => client,
+        ownershipClient: () => client,
+        dom,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.listThreadOwnership).toHaveBeenCalledTimes(1);
+      for (let index = 0; index < 20; index++) {
+        control.refresh();
+        dom.change();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(client.listThreadOwnership).toHaveBeenCalledTimes(1);
+      await vi.runAllTimersAsync();
+      expect(client.listThreadOwnership).toHaveBeenCalledTimes(6);
+      control.refresh();
+      await vi.runAllTimersAsync();
+      expect(client.listThreadOwnership).toHaveBeenCalledTimes(6);
+      expect(vi.getTimerCount()).toBe(0);
+      control.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("admits only one ownership batch per Host while earlier requests are pending", async () => {
+    const rows = Array.from({ length: 201 }, (_, index) => new FakeRow(`thread-${index}`));
+    const dom = new FakeDom(rows);
+    const first = Promise.withResolvers<ThreadOwnershipListResult>();
+    const lookup = vi.fn(
+      async ({ threadIds }: ThreadOwnershipListParams): Promise<ThreadOwnershipListResult> => ({
+        threads: threadIds.map((threadId) => ({
+          threadId,
+          owner: "external" as const,
+          harnessId: PI_HARNESS_ID,
+        })),
+      }),
+    );
+    lookup.mockReturnValueOnce(first.promise);
+    const client = clientWith(lookup);
+    const control = installRendererSidebarAgentIcons({ getClient: () => client, dom });
+    try {
+      await settle();
+      for (let index = 0; index < 5; index++) {
+        control.refresh();
+        dom.change();
+        await settle();
+      }
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(lookup.mock.calls[0]?.[0].threadIds).toHaveLength(100);
+      first.resolve({
+        threads: rows.slice(0, 100).map((row) => ({
+          threadId: row.id as HostThreadId,
+          owner: "external",
+          harnessId: PI_HARNESS_ID,
+        })),
+      });
+      await settle();
+      expect(lookup).toHaveBeenCalledTimes(3);
+      expect(rows.every((row) => row.agent === "pi")).toBe(true);
+    } finally {
+      first.resolve({ threads: [] });
+      control.dispose();
     }
   });
 

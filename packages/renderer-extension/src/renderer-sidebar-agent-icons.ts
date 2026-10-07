@@ -339,6 +339,7 @@ export function installRendererSidebarAgentIcons(options: {
   const dom = options.dom ?? new BrowserSidebarAgentIconDom(document);
   const ownershipByThread = new Map<string, Exclude<RendererAgent, "codex"> | null>();
   const pending = new Set<string>();
+  const pendingHosts = new Set<string>();
   const failed = new Set<string>();
   const provisionalCodex = new Set<string>();
   const ownershipRetryAttempts = new Map<string, number>();
@@ -397,8 +398,8 @@ export function installRendererSidebarAgentIcons(options: {
     threadIds: ReturnType<typeof hostThreadIdSchema.parse>[],
     client: RendererModelClient,
   ): void => {
+    pendingHosts.add(hostId);
     for (const threadId of threadIds) pending.add(ownershipKey(hostId, threadId));
-    let succeeded = false;
     let retryable = true;
     const requestOptions: RendererRequestOptions = { priority: "background" };
     void Promise.resolve()
@@ -419,7 +420,6 @@ export function installRendererSidebarAgentIcons(options: {
             clearOwnershipRetry(key);
           }
         }
-        succeeded = true;
       })
       .catch((error) => {
         if (disposed) return;
@@ -427,11 +427,12 @@ export function installRendererSidebarAgentIcons(options: {
         for (const threadId of threadIds) failed.add(ownershipKey(hostId, threadId));
       })
       .finally(() => {
+        pendingHosts.delete(hostId);
         for (const threadId of threadIds) pending.delete(ownershipKey(hostId, threadId));
         if (retryable) {
           for (const threadId of threadIds) scheduleOwnershipRetry(hostId, threadId);
         }
-        if (succeeded) scheduleScan();
+        if (!disposed) scheduleScan();
       });
   };
 
@@ -487,6 +488,7 @@ export function installRendererSidebarAgentIcons(options: {
       }
     }
     for (const [hostId, unresolved] of unresolvedByHost) {
+      if (pendingHosts.has(hostId)) continue;
       const client = options.getClient(hostId);
       if (!client) {
         for (const threadId of unresolved) {
@@ -497,13 +499,8 @@ export function installRendererSidebarAgentIcons(options: {
         continue;
       }
       const threadIds = [...unresolved];
-      for (let index = 0; index < threadIds.length; index += THREAD_OWNERSHIP_LIST_MAX_LENGTH) {
-        requestOwnership(
-          hostId,
-          threadIds.slice(index, index + THREAD_OWNERSHIP_LIST_MAX_LENGTH),
-          client,
-        );
-      }
+      // 每个 Host 只保留一个在途批次，避免大量侧栏行占满原生请求队列。
+      requestOwnership(hostId, threadIds.slice(0, THREAD_OWNERSHIP_LIST_MAX_LENGTH), client);
     }
   };
 
@@ -512,7 +509,6 @@ export function installRendererSidebarAgentIcons(options: {
 
   return {
     refresh() {
-      failed.clear();
       // Many unrelated Renderer events call refresh(). Only a new ownership
       // connection may restart the bounded retry budget, cancel a pending
       // retry, or discard a confirmed official-Thread classification; doing
@@ -521,6 +517,7 @@ export function installRendererSidebarAgentIcons(options: {
       const ownershipClient = options.ownershipClient?.() ?? null;
       if (ownershipClient !== ownershipClientSeen) {
         ownershipClientSeen = ownershipClient;
+        failed.clear();
         for (const timer of ownershipRetryTimers.values()) clearTimeout(timer);
         ownershipRetryTimers.clear();
         ownershipRetryAttempts.clear();
@@ -536,6 +533,7 @@ export function installRendererSidebarAgentIcons(options: {
       dom.clear();
       ownershipByThread.clear();
       pending.clear();
+      pendingHosts.clear();
       failed.clear();
       provisionalCodex.clear();
       for (const timer of ownershipRetryTimers.values()) clearTimeout(timer);

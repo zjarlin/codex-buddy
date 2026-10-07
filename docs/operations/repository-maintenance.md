@@ -111,6 +111,14 @@ fork 默认跳过上游 `@codexhost` npm 包发布，GitHub 安装包不依赖�
 
 更新页先通过本地状态接口读取当前安装版本和安装方式，同时执行联网检查。联网请求失败或超时保留本地版本；旧 Host 不返回本地字段时，页面仍可使用检查结果。当前版本未知时显示“未知”，不能据此判断已是最新。
 
+### 安装包下载镜像
+
+应用内更新下载公开的 `zjarlin/codex-buddy` Release 安装包时，默认依次尝试 `https://gh-proxy.com/`、`https://ghfast.top/`，最后回退 GitHub 原始地址。镜像采用“镜像前缀 + 完整 GitHub 下载 URL”的格式。可通过本地 Host 环境变量 `CODEXHOST_UPDATE_DOWNLOAD_MIRRORS` 指定逗号分隔的 HTTPS 前缀；设置为空字符串禁用镜像。前缀不能包含凭据、查询参数或片段；重复地址只尝试一次。其他仓库、非 GitHub 地址和带查询参数的地址不转发给第三方镜像。npm 更新及流水线的 MacBook 投递不受影响。
+
+每个入口等待响应头或下一块数据超过 15 秒则中止该请求并尝试下一入口；持续传输的大文件不受总时长限制。HTTP 错误、网络故障、流中断、非法重定向、大小或 SHA-256 不符都会切换入口。每次重试清空临时文件并将下载进度归零；所有入口失败时删除临时文件并保留失败原因，不创建安装请求。文件和进度写入失败直接终止，不通过镜像重试。
+
+镜像仅改变安装包的传输地址。版本、资产大小和 SHA-256 继续从 GitHub 的认证 CLI / REST API 或官方 Release 更新清单读取；未签名清单不经过第三方镜像。每个下载入口均验证原始资产的大小和 SHA-256，下载落盘后仍执行现有的文件校验，原生安装助手继续校验 SHA-256。GitHub 元数据不可达时仍明确报错，不能仅凭镜像清单判定最新版本或执行更新；未来若需代理清单，必须先建立独立的签名验证。
+
 ## 发布后投递到 MacBook
 
 `Release packages` 的正式 GitHub Release 发布成功后，`deliver-macbook` job 通过 `ssh macbook` 将 GitHub 当前 latest 的 Apple Silicon DMG 放到 `/Users/zjarlin/Downloads`。预发布和仅构建的 `Buddy macOS DMG` 不触发投递。旧流水线重跑时也读取当前 latest；下载过程中发布物被替换则报错，避免旧任务覆盖新版本。

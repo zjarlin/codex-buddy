@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, open } from "node:fs/promises";
+import { lstat, open, rm } from "node:fs/promises";
+
+import { artifactDownloadUrls } from "./download-mirrors.js";
 
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const DOWNLOAD_STALL_TIMEOUT_MS = 15_000;
 
 export interface ArtifactSource {
   url: string;
@@ -27,6 +30,15 @@ export type ArtifactDownloader = (
   onProgress?: (progress: ArtifactDownloadProgress) => void | Promise<void>,
 ) => Promise<ArtifactDownloadResult>;
 
+interface ArtifactDownloadOptions {
+  environment?: NodeJS.ProcessEnv;
+  fetch?: typeof fetch;
+  signal?: AbortSignal;
+  stallTimeoutMs?: number;
+}
+
+class DownloadSourceError extends Error {}
+
 export function validateArtifact(source: ArtifactSource): ArtifactSource {
   const url = new URL(source.url);
   if (url.protocol !== "https:" || url.username || url.password) {
@@ -47,12 +59,94 @@ export function validateArtifact(source: ArtifactSource): ArtifactSource {
 async function writeChunk(
   file: Awaited<ReturnType<typeof open>>,
   chunk: Uint8Array,
+  position: number,
 ): Promise<void> {
   let offset = 0;
   while (offset < chunk.byteLength) {
-    const result = await file.write(chunk, offset, chunk.byteLength - offset, null);
+    const result = await file.write(chunk, offset, chunk.byteLength - offset, position + offset);
     if (result.bytesWritten === 0) throw new Error("update artifact write made no progress");
     offset += result.bytesWritten;
+  }
+}
+
+async function downloadFromUrl(
+  source: ArtifactSource,
+  url: string,
+  file: Awaited<ReturnType<typeof open>>,
+  onProgress: ((progress: ArtifactDownloadProgress) => void | Promise<void>) | undefined,
+  options: ArtifactDownloadOptions,
+): Promise<ArtifactDownloadResult> {
+  const controller = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, controller.signal])
+    : controller.signal;
+  async function receive<T>(operation: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const timeout = setTimeout(
+      () => controller.abort(new Error("update artifact download stalled")),
+      options.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS,
+    );
+    timeout.unref();
+    try {
+      return await operation();
+    } catch (error) {
+      const reason = signal.aborted ? signal.reason : error;
+      throw new DownloadSourceError(reason instanceof Error ? reason.message : String(reason), {
+        cause: error,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  const response = await receive(() =>
+    (options.fetch ?? fetch)(url, {
+      redirect: "follow",
+      headers: { "accept-encoding": "identity" },
+      signal,
+    }),
+  );
+  const reader = response.body?.getReader();
+  let complete = false;
+  let bytes = 0;
+  try {
+    if (!response.ok || !reader) {
+      throw new DownloadSourceError(`update artifact download failed with HTTP ${response.status}`);
+    }
+    const finalUrl = new URL(response.url);
+    if (finalUrl.protocol !== "https:" || finalUrl.username || finalUrl.password) {
+      throw new DownloadSourceError("update artifact redirected to a non-HTTPS URL");
+    }
+    const hash = createHash("sha256");
+    while (true) {
+      const item = await receive(() => reader.read());
+      if (item.done) break;
+      const position = bytes;
+      bytes += item.value.byteLength;
+      if (bytes > (source.size ?? MAX_ARTIFACT_BYTES)) {
+        throw new DownloadSourceError("update artifact exceeds expected size limit");
+      }
+      hash.update(item.value);
+      await writeChunk(file, item.value, position);
+      await onProgress?.({ downloadedBytes: bytes, totalBytes: source.size });
+    }
+    signal.throwIfAborted();
+    if (bytes === 0 || (source.size !== undefined && bytes !== source.size)) {
+      throw new DownloadSourceError(
+        `update artifact size mismatch: expected ${source.size}, got ${bytes}`,
+      );
+    }
+    if (hash.digest("hex") !== source.sha256) {
+      throw new DownloadSourceError("update artifact SHA-256 mismatch");
+    }
+    complete = true;
+    return { bytes, finalUrl: finalUrl.toString() };
+  } finally {
+    if (!complete) {
+      controller.abort();
+      await reader?.cancel().catch(() => undefined);
+    }
+    reader?.releaseLock();
   }
 }
 
@@ -60,38 +154,40 @@ export async function downloadArtifact(
   source: ArtifactSource,
   destination: string,
   onProgress?: (progress: ArtifactDownloadProgress) => void | Promise<void>,
+  options: ArtifactDownloadOptions = {},
 ): Promise<ArtifactDownloadResult> {
-  const response = await fetch(source.url, {
-    redirect: "follow",
-    headers: { "accept-encoding": "identity" },
-  });
-  if (!response.ok || response.body === null) {
-    throw new Error(`update artifact download failed with HTTP ${response.status}`);
-  }
-  const finalUrl = new URL(response.url);
-  if (finalUrl.protocol !== "https:" || finalUrl.username || finalUrl.password) {
-    throw new Error("update artifact redirected to a non-HTTPS URL");
-  }
+  validateArtifact(source);
+  options.signal?.throwIfAborted();
+  const urls = artifactDownloadUrls(source.url, options.environment ?? process.env);
   const file = await open(destination, "wx", 0o600);
-  let bytes = 0;
+  const errors: string[] = [];
+  let succeeded = false;
   try {
-    const reader = response.body.getReader();
-    while (true) {
-      const item = await reader.read();
-      if (item.done) break;
-      bytes += item.value.byteLength;
-      if (bytes > MAX_ARTIFACT_BYTES) {
-        await reader.cancel();
-        throw new Error(`update artifact exceeds ${MAX_ARTIFACT_BYTES} bytes`);
+    for (const url of urls) {
+      options.signal?.throwIfAborted();
+      await file.truncate(0);
+      await onProgress?.({ downloadedBytes: 0, totalBytes: source.size });
+      let result: ArtifactDownloadResult;
+      try {
+        result = await downloadFromUrl(source, url, file, onProgress, options);
+      } catch (error) {
+        options.signal?.throwIfAborted();
+        if (!(error instanceof DownloadSourceError)) throw error;
+        errors.push(`${new URL(url).host}: ${error.message}`);
+        continue;
       }
-      await writeChunk(file, item.value);
-      await onProgress?.({ downloadedBytes: bytes, totalBytes: source.size });
+      await file.sync();
+      succeeded = true;
+      return result;
     }
-    await file.sync();
+    throw new Error("update artifact download failed from all sources: " + errors.join("; "));
   } finally {
-    await file.close();
+    try {
+      await file.close();
+    } finally {
+      if (!succeeded) await rm(destination, { force: true });
+    }
   }
-  return { bytes, finalUrl: finalUrl.toString() };
 }
 
 async function sha256File(filePath: string): Promise<string> {

@@ -60,7 +60,12 @@ export function createHostUpdateCoordinator(
   options: CreateHostUpdateCoordinatorOptions,
 ): HostUpdateCoordinator {
   const platform = options.platform ?? process.platform;
-  const manager = options.manager ?? createBackgroundUpdateManager({ platform });
+  const manager =
+    options.manager ??
+    createBackgroundUpdateManager({
+      platform,
+      ...(options.environment ? { environment: options.environment } : {}),
+    });
   let contextPromise: Promise<InstalledUpdateContext> | undefined;
   const installedContext = (): Promise<InstalledUpdateContext> => {
     contextPromise ??= resolveInstalledUpdateContext({

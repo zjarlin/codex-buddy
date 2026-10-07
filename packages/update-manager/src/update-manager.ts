@@ -70,6 +70,7 @@ export interface StartedBackgroundUpdate extends PreparedBackgroundUpdate {
 
 export interface BackgroundUpdateManagerDependencies {
   platform?: NodeJS.Platform;
+  environment?: NodeJS.ProcessEnv;
   randomId?(): string;
   download?: ArtifactDownloader;
   spawnUpdater?(executable: string, requestPath: string): ChildProcess;
@@ -207,7 +208,12 @@ export function createBackgroundUpdateManager(
 ): BackgroundUpdateManager {
   const platform = dependencies.platform ?? process.platform;
   const randomId = dependencies.randomId ?? randomUUID;
-  const download = dependencies.download ?? downloadArtifact;
+  const download: ArtifactDownloader =
+    dependencies.download ??
+    ((source, destination, onProgress) =>
+      downloadArtifact(source, destination, onProgress, {
+        ...(dependencies.environment ? { environment: dependencies.environment } : {}),
+      }));
   const spawnUpdater = dependencies.spawnUpdater ?? defaultSpawnUpdater;
   const now = dependencies.now ?? Date.now;
   const preparedRequests = new Set<string>();

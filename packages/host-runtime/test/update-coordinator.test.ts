@@ -25,6 +25,7 @@ const roots: string[] = [];
 afterEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true }))));
 
@@ -124,6 +125,43 @@ function release(version = "1.2.3"): CodexhostLatestRelease {
 }
 
 describe("Host update coordinator", () => {
+  it("passes local Host mirror configuration to the default installer downloader", async () => {
+    const fixture = await macFixture();
+    fixture.environment.CODEXHOST_UPDATE_DOWNLOAD_MIRRORS = "https://mirror.example.test/";
+    const bytes = Buffer.from("macos-dmg-fixture");
+    const url =
+      "https://github.com/zjarlin/codex-buddy/releases/download/v1.2.3/codex-buddy-1.2.3-macos-arm64.dmg";
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => {
+      const response = new Response(new Uint8Array(bytes));
+      Object.defineProperty(response, "url", { value: "https://mirror.example.test/" + url });
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    const coordinator = createHostUpdateCoordinator({
+      ...fixture,
+      platform: "darwin",
+      architecture: "arm64",
+      fetchLatest: async () => ({
+        ...release(),
+        assets: [
+          {
+            name: "codex-buddy-1.2.3-macos-arm64.dmg",
+            size: bytes.length,
+            digest: "sha256:" + digest(bytes),
+            downloadUrl: url,
+          },
+        ],
+      }),
+    });
+    await coordinator.check();
+    await coordinator.start();
+    await vi.waitFor(async () => {
+      expect(await coordinator.status()).toMatchObject({ status: { phase: "prepared" } });
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://mirror.example.test/" + url);
+  });
+
   it.each([true, false])(
     "prefers gh and only falls back when needed (CLI available: %s)",
     async (available) => {

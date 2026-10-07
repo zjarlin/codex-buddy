@@ -108,6 +108,8 @@ import {
 } from "./renderer-new-thread-preference.js";
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
 import { installRendererSidebarStatusFilter } from "./renderer-sidebar-status-filter.js";
+import { installRendererSidebarThreadAlign } from "./renderer-sidebar-thread-align.js";
+import { installRendererTitlebarProjectName } from "./renderer-titlebar-project-name.js";
 import { installRendererThreadActions } from "./renderer-thread-actions.js";
 import {
   installRendererQueuedTransfer,
@@ -780,6 +782,16 @@ export function installRendererBindingProbe(
   };
   const controllerTarget = (target: readonly unknown[] | null, hostId: string | null) =>
     scopedComposerTarget(target, hostId);
+  // 右侧当前正在查看的会话：标题栏项目名与左侧树滚动对齐共用同一个判定。
+  const viewedThread = (): { hostId: string; threadId: string } | null => {
+    for (const mounted of mountedByComposer.values()) {
+      if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0) continue;
+      const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+      const hostId = mounted.hostId ?? activeModelHostId();
+      if (threadId && hostId) return { hostId, threadId };
+    }
+    return null;
+  };
   let usageNotificationDispose: (() => void) | null = null;
   const localAgentForSidebarThread = (input: {
     hostId: string;
@@ -836,19 +848,12 @@ export function installRendererBindingProbe(
       if (activeHostId) hostIds.add(activeHostId);
       return [...hostIds];
     },
-    activeThread: () => {
-      for (const mounted of mountedByComposer.values()) {
-        if (!mounted.composer.isConnected || mounted.composer.getClientRects().length === 0)
-          continue;
-        const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
-        const hostId = mounted.hostId ?? activeModelHostId();
-        if (threadId && hostId) return { hostId, threadId };
-      }
-      return null;
-    },
+    activeThread: viewedThread,
     getLocale: rendererLocale,
     model: pendingConfirmations,
   });
+  const titlebarProjectName = installRendererTitlebarProjectName({ getActiveThread: viewedThread });
+  const sidebarThreadAlign = installRendererSidebarThreadAlign({ getActiveThread: viewedThread });
   const sidebarStatusFilter = installRendererSidebarStatusFilter({
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: rendererLocale,
@@ -2921,6 +2926,10 @@ export function installRendererBindingProbe(
       commandRequestGeneration: 0,
     };
     mountedByComposer.set(composer, mounted);
+    control.onModelShortcutsViewChange = (view, harnessId) => {
+      if (mountedByComposer.get(composer) !== mounted) return;
+      buddyControl?.setModelShortcutsView(view, harnessId);
+    };
     if (isComposerModelWriteAllowed(modelTarget)) {
       applyDraftAgentCarrier(composer, state.agent);
     }
@@ -3015,6 +3024,9 @@ export function installRendererBindingProbe(
     gitSidebar.syncContext();
     gitBranchControl.refreshContext();
     gitWorkflowControl.refreshContext();
+    // 会话切换会在挂载的 Composer 目标上体现，标题栏项目名与左侧树对齐依赖它。
+    titlebarProjectName.refresh();
+    sidebarThreadAlign.refresh();
   };
 
   const scheduleScan = (refreshTargets = false): void => {
@@ -3218,6 +3230,8 @@ export function installRendererBindingProbe(
     queuedTransfer.refresh();
     projectActions.refresh();
     projectTabs.refresh();
+    titlebarProjectName.refresh();
+    sidebarThreadAlign.refresh();
     const hostId = activeModelHostId();
     // Reapply the visible draft's selection after its native connection changes.
     // Do this before rebinding Hosts: an old local draft is not a remote choice.
@@ -3623,6 +3637,8 @@ export function installRendererBindingProbe(
       queuedTransfer.dispose();
       projectActions.dispose();
       projectTabs.dispose();
+      titlebarProjectName.dispose();
+      sidebarThreadAlign.dispose();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
       gitSidebar.dispose();

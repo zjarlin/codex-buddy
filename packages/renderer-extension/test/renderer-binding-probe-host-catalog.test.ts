@@ -52,6 +52,14 @@ vi.mock("../src/renderer-pending-confirmations.js", () => ({
   },
 }));
 
+vi.mock("../src/renderer-titlebar-project-name.js", () => ({
+  installRendererTitlebarProjectName: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
+vi.mock("../src/renderer-sidebar-thread-align.js", () => ({
+  installRendererSidebarThreadAlign: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
 vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
   installRendererSidebarStatusFilter: (options: { getLocale(): "zh-CN" | "en" }) => {
     testState.localeReads.push(options.getLocale());

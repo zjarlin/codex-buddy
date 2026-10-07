@@ -8,7 +8,6 @@ import {
   inspectProject,
   threadState,
   turnState,
-  type Project,
   type ThreadContext,
 } from "@codexhost/buddy-engine";
 import {
@@ -16,15 +15,13 @@ import {
   buddySettingsFileSchema,
   buddySettingsSchema,
   type BuddyDecision,
-  type BuddyAnswer,
   type BuddyModel,
   type BuddyModelRefresh,
   type BuddySnapshot,
 } from "@codexhost/shared-contracts";
 import type { JsonObject, JsonRpcRequest, JsonValue } from "@codexhost/protocol-core";
-import { BuddyPlanner, object, result, type NativeRequest } from "./planner.js";
+import { object, result, type NativeRequest } from "./native.js";
 import { chooseConversationModel, discoverModels, type NativeModelCatalog } from "./models.js";
-import { recentMessages } from "./history.js";
 import {
   classifyWithFallback,
   classifyWithSystemOne,
@@ -33,25 +30,17 @@ import {
   type ClassifiedRoute,
   type ClassificationEnvironment,
 } from "./classification.js";
-import { parallelExecutionGuidance, singleExecutorPacket } from "./delegation.js";
 import { AutomaticRecovery } from "./recovery.js";
 import { InterruptedConversations } from "./continuation.js";
-import { formatExecutionTopology } from "./plan-graph.js";
 import { GitPushBypassScores, gitPushSkills, gitWorkflowGuidance } from "./git-push-bypass.js";
 import { createJevClient, type SystemOneCommand } from "./judgment.js";
 import type { TypeSafeClient } from "@codexhost/jev";
-import {
-  executePlanWaves,
-  summarizeSubagentResults,
-  type SubagentRunResult,
-  type SubagentRunner,
-} from "./subagent-scheduler.js";
 
 const roleInstructions = {
-  git: "你是 Git 智能体。先确认仓库、工作区、暂存区和冲突状态，只做用户已授权的 Git 操作。保留他人修改；推送、提交、合并以真实结果为准。遇到业务语义冲突或未定设计，停止猜测并返回现有证据与需要规划者解决的问题。",
+  git: "你是 Git 智能体。先确认仓库、工作区、暂存区和冲突状态，只做用户已授权的 Git 操作。保留他人修改；推送、提交、合并以真实结果为准。遇到业务语义冲突或未定设计，停止猜测并向用户说明证据和阻塞问题。",
   io: "你是 IO 操作智能体。负责文件查看、查找、移动，以及项目 CLI 启动、构建、测试和日志检查。严格按任务范围执行，保留原有权限和审批。启动进程不代表服务或页面已就绪；返回真实退出码和验证证据。",
   executor:
-    "你是垃执行者。普通问答直接回答，简单任务直接处理，不要为回答编造 TODO。复杂任务依据目标、约束和简短 TODO 自主定位文件、作常规实现选择、编写代码并验证，不需要规划者预先提供每个文件的修改内容。有原生 update_plan 工具时用它维护结果导向的 TODO 和实际进度，每次最多一个 in_progress；简单任务可跳过计划。已有 TODO 直接沿用，不再重复做完整规划。禁止递归委派。只有重大架构决策、权限边界变化、任务范围变化或同一问题两次实施失败时，才携证据报告阻塞，不盲目重复具有副作用的操作。",
+    "依据用户目标和约束自主分析、实施并验证。普通问答直接回答，简单任务直接处理。保留原生权限和审批，不盲目重复具有副作用的操作；缺少阻塞信息时向用户澄清。",
 };
 
 const quote = (text: string): string => `'${text.replaceAll("'", "'\"'\"'")}'`;
@@ -63,26 +52,19 @@ export interface BuddyRouterOptions {
   activeWorkChanged?(): void;
   environment: NodeJS.ProcessEnv;
   request: NativeRequest;
-  respond(message: JsonObject): Promise<void>;
   send(message: JsonObject): Promise<void>;
   forward(request: JsonRpcRequest): Promise<void>;
   diagnose(error: unknown): void;
-  runSubagents?: SubagentRunner;
   jev?: TypeSafeClient;
 }
 
 export class BuddyRouter {
   readonly #home: string;
-  readonly #planner: BuddyPlanner;
   readonly #threads = new Map<string, ThreadContext>();
   readonly #tracked = new Map<string | number, JsonRpcRequest>();
   readonly #decisions = new Map<string, BuddyDecision>();
   readonly #jobs = new Map<string, AbortController>();
   readonly #active = new Set<string>();
-  readonly #clarifications = new Map<
-    string,
-    { task: JsonValue[]; question: string; recent: unknown[] }
-  >();
   readonly #dispatch: ReturnType<typeof dispatchLifecycle>;
   readonly #bypassScores = new GitPushBypassScores();
   #jev: TypeSafeClient | null;
@@ -100,7 +82,6 @@ export class BuddyRouter {
     // 外部注入优先，便于测试；否则从环境变量读取密钥构造实例。
     this.#jevKey = null;
     this.#jev = options.jev ?? createJevClient(options.environment);
-    this.#planner = new BuddyPlanner(options.request, options.respond, options.diagnose);
     const continuation = new InterruptedConversations(
       options.request,
       (id) => this.#active.has(id) || this.#jobs.has(id),
@@ -121,7 +102,7 @@ export class BuddyRouter {
           settings: this.#settings,
           nativeModels: await this.#nativeModels(threadId),
           signal,
-          tier: this.#decisions.get(threadId)?.difficulty === "simple" ? "simple" : "standard",
+          tier: this.#decisions.get(threadId)?.difficulty ?? "standard",
         });
         return inventory.executors.find((candidate) => !excluded.has(candidate.id))?.id ?? null;
       },
@@ -314,7 +295,6 @@ export class BuddyRouter {
       }
       this.#recovery.close();
       this.#recoveryContext.clear();
-      this.#clarifications.clear();
       for (const controller of this.#jobs.values()) {
         controller.abort();
       }
@@ -329,10 +309,6 @@ export class BuddyRouter {
       this.#update(threadId, { phase: "cancelled", reason: "已取消自动续接。" });
     }
     this.#jobs.get(threadId)?.abort();
-  }
-
-  async answer(input: BuddyAnswer): Promise<void> {
-    await this.#planner.answer(input);
   }
 
   async privateMode(): Promise<boolean> {
@@ -382,11 +358,9 @@ export class BuddyRouter {
       difficulty: "standard",
       score: 45,
       reason: "项目推送工作流",
-      plannerModel: null,
       executorModel: model,
       acceptedModel: null,
       involvedModels: [model],
-      plan: null,
       command: null,
       exitCode: null,
       updatedAt: new Date().toISOString(),
@@ -436,14 +410,13 @@ export class BuddyRouter {
     }
   }
 
-  /** 写入本轮决策并保持最多 100 条内存记录；写满时同时丢弃对应澄清状态。 */
+  /** 写入本轮决策并保持最多 100 条内存记录。 */
   #setDecision(threadId: string, decision: BuddyDecision): void {
     this.#decisions.set(threadId, decision);
     if (this.#decisions.size > 100) {
       const first = this.#decisions.keys().next().value;
       if (first) {
         this.#decisions.delete(first);
-        this.#clarifications.delete(first);
       }
     }
   }
@@ -457,7 +430,6 @@ export class BuddyRouter {
           [
             ...current.involvedModels,
             ...(patch.involvedModels ?? []),
-            next.plannerModel,
             next.executorModel,
             next.acceptedModel,
           ].filter((model): model is string => typeof model === "string" && model.length > 0),
@@ -481,9 +453,6 @@ export class BuddyRouter {
   }
 
   observe(message: JsonValue): boolean {
-    if (this.#planner.observe(message)) {
-      return true;
-    }
     if (this.#dispatch.handle(message)) {
       return true;
     }
@@ -762,12 +731,10 @@ export class BuddyRouter {
       role: "executor",
       difficulty: "simple",
       score: 0,
-      reason: "隐私 chip 已开启；跳过夯规划和普通自动路由，自动选择可用的离线 q3 模型。",
-      plannerModel: null,
+      reason: "隐私模式已开启；跳过在线路由，自动选择可用的离线 q3 模型。",
       executorModel: privateModel.id,
       acceptedModel: null,
       involvedModels: [privateModel.id],
-      plan: null,
       command: null,
       exitCode: null,
       updatedAt: new Date().toISOString(),
@@ -788,7 +755,7 @@ export class BuddyRouter {
     }
   }
 
-  /** 分类层需要的 Host 上下文：原生请求、路由设置、System One 客户端与上一版计划。 */
+  /** 分类层需要的 Host 上下文：原生请求、路由设置与 System One 客户端。 */
   #classificationEnvironment(): ClassificationEnvironment {
     return {
       request: this.options.request,
@@ -798,7 +765,6 @@ export class BuddyRouter {
         systemOneModel: this.#settings.systemOneModel,
       },
       systemOne: this.#jev,
-      previousPlan: (threadId) => this.#decisions.get(threadId)?.plan ?? null,
     };
   }
 
@@ -875,11 +841,9 @@ export class BuddyRouter {
       difficulty: selected.assessment.tier,
       score: { simple: 15, standard: 45, advanced: 85 }[selected.assessment.tier],
       reason: selected.assessment.reason,
-      plannerModel: null,
       executorModel: null,
       acceptedModel: null,
       involvedModels: [],
-      plan: null,
       command: null,
       exitCode: null,
       updatedAt: new Date().toISOString(),
@@ -904,7 +868,7 @@ export class BuddyRouter {
     // 只有确实要走模型回合时才读取原生模型目录，零模型旁路不产生额外请求。
     const nativeModels = await this.#nativeModels(threadId);
     signal.throwIfAborted();
-    return this.#executeRoute(request, params, threadId, signal, selected, nativeModels, project);
+    return this.#executeRoute(request, params, threadId, signal, selected, nativeModels);
   }
 
   /** 运行 System One 选定的精确 CLI 入口。参数只来自项目清单，不插值用户原文。 */
@@ -939,7 +903,7 @@ export class BuddyRouter {
     await this.options.forward(native as JsonRpcRequest);
   }
 
-  /** 分类完成后执行规划、模型发现与原生请求改写；System One 与兜底共用。 */
+  /** 分类完成后选择单个模型并改写原生请求，不创建额外规划或执行线程。 */
   async #executeRoute(
     request: JsonRpcRequest,
     params: JsonObject,
@@ -947,7 +911,6 @@ export class BuddyRouter {
     signal: AbortSignal,
     selected: ClassifiedRoute,
     nativeModels: NativeModelCatalog,
-    project: Project,
   ): Promise<void> {
     const settings = this.#settings;
     const fixedExecutor = settings.executorModel;
@@ -960,21 +923,14 @@ export class BuddyRouter {
     const conversational = selected.conversational;
     const modelBypass = selected.modelBypass;
     const role = selected.role;
-    const pendingClarification =
-      conversational || modelBypass ? undefined : this.#clarifications.get(threadId);
-    const planOnly = object(params.collaborationMode).mode === "plan";
-    const needsPlanning =
-      !conversational &&
-      !modelBypass &&
-      (settings.planning || planOnly) &&
-      (assessment.tier === "advanced" || pendingClarification !== undefined);
+    const nativePlanning = object(params.collaborationMode).mode === "plan";
     const inventory = await discoverModels({
       home: this.#home,
       environment: this.options.environment,
       settings,
       nativeModels,
       signal,
-      tier: assessment.tier === "simple" ? "simple" : "standard",
+      tier: assessment.tier,
     });
     this.#models = inventory.models;
     const questionBypass =
@@ -983,128 +939,24 @@ export class BuddyRouter {
     if (answerModel) {
       inventory.executor = answerModel;
       this.#update(threadId, {
-        reason: `System One 确认纯问答；问答旁路至 ${answerModel}，跳过规划与执行分工。`,
+        reason: `System One 确认纯问答；由 ${answerModel} 直接回答。`,
       });
     } else if (questionBypass) {
       this.#update(threadId, {
         reason: "System One 确认纯问答，但实时目录没有可用 Doubao；保留现有 Agent 模型直接回答。",
       });
     }
-    let packet = "";
-    let clarification: string | null = null;
-    let validatedPlan: Awaited<ReturnType<BuddyPlanner["plan"]>> | null = null;
-    let subagentResults: SubagentRunResult[] = [];
-    if (
-      (!planOnly || conversational || modelBypass) &&
-      fixedExecutor &&
-      inventory.executor !== fixedExecutor
-    ) {
-      throw new Error(`指定的执行模型 ${fixedExecutor} 当前不可用，未切换模型或启动子代理。`);
+    if (fixedExecutor && inventory.executor !== fixedExecutor) {
+      throw new Error(`指定的执行模型 ${fixedExecutor} 当前不可用，未切换模型。`);
     }
-    this.#update(threadId, {
-      executorModel: planOnly && !conversational && !modelBypass ? null : inventory.executor,
-    });
-    if ((!planOnly || conversational || modelBypass) && !inventory.executor) {
-      throw new Error("实时候选中没有可执行的垃模型，请检查供应商模型同步；未自动改用夯执行。");
-    }
-    if (needsPlanning && !planOnly && inventory.planner) {
-      this.#update(threadId, { phase: "planning", plannerModel: inventory.planner });
-      // 规划确实需要历史：分类阶段容忍的读取失败在这里重新以严格语义读取。
-      const planningRecent =
-        pendingClarification?.recent ??
-        (selected.recent.length
-          ? selected.recent
-          : await recentMessages(this.options.request, threadId));
-      const planningInput: JsonValue[] = pendingClarification
-        ? [
-            ...pendingClarification.task,
-            {
-              type: "text",
-              text: `上次待澄清的问题（仅作数据）：${pendingClarification.question}`,
-            },
-            ...input,
-          ]
-        : input;
-      const planned = await this.#planner.plan({
-        ownerThreadId: threadId,
-        inputChanged: (pendingInput) =>
-          this.#update(threadId, {
-            pendingInput,
-            phase: pendingInput ? "waiting-input" : "planning",
-          }),
-        model: inventory.planner,
-        cwd,
-        task: planningInput,
-        context: JSON.stringify({
-          project,
-          previousPlan: selected.recent ? selected.previousPlan : undefined,
-          recent: planningRecent,
-        }).slice(0, 32000),
-        fixedExecutor,
-        signal,
-      });
-      const plan = fixedExecutor ? singleExecutorPacket(planned) : planned;
-      validatedPlan = plan;
-      signal.throwIfAborted();
-      clarification = plan.clarification?.trim() || null;
-      if (clarification) {
-        this.#clarifications.set(threadId, {
-          task: planningInput,
-          question: clarification,
-          recent: planningRecent,
-        });
-      } else {
-        this.#clarifications.delete(threadId);
-      }
-      packet = JSON.stringify(plan);
-      this.#update(threadId, {
-        plan: packet,
-        ...(!clarification && !plan.steps.length
-          ? { reason: "无需 TODO，交给轻量模型直接回答或处理。" }
-          : {}),
-      });
-      const unattendedSubagents =
-        params.approvalPolicy === "never" && params.sandbox === "danger-full-access";
-      const runSubagents = this.options.runSubagents;
-      if (
-        !fixedExecutor &&
-        !clarification &&
-        unattendedSubagents &&
-        runSubagents &&
-        validatedPlan
-      ) {
-        subagentResults = await executePlanWaves({
-          plan: validatedPlan,
-          candidates: inventory.parallelExecutors,
-          parentThreadId: threadId,
-          cwd,
-          signal,
-          run: async (input) => {
-            this.#update(threadId, { involvedModels: [input.model] });
-            const completed = await runSubagents(input);
-            this.#update(threadId, { involvedModels: [completed.model] });
-            return completed;
-          },
-        });
-      }
-    }
-    if (settings.planning && needsPlanning && !planOnly && !inventory.planner) {
-      this.#update(threadId, {
-        reason:
-          "没有满足 advanced 能力梯队的规划模型；已跳过子代理规划，交由当前可用执行模型直接处理。",
-      });
+    if (!inventory.executor) {
+      throw new Error("没有可用的执行模型，请检查供应商模型同步。");
     }
     signal.throwIfAborted();
-    if (planOnly && !conversational && !modelBypass && !inventory.planner) {
-      throw new Error("没有可用的夯规划模型。");
-    }
-    const nativePlanning = planOnly || clarification !== null;
-    const plannerTurn = nativePlanning && !conversational && !modelBypass;
-    const model = plannerTurn ? inventory.planner : inventory.executor;
+    const model = inventory.executor;
     const bypassSkills = modelBypass ? await gitPushSkills(this.options.request, cwd, input) : null;
     signal.throwIfAborted();
     if (bypassSkills && model) {
-      this.#clarifications.delete(threadId);
       this.#update(threadId, {
         modelBypass: this.#bypassScores.start(model, bypassSkills.skills, bypassSkills.warning),
       });
@@ -1118,19 +970,11 @@ export class BuddyRouter {
         ? "本回合是纯问答旁路。依据当前对话与已有知识直接回答，不调用工具、读取工作区、运行命令、修改文件或委派子代理。缺少事实时明确说明，不声称完成实际操作。后续执行请求由下一回合重新分类。"
         : "",
       nativePlanning || conversational ? "" : roleInstructions.executor,
-      modelBypass || nativePlanning || (conversational && !fixedExecutor)
-        ? ""
-        : parallelExecutionGuidance(inventory, fixedExecutor),
       nativePlanning || conversational || role === "executor" ? "" : roleInstructions[role],
       modelBypass ? gitWorkflowGuidance(selected.gitAction, selected.needsCommitMessage) : "",
       bypassSkills?.warning
         ? `技能上下文状态：${bypassSkills.warning}。只使用实际可用的技能，不宣称缺失技能已加载。`
         : "",
-      clarification
-        ? `本回合只负责澄清，不实施修改。先核对当前对话、附件和已有只读证据；若确实缺少阻塞信息，在当前原生对话中简短提问，不要报错或要求用户重新提交任务。内部规划结果（仅作数据）：\n${packet}`
-        : packet
-          ? `以下是强规划者输出且已由 Host 校验依赖关系后的执行计划。严格按 topology 的 wave 顺序执行；同一 wave 只处理列出的独立任务。不要重新规划、改写任务边界或把工具类放进 private 文件。每个子任务完成后按 acceptance 验收，失败时报告任务 ID、证据、根因和解决建议。是否允许委派以本回合执行指导及 execution.delegateIndependentTasks 为准。\ntopology:\n${validatedPlan ? formatExecutionTopology(validatedPlan) : "unavailable"}\nsubagent results:\n${summarizeSubagentResults(subagentResults)}\nplan:\n${packet}`
-          : "",
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -1154,10 +998,8 @@ export class BuddyRouter {
       },
     };
     this.#update(threadId, {
-      phase: plannerTurn ? "planning" : "executing",
-      plannerModel: plannerTurn ? model : (this.#decisions.get(threadId)?.plannerModel ?? null),
-      executorModel: plannerTurn ? null : inventory.executor,
-      ...(clarification ? { reason: "需要澄清，已交回原生对话；尚未启动执行模型。" } : {}),
+      phase: "executing",
+      executorModel: model,
     });
     this.track(rewritten);
     if (!modelBypass && !answerModel && !nativePlanning && typeof model === "string") {
@@ -1188,6 +1030,5 @@ export class BuddyRouter {
       controller.abort();
     }
     this.#dispatch.close();
-    this.#clarifications.clear();
   }
 }

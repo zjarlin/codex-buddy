@@ -1,4 +1,6 @@
 import {
+  BUDDY_SETTINGS_METHOD,
+  buddySettingsSchema,
   HARNESS_LAUNCH_SETTINGS_GET_METHOD,
   HARNESS_LAUNCH_SETTINGS_SET_METHOD,
   PROJECT_TABS_GET_METHOD,
@@ -43,6 +45,7 @@ import {
 } from "../src/renderer-model-client.js";
 
 import { RendererSessionImportUnavailableError } from "../src/renderer-session-import-client.js";
+import { BUDDY_SETTINGS_CHANGED_EVENT } from "../src/buddy/settings-events.js";
 
 const piHarnessId = harnessIdSchema.parse("pi");
 const model = harnessModelRefSchema.parse({ id: "pi-model-v1.synthetic" });
@@ -78,6 +81,44 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("notifies recovery only after routing settings are accepted", async () => {
+    const settings = buddySettingsSchema.parse({ privateMode: true });
+    const snapshot = { settings, models: [], decisions: [] };
+    const sendRequest = vi.fn().mockResolvedValue(snapshot);
+    const ownerWindow = new EventTarget();
+    const changed = vi.fn();
+    ownerWindow.addEventListener(BUDDY_SETTINGS_CHANGED_EVENT, changed);
+    vi.stubGlobal("window", ownerWindow);
+    try {
+      const client = createRendererModelClient([{ sendRequest }]);
+      await expect(client?.buddyConfigure?.(settings)).resolves.toMatchObject(snapshot);
+      expect(sendRequest).toHaveBeenCalledExactlyOnceWith(BUDDY_SETTINGS_METHOD, settings);
+      expect(changed).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["rejected", "invalid snapshot"])(
+    "does not notify recovery after a %s settings save",
+    async (failure) => {
+      const sendRequest = vi.fn();
+      if (failure === "rejected") sendRequest.mockRejectedValue(new Error("Save unavailable"));
+      else sendRequest.mockResolvedValue({ settings: { enabled: "invalid" } });
+      const ownerWindow = new EventTarget();
+      const changed = vi.fn();
+      ownerWindow.addEventListener(BUDDY_SETTINGS_CHANGED_EVENT, changed);
+      vi.stubGlobal("window", ownerWindow);
+      try {
+        const client = createRendererModelClient([{ sendRequest }]);
+        await expect(client?.buddyConfigure?.(buddySettingsSchema.parse({}))).rejects.toThrow();
+        expect(changed).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("confirms restart only through the fixed update method with an empty payload", async () => {
     const sendRequest = vi.fn(async () => ({
       status: {
@@ -560,7 +601,6 @@ describe("Renderer fixed Model request client", () => {
       "addProjectSync",
       "archiveCompletedThreads",
       "bindProjectSync",
-      "buddyAnswer",
       "buddyCancel",
       "buddyConfigure",
       "buddyContinue",

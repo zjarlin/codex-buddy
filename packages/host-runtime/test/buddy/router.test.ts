@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JsonObject, JsonRpcRequest } from "@codexhost/protocol-core";
 import { BuddyRouter } from "../../src/buddy/router.js";
 import { chooseModels, modelTier } from "../../src/buddy/models.js";
-import type { SubagentRunner } from "../../src/buddy/subagent-scheduler.js";
 import { TypeSafeClient } from "@codexhost/jev";
 
 const cleanups: (() => Promise<void>)[] = [];
@@ -16,7 +15,7 @@ afterEach(async () => {
 
 /**
  * 让路由用例用 System One 表达分类意图，而不是依赖已删除的本地正则。
- * `conversational` 表示普通问答，`advanced` 表示需要夯规划，`push` 表示推送旁路；
+ * `conversational` 表示普通问答，`advanced` 表示复杂任务，`push` 表示推送旁路；
  * `forText` 可按请求文本给出不同结论。
  */
 interface SystemOneProfile {
@@ -118,9 +117,6 @@ function profileClient(profile: SystemOneProfile): TypeSafeClient {
 
 async function fixture(
   options: {
-    holdPlan?: boolean;
-    plannerFails?: boolean;
-    interactivePlan?: boolean;
     ephemeral?: boolean;
     historyError?: { code: number; message: string };
     legacyHistoryError?: { code: number; message: string };
@@ -129,12 +125,7 @@ async function fixture(
     modelIds?: string[];
     modelRows?: JsonObject[];
     threadProvider?: string;
-    clarification?: string;
-    planSteps?: string[];
-    planChecks?: string[];
     recovery?: boolean;
-    plan?: JsonObject;
-    runSubagents?: SubagentRunner;
     skills?: JsonObject[];
     skillsError?: boolean;
     jev?: TypeSafeClient;
@@ -164,10 +155,8 @@ async function fixture(
   const sent: JsonObject[] = [];
   const forwarded: JsonRpcRequest[] = [];
   const requested: { method: string; params: JsonObject }[] = [];
-  const replies: JsonObject[] = [];
   const router: BuddyRouter = new BuddyRouter({
     environment: { CODEX_HOME: home },
-    ...(options.runSubagents ? { runSubagents: options.runSubagents } : {}),
     ...(options.jev
       ? { jev: options.jev }
       : options.classify
@@ -208,8 +197,6 @@ async function fixture(
               ],
             },
           };
-        case "thread/start":
-          return { result: { thread: { id: "planner" } } };
         case "turn/start": {
           if (options.recovery && params.threadId === "work") {
             const turnId = `continued-${requested.filter((entry) => entry.method === "turn/start").length}`;
@@ -219,43 +206,7 @@ async function fixture(
             });
             return { result: { turn: { id: turnId } } };
           }
-          if (options.plannerFails) {
-            return { error: { code: -1, message: "fixture planning failure" } };
-          }
-          router.observe({
-            method: "turn/started",
-            params: { threadId: "planner", turn: { id: "plan-turn" } },
-          });
-          if (options.interactivePlan) {
-            router.observe({
-              id: "question",
-              method: "item/tool/requestUserInput",
-              params: { threadId: "planner" },
-            });
-          } else if (!options.holdPlan) {
-            router.observe({
-              method: "item/completed",
-              params: {
-                threadId: "planner",
-                item: {
-                  type: "agentMessage",
-                  text: JSON.stringify(
-                    options.plan ?? {
-                      goal: "目标",
-                      steps: options.clarification ? [] : (options.planSteps ?? ["只修改目标文件"]),
-                      checks: options.clarification ? [] : (options.planChecks ?? ["运行对应测试"]),
-                      clarification: options.clarification ?? null,
-                    },
-                  ),
-                },
-              },
-            });
-            router.observe({
-              method: "turn/completed",
-              params: { threadId: "planner", turn: { id: "plan-turn", status: "completed" } },
-            });
-          }
-          return { result: { turn: { id: "plan-turn" } } };
+          throw new Error(`Unexpected internal model call: ${method}`);
         }
         default:
           return { result: {} };
@@ -263,9 +214,6 @@ async function fixture(
     },
     send: async (message) => {
       sent.push(message);
-    },
-    respond: async (message) => {
-      replies.push(message);
     },
     forward: async (request) => {
       forwarded.push(request);
@@ -301,7 +249,6 @@ async function fixture(
     sent,
     forwarded,
     requested,
-    replies,
     home,
     providerRequests: () => providerRequests,
   };
@@ -410,7 +357,14 @@ const jevClient = (body: unknown) =>
         ).answers,
       };
       const choice = answers.commandIndex?.choice ?? "none";
-      const selected = criteria.includes(choice) ? choice : "none";
+      const selected =
+        choice === "c1"
+          ? (Object.entries(request.questions?.commandIndex?.criteria ?? {}).find(
+              ([, command]) => command === "ls -la",
+            )?.[0] ?? "none")
+          : criteria.includes(choice)
+            ? choice
+            : "none";
       answers.commandIndex = {
         type: "choice",
         choice: selected,
@@ -445,7 +399,7 @@ describe("Buddy family policy", () => {
     expect(f.forwarded[0]?.params).toMatchObject({ model: "doubao" });
     expect(JSON.stringify(f.forwarded[0]?.params)).toContain("本回合是纯问答旁路");
     expect(f.requested.some((entry) => entry.method === "thread/start")).toBe(false);
-    expect((await f.router.snapshot()).decisions[0]?.reason).toContain("问答旁路至 doubao");
+    expect((await f.router.snapshot()).decisions[0]?.reason).toContain("由 doubao 直接回答");
     f.router.observe({
       method: "turn/completed",
       params: { threadId: "work", turn: { id: "answer", status: "completed" } },
@@ -492,7 +446,6 @@ describe("Buddy family policy", () => {
     });
     expect(f.requested.some((entry) => entry.method === "thread/start")).toBe(false);
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      plannerModel: null,
       score: 15,
     });
   });
@@ -579,14 +532,14 @@ describe("Buddy family policy", () => {
       ["deepseek-pro", "gemini-ultra", "o3", "fake-gpt-6", "gpt-image-1"].map(modelTier),
     ).toEqual(["垃", "垃", "垃", "垃", "夯"]);
   });
-  it("keeps open-weight gpt-oss models out of the 夯 planning tier", () => {
+  it("keeps open-weight gpt-oss models out of the flagship tier", () => {
     expect(["gpt-oss-20b", "openai/gpt-oss-120b", "vendor:gpt-oss-20b"].map(modelTier)).toEqual([
       "垃",
       "垃",
       "垃",
     ]);
   });
-  it("requires live and native availability and never promotes a weak model", () => {
+  it("requires live and native availability and allows flagship execution", () => {
     const native = {
       ids: new Set(["gpt-6", "deepseek-flash", "gpt-image-1"]),
       contextWindows: new Map<string, number>(),
@@ -597,159 +550,55 @@ describe("Buddy family policy", () => {
     expect(chosen.executor).toBe("deepseek-flash");
     expect(chosen.models.find((model) => model.id === "gpt-image-1")?.eligible).toBe(false);
     expect(chooseModels(["gpt-6"], native, {})).toMatchObject({
-      planner: "gpt-6",
-      executor: null,
+      executor: "gpt-6",
     });
   });
 });
 
 describe("Buddy native routing", () => {
-  async function parallelFixture(profile: SystemOneProfile = { advanced: true }) {
-    const runSubagents = vi.fn<SubagentRunner>(async (input) => ({
-      taskId: input.requestId.split(":").at(-1) ?? "task",
-      model: input.model,
-      status: "completed",
-      summary: "verified",
-    }));
-    const f = await fixture({
-      modelIds: ["gpt-planner", "deepseek-flash", "other-mini"],
-      runSubagents,
-      classify: profile,
-      plan: {
-        version: 1,
-        goal: "检查两个独立模块",
-        diagnosis: { problem: "待检查", evidence: [], rootCause: "待验证", solution: "分别读取" },
-        architecture: { recommendations: [], naming: [], placement: [], boundaries: [] },
-        constraints: [],
-        tasks: ["alpha", "bravo"].map((id) => ({
-          id,
-          title: id,
-          objective: "只读检查",
-          kind: "inspect",
-          steps: ["读取文件"],
-          acceptance: ["读取成功"],
-          dependsOn: [],
-          files: [`${id}.ts`],
-          packages: [],
-          writeScope: "none",
-          executorRole: "io",
-          risk: "low",
-          parallelizable: true,
-        })),
-        checks: ["两个模块已检查"],
-        clarification: null,
-        execution: { delegateIndependentTasks: true, maxParallel: 2, delegationReason: "独立检查" },
-      },
-    });
-    await mkdir(join(f.home, "model-router"));
-    await writeFile(
-      join(f.home, "model-router/policy.json"),
-      JSON.stringify({
-        planning: {
-          executorCapabilities: {
-            observedAt: new Date().toISOString(),
-            models: [
-              { id: "deepseek-flash", efforts: ["low"] },
-              { id: "other-mini", efforts: [] },
-            ],
-          },
-        },
+  it("routes an advanced task once to a capable model without internal model turns", async () => {
+    const f = await fixture({ classify: { advanced: true } });
+    await f.router.route(
+      f.turn("重构跨模块鉴权", {
+        approvalPolicy: "on-request",
+        sandboxPolicy: { type: "readOnly" },
       }),
     );
-    return { ...f, runSubagents };
-  }
-
-  it("keeps a fixed executor alone even when the planner proposes parallel agents", async () => {
-    const f = await parallelFixture();
-    await f.router.configure({ executorModel: "deepseek-flash" });
-    await f.router.route(
-      f.turn("重构跨模块实现", { approvalPolicy: "never", sandbox: "danger-full-access" }),
-    );
-    expect(f.runSubagents).not.toHaveBeenCalled();
     expect(f.forwarded).toHaveLength(1);
-    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    const guidance = JSON.stringify(f.forwarded[0]?.params);
-    expect(guidance).toContain("不要启动、恢复或委派任何子代理");
-    expect(guidance).not.toContain("经济型并行候选");
-    const decision = (await f.router.snapshot()).decisions[0];
-    expect(decision?.involvedModels).toEqual(["deepseek-flash", "gpt-planner"]);
-    const packet = JSON.parse(decision?.plan ?? "null");
-    expect(packet.plan.execution).toMatchObject({
-      delegateIndependentTasks: false,
-      maxParallel: 1,
+    expect(f.forwarded[0]?.params).toMatchObject({
+      model: "gpt-planner",
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "readOnly" },
     });
     expect(
-      packet.plan.tasks.every((task: { parallelizable: boolean }) => !task.parallelizable),
+      f.requested.every(({ method }) => !["thread/start", "turn/start"].includes(method)),
     ).toBe(true);
-    expect(packet.waves.map((wave: { tasks: unknown[] }) => wave.tasks.length)).toEqual([1, 1]);
-    expect(
-      f.requested.find((request) => request.method === "thread/start")?.params
-        .developerInstructions,
-    ).toContain("只允许单个执行者串行完成");
+    expect((await f.router.snapshot()).decisions[0]).not.toHaveProperty("plan");
+    expect((await f.router.snapshot()).settings).not.toHaveProperty("planning");
   });
 
-  it("allows automatic delegation and retains all selected and reported models", async () => {
-    const f = await parallelFixture({
-      forText: (text) =>
-        text.includes("你好") ? { conversational: true, role: "executor" } : { advanced: true },
-    });
-    await f.router.route(
-      f.turn("重构跨模块实现", { approvalPolicy: "never", sandbox: "danger-full-access" }),
+  it("keeps an explicit execution model for advanced work without injecting delegation guidance", async () => {
+    const f = await fixture({ classify: { advanced: true } });
+    await f.router.configure({ executorModel: "deepseek-flash" });
+    await f.router.route(f.turn("重构跨模块鉴权"));
+    expect(f.forwarded).toHaveLength(1);
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect(f.requested.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(JSON.stringify(f.forwarded)).not.toContain("经济型并行候选");
+  });
+
+  it("ignores old persisted planning choices and does not expose them to the renderer", async () => {
+    const f = await fixture({ classify: { advanced: true } });
+    await writeFile(
+      join(f.home, "buddy-router.json"),
+      JSON.stringify({ planning: true, plannerModel: "nonexistent" }),
     );
-    expect(f.runSubagents).toHaveBeenCalledTimes(2);
-    expect((await f.router.snapshot()).decisions[0]?.involvedModels).toEqual([
-      "other-mini",
-      "gpt-planner",
-      "deepseek-flash",
-    ]);
-    f.router.observe({ id: 2, result: { turn: { id: "executing" } } });
-    f.router.observe({
-      method: "turn/started",
-      params: { threadId: "work", turn: { id: "executing" } },
-    });
-    const event = {
-      method: "item/completed",
-      params: {
-        threadId: "work",
-        turnId: "executing",
-        item: {
-          type: "collabAgentToolCall",
-          tool: "spawnAgent",
-          receiverThreadIds: ["child"],
-          model: "reported-model",
-        },
-      },
-    };
-    f.router.observe(event);
-    f.router.observe(event);
-    f.router.observe({
-      ...event,
-      params: {
-        ...event.params,
-        turnId: "old",
-        item: { ...event.params.item, model: "stale-model" },
-      },
-    });
-    f.router.track({
-      id: 22,
-      method: "turn/start",
-      params: { threadId: "work", model: "recovery-model" },
-    });
-    f.router.observe({ id: 22, result: { turn: { id: "recovery" } } });
-    expect((await f.router.snapshot()).decisions[0]?.involvedModels).toEqual([
-      "other-mini",
-      "gpt-planner",
-      "deepseek-flash",
-      "reported-model",
-      "recovery-model",
-    ]);
-    f.router.observe({
-      method: "turn/completed",
-      params: { threadId: "work", turn: { id: "recovery", status: "completed" } },
-    });
-    await f.router.route(f.turn("你好"));
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({ role: "executor", score: 15 });
-    expect((await f.router.snapshot()).decisions[0]?.involvedModels).toEqual(["other-mini"]);
+    await f.router.route(f.turn("重构鉴权"));
+    const snapshot = await f.router.snapshot();
+    expect(snapshot.settings).not.toHaveProperty("planning");
+    expect(snapshot.settings).not.toHaveProperty("plannerModel");
+    expect(f.forwarded).toHaveLength(1);
+    expect(f.requested.some(({ method }) => method === "thread/start")).toBe(false);
   });
 
   it("does not replace an unavailable fixed executor", async () => {
@@ -788,10 +637,8 @@ describe("Buddy native routing", () => {
     await f.router.route(f.turn("修改按钮文案"));
     expect(f.forwarded[0]?.params).toMatchObject({ model: "other-mini" });
     const guidance = JSON.stringify(f.forwarded[0]?.params);
-    expect(guidance).toContain("经济型并行候选");
-    expect(guidance).toContain("deepseek-flash");
-    expect(guidance).toContain("写入范围不重叠");
-    expect(guidance).toContain("不继承整段对话");
+    expect(guidance).not.toContain("经济型并行候选");
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
   });
   it("uses a lightweight model for greetings without changing explicit Plan Mode", async () => {
     const f = await fixture({
@@ -808,7 +655,6 @@ describe("Buddy native routing", () => {
     ).toBe(true);
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
       score: 15,
-      plannerModel: null,
     });
   });
   it.each([
@@ -820,7 +666,7 @@ describe("Buddy native routing", () => {
     "解释数据库事务",
     "认证是什么意思？",
     "Explain database migrations",
-  ])("skips planning for %s even without a planner model", async (text) => {
+  ])("answers %s directly with the available execution model", async (text) => {
     const f = await fixture({
       modelIds: ["deepseek-flash"],
       classify: { conversational: true, role: "executor" },
@@ -838,19 +684,17 @@ describe("Buddy native routing", () => {
       phase: "executing",
       difficulty: "simple",
       score: 15,
-      plannerModel: null,
-      plan: null,
     });
   });
-  it("keeps a strong-only catalog observable but refuses to use it for execution", async () => {
+  it("uses an available flagship directly when it is the only execution candidate", async () => {
     const f = await fixture({ modelIds: ["gpt-planner"] });
     const refreshed = await f.router.refreshModels();
     expect(refreshed.models).toEqual([{ id: "gpt-planner", tier: "夯", eligible: true }]);
     expect(refreshed.modelRefresh).toEqual({ returned: 1, synchronized: 1, eligible: 1 });
     await f.router.route(f.turn("更新README"));
-    expect(f.forwarded).toEqual([]);
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "gpt-planner" });
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      phase: "failed",
+      phase: "executing",
       acceptedModel: null,
     });
   });
@@ -864,7 +708,7 @@ describe("Buddy native routing", () => {
       collaborationMode: { mode: "plan" },
     });
     expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
-    expect((await f.router.snapshot()).decisions[0]?.executorModel).toBe(null);
+    expect((await f.router.snapshot()).decisions[0]?.executorModel).toBe("gpt-planner");
   });
   it.runIf(process.platform !== "win32")(
     "bypasses both discovery and inference and keeps a failing real exit code",
@@ -945,44 +789,6 @@ describe("Buddy native routing", () => {
     f.router.observe({ id: 2, result: { turn: { id: "execute" } } });
     expect((await f.router.snapshot()).decisions[0]?.acceptedModel).toBe("deepseek-flash");
   });
-  it("actually completes a read-only strong planner before starting the weak executor", async () => {
-    const f = await fixture();
-    await f.router.route(f.turn("重构跨模块的鉴权实现"));
-    const planner = f.requested.find((request) => request.method === "thread/start");
-    expect(planner?.params).toMatchObject({
-      model: "gpt-planner",
-      ephemeral: true,
-      sandbox: "read-only",
-      approvalPolicy: "never",
-    });
-    expect(f.forwarded).toHaveLength(1);
-    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect(JSON.stringify(f.forwarded[0]?.params)).toContain("运行对应测试");
-    expect(
-      f.requested.find((request) => request.method === "thread/read")?.params.includeTurns,
-    ).toBe(false);
-    const planInput = f.requested.find((request) => request.method === "turn/start")?.params.input;
-    expect(JSON.stringify(planInput)).toContain("原需求");
-    expect(JSON.stringify(planInput)).toContain("已确认目标目录");
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      phase: "executing",
-      plannerModel: "gpt-planner",
-      executorModel: "deepseek-flash",
-      score: 85,
-    });
-  });
-  it.each([
-    { planSteps: [], planChecks: [] },
-    { planSteps: ["明确边界", "完成改动"], planChecks: [] },
-    { planSteps: ["   "], planChecks: ["\n"] },
-  ])("accepts lightweight or unnecessary TODOs without rejecting the turn: %j", async (options) => {
-    const f = await fixture(options);
-    await f.router.route(f.turn("设计数据库迁移方案"));
-    expect(f.sent).toEqual([]);
-    expect(f.forwarded).toHaveLength(1);
-    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("executing");
-  });
   it("does not classify an unmatched ordinary question as complex", async () => {
     const f = await fixture({ modelIds: ["deepseek-flash"], classify: { role: "executor" } });
     await f.router.route(f.turn("一句话概括这个项目"));
@@ -990,83 +796,6 @@ describe("Buddy native routing", () => {
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
     expect(f.requested.map((request) => request.method)).toEqual(["thread/read", "model/list"]);
     expect((await f.router.snapshot()).decisions[0]?.score).toBe(45);
-  });
-  it("cancellation stops planning without executing or replaying the original task", async () => {
-    const f = await fixture({ holdPlan: true });
-    const routing = f.router.route(f.turn("设计并实现数据库迁移"));
-    await vi.waitFor(() =>
-      expect(f.requested.some((request) => request.method === "turn/start")).toBe(true),
-    );
-    expect(f.router.hasActiveWork).toBe(true);
-    f.router.cancel("work");
-    await routing;
-    expect(f.forwarded).toEqual([]);
-    expect(f.sent[0]).toMatchObject({ id: 2, error: { code: -32800 } });
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("cancelled");
-    expect(f.router.hasActiveWork).toBe(false);
-  });
-  it("returns clarification to native planning and replans after a short reply", async () => {
-    const options = { clarification: "请提供完整页面地址。" };
-    const f = await fixture({
-      ...options,
-      // 只有最初的设计请求需要夯规划；后续 hi / URL 是普通回合。
-      classify: {
-        forText: (text) =>
-          text.includes("设计并修复") || text.startsWith("https://")
-            ? { advanced: true }
-            : { conversational: true, role: "executor" },
-      },
-    });
-    const original = f.turn("设计并修复截图中的跨模块问题");
-    await f.router.route(original);
-    expect(f.sent).toEqual([]);
-    expect(f.forwarded).toHaveLength(1);
-    expect(f.forwarded[0]?.params).toMatchObject({
-      input: [{ type: "text", text: "设计并修复截图中的跨模块问题" }],
-      model: "gpt-planner",
-      collaborationMode: { mode: "plan", settings: { model: "gpt-planner" } },
-    });
-    const guidance = JSON.stringify(f.forwarded[0]?.params);
-    expect(guidance).toContain(options.clarification);
-    expect(guidance).not.toContain("按以下任务包实施并验收");
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      phase: "planning",
-      plannerModel: "gpt-planner",
-      executorModel: null,
-    });
-    expect(
-      f.router.observe({
-        id: "native-question",
-        method: "item/tool/requestUserInput",
-        params: { threadId: "work" },
-      }),
-    ).toBe(false);
-    f.router.observe({
-      method: "turn/completed",
-      params: { threadId: "work", turn: { status: "completed" } },
-    });
-    options.clarification = "";
-    await f.router.route(f.turn("hi"));
-    expect(f.forwarded[1]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect(f.requested.filter((request) => request.method === "turn/start")).toHaveLength(1);
-    expect((await f.router.snapshot()).decisions[0]?.score).toBe(15);
-    f.router.observe({
-      method: "turn/completed",
-      params: { threadId: "work", turn: { status: "completed" } },
-    });
-    await f.router.route(f.turn("https://example.test/page"));
-    // 承接待澄清状态的新请求重新进入夯规划，而不是直接执行。
-    expect(f.forwarded.map((r) => (r.params as { model?: string }).model)).toEqual([
-      "gpt-planner",
-      "deepseek-flash",
-      "gpt-planner",
-    ]);
-    const plans = f.requested.filter((request) => request.method === "turn/start");
-    expect(plans).toHaveLength(2);
-    expect(JSON.stringify(plans[1]?.params.input)).toContain("设计并修复截图中的跨模块问题");
-    expect(JSON.stringify(plans[1]?.params.input)).toContain("https://example.test/page");
-    expect(JSON.stringify(plans[1]?.params.input)).toContain("原需求");
-    expect(f.requested.filter((request) => request.method === "thread/items/list")).toHaveLength(1);
   });
   it.each([
     { code: -32600, message: "thread/items/list is not supported yet" },
@@ -1082,12 +811,10 @@ describe("Buddy native routing", () => {
     });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.forwarded).toHaveLength(1);
-    const input = JSON.stringify(
-      f.requested.find((request) => request.method === "turn/start")?.params.input,
-    );
-    expect(input).toContain("原需求");
-    expect(input).toContain("已确认目标目录");
-    expect(input.indexOf("原需求")).toBeLessThan(input.indexOf("已确认目标目录"));
+    expect(f.requested.some((request) => request.method === "turn/start")).toBe(false);
+    expect(f.forwarded[0]?.params).toMatchObject({
+      input: [{ type: "text", text: "设计数据库迁移" }],
+    });
   });
   it("sends the first message when legacy history has no turns", async () => {
     const f = await fixture({
@@ -1097,130 +824,11 @@ describe("Buddy native routing", () => {
     expect(f.forwarded).toHaveLength(1);
     expect((await f.router.snapshot()).decisions[0]?.phase).toBe("executing");
   });
-  it("keeps long routed history to the recent bounded window", async () => {
-    const oldHistory = Array.from({ length: 40 }, (_, index) => ({
-      type: "userMessage",
-      content: [{ type: "text", text: `OLD_HISTORY_${index}` }],
-    }));
-    const recent = [
-      { type: "agentMessage", text: "RECENT_AGENT" },
-      { type: "userMessage", content: [{ type: "text", text: "RECENT_USER" }] },
-    ];
-    const f = await fixture({
-      historyItems: [...recent, ...oldHistory.slice(-14).reverse()],
-      classify: { advanced: true },
-    });
-    await f.router.route(f.turn("设计数据库迁移"));
-    const planningInput = JSON.stringify(
-      f.requested.find((request) => request.method === "turn/start")?.params.input,
-    );
-    expect(planningInput).toContain("RECENT_USER");
-    expect(planningInput).toContain("RECENT_AGENT");
-    expect(planningInput.match(/OLD_HISTORY_\d+/gu)?.length ?? 0).toBeLessThanOrEqual(16);
-  });
-  it("does not hide unrelated history failures", async () => {
-    const f = await fixture({
-      historyError: { code: -32000, message: "permission denied" },
-      classify: { advanced: true },
-    });
-    await f.router.route(f.turn("设计数据库迁移"));
-    expect(f.forwarded).toEqual([]);
-    expect(f.requested.some((request) => request.params.includeTurns === true)).toBe(false);
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("failed");
-  });
-  it.each([
-    {
-      message:
-        "thread work is not materialized yet; includeTurns is unavailable before first user message",
-      forwarded: 1,
-    },
-    { message: "permission denied", forwarded: 0 },
-  ])("handles legacy history errors narrowly: $message", async ({ message, forwarded }) => {
-    const f = await fixture({
-      historyError: { code: -32600, message: "thread/items/list is not supported yet" },
-      legacyHistoryError: { code: -32600, message },
-      classify: { advanced: true },
-    });
-    await f.router.route(f.turn("设计数据库迁移"));
-    expect(f.forwarded).toHaveLength(forwarded);
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe(
-      forwarded ? "executing" : "failed",
-    );
-  });
   it("does not request unavailable persisted history for an ephemeral thread", async () => {
     const f = await fixture({ ephemeral: true });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.requested.some((request) => request.method === "thread/items/list")).toBe(false);
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-  });
-  it("rejects malformed planner interaction and releases the native request without execution", async () => {
-    const f = await fixture({ interactivePlan: true });
-    await f.router.route(f.turn("设计数据库迁移"));
-    expect(f.forwarded).toEqual([]);
-    expect(f.replies[0]).toMatchObject({ id: "question", error: { code: -32090 } });
-    expect(f.requested.some((request) => request.method === "turn/interrupt")).toBe(true);
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("failed");
-  });
-  it("exposes planner questions on the owner thread and waits for confirmation before execution", async () => {
-    const f = await fixture({ holdPlan: true });
-    const routing = f.router.route(f.turn("设计数据库迁移"));
-    await vi.waitFor(() => expect(f.requested.some((r) => r.method === "turn/start")).toBe(true));
-    f.router.observe({
-      id: 78,
-      method: "item/tool/requestUserInput",
-      params: {
-        threadId: "planner",
-        questions: [{ id: "scope", header: "范围", question: "迁移哪个模块？", options: null }],
-      },
-    });
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      threadId: "work",
-      phase: "waiting-input",
-      pendingInput: { requestId: 78 },
-    });
-    expect(f.forwarded).toEqual([]);
-    expect(f.replies).toEqual([]);
-    await f.router.answer({
-      threadId: "work",
-      requestId: 78,
-      answers: { scope: { answers: ["目标模块"] } },
-    });
-    expect(f.replies).toEqual([
-      { id: 78, result: { answers: { scope: { answers: ["目标模块"] } } } },
-    ]);
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      phase: "planning",
-      pendingInput: null,
-    });
-    f.router.observe({
-      method: "item/completed",
-      params: {
-        threadId: "planner",
-        item: {
-          type: "agentMessage",
-          text: JSON.stringify({
-            goal: "迁移",
-            steps: ["仅迁移目标模块"],
-            checks: ["验证"],
-            clarification: null,
-          }),
-        },
-      },
-    });
-    f.router.observe({
-      method: "turn/completed",
-      params: { threadId: "planner", turn: { status: "completed" } },
-    });
-    await routing;
-    expect(f.forwarded).toHaveLength(1);
-    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("executing");
-  });
-  it("planner rejection cannot silently start a strong executor or replay", async () => {
-    const f = await fixture({ plannerFails: true });
-    await f.router.route(f.turn("设计数据库迁移"));
-    expect(f.forwarded).toEqual([]);
-    expect((await f.router.snapshot()).decisions[0]?.phase).toBe("failed");
   });
   it("never bypasses a shell expression, a Git write, or unconfirmed permissions", async () => {
     const f = await fixture();
@@ -1238,7 +846,7 @@ describe("Buddy native routing", () => {
     expect(f.requested).toEqual([]);
     expect(f.providerRequests()).toBe(0);
   });
-  it("assesses a short follow-up against the previous proposal before choosing to plan", async () => {
+  it("assesses a short follow-up with bounded history without creating another thread", async () => {
     const f = await fixture({
       historyItems: [
         { type: "agentMessage", text: "先迁移数据库事务，再跨服务统一认证，最后验证并发登录。" },
@@ -1247,14 +855,10 @@ describe("Buddy native routing", () => {
     });
     await f.router.route(f.turn("按你说的修"));
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      difficulty: "advanced",
       reason: expect.stringContaining("结合最近任务"),
-      plannerModel: "gpt-planner",
     });
-    const planner = f.requested.find(
-      (request) => request.method === "turn/start" && request.params.threadId === "planner",
-    );
-    expect(JSON.stringify(planner)).toContain("跨服务统一认证");
+    expect(f.forwarded).toHaveLength(1);
+    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
   });
   it("uses the thread provider for model discovery and ignores candidates below the input limit", async () => {
     const f = await fixture({
@@ -1312,7 +916,6 @@ describe("Buddy native routing", () => {
       send: async (message) => {
         sent.push(message);
       },
-      respond: async () => undefined,
       forward: async (request) => {
         forwarded.push(request);
       },
@@ -1416,14 +1019,13 @@ describe("Git push model bypass", () => {
         collaborationMode: {
           settings: {
             model: "deepseek-flash",
-            developer_instructions: expect.stringContaining("不委派子代理或切换到高级模型"),
+            developer_instructions: expect.stringContaining("不委派子代理或切换模型"),
           },
         },
       },
     });
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
       role: "git",
-      plannerModel: null,
       command: null,
       executorModel: "deepseek-flash",
       modelBypass: {
@@ -1449,17 +1051,13 @@ describe("Git push model bypass", () => {
     expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
   });
 
-  it("fails visibly without a cheap candidate instead of falling back to a planner", async () => {
+  it("allows a flagship to execute Git when it is the only eligible model", async () => {
     const f = await fixture({ modelIds: ["gpt-planner"] });
     await f.router.route(f.turn("推送代码"));
-    expect(f.forwarded).toEqual([]);
-    expect(f.sent[0]).toMatchObject({
-      error: { message: expect.stringContaining("没有可执行的垃模型") },
-    });
+    expect(f.forwarded[0]?.params).toMatchObject({ model: "gpt-planner" });
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      phase: "failed",
-      plannerModel: null,
-      modelBypass: { outcome: "failed", total: 0 },
+      phase: "executing",
+      modelBypass: { outcome: "pending", total: 0 },
     });
   });
 
@@ -1525,23 +1123,8 @@ describe("Git push model bypass", () => {
     const f = await fixture();
     await f.router.configure({ bypass: false });
     await f.router.route(f.turn("推送代码，检查跨仓库冲突"));
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({ plannerModel: "gpt-planner" });
+    expect(f.forwarded).toHaveLength(1);
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
-  });
-
-  it("keeps System One and bypass active when automatic planning is off", async () => {
-    const f = await fixture({
-      jev: jevClient(jevResponse("code", 1.2, 0.97, "git")),
-    });
-    await f.router.configure({ planning: false });
-    await f.router.route(f.turn("把当前改动同步到远端"));
-    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
-    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      judgment: { source: "system-one" },
-      plannerModel: null,
-      modelBypass: { kind: "git-push" },
-    });
   });
 
   it("loads persisted settings with future keys without rejecting the runtime", async () => {
@@ -1554,22 +1137,8 @@ describe("Git push model bypass", () => {
 
     expect((await f.router.snapshot()).settings).toMatchObject({
       enabled: true,
-      planning: true,
     });
     await expect(f.router.configure({ futureSwitch: true } as never)).rejects.toThrow();
-  });
-
-  it("skips the planner for complex requests when automatic planning is off", async () => {
-    const f = await fixture({ jev: jevClient(jevResponse("plan", 2, 0.02, "executor")) });
-    await f.router.configure({ planning: false });
-    await f.router.route(f.turn("实现一个跨模块的认证重构"));
-    expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
-    expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      difficulty: "advanced",
-      plannerModel: null,
-      judgment: { source: "system-one" },
-    });
   });
 });
 
@@ -1584,7 +1153,7 @@ describe("JEV judgment integration", () => {
     expect(decision).toMatchObject({
       role: "executor",
       difficulty: "advanced",
-      plannerModel: "gpt-planner",
+      executorModel: "gpt-planner",
       judgment: { source: "system-one", model: "typesafe/jev" },
     });
     expect(decision?.judgment?.decisions.route?.status).toBe("automatic");
@@ -1597,7 +1166,6 @@ describe("JEV judgment integration", () => {
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
       role: "git",
-      plannerModel: null,
       modelBypass: { kind: "git-push" },
     });
   });
@@ -1606,7 +1174,7 @@ describe("JEV judgment integration", () => {
     const f = await fixture({ jev: jevClient(jevResponse("code", 2, 0.05, "executor")) });
     await f.router.route(f.turn("推送代码这个功能的旁路要怎么实现"));
     expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      plannerModel: "gpt-planner",
+      executorModel: "gpt-planner",
     });
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toBeUndefined();
   });
@@ -1721,7 +1289,7 @@ describe("JEV judgment integration", () => {
     expect(followUp.requested.some((entry) => entry.method === "thread/items/list")).toBe(true);
     expect((await followUp.router.snapshot()).decisions[0]).toMatchObject({
       difficulty: "advanced",
-      plannerModel: "gpt-planner",
+      executorModel: "gpt-planner",
     });
   });
 

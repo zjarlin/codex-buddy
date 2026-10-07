@@ -50,7 +50,8 @@ const { outputFiles } = await build({
         },
       };
       trigger.__reactFiber$fixture.return = { memoizedProps: { client: queryClient } };
-      const snapshot = { settings: { enabled: true, planning: true, privateMode: false, bypass: true, role: "auto", plannerModel: null, executorModel: null }, models: [], decisions: [] };
+      const snapshot = { settings: { enabled: true, privateMode: false, bypass: true, role: "auto", executorModel: null }, models: [], decisions: [] };
+      globalThis.snapshot = snapshot;
       const client = {
         buddyStatus: async () => structuredClone(snapshot),
         buddyConfigure: async (settings) => {
@@ -212,7 +213,10 @@ test("manual IDs preserve case and slashes, pin without selecting, and survive r
     { model: "Vendor/Model-A:Latest", effort: null },
   ]);
   expect(await page.evaluate(() => Reflect.get(globalThis, "composerKeys"))).toEqual([]);
-  await expect(page.locator("[data-buddy-router] summary")).toContainText("固定模型 · 不规划");
+  await expect(page.locator("[data-buddy-router]")).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "snapshot").settings.enabled)).toBe(
+    false,
+  );
   await page.reload();
   await page.addScriptTag({ content: bundle });
   const chip = page.locator('[data-model-shortcut="Vendor/Model-A:Latest"]');
@@ -504,10 +508,12 @@ test("native manual refresh preserves favorites, search and selection and ignore
   await refresh.click();
   await page.evaluate(() => Reflect.get(globalThis, "changeHarness")("pi"));
   await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(true));
-  await expect(page.getByRole("status")).not.toBeVisible();
+  await expect(
+    page.locator("[data-codexhost-model-shortcuts]").getByRole("status"),
+  ).not.toBeVisible();
 });
 
-test("favorite chips persist and select the exact native model with planning disabled", async ({
+test("favorite chips persist and select the exact native model with routing disabled", async ({
   page,
 }) => {
   await page.route("http://shortcuts.test/", (route) =>
@@ -530,7 +536,9 @@ test("favorite chips persist and select the exact native model with planning dis
   const beta = page.locator('[data-model-shortcut="deepseek-b"]');
   await page.evaluate(() => Reflect.set(globalThis, "fail", true));
   await beta.click();
-  await expect(page.getByRole("status")).toHaveText("Configuration unavailable");
+  await expect(page.locator("[data-codexhost-model-shortcuts]").getByRole("status")).toHaveText(
+    "Configuration unavailable",
+  );
   await expect(page.locator("#native")).toHaveText("gpt-a");
   await page.evaluate(() => Reflect.set(globalThis, "fail", false));
   await beta.focus();
@@ -540,18 +548,11 @@ test("favorite chips persist and select the exact native model with planning dis
   expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
     { model: "deepseek-b", effort: "low" },
   ]);
-  await expect(page.locator("[data-buddy-router] summary")).toContainText("固定模型 · 不规划");
-  await page.locator("[data-buddy-router] summary").click();
-  await page.getByRole("switch", { name: /Auto Router/ }).click();
-  await expect(page.locator("[data-buddy-router] summary")).not.toContainText("固定模型");
+  await expect(page.locator("[data-buddy-router]")).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "snapshot").settings.enabled)).toBe(
+    false,
+  );
   await page.setViewportSize({ width: 720, height: 800 });
-  const settings = page.locator(".buddy-settings");
-  expect(
-    await settings.evaluate(
-      (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
-    ),
-  ).toBe(2);
-  expect((await settings.boundingBox())?.height).toBeLessThan(155);
   await page.screenshot({ path: "test-results/model-shortcuts-compact.png" });
   await page.evaluate(() => Reflect.get(globalThis, "changeHarness")("pi"));
   await expect(beta).toHaveCount(0);

@@ -1,7 +1,7 @@
 import type { JsonValue } from "@codexhost/protocol-core";
 import type { BuddyDecision } from "@codexhost/shared-contracts";
 import type { GitAction } from "./judgment.js";
-import { object, result, type NativeRequest } from "./planner.js";
+import { object, result, type NativeRequest } from "./native.js";
 
 type ModelBypass = NonNullable<BuddyDecision["modelBypass"]>;
 
@@ -37,7 +37,7 @@ export function isGitPushRequest(input: JsonValue[]): boolean {
 }
 
 export const gitPushGuidance = [
-  "本回合命中 Git 推送模型旁路，由当前垃模型独立处理，跳过夯规划，不委派子代理或切换到高级模型。",
+  "本回合命中 Git 推送模型旁路，由当前模型独立处理，不委派子代理或切换模型。",
   "先读取本回合附带的 Git、GitLab、GitHub CLI 和 PR skill，按实际远程仓库选择 glab 或 gh；技能中与当前任务无关的发布流程不自动执行。",
   "先确认实际仓库、分支、远程、暂存区与工作区；只提交和推送用户授权的改动，保留其他修改。遇到未定设计或冲突时报告证据，不扩大范围。",
   "保留原生权限、审批及 Plan Mode 约束；规划模式只检查和说明，不执行 Git 写操作。",

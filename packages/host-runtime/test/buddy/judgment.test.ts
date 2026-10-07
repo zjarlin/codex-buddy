@@ -241,7 +241,6 @@ describe("JEV API key persistence", () => {
       ...(injected ? { jev: injected } : {}),
       request: async () => ({ result: {} }),
       send: async () => undefined,
-      respond: async () => undefined,
       forward: async () => undefined,
       diagnose: () => undefined,
     });

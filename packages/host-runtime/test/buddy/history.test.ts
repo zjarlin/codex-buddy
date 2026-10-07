@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recentMessages } from "../../src/buddy/history.js";
-import type { NativeRequest } from "../../src/buddy/planner.js";
+import type { NativeRequest } from "../../src/buddy/native.js";
 
 const directories: string[] = [];
 afterEach(async () => {

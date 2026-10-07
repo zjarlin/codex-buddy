@@ -3404,9 +3404,14 @@ export function installRendererBindingProbe(
       if (
         !mounted ||
         controller.get(mounted.composer).agent !== "codex" ||
-        controller.isSwitching(mounted.composer) ||
-        isOwnershipSubmissionBlocked(mounted.ownershipStatus) ||
-        mounted.ownershipStatus !== "ready"
+        controller.isSwitching(mounted.composer)
+      ) {
+        return null;
+      }
+      const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+      if (
+        mounted.ownershipStatus !== "ready" &&
+        (threadId !== null || mounted.ownershipStatus !== "not-required")
       ) {
         return null;
       }
@@ -3416,7 +3421,7 @@ export function installRendererBindingProbe(
       }
       return {
         anchor: mounted.composer,
-        threadId: threadIdFromComposerModelTarget(mounted.modelTarget),
+        threadId,
         client,
       };
     },

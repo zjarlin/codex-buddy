@@ -1,5 +1,5 @@
 import type { JsonObject } from "@codexhost/protocol-core";
-import { object, result, type NativeRequest } from "./planner.js";
+import { object, result, type NativeRequest } from "./native.js";
 
 export async function recentMessages(request: NativeRequest, threadId: string): Promise<unknown[]> {
   const metadata = result(await request("thread/read", { threadId, includeTurns: false }));

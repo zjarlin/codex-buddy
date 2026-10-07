@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 import path from "node:path";
+import { tailwindEsbuildPlugin } from "../../packages/renderer-extension/scripts/tailwind-esbuild-plugin.mjs";
 
 const { outputFiles } = await build({
   stdin: {
@@ -10,11 +11,15 @@ const { outputFiles } = await build({
       import { installRendererThreadActions } from './packages/renderer-extension/src/renderer-thread-actions.ts';
       import { installSidebarContinuation } from './packages/renderer-extension/src/buddy/continuation.ts';
       import { installBuddyControl } from './packages/renderer-extension/src/buddy/control.ts';
+      import { createRoutingSettingsPage } from './packages/renderer-extension/src/settings/routing-page.ts';
+      import { createRendererSettingsPageRegistry } from './packages/renderer-extension/src/settings/core.ts';
+      import { rendererSettingsMessages } from './packages/renderer-extension/src/settings/localization.ts';
+      import { mountRendererSettingsShell } from './packages/renderer-extension/src/settings/shell.ts';
       globalThis.calls = [];
       let active = 'local';
       let finishConfigure;
       const clients = Object.fromEntries(['local', 'remote-ssh-discovered:okm252'].map(hostId => {
-        const snapshot = { settings: { enabled: true, planning: true, privateMode: false, bypass: true, role: 'auto', plannerModel: null, executorModel: null }, models: [], decisions: [] };
+        const snapshot = { settings: { enabled: true, privateMode: false, bypass: true, role: 'auto', executorModel: null }, models: [], decisions: [] };
         let recovered = false;
         const client = {
           threadOpenTarget: async threadId => {
@@ -41,14 +46,27 @@ const { outputFiles } = await build({
       installRendererThreadActions({getClient:hostId=>clients[hostId],getLocale:()=> 'zh-CN'});
       installSidebarContinuation({getClient:hostId=>clients[hostId],getLocale:()=> 'zh-CN'});
       const control = installBuddyControl(()=>({anchor:document.querySelector('#composer'),threadId:'same-id',client:clients[active]}),()=> 'zh-CN');
-      document.querySelector('#switch-host').addEventListener('click',()=> {active='remote-ssh-discovered:okm252';void control.refresh();});
-      document.querySelector('#finish').addEventListener('click',()=>finishConfigure?.());
+      const switchHost = document.querySelector('#switch-host');
+      const finish = document.querySelector('#finish');
+      const open = document.createElement('button');open.textContent='设置';document.body.prepend(open);
+      const routing = createRoutingSettingsPage(rendererSettingsMessages('zh-CN'),()=>clients[active]);
+      const registry = createRendererSettingsPageRegistry([{...routing,mount(context){
+        context.content.append(switchHost,finish);return routing.mount(context);
+      }}]);
+      const shell = mountRendererSettingsShell(registry,document,rendererSettingsMessages('zh-CN'));
+      open.addEventListener('click',()=>shell.openSettings(open,'routing'));
+      switchHost.addEventListener('click',()=> {
+        active='remote-ssh-discovered:okm252';void control.refresh();
+        if(shell.open)shell.openSettings(open,'routing');
+      });
+      finish.addEventListener('click',()=>finishConfigure?.());
     `,
   },
   bundle: true,
   platform: "browser",
   format: "iife",
-  loader: { ".png": "dataurl", ".svg": "dataurl" },
+  loader: { ".css": "text", ".png": "dataurl", ".svg": "dataurl" },
+  plugins: [tailwindEsbuildPlugin()],
   write: false,
 });
 const bundle = outputFiles[0]?.text;
@@ -128,14 +146,18 @@ test("interrupted SSH thread resumes only on its owning Host", async ({ page }) 
 });
 
 test("late local settings cannot overwrite the selected SSH Host", async ({ page }) => {
-  await page.locator("[data-buddy-router] summary").click();
-  const toggle = page.getByRole("switch", { name: /Auto Router/ });
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await toggle.click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const toggle = page.getByRole("switch", { name: "自动路由", exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await expect(page.locator(".settings-routing-status")).toHaveText("正在读取…");
   await page.getByRole("button", { name: "Switch to SSH" }).click();
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(toggle).toBeChecked();
+  await expect(toggle).toBeEnabled();
   await page.screenshot({ path: "test-results/ssh-settings-before.png" });
   await page.getByRole("button", { name: "Complete local request" }).click();
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(toggle).toBeChecked();
+  await expect(page.locator(".settings-routing-status")).toHaveText("");
   await page.screenshot({ path: "test-results/ssh-settings-after.png" });
 });

@@ -196,14 +196,14 @@ describe("Renderer settings navigation rail trigger", () => {
 
       control.setUpdateAvailable(true);
       expect(badge?.style.display).toBe("block");
-      expect(control.button.title).toBe("codexhost settings · A new version is available.");
+      expect(control.button.title).toBe("Codex Buddy settings · A new version is available.");
       expect(control.root.hasAttribute("data-update-available")).toBe(true);
       button.dispatch("click");
       expect(opened).toHaveBeenLastCalledWith(control.button, "updates");
 
       control.setUpdateAvailable(false);
       expect(badge?.style.display).toBe("none");
-      expect(control.button.title).toBe("codexhost settings");
+      expect(control.button.title).toBe("Codex Buddy settings");
       control.dispose();
     } finally {
       vi.unstubAllGlobals();

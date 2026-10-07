@@ -23,7 +23,7 @@ const messages = {
     unavailable: "当前连接不支持会话恢复。",
     waiting: "连接状态尚未确认，暂时无法恢复会话。",
     unavailableHint:
-      "请确认当前连接已接入支持会话恢复的 codexhost；SSH 会话需在远端启用后重新连接。",
+      "请确认当前连接已接入支持会话恢复的 Codex Buddy；SSH 会话需在远端启用后重新连接。",
     private: "隐私模式下不能续接普通会话。",
     unreadable: "条会话历史暂时无法读取",
     failed: "失败",
@@ -45,7 +45,7 @@ const messages = {
     unavailable: "Conversation recovery is unavailable on this connection.",
     waiting: "Waiting for connection status before allowing conversation recovery.",
     unavailableHint:
-      "Check that this connection runs codexhost with conversation recovery; for SSH, enable it on the remote machine and reconnect.",
+      "Check that this connection runs Codex Buddy with conversation recovery; for SSH, enable it on the remote machine and reconnect.",
     private: "Ordinary conversations cannot resume in private mode.",
     unreadable: "conversation histories could not be read",
     failed: "Failed",

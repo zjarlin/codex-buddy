@@ -108,7 +108,7 @@ const { outputFiles } = await build({
           buddyStatus: async () => {
             globalThis.buddyStatusRequests += 1;
             return {
-              settings: { enabled: true, privateMode: false, bypass: true, role: "auto", plannerModel: null, executorModel: null },
+              settings: { enabled: true, privateMode: false, bypass: true, role: "auto", executorModel: null },
               models: [], decisions: [],
             };
           },
@@ -338,7 +338,7 @@ test("streaming elements in a long transcript leave unrelated injection surfaces
     expect(counts[selector] ?? 0, selector).toBe(0);
 });
 
-test("Auto Router follows the draft Harness and stops polling for external Harnesses", async ({
+test("recovery follows the draft Harness without a routing panel or polling", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1000, height: 800 });
@@ -352,6 +352,7 @@ test("Auto Router follows the draft Harness and stops polling for external Harne
   await page.addScriptTag({ content: browserBundle });
   await page.clock.runFor(100);
   const router = page.locator("[data-buddy-router]");
+  const recovery = page.locator("[data-buddy-recovery]");
   const picker = page.locator('[data-codexhost-agent-control] > button[aria-haspopup="menu"]');
   await expect(
     page.locator('[data-codexhost-model-control] > button[aria-haspopup="menu"]'),
@@ -362,21 +363,27 @@ test("Auto Router follows the draft Harness and stops polling for external Harne
 
   await picker.click();
   await page.locator('[role="menuitemradio"][data-agent="codex"]').click();
-  await expect(router).toBeVisible();
+  await expect(router).toHaveCount(0);
+  await expect(recovery).toBeVisible();
   await page.clock.runFor(1_200);
-  const polls = await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"));
-  expect(polls).toBeGreaterThan(0);
+  const reads = await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"));
+  expect(reads).toBe(1);
+  await page.clock.runFor(2_400);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(reads);
 
   await picker.click();
   await page.locator('[role="menuitemradio"][data-agent="opencode"]').click();
   await expect(router).toHaveCount(0);
+  await expect(recovery).toHaveCount(0);
   await page.clock.runFor(2_400);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(polls);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(reads);
   await page.screenshot({ path: testInfo.outputPath("opencode-without-auto-router.png") });
 
   await picker.click();
   await page.locator('[role="menuitemradio"][data-agent="codex"]').click();
-  await expect(router).toBeVisible();
+  await expect(router).toHaveCount(0);
+  await expect(recovery).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(reads + 1);
 });
 
 test("a draft waits for the Desktop prewarm policy before applying its Model", async ({ page }) => {

@@ -222,9 +222,6 @@ import {
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
-  BUDDY_ANSWER_METHOD,
-  buddyAnswerSchema,
-  type BuddyAnswer,
   buddySnapshotSchema,
   type BuddySnapshot,
   type BuddySettings,
@@ -342,6 +339,7 @@ import {
   createRendererSessionImportClient,
   type RendererSessionImportClient,
 } from "./renderer-session-import-client.js";
+import { BUDDY_SETTINGS_CHANGED_EVENT } from "./buddy/settings-events.js";
 import { createNativeModelAvailability } from "./renderer-native-model-availability.js";
 import { restoreRemoteProject } from "./renderer-remote-project-restore.js";
 
@@ -539,7 +537,6 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     enabled?: boolean;
   }): Promise<BuddySnapshot>;
   buddyCancel?(threadId: string): Promise<BuddySnapshot>;
-  buddyAnswer?(input: BuddyAnswer): Promise<BuddySnapshot>;
   getHarnessLaunchSettings?(input: HarnessLaunchSettingsGet): Promise<HarnessLaunchSettings>;
   setHarnessLaunchSettings?(input: HarnessLaunchSettingsSet): Promise<HarnessLaunchSettings>;
   setIdleReleaseSettings?(settings: IdleReleaseSettings): Promise<IdleReleaseSettings>;
@@ -1258,8 +1255,14 @@ export function createRendererModelClient(
     },
     syncCodexCatalog: async () =>
       buddyCatalogSyncSchema.parse(await manager.sendRequest(BUDDY_CATALOG_SYNC_METHOD, {})),
-    buddyConfigure: async (settings: BuddySettings) =>
-      buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_SETTINGS_METHOD, settings)),
+    buddyConfigure: async (settings: BuddySettings) => {
+      const snapshot = buddySnapshotSchema.parse(
+        await manager.sendRequest(BUDDY_SETTINGS_METHOD, settings),
+      );
+      if (typeof window !== "undefined")
+        window.dispatchEvent(new Event(BUDDY_SETTINGS_CHANGED_EVENT));
+      return snapshot;
+    },
     buddyJevKey: async (config: {
       apiKey?: string | null | undefined;
       baseURL?: string | null | undefined;
@@ -1269,10 +1272,6 @@ export function createRendererModelClient(
       baseURL?: string | null | undefined;
       enabled?: boolean;
     }) => buddySnapshotSchema.parse(await manager.sendRequest(EMERGENCY_PROVIDER_METHOD, config)),
-    buddyAnswer: async (input: BuddyAnswer) =>
-      buddySnapshotSchema.parse(
-        await manager.sendRequest(BUDDY_ANSWER_METHOD, buddyAnswerSchema.parse(input)),
-      ),
     buddyCancel: async (threadId: string) =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_CANCEL_METHOD, { threadId })),
     routeSession: async (input: SessionRouteParams): Promise<SessionRouteResult> => {

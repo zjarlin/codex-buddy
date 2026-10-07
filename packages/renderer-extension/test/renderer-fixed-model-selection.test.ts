@@ -7,11 +7,9 @@ describe("fixed model selection", () => {
   function fixture() {
     const settings = {
       enabled: true,
-      planning: true,
       privateMode: true,
       bypass: true,
       role: "auto",
-      plannerModel: "planner",
       executorModel: "worker",
     };
     const client = {
@@ -28,7 +26,6 @@ describe("fixed model selection", () => {
       expect.objectContaining({
         enabled: false,
         privateMode: false,
-        plannerModel: "planner",
         executorModel: "worker",
       }),
     );

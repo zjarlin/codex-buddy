@@ -2110,3 +2110,67 @@
     transition-duration: 0s !important;
   }
 }
+.settings-routing-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.settings-routing-form label {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 280px);
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+}
+.settings-routing-form input:not([type="checkbox"]),
+.settings-routing-form select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--settings-border);
+  border-radius: 6px;
+  background: var(--settings-panel);
+  color: var(--settings-text);
+  padding: 4px 8px;
+  font: inherit;
+}
+.settings-routing-form input[type="checkbox"] {
+  justify-self: end;
+}
+.settings-routing-form label:has(:disabled) {
+  opacity: 0.45;
+}
+.settings-routing-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.settings-routing-recoveries > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+.settings-routing-status,
+.settings-routing-key-status {
+  font-size: 12px;
+  color: var(--settings-muted);
+}
+.settings-routing-status[role="alert"] {
+  color: var(--settings-danger);
+}
+@media (max-width: 600px) {
+  .settings-routing-form label {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+  .settings-routing-form label:has(input[type="checkbox"]) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+}

@@ -10,19 +10,9 @@ const modelAssessment = z.object({
   purpose: z.enum(["general", "specialized", "unknown"]).optional(),
   tools: z.boolean().nullable().optional(),
 });
-const clientCapabilities = z.object({
-  observedAt: z.string(),
-  models: z.array(z.object({ id: z.string(), efforts: z.array(z.string()) })),
-});
 const policySchema = z.object({
   models: z.record(z.string(), modelAssessment).default({}),
   capabilityThresholds: z.object({ standard: score.default(70) }).default({ standard: 70 }),
-  planning: z
-    .object({
-      plannerModel: z.string().nullable().optional(),
-      executorCapabilities: clientCapabilities.optional(),
-    })
-    .optional(),
 });
 const adviceSchema = z.object({
   at: z.number(),
@@ -35,8 +25,6 @@ const adviceSchema = z.object({
 export interface SelectionPolicy {
   assessments: Map<string, z.infer<typeof modelAssessment>>;
   standardThreshold: number;
-  planner?: string | null;
-  clientModels: Map<string, string[]>;
 }
 
 async function optionalJson(file: string): Promise<unknown> {
@@ -78,17 +66,8 @@ export async function readSelectionPolicy(
   for (const [id, override] of Object.entries(policy.models)) {
     assessments.set(id, { ...assessments.get(id), ...override });
   }
-  const capabilities = policy.planning?.executorCapabilities;
-  const clientModels = new Map<string, string[]>();
-  if (capabilities && fresh(Date.parse(capabilities.observedAt))) {
-    for (const model of capabilities.models) {
-      clientModels.set(model.id, model.efforts);
-    }
-  }
   return {
     assessments,
     standardThreshold: policy.capabilityThresholds.standard,
-    planner: policy.planning?.plannerModel ?? null,
-    clientModels,
   };
 }

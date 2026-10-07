@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { InterruptedConversations } from "../../src/buddy/continuation.js";
-import type { NativeRequest } from "../../src/buddy/planner.js";
+import type { NativeRequest } from "../../src/buddy/native.js";
 
 function fixture() {
   let status = "failed";

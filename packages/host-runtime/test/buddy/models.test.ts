@@ -54,10 +54,6 @@ describe("economic execution pools", () => {
       ["not-native", { capability: 99, economy: 100 }],
     ]),
     standardThreshold: 70,
-    clientModels: new Map([
-      ["primary-flash", ["low", "high"]],
-      ["tiny-reader", []],
-    ]),
   };
   const native = {
     ids: new Set(ids.filter((id) => id !== "not-native")),
@@ -68,19 +64,17 @@ describe("economic execution pools", () => {
     ]),
   };
 
-  it("chooses economy after capability and keeps differently sized child candidates", () => {
+  it("chooses economy after capability and retains flagship execution candidates", () => {
     const result = chooseModels(ids, native, {}, { policy, tier: "standard" });
     expect(result.executor).toBe("cheap-coder");
-    expect(result.executors.map((model) => model.id)).toEqual(["cheap-coder", "primary-flash"]);
-    expect(result.parallelExecutors).toEqual([
-      {
-        id: "primary-flash",
-        capability: 80,
-        economy: 60,
-        level: "standard",
-        efforts: ["low", "high"],
-      },
+    expect(result.executors.map((model) => model.id)).toEqual([
+      "cheap-coder",
+      "primary-flash",
+      "gpt-planner",
     ]);
+    expect(chooseModels(ids, native, {}, { policy, tier: "advanced" }).executor).toBe(
+      "gpt-planner",
+    );
     expect(chooseModels(ids, native, {}, { policy, tier: "simple" }).executor).toBe("cheap-coder");
   });
 
@@ -119,18 +113,7 @@ describe("economic execution pools", () => {
       { policy, tier: "standard" },
     );
     expect(result.executor).toBe("primary-flash");
-    expect(result.executors).toHaveLength(2);
-  });
-
-  it("does not invent child availability when the capability snapshot is absent", () => {
-    const result = chooseModels(
-      ids,
-      native,
-      {},
-      { policy: { ...policy, clientModels: new Map() }, tier: "standard" },
-    );
-    expect(result.parallelExecutors).toEqual([]);
-    expect(result.executor).toBe("cheap-coder");
+    expect(result.executors).toHaveLength(3);
   });
 
   it("uses model_catalog_json context windows when filtering discovery", async () => {
@@ -222,7 +205,6 @@ describe("scoped model advice", () => {
     const result = await fixture();
     expect(result.assessments.get("cheap-coder")).toMatchObject({ economy: 90 });
     expect(result.assessments.get("manual-coder")).toMatchObject({ economy: 75 });
-    expect(result.clientModels.get("cheap-coder")).toEqual(["low"]);
   });
   it.each([
     { at: now - 25 * 60 * 60 * 1000 },
@@ -234,9 +216,5 @@ describe("scoped model advice", () => {
     const result = await fixture(overrides);
     expect(result.assessments.has("cheap-coder")).toBe(false);
     expect(result.assessments.has("manual-coder")).toBe(true);
-  });
-  it("rejects stale child model snapshots", async () => {
-    const result = await fixture({}, 25 * 60 * 60 * 1000);
-    expect(result.clientModels.size).toBe(0);
   });
 });

@@ -8,17 +8,14 @@ export interface ExecutorCandidate {
   capability: number | null;
   economy: number | null;
   level: "simple" | "standard" | "unknown";
-  efforts?: string[];
 }
 
 export interface ModelInventory {
   models: BuddyModel[];
   returned: number;
   provider: string;
-  planner: string | null;
   executor: string | null;
   executors: ExecutorCandidate[];
-  parallelExecutors: ExecutorCandidate[];
 }
 
 export interface NativeModelCatalog {
@@ -62,7 +59,7 @@ async function catalogContextWindows(path: string | undefined): Promise<Map<stri
 }
 
 export function modelTier(id: string): "夯" | "垃" {
-  // 开源权重系列（gpt-oss）不是夯模型，不能用于规划，也不进入夯规划候选。
+  // 开源权重系列单独归类，不按名称当作旗舰模型。
   if (/(?:^|[/:])gpt-oss(?=[\d._-]|$)/iu.test(id)) return "垃";
   return /(?:^|[/:])(?:gpt|claude)(?=[\d._-]|$)/iu.test(id) ? "夯" : "垃";
 }
@@ -83,9 +80,9 @@ export function chooseConversationModel(models: BuddyModel[]): string | null {
 export function chooseModels(
   ids: string[],
   nativeModels: Pick<NativeModelCatalog, "ids" | "contextWindows">,
-  preferred: { planner?: string | null; executor?: string | null },
-  selection?: { policy: SelectionPolicy; tier: "simple" | "standard" },
-): Pick<ModelInventory, "models" | "planner" | "executor" | "executors" | "parallelExecutors"> {
+  preferred: { executor?: string | null },
+  selection?: { policy: SelectionPolicy; tier: "simple" | "standard" | "advanced" },
+): Pick<ModelInventory, "models" | "executor" | "executors"> {
   const models: BuddyModel[] = [...new Set(ids)].map((id) => ({
     id,
     tier: modelTier(id),
@@ -96,24 +93,24 @@ export function chooseModels(
         id,
       ),
   }));
-  const strong = models.filter((m) => m.eligible && m.tier === "夯");
-  const weak = models.filter((m) => {
+  const candidates = models.filter((m) => {
     const assessment = selection?.policy.assessments.get(m.id);
-    return (
-      m.eligible &&
-      m.tier === "垃" &&
-      assessment?.purpose !== "specialized" &&
-      assessment?.tools !== false
-    );
+    return m.eligible && assessment?.purpose !== "specialized" && assessment?.tools !== false;
   });
-  const planner =
-    strong.find((m) => m.id === preferred.planner) ??
-    strong.sort((a, b) => {
-      const gpt = (m: BuddyModel): number => (/(?:^|[/:])gpt/iu.test(m.id) ? 1 : 0);
-      return gpt(b) - gpt(a) || b.id.localeCompare(a.id, "en", { numeric: true });
-    })[0];
-  const ranked: ExecutorCandidate[] = weak
+  const ranked: ExecutorCandidate[] = candidates
     .sort((a, b) => {
+      if (selection?.tier === "advanced") {
+        const capability = (model: BuddyModel): number =>
+          selection.policy.assessments.get(model.id)?.capability ?? (model.tier === "夯" ? 90 : 0);
+        const difference = capability(b) - capability(a);
+        if (difference) return difference;
+        const gpt = (model: BuddyModel): number => (/(?:^|[/:])gpt/iu.test(model.id) ? 1 : 0);
+        const family = gpt(b) - gpt(a);
+        if (family) return family;
+      } else {
+        const family = Number(a.tier === "夯") - Number(b.tier === "夯");
+        if (family) return family;
+      }
       const aEconomy = selection?.policy.assessments.get(a.id)?.economy;
       const bEconomy = selection?.policy.assessments.get(b.id)?.economy;
       if (aEconomy !== undefined || bEconomy !== undefined) {
@@ -139,18 +136,13 @@ export function chooseModels(
             : "simple",
     }));
   const executors = ranked.filter(
-    (model) => selection?.tier !== "standard" || model.level !== "simple",
+    (model) => selection?.tier === "simple" || model.level !== "simple",
   );
   const executor = executors.find((model) => model.id === preferred.executor) ?? executors[0];
-  const parallelExecutors = ranked
-    .filter((model) => selection?.policy.clientModels.has(model.id))
-    .map((model) => ({ ...model, efforts: selection?.policy.clientModels.get(model.id) ?? [] }));
   return {
     models,
-    planner: planner?.id ?? null,
     executor: executor?.id ?? null,
     executors,
-    parallelExecutors,
   };
 }
 
@@ -160,7 +152,7 @@ export async function discoverModels(input: {
   settings: BuddySettings;
   nativeModels: NativeModelCatalog;
   signal: AbortSignal;
-  tier?: "simple" | "standard";
+  tier?: "simple" | "standard" | "advanced";
 }): Promise<ModelInventory> {
   const connection = await readConnection(
     input.home,
@@ -193,12 +185,10 @@ export async function discoverModels(input: {
       ...input.nativeModels.contextWindows,
     ]),
   };
-  const configModel = typeof connection.config.model === "string" ? connection.config.model : null;
   const chosen = chooseModels(
     ids,
     nativeModels,
     {
-      planner: input.settings.plannerModel ?? policy.planner ?? configModel,
       executor: input.settings.executorModel,
     },
     { policy, tier: input.tier ?? "standard" },

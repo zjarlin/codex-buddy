@@ -27,6 +27,8 @@ import {
   type RendererImportedThreadOpener,
 } from "./session-import-page.js";
 import { createAppearanceSettingsPage } from "./appearance-page.js";
+import { createRoutingSettingsPage } from "./routing-page.js";
+import type { RendererModelClient } from "../renderer-model-client.js";
 import type { RendererThreadTerminalClient } from "./terminal-controls.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { createReleaseNotesElement } from "./release-notes.js";
@@ -80,6 +82,7 @@ function windowsInstallerDownloadUrl(window: Window | null | undefined, version:
 export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "connections",
   "accounts",
+  "routing",
   "emergency-provider",
   "project-sync",
   "session-import",
@@ -185,7 +188,7 @@ function aboutPage(messages: RendererSettingsMessages): RendererSettingsPageDefi
       panel.className = "settings-about-panel";
       const product = document.createElement("strong");
       product.className = "settings-about-product";
-      product.textContent = "CodexHost";
+      product.textContent = "Codex Buddy";
       const tagline = document.createElement("strong");
       tagline.className = "settings-about-tagline";
       tagline.textContent = messages.aboutTagline;
@@ -714,10 +717,12 @@ export function createDefaultRendererSettingsPages(
   getProjectSyncClient: () => ProjectSyncClient | null = () => null,
   getEmergencyProviderClient: () => EmergencyProviderClient | null = () => null,
   getThreadTerminalClient: () => RendererThreadTerminalClient | null = () => null,
+  getBuddyClient: () => RendererModelClient | null = () => null,
 ): readonly RendererSettingsPageDefinition[] {
   return Object.freeze([
     createConnectionsSettingsPage(messages, getDiagnostics),
     createAccountsSettingsPage(messages, getAccountClient),
+    createRoutingSettingsPage(messages, getBuddyClient),
     createEmergencyProviderSettingsPage(messages, getEmergencyProviderClient),
     createProjectSyncPage(messages, getProjectSyncClient),
     createSessionImportSettingsPage(messages, getSessionImportClient, openImportedThread),

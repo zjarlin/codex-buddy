@@ -1,6 +1,6 @@
 import { assess, type Assessment, type Project } from "@codexhost/buddy-engine";
 import type { JsonValue } from "@codexhost/protocol-core";
-import { object } from "./planner.js";
+import { object } from "./native.js";
 
 function messageText(value: unknown): string {
   if (typeof value === "string") return value;

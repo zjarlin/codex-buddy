@@ -3,7 +3,7 @@ import type { TypeSafeClient } from "@codexhost/jev";
 import type { BuddyDecision } from "@codexhost/shared-contracts";
 import type { JsonObject, JsonValue } from "@codexhost/protocol-core";
 import { recentMessages } from "./history.js";
-import { object, type NativeRequest } from "./planner.js";
+import { object, type NativeRequest } from "./native.js";
 import { assessWithContext } from "./assessment-context.js";
 import { isGitPushRequest } from "./git-push-bypass.js";
 import {
@@ -26,15 +26,12 @@ export interface ClassifiedRoute {
   commandIndex: number | null;
   reason: string;
   source: "system-one" | "local-rules";
-  recent: unknown[];
-  previousPlan: string | null;
 }
 
 export interface ClassificationEnvironment {
   request: NativeRequest;
   settings: { bypass: boolean; role: BuddyDecision["role"] | "auto"; systemOneModel: string };
   systemOne: TypeSafeClient | null;
-  previousPlan(threadId: string): string | null;
 }
 
 /**
@@ -95,7 +92,6 @@ function recentTextForJev(recent: unknown[]): string {
 
 /**
  * 分类阶段的历史读取：失败时返回空历史，让 System One 仍能只凭本轮文本判断。
- * 真正需要历史的规划阶段仍使用 recentMessages，失败照常中止本回合。
  */
 async function classificationHistory(request: NativeRequest, threadId: string): Promise<unknown[]> {
   try {
@@ -178,7 +174,7 @@ export async function classifyWithSystemOne(
   if (modelBypass) {
     assessment.tier = "standard";
     assessment.intent = "git";
-    assessment.reason = `System One 确认 Git 动作 ${jev.gitAction}（${jev.model}，confidence=${jev.pushConfidence.toFixed(2)}）；旁路至垃模型，跳过夯规划。`;
+    assessment.reason = `System One 确认 Git 动作 ${jev.gitAction}（${jev.model}，confidence=${jev.pushConfidence.toFixed(2)}）；由单个模型直接处理。`;
   }
   return {
     assessment,
@@ -191,8 +187,6 @@ export async function classifyWithSystemOne(
     commandIndex: modelBypass ? null : jev.commandIndex,
     reason: jev.reason,
     source: "system-one",
-    recent,
-    previousPlan: environment.previousPlan(context.threadId),
   };
 }
 
@@ -207,21 +201,14 @@ export async function classifyWithFallback(
     threadId: string;
   },
 ): Promise<ClassifiedRoute> {
-  const previousPlan = environment.previousPlan(path.threadId);
   // 兜底路径无法判断承接关系，直接读取有界历史交给本地评级；失败按空历史处理。
   const recent = await classificationHistory(environment.request, path.threadId);
-  const assessment = await assessWithContext(
-    path.input,
-    path.cwd,
-    path.project,
-    recent,
-    previousPlan,
-  );
+  const assessment = await assessWithContext(path.input, path.cwd, path.project, recent);
   const modelBypass = environment.settings.bypass && isGitPushRequest(path.input);
   if (modelBypass) {
     assessment.tier = "standard";
     assessment.intent = "git";
-    assessment.reason = "本地规则命中推送请求（System One 不可用）；旁路至垃模型，跳过夯规划。";
+    assessment.reason = "本地规则命中推送请求（System One 不可用）；由单个模型直接处理。";
   }
   return {
     assessment,
@@ -234,8 +221,6 @@ export async function classifyWithFallback(
     commandIndex: null,
     reason: assessment.reason,
     source: "local-rules",
-    recent,
-    previousPlan: previousPlan ?? null,
   };
 }
 

@@ -163,13 +163,11 @@ describe("System One model header control", () => {
       buddyStatus: vi.fn(async () => ({
         settings: {
           enabled: true,
-          planning: true,
           privateMode: false,
           role: "auto",
           bypass: true,
           jev: true,
           systemOneModel: "typesafe/jev",
-          plannerModel: null,
           executorModel: null,
         },
         models: [],
@@ -212,13 +210,11 @@ describe("System One model header control", () => {
     const buddyStatus = vi.fn(async () => ({
       settings: {
         enabled: true,
-        planning: true,
         privateMode: false,
         role: "auto",
         bypass: true,
         jev: true,
         systemOneModel: "typesafe/jev",
-        plannerModel: null,
         executorModel: null,
       },
       models: [],

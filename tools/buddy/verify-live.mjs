@@ -7,7 +7,7 @@ import { homePath, readConnection } from "@codexhost/buddy-engine";
 import { AppServerHost } from "../../packages/host-runtime/dist/index.js";
 import assert from "node:assert/strict";
 
-// 只在用户主动运行本脚本时发起真实规划与执行，所有任务限制在新建的验证目录。
+// 只在用户主动运行本脚本时发起单模型执行，所有任务限制在新建的验证目录。
 const cwd = await mkdtemp(join(tmpdir(), "codex-buddy-live-"));
 await writeFile(join(cwd, "README.md"), "Buddy read-only validation fixture.\n");
 const input = new PassThrough();
@@ -96,13 +96,13 @@ try {
   assert.equal(bypassStatus.exitCode, 0);
   assert.equal(bypassStatus.acceptedModel, null);
   console.log("BYPASS", JSON.stringify(bypassStatus));
-  if (process.argv.includes("--planning")) {
+  if (process.argv.includes("--execution")) {
     const turn = await request("turn/start", {
       threadId,
       input: [
         {
           type: "text",
-          text: "执行一次跨模块架构审查的只读演练：先生成最小验证计划，再执行唯一检查，读取当前目录 README.md 并确认内容含 Buddy，然后报告结果。演练范围只有这个文件，不需要审查其他架构；不要修改、创建、删除任何文件，不需要询问用户，不要委派。",
+          text: "执行只读验证：读取当前目录 README.md 并确认内容含 Buddy，然后报告结果。不要修改、创建、删除任何文件，不需要询问用户，不要委派。",
         },
       ],
     });
@@ -111,10 +111,9 @@ try {
       (item) => item.threadId === threadId,
     );
     assert.equal(execution.phase, "completed");
-    assert.ok(execution.plan);
-    assert.ok(execution.plannerModel);
     assert.equal(execution.acceptedModel, execution.executorModel);
-    assert.notEqual(execution.plannerModel, execution.executorModel);
+    assert.equal(execution.plannerModel, undefined);
+    assert.equal(execution.plan, undefined);
     const items = events
       .filter(
         (event) =>
@@ -126,7 +125,7 @@ try {
     const commands = items.filter((item) => item.type === "commandExecution");
     assert.ok(commands.length > 0, "Executor must perform the read-only check itself");
     assert.ok(commands.every((item) => item.exitCode === 0));
-    console.log("PLANNING_EXECUTION", JSON.stringify(execution));
+    console.log("SINGLE_MODEL_EXECUTION", JSON.stringify(execution));
     console.log(
       "EXECUTOR_EVIDENCE",
       JSON.stringify(

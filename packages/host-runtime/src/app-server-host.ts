@@ -74,8 +74,6 @@ import {
   BUDDY_STATUS_METHOD,
   BUDDY_SETTINGS_METHOD,
   BUDDY_CANCEL_METHOD,
-  BUDDY_ANSWER_METHOD,
-  buddyAnswerSchema,
   buddyJevKeySchema,
   EMERGENCY_PROVIDER_METHOD,
   emergencyProviderConfigSchema,
@@ -928,7 +926,6 @@ export class AppServerHost {
         environment,
         activeWorkChanged: () => this.#signalActiveWorkChanged(),
         request: (method, params) => this.#requestOfficial(method, params),
-        respond: (message) => this.#officialRuntime.send(message),
         send: (message) => this.#writer.json(message),
         forward: async (request) => {
           const params = isRecord(request.params) ? request.params : null;
@@ -941,46 +938,6 @@ export class AppServerHost {
           await this.#officialRuntime.send(jsonValueSchema.parse(forwarded) as JsonObject);
         },
         diagnose: (error) => this.#diagnose(error),
-        runSubagents: async (input) => {
-          const started = await this.#delegationCoordinator.start({
-            harnessId: "codex",
-            parentThreadId: input.parentThreadId,
-            cwd: input.cwd,
-            task: input.task,
-            model: harnessModelRefSchema.parse({ id: input.model }),
-            requestId: input.requestId,
-          });
-          const abort = (): void => {
-            void this.#delegationCoordinator
-              .cancel({ threadId: started.threadId })
-              .catch(() => undefined);
-          };
-          input.signal.addEventListener("abort", abort, { once: true });
-          try {
-            const snapshot = await this.#delegationCoordinator.wait({
-              threadId: started.threadId,
-              view: "result",
-              timeoutMs: 3_600_000,
-              limit: 100,
-            });
-            return {
-              taskId: input.requestId.split(":").at(-1) ?? input.requestId,
-              model: input.model,
-              status:
-                snapshot.status === "completed"
-                  ? "completed"
-                  : snapshot.status === "interrupted"
-                    ? "cancelled"
-                    : "failed",
-              summary:
-                snapshot.result.text ??
-                snapshot.result.message ??
-                (snapshot.timedOut ? "子代理等待超时。" : `子代理状态：${snapshot.status}`),
-            };
-          } finally {
-            input.signal.removeEventListener("abort", abort);
-          }
-        },
       });
     }
     this.#nativeAccountObserver = this.#accountControl.refresh
@@ -1193,13 +1150,11 @@ export class AppServerHost {
     return {
       settings: {
         enabled: true,
-        planning: true,
         privateMode: false,
         role: "auto",
         bypass: true,
         jev: true,
         systemOneModel: "typesafe/jev",
-        plannerModel: null,
         executorModel: null,
       },
       models: [],
@@ -1676,7 +1631,6 @@ export class AppServerHost {
         BUDDY_STATUS_METHOD,
         BUDDY_SETTINGS_METHOD,
         BUDDY_CANCEL_METHOD,
-        BUDDY_ANSWER_METHOD,
         BUDDY_MODELS_METHOD,
         BUDDY_JEV_KEY_METHOD,
       ].includes(request.method)
@@ -1688,9 +1642,6 @@ export class AppServerHost {
         return;
       }
       try {
-        if (request.method === BUDDY_ANSWER_METHOD) {
-          await this.#buddy.answer(buddyAnswerSchema.parse(request.params));
-        }
         if (request.method === BUDDY_JEV_KEY_METHOD) {
           await this.#buddy.configureJevKey(buddyJevKeySchema.parse(request.params));
         }

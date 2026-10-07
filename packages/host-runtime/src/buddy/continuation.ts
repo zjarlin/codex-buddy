@@ -1,6 +1,6 @@
 import type { BuddyInterrupted, ThreadArchiveCompletedResult } from "@codexhost/shared-contracts";
 import type { JsonObject } from "@codexhost/protocol-core";
-import { object, result, type NativeRequest } from "./planner.js";
+import { object, result, type NativeRequest } from "./native.js";
 
 const continuation =
   "继续本会话上一次尚未完成的请求。先核对已有回答、工具结果和当前实际状态，从中断处继续；不要盲目重放已完成的命令、修改或外部操作。若上次请求已经完成，简要说明即可。";

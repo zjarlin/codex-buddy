@@ -90,6 +90,7 @@ export function installRendererSettingsLifecycle(
       options.getProjectSyncClient ?? (() => null),
       options.getEmergencyProviderClient ?? (() => null),
       options.getThreadTerminalClient ?? (() => null),
+      options.getBuddyClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);
     const nextTrigger = installRendererSettingsRailTrigger({

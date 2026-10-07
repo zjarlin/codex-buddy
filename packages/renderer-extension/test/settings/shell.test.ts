@@ -23,6 +23,7 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ label }) => label)).toEqual([
       "Connections",
       "Accounts",
+      "Routing",
       "Emergency Provider",
       "Projects",
       "Session Import",
@@ -33,6 +34,7 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ icon }) => icon)).toEqual([
       "connections",
       "accounts",
+      "routes",
       "alert",
       "project-sync",
       "session-import",
@@ -69,6 +71,7 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ id }) => id)).toEqual([
       "connections",
       "accounts",
+      "routing",
       "emergency-provider",
       "project-sync",
       "session-import",

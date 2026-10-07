@@ -251,7 +251,7 @@ function createConnectionIdentityIcon(
   if (item.agentSnapshot) {
     container.append(createRendererAgentIcon(item.agentSnapshot.agent, size, document));
   } else {
-    container.textContent = "CH";
+    container.textContent = "CB";
   }
   return container;
 }

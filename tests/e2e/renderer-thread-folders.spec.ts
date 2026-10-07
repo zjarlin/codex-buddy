@@ -42,6 +42,7 @@ const { outputFiles } = await build({
             for (const [name, value] of Object.entries(dataAttributes)) row.setAttribute(name, value);
             bind(row, fiber({ conversationId: threadId, dataAttributes }));
             row.innerHTML = '<span data-thread-title-trigger><span data-thread-title>' + title + '</span></span>';
+            row.addEventListener("click", () => { globalThis.openedFolderThread = threadId; });
             section.append(row);
           }
           document.querySelector("#app-shell-sidebar").append(section);
@@ -82,7 +83,12 @@ if (!bundle) throw new Error("Thread folder fixture bundle is unavailable");
 test("groups conversations independently per project and restores native rows on dispose", async ({
   page,
 }) => {
-  await page.setContent("");
+  await page.route("https://folders.test/", (route) =>
+    route.fulfill({ body: "<html><body></body></html>", contentType: "text/html" }),
+  );
+  await page.goto("https://folders.test/");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await page.addScriptTag({ content: bundle });
   await page.evaluate(() => Reflect.get(globalThis, "setupThreadFolders")());
 
@@ -94,8 +100,7 @@ test("groups conversations independently per project and restores native rows on
   await expect(projectTwo.locator("[data-codexhost-thread-folders]")).not.toContainText("计划");
 
   const rowA = projectOne.locator('[data-app-action-sidebar-thread-id="local:thread-a"]');
-  await rowA.hover();
-  await rowA.locator("[data-codexhost-thread-actions-trigger]").click();
+  await rowA.click({ button: "right" });
   await page.getByRole("menuitem", { name: "移动到文件夹…", exact: true }).click();
   await page
     .locator("[data-codexhost-thread-folder-dialog]")
@@ -113,14 +118,31 @@ test("groups conversations independently per project and restores native rows on
     )
     .toBe("plan");
 
-  await projectOne.getByRole("button", { name: "计划", exact: true }).click();
-  await expect(rowA).toBeVisible();
-  await expect(projectOne.getByText("任务 B")).toBeHidden();
-  await expect(projectTwo.getByText("任务 C")).toBeVisible();
-
-  await projectOne.getByRole("button", { name: "未分类", exact: true }).click();
+  const filed = projectOne.locator('[data-codexhost-folder-thread="thread-a"]');
+  await expect(filed).toBeVisible();
+  await filed.click();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "openedFolderThread"))).toBe("thread-a");
+  await page.screenshot({ path: "test-results/thread-folder-tree.png" });
   await expect(rowA).toBeHidden();
   await expect(projectOne.getByText("任务 B")).toBeVisible();
+  await expect(projectTwo.getByText("任务 C")).toBeVisible();
+  await projectOne.getByRole("button", { name: "计划", exact: true }).click();
+  await expect(filed).toBeHidden();
+  await projectOne.getByRole("button", { name: "计划", exact: true }).click();
+  await expect(filed).toBeVisible();
+
+  await filed.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "移动到文件夹…", exact: true }).click();
+  await page.getByRole("button", { name: "未分类", exact: true }).click();
+  await expect(rowA).toBeVisible();
+  await expect(filed).toHaveCount(0);
+
+  await projectOne.locator("[data-app-action-sidebar-project-row]").click({ button: "right" });
+  await page.getByRole("menuitem", { name: "新建文件夹", exact: true }).click();
+  await page.getByRole("dialog").locator("input").last().fill("新文件夹");
+  await page.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(projectOne.getByRole("button", { name: "新文件夹", exact: true })).toBeVisible();
+  await expect(projectOne.getByRole("tab")).toHaveCount(0);
 
   await page.evaluate(() => Reflect.get(globalThis, "threadFolderFixture").dispose());
   await expect(projectOne.locator("[data-codexhost-thread-folders]")).toHaveCount(0);
@@ -129,4 +151,5 @@ test("groups conversations independently per project and restores native rows on
   expect(
     await page.evaluate(() => Reflect.get(globalThis, "threadFolderFixture").writes.length),
   ).toBe(3);
+  expect(errors).toEqual([]);
 });

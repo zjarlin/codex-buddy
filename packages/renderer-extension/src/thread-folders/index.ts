@@ -1,6 +1,5 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Folder from "lucide/dist/esm/icons/folder.mjs";
-import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
 import type { ThreadFoldersConfig, ThreadFoldersState } from "@codexhost/shared-contracts";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
@@ -10,13 +9,10 @@ import { threadFolderMessages } from "./messages.js";
 import {
   defaultThreadFolders,
   parseThreadFolders,
-  selectedThreadFolder,
   THREAD_FOLDERS_STORAGE_KEY,
   threadFolderProject,
-  UNASSIGNED_THREAD_FOLDER_ID,
   withThreadFolderAssignment,
   withThreadFolders,
-  withThreadFolderProject,
 } from "./model.js";
 import { threadFoldersStyle } from "./styles.js";
 import {
@@ -26,10 +22,8 @@ import {
 } from "../renderer-sidebar-agent-icons.js";
 
 const BAR_ATTRIBUTE = "data-codexhost-thread-folders";
-const MANAGE_ATTRIBUTE = "data-codexhost-thread-folder-manage";
 const MOVE_ATTRIBUTE = "data-codexhost-thread-folder-move";
 const HIDDEN_ATTRIBUTE = "data-codexhost-thread-folder-hidden";
-const NATIVE_AUGMENTED_ATTRIBUTE = "data-codexhost-thread-folder-native-augmented";
 const CUSTOM_MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id][data-sidebar-project-kind]";
@@ -197,10 +191,11 @@ export function installThreadFolders(options: {
     }
   };
 
-  const configure = (project: SidebarProject, key: string): void => {
-    if (dialog) return;
+  const configure = (project: SidebarProject, key: string, create = false): void => {
+    if (dialog?.open) return;
     const current = threadFolderProject(config, key);
     const draft = current.folders.map((folder) => ({ ...folder }));
+    if (create) draft.push({ id: crypto.randomUUID(), name: "" });
     const m = threadFolderMessages(options.getLocale());
     const folderDialog = openDialog(`${m.title} · ${project.label}`, () => {
       if (dialog === folderDialog) dialog = null;
@@ -306,10 +301,11 @@ export function installThreadFolders(options: {
     form.append(hint, rows, add, error, footer);
     folderDialog.append(form);
     folderDialog.showModal();
+    if (create) rows.lastElementChild?.querySelector("input")?.focus();
   };
 
   const chooseFolder = (project: SidebarProject, key: string, threadId: string): void => {
-    if (dialog) return;
+    if (dialog?.open) return;
     const current = threadFolderProject(config, key);
     const m = threadFolderMessages(options.getLocale());
     const moveDialog = openDialog(m.moveTitle, () => {
@@ -386,167 +382,168 @@ export function installThreadFolders(options: {
     },
   };
 
-  // ── Native context menu augmentation ──────────────────────────────
-  // Append "移动到文件夹" to the native Codex Desktop right-click menu.
-  // We capture which thread row was right-clicked, then observe for the
-  // native menu element appearing in the DOM and append our item.
-  let pendingNativeRow: HTMLElement | null = null;
-  let nativeMenuObserver: MutationObserver | null = null;
-  let nativeMenuTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const cleanupNativeWatch = (): void => {
-    if (nativeMenuObserver) {
-      nativeMenuObserver.disconnect();
-      nativeMenuObserver = null;
-    }
-    if (nativeMenuTimer !== null) {
-      clearTimeout(nativeMenuTimer);
-      nativeMenuTimer = null;
-    }
-    pendingNativeRow = null;
+  const collapsed = new Set<string>();
+  let contextMenu: HTMLElement | null = null;
+  let forwardingNativeMenu = false;
+  const closeContextMenu = (): void => {
+    contextMenu?.remove();
+    contextMenu = null;
   };
-
-  const findNativeMenu = (): HTMLElement | null => {
-    // Native Codex menus are typically [role="menu"] portals rendered outside
-    // the sidebar. Skip our own custom thread-actions menu.
-    const candidates = document.querySelectorAll<HTMLElement>('[role="menu"]');
-    for (const candidate of candidates) {
-      if (candidate.hasAttribute(NATIVE_AUGMENTED_ATTRIBUTE)) continue;
-      if (candidate.hasAttribute(CUSTOM_MENU_ATTRIBUTE)) continue;
-      if (candidate.querySelector('[role="menuitem"]')) return candidate;
-    }
-    return null;
+  const onOutsidePointer = (event: PointerEvent): void => {
+    if (event.target instanceof Node && !contextMenu?.contains(event.target)) closeContextMenu();
   };
-
-  const augmentNativeMenu = (menu: HTMLElement, row: HTMLElement): void => {
-    const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
-    if (!hostId) return;
-    const folderThreadId = nativeThreadId(hostId, row);
-    const client = persistenceClient();
-    if (!folderThreadId || !client) return;
-    const project = projectForRow(row);
-    if (!project) return;
-
-    menu.setAttribute(NATIVE_AUGMENTED_ATTRIBUTE, "");
+  const onMenuKey = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") closeContextMenu();
+  };
+  const showContextMenu = (event: MouseEvent, project: SidebarProject, row?: HTMLElement): void => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeContextMenu();
     const m = threadFolderMessages(options.getLocale());
-
-    // Separator
-    const separator = document.createElement("div");
-    separator.setAttribute("role", "separator");
-    separator.style.cssText =
-      "height:1px;margin:4px 8px;background:color-mix(in srgb,currentColor 12%,transparent);";
-    menu.append(separator);
-
-    const item = document.createElement("button");
-    item.type = "button";
-    item.setAttribute("role", "menuitem");
-    item.setAttribute(MOVE_ATTRIBUTE, "");
-    item.title = m.move;
-    item.setAttribute("aria-label", m.move);
-    // Match typical native menu item styling; inherits font/color from menu
-    item.style.cssText =
-      "display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:5px 8px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;";
-    item.addEventListener("mouseenter", () => {
-      item.style.background = "color-mix(in srgb,currentColor 12%,transparent)";
-    });
-    item.addEventListener("mouseleave", () => {
-      item.style.background = "transparent";
-    });
-
-    const icon = document.createElement("span");
-    icon.style.display = "inline-flex";
-    icon.style.alignItems = "center";
-    icon.append(createElement(Folder, { width: 15, height: 15, "aria-hidden": "true" }));
-    const text = document.createElement("span");
-    text.textContent = m.move;
-    item.append(icon, text);
-
-    item.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      // Dismiss the native menu
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      chooseFolder(project, projectKey(project), folderThreadId);
-    });
-
-    menu.append(item);
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("data-codexhost-folder-context-menu", "");
+    const addAction = (label: string, action: () => void): void => {
+      const item = button(label, () => {
+        closeContextMenu();
+        action();
+      });
+      item.setAttribute("role", "menuitem");
+      menu.append(item);
+    };
+    const key = projectKey(project);
+    const hostId = row?.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
+    const threadId = row && hostId ? nativeThreadId(hostId, row) : null;
+    if (threadId) addAction(m.move, () => chooseFolder(project, key, threadId));
+    addAction(m.add, () => configure(project, key, true));
+    addAction(m.manage, () => configure(project, key));
+    const nativeTarget =
+      row ?? bars.get(key)?.container.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
+    if (nativeTarget)
+      addAction(m.nativeActions, () => {
+        forwardingNativeMenu = true;
+        try {
+          nativeTarget.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: event.clientX,
+              clientY: event.clientY,
+            }),
+          );
+        } finally {
+          forwardingNativeMenu = false;
+        }
+      });
+    document.body.append(menu);
+    contextMenu = menu;
+    menu.style.left = `${Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth))}px`;
+    menu.style.top = `${Math.max(0, Math.min(event.clientY, innerHeight - menu.offsetHeight))}px`;
+    menu.querySelector("button")?.focus();
   };
-
-  const watchForNativeMenu = (): void => {
-    if (!pendingNativeRow) return;
-    const immediate = findNativeMenu();
-    if (immediate) {
-      augmentNativeMenu(immediate, pendingNativeRow);
-      cleanupNativeWatch();
-      return;
-    }
-    nativeMenuObserver = new MutationObserver(() => {
-      const menu = findNativeMenu();
-      if (menu && pendingNativeRow) {
-        augmentNativeMenu(menu, pendingNativeRow);
-        cleanupNativeWatch();
-      }
-    });
-    nativeMenuObserver.observe(document.body, { childList: true, subtree: true });
-    nativeMenuTimer = setTimeout(cleanupNativeWatch, 600);
-  };
-
   const onSidebarContextMenu = (event: MouseEvent): void => {
-    const target = event.target instanceof HTMLElement ? event.target : null;
-    if (!target) return;
+    if (forwardingNativeMenu || !(event.target instanceof Element)) return;
+    const target = event.target;
+    if (!target.closest(SIDEBAR_SCOPE) || target.closest(`[${CUSTOM_MENU_ATTRIBUTE}]`)) return;
+    const container = target.closest<HTMLElement>(PROJECT_CONTAINER_SELECTOR);
+    const project = container ? rowProject(container) : null;
+    if (!project) return;
     const row = target.closest<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR);
-    if (!row) return;
-    // Don't interfere with our own custom three-dot menu
-    if (target.closest(`[${CUSTOM_MENU_ATTRIBUTE}]`)) return;
-    pendingNativeRow = row;
-    requestAnimationFrame(watchForNativeMenu);
+    // 树内会话入口自行处理右键，并保留对应原生会话行。
+    if (target.closest("[data-codexhost-folder-thread]")) return;
+    showContextMenu(event, project, row ?? undefined);
   };
-
-  const sidebarEl = document.querySelector<HTMLElement>(SIDEBAR_SCOPE);
-  sidebarEl?.addEventListener("contextmenu", onSidebarContextMenu, { capture: true });
+  document.addEventListener("contextmenu", onSidebarContextMenu, true);
+  document.addEventListener("pointerdown", onOutsidePointer, true);
+  document.addEventListener("keydown", onMenuKey);
 
   const renderBar = (project: SidebarProject, entry: ProjectBarEntry): void => {
     const key = projectKey(project);
     const state = threadFolderProject(config, key);
-    const selected = selectedThreadFolder(state);
     const m = threadFolderMessages(options.getLocale());
+    const rows = [...entry.container.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)];
     const signature = JSON.stringify([
       options.getLocale(),
       project.label,
       state.folders,
       state.assignments,
-      selected,
+      rows.map((row) => [
+        nativeThreadId(row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local", row),
+        row.textContent,
+        row.getAttribute("data-app-action-sidebar-thread-active"),
+      ]),
+      [...collapsed],
       failure ? String(failure) : null,
     ]);
     if (entry.signature === signature) return;
     entry.signature = signature;
-    const group = document.createElement("div");
-    group.setAttribute("role", "group");
-    const chips: Array<{ id: string | null; label: string }> = [
-      { id: null, label: m.all },
-      ...(state.folders.length ? [{ id: UNASSIGNED_THREAD_FOLDER_ID, label: m.unassigned }] : []),
-      ...state.folders.map((folder) => ({ id: folder.id, label: folder.name })),
-    ];
-    for (const chip of chips) {
-      const item = button(chip.label, () => {
-        const next = withThreadFolderProject(config, key, { ...state, selected: chip.id });
-        void persist(next).catch(() => undefined);
+    const tree = document.createElement("div");
+    tree.setAttribute("role", "tree");
+    tree.setAttribute("aria-label", m.title);
+    for (const folder of state.folders) {
+      const node = document.createElement("div");
+      node.setAttribute("role", "treeitem");
+      node.setAttribute("aria-label", folder.name);
+      const collapseKey = JSON.stringify([key, folder.id]);
+      const expanded = !collapsed.has(collapseKey);
+      node.setAttribute("aria-expanded", String(expanded));
+      const children = document.createElement("div");
+      children.setAttribute("role", "group");
+      children.hidden = !expanded;
+      const toggle = button("", () => {
+        if (collapsed.has(collapseKey)) collapsed.delete(collapseKey);
+        else collapsed.add(collapseKey);
+        const open = !collapsed.has(collapseKey);
+        node.setAttribute("aria-expanded", String(open));
+        toggle.setAttribute("aria-expanded", String(open));
+        arrow.textContent = open ? "▾" : "▸";
+        children.hidden = !open;
       });
-      item.setAttribute("aria-pressed", String(selected === chip.id));
-      group.append(item);
+      toggle.setAttribute("aria-label", folder.name);
+      toggle.setAttribute("aria-expanded", String(expanded));
+      const arrow = document.createElement("span");
+      arrow.setAttribute("aria-hidden", "true");
+      arrow.textContent = expanded ? "▾" : "▸";
+      toggle.append(
+        arrow,
+        createElement(Folder, { width: 15, height: 15, "aria-hidden": "true" }),
+        folder.name,
+      );
+      for (const row of rows) {
+        const id = nativeThreadId(
+          row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local",
+          row,
+        );
+        if (!id || state.assignments[id] !== folder.id) continue;
+        const title =
+          row.querySelector("[data-thread-title]")?.textContent ?? row.textContent ?? id;
+        // 不搬动 React 管理的节点；点击时重新查找当前行，兼容原生列表重绘。
+        const findRow = (): HTMLElement | undefined =>
+          [...entry.container.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].find(
+            (candidate) =>
+              nativeThreadId(
+                candidate.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local",
+                candidate,
+              ) === id,
+          );
+        const item = button(title, () => findRow()?.click());
+        item.setAttribute("role", "treeitem");
+        item.setAttribute("data-codexhost-folder-thread", id);
+        item.setAttribute(
+          "aria-selected",
+          String(row.getAttribute("data-app-action-sidebar-thread-active") === "true"),
+        );
+        item.addEventListener("contextmenu", (event) => showContextMenu(event, project, findRow()));
+        children.append(item);
+      }
+      node.append(toggle, children);
+      tree.append(node);
     }
-    const manage = document.createElement("button");
-    manage.type = "button";
-    manage.setAttribute(MANAGE_ATTRIBUTE, "");
-    manage.title = m.manage;
-    manage.setAttribute("aria-label", m.manage);
-    manage.append(createElement(Settings2, { width: 13, height: 13, "aria-hidden": "true" }));
-    manage.addEventListener("click", () => configure(project, key));
     const error = document.createElement("span");
     error.setAttribute("role", "alert");
     error.hidden = !failure;
     error.textContent = failure ? `${m.failed}${String(failure)}` : "";
-    entry.bar.replaceChildren(group, manage, error);
+    entry.bar.replaceChildren(tree, error);
     entry.bar.setAttribute("aria-label", `${m.title} · ${project.label}`);
   };
 
@@ -639,15 +636,9 @@ export function installThreadFolders(options: {
         continue;
       }
       const state = threadFolderProject(config, projectKey(project));
-      const selected = selectedThreadFolder(state);
       const threadId = nativeThreadId(hostId, row);
       const assigned = threadId ? state.assignments[threadId] : undefined;
-      const hidden =
-        selected === null
-          ? false
-          : selected === UNASSIGNED_THREAD_FOLDER_ID
-            ? Boolean(assigned)
-            : assigned !== selected;
+      const hidden = !failure && state.folders.some((folder) => folder.id === assigned);
       row.toggleAttribute(HIDDEN_ATTRIBUTE, hidden);
       if (hidden) hiddenRows.add(row);
       else hiddenRows.delete(row);
@@ -674,6 +665,7 @@ export function installThreadFolders(options: {
       "data-sidebar-project-kind",
       "data-sidebar-project-container-id",
       "data-app-action-sidebar-project-row",
+      "data-app-action-sidebar-thread-active",
       "data-app-action-sidebar-thread-id",
       "data-app-action-sidebar-thread-host-id",
     ],
@@ -692,8 +684,10 @@ export function installThreadFolders(options: {
     dispose() {
       disposed = true;
       stopObserving();
-      cleanupNativeWatch();
-      sidebarEl?.removeEventListener("contextmenu", onSidebarContextMenu, { capture: true });
+      closeContextMenu();
+      document.removeEventListener("contextmenu", onSidebarContextMenu, true);
+      document.removeEventListener("pointerdown", onOutsidePointer, true);
+      document.removeEventListener("keydown", onMenuKey);
       window.removeEventListener("storage", onStorage);
       dialog?.close();
       for (const entry of bars.values()) entry.bar.remove();

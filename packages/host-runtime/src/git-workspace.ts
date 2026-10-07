@@ -32,7 +32,12 @@ const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
 const MESSAGE_TIMEOUT_MS = 120_000;
 const MESSAGE_INPUT_MAX_CHARS = 48_000;
-const MESSAGE_OUTPUT_MAX_TOKENS = 256;
+// 推理型上游（如 DeepSeek-V4、Ask 虚拟模型）会把输出额度先花在 reasoning 上：
+// 额度只有 256 时正文常常还没开始就被截断（finish_reason=length），界面只会显示
+// “模型没有返回提交消息”。首次给常规额度，只有模型确实把额度耗在推理上才重试一次。
+const MESSAGE_OUTPUT_ATTEMPT_TOKENS = [2_048, 8_192] as const;
+const GIT_MESSAGE_SYSTEM_PROMPT =
+  "你是 Git 提交消息助手。根据变更只输出一条简洁的 Conventional Commit 提交消息，使用中文正文（如需要），不要 Markdown、不要引号、不要解释。";
 const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const GIT_LOG_LIMIT = 200;
 const GIT_LOG_MAX_BYTES = 2_000_000;
@@ -926,46 +931,56 @@ export class GitWorkspace {
       if (!payload.trim()) throw new GitWorkspaceError("当前没有可生成消息的变更。");
       const completionUrl = new URL(connection.url);
       completionUrl.pathname = completionUrl.pathname.replace(/\/models$/u, "/chat/completions");
-      const response = await fetch(completionUrl, {
-        method: "POST",
-        headers: {
-          ...Object.fromEntries(connection.headers),
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content:
-                "你是 Git 提交消息助手。根据变更只输出一条简洁的 Conventional Commit 提交消息，使用中文正文（如需要），不要 Markdown、不要引号、不要解释。",
-            },
-            { role: "user", content: payload },
-          ],
-          stream: false,
-          store: false,
-          max_tokens: MESSAGE_OUTPUT_MAX_TOKENS,
-        }),
-        redirect: "error",
-        signal: AbortSignal.timeout(MESSAGE_TIMEOUT_MS),
-      });
-      if (!response.ok) {
-        throw new GitWorkspaceError(`生成提交消息失败：HTTP ${response.status}`);
+      const headers = {
+        ...Object.fromEntries(connection.headers),
+        "Content-Type": "application/json",
+      };
+      const request = async (
+        maxTokens: number,
+      ): Promise<{ message: string; truncated: boolean }> => {
+        const response = await fetch(completionUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: GIT_MESSAGE_SYSTEM_PROMPT },
+              { role: "user", content: payload },
+            ],
+            stream: false,
+            store: false,
+            max_tokens: maxTokens,
+          }),
+          redirect: "error",
+          signal: AbortSignal.timeout(MESSAGE_TIMEOUT_MS),
+        });
+        if (!response.ok) {
+          throw new GitWorkspaceError(`生成提交消息失败：HTTP ${response.status}`);
+        }
+        const body = (await response.json()) as { choices?: unknown };
+        const choice = Array.isArray(body.choices) ? body.choices[0] : null;
+        const record =
+          choice && typeof choice === "object" ? (choice as Record<string, unknown>) : null;
+        const rawMessage = record?.message;
+        const content =
+          rawMessage &&
+          typeof rawMessage === "object" &&
+          "content" in rawMessage &&
+          typeof (rawMessage as { content?: unknown }).content === "string"
+            ? (rawMessage as { content: string }).content.trim()
+            : "";
+        if (content) return { message: content, truncated: false };
+        // 只有模型确实因为输出额度用尽（含全部花在推理上）才值得加额度重试；
+        // 其他空回复按原样报错，避免把真实故障伪装成慢重试。
+        return { message: "", truncated: record?.finish_reason === "length" };
+      };
+      let result = { message: "", truncated: false };
+      for (const maxTokens of MESSAGE_OUTPUT_ATTEMPT_TOKENS) {
+        result = await request(maxTokens);
+        if (result.message || !result.truncated) break;
       }
-      const body = (await response.json()) as { choices?: unknown };
-      const choice = Array.isArray(body.choices) ? body.choices[0] : null;
-      const message =
-        choice &&
-        typeof choice === "object" &&
-        "message" in choice &&
-        choice.message &&
-        typeof choice.message === "object" &&
-        "content" in choice.message &&
-        typeof choice.message.content === "string"
-          ? choice.message.content.trim()
-          : "";
-      if (!message) throw new GitWorkspaceError("模型没有返回提交消息。");
-      return { message: gitCommitMessageSchema.parse(message), model };
+      if (!result.message) throw new GitWorkspaceError("模型没有返回提交消息。");
+      return { message: gitCommitMessageSchema.parse(result.message), model };
     });
   }
 

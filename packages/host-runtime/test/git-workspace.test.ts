@@ -414,6 +414,112 @@ describe("GitWorkspace", () => {
     }
   });
 
+  // 复现“模型没有返回提交消息”：推理型上游把首轮额度全花在 reasoning 上，
+  // finish_reason=length 且正文为空；提高额度后必须重试并返回消息。
+  it("retries commit message generation once when the model exhausts its reasoning budget", async () => {
+    const directory = await repository();
+    await writeFile(path.join(directory, "tracked.txt"), "changed\n");
+    const home = await mkdtemp(path.join(tmpdir(), "codexhost-git-home-"));
+    cleanup.push(home);
+    const requests: { max_tokens?: unknown; model?: unknown }[] = [];
+    const server = await new Promise<Server>((resolve) => {
+      void import("node:http").then(({ createServer }) => {
+        const instance = createServer((request, response) => {
+          const chunks: Buffer[] = [];
+          request.on("data", (chunk: Buffer) => chunks.push(chunk));
+          request.on("end", () => {
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+              max_tokens?: unknown;
+              model?: unknown;
+            };
+            requests.push(body);
+            response.setHeader("Content-Type", "application/json");
+            const enough = typeof body.max_tokens === "number" && body.max_tokens > 2048;
+            response.end(
+              JSON.stringify({
+                choices: [
+                  enough
+                    ? {
+                        finish_reason: "stop",
+                        message: { role: "assistant", content: "fix: 提高提交消息额度" },
+                      }
+                    : {
+                        finish_reason: "length",
+                        message: { role: "assistant", content: "", reasoning_content: "…" },
+                      },
+                ],
+              }),
+            );
+          });
+        });
+        instance.listen(0, "127.0.0.1", () => resolve(instance));
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No fixture address");
+    await writeFile(
+      path.join(home, "config.toml"),
+      `model_provider = "fixture"\n[model_providers.fixture]\nbase_url = "http://127.0.0.1:${address.port}/v1"\nexperimental_bearer_token = "fixture-only"\n`,
+    );
+    try {
+      const result = await new GitWorkspace().generateMessage({
+        cwd: directory,
+        model: "reasoning-fixture",
+        environment: { CODEX_HOME: home },
+      });
+      expect(result.message).toBe("fix: 提高提交消息额度");
+      expect(requests.map((body) => body.max_tokens)).toEqual([2048, 8192]);
+      expect(requests.every((body) => body.model === "reasoning-fixture")).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it("fails a commit message request without retrying when the model returns no content", async () => {
+    const directory = await repository();
+    await writeFile(path.join(directory, "tracked.txt"), "changed\n");
+    const home = await mkdtemp(path.join(tmpdir(), "codexhost-git-home-"));
+    cleanup.push(home);
+    let requests = 0;
+    const server = await new Promise<Server>((resolve) => {
+      void import("node:http").then(({ createServer }) => {
+        const instance = createServer((request, response) => {
+          requests += 1;
+          request.resume();
+          response.setHeader("Content-Type", "application/json");
+          response.end(
+            JSON.stringify({
+              choices: [{ finish_reason: "stop", message: { role: "assistant", content: "" } }],
+            }),
+          );
+        });
+        instance.listen(0, "127.0.0.1", () => resolve(instance));
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No fixture address");
+    await writeFile(
+      path.join(home, "config.toml"),
+      `model_provider = "fixture"\n[model_providers.fixture]\nbase_url = "http://127.0.0.1:${address.port}/v1"\nexperimental_bearer_token = "fixture-only"\n`,
+    );
+    try {
+      await expect(
+        new GitWorkspace().generateMessage({
+          cwd: directory,
+          model: "empty-fixture",
+          environment: { CODEX_HOME: home },
+        }),
+      ).rejects.toThrow("模型没有返回提交消息");
+      expect(requests).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it("reads the commit graph, refs, changed files, and commit diff", async () => {
     const directory = await repository();
     await writeFile(path.join(directory, "tracked.txt"), "two\n");

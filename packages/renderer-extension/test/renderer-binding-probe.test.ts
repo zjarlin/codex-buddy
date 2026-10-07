@@ -16,6 +16,7 @@ import {
   isLateConversationTarget,
   isComposerModelWriteAllowed,
   isOwnershipSubmissionBlocked,
+  isConversationSubmissionReady,
   lockedPermissionMode,
   permissionModeSelectionLocked,
   lateConversationTargetResolution,
@@ -1292,10 +1293,13 @@ describe("Renderer Composer DOM behavior", () => {
         locked: true,
       }),
     ).toThrow("incompatible transport Model");
-    expect(isOwnershipSubmissionBlocked("loading")).toBe(true);
+    expect(isOwnershipSubmissionBlocked("loading")).toBe(false);
     expect(isOwnershipSubmissionBlocked("error")).toBe(true);
     expect(isOwnershipSubmissionBlocked("ready")).toBe(false);
     expect(isOwnershipSubmissionBlocked("not-required")).toBe(false);
+    expect(isConversationSubmissionReady(["conversation", "thread-1"], "loading")).toBe(true);
+    expect(isConversationSubmissionReady(["conversation", "thread-1"], "error")).toBe(false);
+    expect(isConversationSubmissionReady(["default"], "loading")).toBe(false);
   });
 
   it("resolves Draft Thinking from the selected Model's in-memory Catalog entry", () => {

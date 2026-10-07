@@ -602,7 +602,19 @@ export function restoredThreadOwnership(inspection: ThreadInspection): RestoredT
 }
 
 export function isOwnershipSubmissionBlocked(status: ComposerOwnershipStatus): boolean {
-  return status === "loading" || status === "error";
+  return status === "error";
+}
+
+/**
+ * A conversation Composer may send through the native Thread route while its
+ * optional Harness ownership metadata is still loading. External Harness
+ * configuration remains blocked until ownership is confirmed.
+ */
+export function isConversationSubmissionReady(
+  target: readonly unknown[] | null,
+  status: ComposerOwnershipStatus,
+): boolean {
+  return target?.[0] === "conversation" && status !== "error";
 }
 
 interface MountedComposer {
@@ -3076,7 +3088,10 @@ export function installRendererBindingProbe(
     const state = controller.get(composer);
     const mounted = mountedByComposer.get(composer);
     if (mounted?.modelTarget?.[0] === "conversation") {
-      return state.phase === "locked" && mounted.ownershipStatus === "ready";
+      return (
+        state.phase === "locked" &&
+        isConversationSubmissionReady(mounted.modelTarget, mounted.ownershipStatus)
+      );
     }
     if (!mounted || !isComposerModelWriteAllowed(mounted.modelTarget)) return false;
     return applyComposerModelWrite(mounted.modelTarget, () =>
@@ -3116,7 +3131,12 @@ export function installRendererBindingProbe(
     if (!composer) return;
     controller.clearPendingSubmission(composer);
     const mounted = mountedByComposer.get(composer);
-    if (mounted && isOwnershipSubmissionBlocked(mounted.ownershipStatus)) return;
+    if (
+      mounted &&
+      isOwnershipSubmissionBlocked(mounted.ownershipStatus) &&
+      mounted.modelTarget?.[0] !== "conversation"
+    )
+      return;
     if (controller.isSwitching(composer) || !applyComposerAgent(composer)) blockEvent(event);
   };
   const onSubmit = (event: Event): void => {
@@ -3145,7 +3165,12 @@ export function installRendererBindingProbe(
       blockEvent(event);
       return;
     }
-    if (composer && mounted && isOwnershipSubmissionBlocked(mounted.ownershipStatus)) {
+    if (
+      composer &&
+      mounted &&
+      isOwnershipSubmissionBlocked(mounted.ownershipStatus) &&
+      mounted.modelTarget?.[0] !== "conversation"
+    ) {
       if (isComposerSubmissionKey(event)) blockEvent(event);
       return;
     }
@@ -3380,7 +3405,8 @@ export function installRendererBindingProbe(
         !mounted ||
         controller.get(mounted.composer).agent !== "codex" ||
         controller.isSwitching(mounted.composer) ||
-        isOwnershipSubmissionBlocked(mounted.ownershipStatus)
+        isOwnershipSubmissionBlocked(mounted.ownershipStatus) ||
+        mounted.ownershipStatus !== "ready"
       ) {
         return null;
       }

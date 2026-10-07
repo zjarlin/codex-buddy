@@ -6,6 +6,7 @@ import {
   projectGitWorkflowInput,
 } from "../src/project-git-workflow.js";
 import type { ProjectGitRepository } from "../src/project-git-repositories.js";
+import { GitWorkspaceError } from "../src/git-workspace.js";
 
 function fixture(group?: ProjectGitWorkflowGroup) {
   vi.useFakeTimers();
@@ -48,14 +49,16 @@ function fixture(group?: ProjectGitWorkflowGroup) {
     })),
   ]);
   const changed = vi.fn();
+  const project = vi.fn(async (id: string) => projects.get(id) ?? null);
+  const diagnose = vi.fn();
   const workflow = new ProjectGitWorkflow({
     ...(group ? { group } : {}),
-    project: async (id) => projects.get(id) ?? null,
+    project,
     activeThreads: async () => [...active],
     repositories: read,
     linkedRepositories: async () => [...linked.keys()],
     start,
-    diagnose: vi.fn(),
+    diagnose,
     changed,
   });
   return {
@@ -64,6 +67,8 @@ function fixture(group?: ProjectGitWorkflowGroup) {
     start,
     read,
     changed,
+    project,
+    diagnose,
     projects,
     linked,
     status() {
@@ -84,6 +89,41 @@ afterEach(() => {
 });
 
 describe("Project Git workflow", () => {
+  it("isolates a missing directory in another active project without hiding its own error", async () => {
+    const f = fixture();
+    const missing = new GitWorkspaceError(
+      "cannot change to '/missing/iot-app': No such file or directory",
+      "",
+      "fatal: cannot change to '/missing/iot-app': No such file or directory\n",
+    );
+    f.project.mockImplementation(async (id) => {
+      if (id === "other") throw missing;
+      return f.projects.get(id) ?? null;
+    });
+    f.active.add("other");
+    expect(await f.workflow.run("a")).toMatchObject({ phase: "running", workspace: "/repo" });
+    expect(f.diagnose).toHaveBeenCalledWith(missing);
+    await expect(f.workflow.inspect("other")).rejects.toThrow("/missing/iot-app");
+    f.workflow.close();
+  });
+
+  it("does not ignore permission errors when checking another active project", async () => {
+    const f = fixture();
+    const denied = new GitWorkspaceError(
+      "cannot change to '/other': Permission denied",
+      "",
+      "fatal: cannot change to '/other': Permission denied\n",
+    );
+    f.project.mockImplementation(async (id) => {
+      if (id === "other") throw denied;
+      return f.projects.get(id) ?? null;
+    });
+    f.active.add("other");
+    expect(await f.workflow.run("a")).toMatchObject({ phase: "failed" });
+    expect(f.start).not.toHaveBeenCalled();
+    f.workflow.close();
+  });
+
   it("does not queue a turn action or attach it to another running workflow", async () => {
     const f = fixture();
     f.active.add("b");

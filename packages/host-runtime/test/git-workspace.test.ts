@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { GitWorkspace } from "../src/git-workspace.js";
+import { GitWorkspace, GitWorkspaceError, isMissingGitDirectory } from "../src/git-workspace.js";
 
 const testGitEnvironment = {
   PATH: process.env.PATH,
@@ -147,6 +147,25 @@ describe("GitWorkspace", () => {
       name: "GitWorkspaceError",
       message: "当前目录不是 Git 仓库。",
     });
+  });
+
+  it("identifies missing directories without treating missing Git or permissions as missing directories", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codexhost-missing-git-cwd-"));
+    cleanup.push(directory);
+    const workspace = new GitWorkspace(testGitEnvironment);
+    await expect(workspace.root(path.join(directory, "missing"))).rejects.toSatisfy(
+      isMissingGitDirectory,
+    );
+    const file = path.join(directory, "file");
+    await writeFile(file, "not a directory");
+    await expect(workspace.root(file)).rejects.toSatisfy(isMissingGitDirectory);
+    expect(
+      isMissingGitDirectory(
+        new GitWorkspaceError("denied", "", "fatal: cannot change to '/repo': Permission denied"),
+      ),
+    ).toBe(false);
+    expect(isMissingGitDirectory({ code: "ENOENT", syscall: "spawn git" })).toBe(false);
+    expect(isMissingGitDirectory({ code: "ENOENT", syscall: "realpath" })).toBe(true);
   });
 
   it("shows an untracked file diff", async () => {

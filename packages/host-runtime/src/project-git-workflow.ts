@@ -1,5 +1,6 @@
 import type { GitWorkflowSnapshot } from "@codexhost/shared-contracts";
 import path from "node:path";
+import { isMissingGitDirectory } from "./git-workspace.js";
 import {
   gitRepositorySynchronized,
   type ProjectGitRepository,
@@ -239,7 +240,18 @@ export class ProjectGitWorkflow {
       [...this.#group.members].map((member) => member.options.activeThreads()),
     );
     const threads = [...new Set(active.flat())];
-    const projects = await Promise.all(threads.map((id) => this.#project(id)));
+    const projects = await Promise.all(
+      threads.map(async (id) => {
+        try {
+          return await this.#project(id);
+        } catch (error) {
+          if (!isMissingGitDirectory(error)) throw error;
+          // 历史活动任务的失效目录不影响当前项目；当前任务自身仍由入口严格校验。
+          this.options.diagnose(error);
+          return null;
+        }
+      }),
+    );
     if (projects.some((root) => root === workspace || (root !== null && scope.has(root))))
       return true;
     for (const root of new Set(projects)) {

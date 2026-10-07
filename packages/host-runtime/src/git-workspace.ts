@@ -122,6 +122,19 @@ export class GitWorkspaceError extends Error {
   }
 }
 
+// 仅识别目录已删除或路径不再是目录；权限、Git 可执行文件和仓库损坏错误不能跳过。
+export function isMissingGitDirectory(error: unknown): boolean {
+  if (error instanceof GitWorkspaceError) {
+    return /^fatal: cannot change to '[\s\S]*': (?:No such file or directory|Not a directory)\s*$/u.test(
+      error.stderr,
+    );
+  }
+  const failure = error as NodeJS.ErrnoException | null;
+  return (
+    failure?.syscall === "realpath" && (failure.code === "ENOENT" || failure.code === "ENOTDIR")
+  );
+}
+
 /**
  * 推送被远端拒绝（通常因为本地落后）。保留结构化信息，让路由层可以自动
  * 进入"拉取并同步"，而不是把 raw git stderr 直接抛给用户。

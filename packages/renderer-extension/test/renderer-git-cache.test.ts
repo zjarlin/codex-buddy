@@ -118,3 +118,20 @@ test("isolates draft projects, hosts and thread snapshots without sending a synt
     { threadId },
   ]);
 });
+
+test("coalesces history and invalidates it after writes", async () => {
+  const cache = new RendererGitCache();
+  const result = { workspace: "/repo", branch: "main", head: null, refs: [], commits: [] };
+  const read = vi.fn(async () => result);
+  const client = { ...clientWith(vi.fn()), inspectGitLog: read };
+  const first = cache.history(client, { threadId });
+  expect(cache.history(client, { threadId })).toBe(first);
+  await first;
+  await cache.history(client, { threadId });
+  expect(read).toHaveBeenCalledTimes(1);
+  await cache.history(client, { threadId }, "/child");
+  expect(read).toHaveBeenLastCalledWith({ threadId, repository: "/child", limit: 200 });
+  cache.update(client, { threadId }, status);
+  await cache.history(client, { threadId });
+  expect(read).toHaveBeenCalledTimes(3);
+});

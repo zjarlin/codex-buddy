@@ -124,6 +124,19 @@ const { outputFiles } = await build({
             return { commit: "def4567", pushed: input.push, output: "", status: structuredClone(target) };
           },
           pushGit: async (input) => structuredClone(input.repository ? submoduleStatus : status),
+          inspectGitLog: async (input) => {
+            calls.push(["log", input]);
+            return {
+              workspace: input.repository ? "/repo/vendor/lib" : "/repo",
+              branch: "main",
+              head: "a".repeat(40),
+              refs: [{ name: "HEAD", kind: "head", commit: "a".repeat(40), current: true }, { name: "refs/heads/main", kind: "local", commit: "a".repeat(40), current: true }, { name: "refs/remotes/origin/main", kind: "remote", commit: "b".repeat(40), current: false }],
+              commits: [
+                { commit: "a".repeat(40), shortCommit: "aaaaaaa", subject: "latest local commit", authorName: "Codex", authorEmail: "codex@example.test", authoredAt: "2026-10-07T00:00:00Z", parents: ["b".repeat(40)], refs: ["HEAD -> main", "tag: v1.0"] },
+                { commit: "b".repeat(40), shortCommit: "bbbbbbb", subject: "latest upstream commit", authorName: "Upstream", authorEmail: "upstream@example.test", authoredAt: "2026-10-06T00:00:00Z", parents: [], refs: ["origin/main"] },
+              ],
+            };
+          },
           syncGit: async (input) => {
             calls.push(["sync", input]);
             status.behind = 0;
@@ -905,7 +918,9 @@ test("shows pending actions, ignores repeated clicks and permits retry after fai
   await push.click();
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveAction());
   await expect(push).toBeEnabled();
-  await expect(root.getByText("已推送。", { exact: true })).toBeVisible();
+  await expect(
+    root.getByText("推送未完成：仍有 1 个本地提交未发布。", { exact: true }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -945,6 +960,165 @@ test("pulls and syncs from the sidebar and surfaces an in-progress merge", async
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
     .toContainEqual(["mergeAbort", { threadId: "thread-1" }]);
   await expect(banner).toBeHidden();
+});
+
+test("shows the commit graph and fetches upstream refs on demand", async ({ page }, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const inspect = fixture.client.inspectGitLog;
+    let fetched = false;
+    fixture.client.fetchGit = async (input: unknown) => {
+      fixture.calls.push(["fetch", input]);
+      fetched = true;
+      return { ...fixture.status, behind: 1 };
+    };
+    fixture.client.inspectGitLog = async (input: unknown) => {
+      const result = await inspect(input);
+      if (fetched) result.commits[1].subject = "fetched upstream commit";
+      return result;
+    };
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await expect(root.getByText("提交历史 · 本地与远端跟踪引用", { exact: true })).toBeVisible();
+  await expect(root.getByText("latest local commit", { exact: true })).toBeVisible();
+  await expect(root.getByText("latest upstream commit", { exact: true })).toBeVisible();
+  await expect(root.locator(".codexhost-git-history-body span").first()).toContainText(
+    "HEAD · main · v1.0",
+  );
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toContainEqual(["log", { threadId: "thread-1", limit: 200 }]);
+  await expect(root.locator(".codexhost-git-history-row svg path")).toHaveCount(2);
+  await root.screenshot({ path: testInfo.outputPath("history-before-fetch.png") });
+  await root.getByRole("button", { name: "获取上游", exact: true }).click();
+  await expect(root.getByText("fetched upstream commit", { exact: true })).toBeVisible();
+  await expect(root.locator(".codexhost-git-branch")).toContainText("1↓");
+  await root.screenshot({ path: testInfo.outputPath("history-after-fetch.png") });
+});
+
+test("prewarms only main status and coalesces repeated history opens", async ({ page }) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.submodules[0].status = "modified";
+    const models = fixture.client.listGitMessageModels;
+    fixture.client.listGitMessageModels = async () => {
+      fixture.calls.push(["models"]);
+      return models();
+    };
+  });
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
+    .toEqual([["status", { threadId: "thread-1" }]]);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await expect(root.getByText("latest upstream commit", { exact: true })).toBeVisible();
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await expect(root.locator("[data-codexhost-git-sidebar-message]")).toBeVisible();
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await expect(root.getByText("latest upstream commit", { exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  expect(calls.filter(([method]: string[]) => method === "status")).toHaveLength(1);
+  expect(calls.filter(([method]: string[]) => method === "models")).toHaveLength(1);
+  expect(calls.filter(([method]: string[]) => method === "log")).toHaveLength(1);
+  expect(calls.filter(([method]: string[]) => method === "generate")).toHaveLength(0);
+});
+
+test("keeps the main list and actions ready while an expanded submodule loads", async ({
+  page,
+}, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.submodules[0].status = "modified";
+    const inspect = fixture.client.inspectGitStatus;
+    fixture.client.inspectGitStatus = async (input: { repository?: string }) => {
+      const status = await inspect(input);
+      if (!input.repository) return status;
+      return new Promise((resolve) => {
+        fixture.resolveChild = () => resolve(status);
+      });
+    };
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const folders = root.locator(".codexhost-git-list > .codexhost-git-directory");
+  const before = await folders.count();
+  const first = await folders.first().elementHandle();
+  await root.locator(".codexhost-git-repository-header").click();
+  await expect(root.getByText("读取中…", { exact: true })).toBeVisible();
+  await expect(root.locator("[data-codexhost-git-sidebar-push]")).toBeEnabled();
+  await expect(root.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
+  await root.screenshot({ path: testInfo.outputPath("submodule-pending.png") });
+  await expect
+    .poll(() =>
+      page.evaluate(() => typeof Reflect.get(globalThis, "gitSidebarFixture").resolveChild),
+    )
+    .toBe("function");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveChild());
+  await expect(root.getByText("child.txt", { exact: true })).toBeVisible();
+  await expect(folders).toHaveCount(before);
+  expect(await first?.evaluate((element) => element.isConnected)).toBe(true);
+  await root.screenshot({ path: testInfo.outputPath("submodule-loaded.png") });
+});
+
+test("ignores old history after switching hosts and reports a successful push", async ({
+  page,
+}, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const inspect = fixture.client.inspectGitLog;
+    fixture.nextClient = {
+      ...fixture.client,
+      inspectGitLog: async (input: unknown) => {
+        const result = await inspect(input);
+        result.commits[0].subject = "remote host history";
+        return result;
+      },
+      pushGit: async () => ({ ...fixture.status, ahead: 0, behind: 0 }),
+    };
+    fixture.client.inspectGitLog = async (input: unknown) => {
+      const result = await inspect(input);
+      return new Promise((resolve) => {
+        fixture.resolveHistory = () => resolve(result);
+      });
+    };
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await expect(root.getByText("正在读取提交历史…", { exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.setContext("thread-1", fixture.nextClient, "remote");
+  });
+  await expect(root.locator("[data-codexhost-git-sidebar-push]")).toBeEnabled();
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await expect(root.getByText("remote host history", { exact: true })).toBeVisible();
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveHistory());
+  await expect(root.getByText("latest local commit", { exact: true })).toHaveCount(0);
+  await root.getByRole("button", { name: "历史", exact: true }).click();
+  await root.locator("[data-codexhost-git-sidebar-push]").click();
+  await expect(root.getByText("推送成功，已与上游同步。", { exact: true })).toBeVisible();
+  await root.screenshot({ path: testInfo.outputPath("push-success.png") });
 });
 
 async function enableLinkedRepositories(page: Page): Promise<void> {
@@ -1200,10 +1374,13 @@ test("shows initialized submodules as separate actionable repositories", async (
 
   const group = root.locator('.codexhost-git-repository-group[data-repository="/repo/vendor/lib"]');
   await expect(group.locator(".codexhost-git-repository-name")).toHaveText("lib");
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls),
+  ).not.toContainEqual(["status", { threadId: "thread-1", repository: "/repo/vendor/lib" }]);
+  await group.locator(".codexhost-git-repository-header").click();
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls))
     .toContainEqual(["status", { threadId: "thread-1", repository: "/repo/vendor/lib" }]);
-  await group.locator(".codexhost-git-repository-header").click();
   const change = group.locator('.codexhost-git-repository-change[title="child.txt"]');
   await expect(change).toBeVisible();
   await change.click();

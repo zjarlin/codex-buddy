@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile, stat, readFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -118,6 +118,89 @@ describe("GitWorkspace", () => {
     const { clone, advanceRemote } = await cloneWithRemote();
     return { clone, advanceRemote: () => advanceRemote("remote divergence\n") };
   }
+
+  it("scans the working tree once while preserving dirty submodule status", async () => {
+    const { parent } = await submoduleRepository();
+    await writeFile(path.join(parent, "vendor/child/child.txt"), "dirty child\n");
+    const commands: string[][] = [];
+    const workspace = new GitWorkspace(testGitEnvironment, {
+      paths: path,
+      realpath,
+      files: { stat, readFile },
+      nullDevice: process.platform === "win32" ? "NUL" : "/dev/null",
+      exists: async (target) =>
+        stat(target).then(
+          () => true,
+          () => false,
+        ),
+      run: async (cwd, args) => {
+        commands.push([...args]);
+        return execFileAsync("git", ["-C", cwd, ...args], {
+          env: { ...process.env, ...testGitEnvironment },
+        });
+      },
+    });
+    const status = await workspace.status(parent);
+    expect(status.submodules).toContainEqual({ path: "vendor/child", status: "modified" });
+    expect(status.changes).toContainEqual(
+      expect.objectContaining({
+        path: "vendor/child",
+        submodule: { path: "vendor/child", status: "modified" },
+      }),
+    );
+    expect(commands.filter((args) => args[0] === "status")).toHaveLength(1);
+  });
+
+  it("allows Git status reads while the commit message model is still waiting", async () => {
+    const directory = await repository();
+    await writeFile(path.join(directory, "tracked.txt"), "changed\n");
+    const home = await mkdtemp(path.join(tmpdir(), "codexhost-model-wait-"));
+    cleanup.push(home);
+    let finishResponse = () => {};
+    let started = () => {};
+    const received = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { createServer } = await import("node:http");
+    const server = createServer((request, response) => {
+      request.resume();
+      finishResponse = () =>
+        response.end(
+          JSON.stringify({ choices: [{ message: { content: "fix: delayed message" } }] }),
+        );
+      started();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No fixture address");
+    await writeFile(
+      path.join(home, "config.toml"),
+      `model_provider = "fixture"\n[model_providers.fixture]\nbase_url = "http://127.0.0.1:${address.port}/v1"\nexperimental_bearer_token = "fixture-only"\n`,
+    );
+    const workspace = new GitWorkspace(testGitEnvironment);
+    const generation = workspace.generateMessage({
+      cwd: directory,
+      model: "slow",
+      environment: { CODEX_HOME: home },
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await received;
+      const status = await Promise.race([
+        workspace.status(directory),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Model request blocked Git status")), 2000);
+        }),
+      ]);
+      expect(status.changes).toContainEqual(expect.objectContaining({ path: "tracked.txt" }));
+    } finally {
+      clearTimeout(timer);
+      finishResponse();
+      await generation;
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
 
   it("reports staged, modified, untracked and renamed files", async () => {
     const directory = await repository();

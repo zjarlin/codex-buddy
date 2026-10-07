@@ -1,4 +1,4 @@
-import type { GitWorkspaceStatus } from "@codexhost/shared-contracts";
+import type { GitLogResult, GitWorkspaceStatus } from "@codexhost/shared-contracts";
 import type { RendererGitClient } from "./renderer-git-sidebar.js";
 import { gitTargetKey, gitTargetParams, type RendererGitTarget } from "./renderer-git-target.js";
 
@@ -16,7 +16,7 @@ interface Entry {
   bytes: number;
 }
 
-// 只缓存状态与模型目录；并发读取共用请求，写入后失效。
+// 缓存状态、历史与模型目录；并发读取共用请求，写入后失效。
 export class RendererGitCache {
   readonly #entries: Entry[] = [];
 
@@ -109,6 +109,21 @@ export class RendererGitCache {
         ...(repository ? { repository } : {}),
       }),
     );
+  }
+
+  history(
+    client: RendererGitClient,
+    target: RendererGitTarget,
+    repository?: string,
+  ): Promise<GitLogResult> {
+    return this.#read(client, target, JSON.stringify([repository, "history"]), () => {
+      if (!client.inspectGitLog) throw new Error("当前连接不支持提交历史。");
+      return client.inspectGitLog({
+        ...gitTargetParams(target),
+        ...(repository ? { repository } : {}),
+        limit: 200,
+      });
+    });
   }
 
   update(

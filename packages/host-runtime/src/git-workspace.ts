@@ -270,13 +270,14 @@ interface SubmoduleState {
 async function submodules(
   cwd: string,
   git: (cwd: string, arguments_: readonly string[]) => Promise<GitCommandResult> = runGit,
+  porcelain?: Promise<GitCommandResult>,
 ): Promise<{ submodules: SubmoduleState[]; warnings: string[] }> {
-  const [result, porcelain] = await Promise.all([
+  const [result, status] = await Promise.all([
     readGitSubmoduleStatus(cwd, git),
-    git(cwd, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]),
+    porcelain ?? git(cwd, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]),
   ]);
   const dirty = new Set(
-    parsePorcelainStatus(porcelain.stdout)
+    parsePorcelainStatus(status.stdout)
       .filter((change) => change.workTreeStatus === "M" || change.indexStatus === "M")
       .map((change) => change.path),
   );
@@ -781,6 +782,7 @@ export class GitWorkspace {
         ]),
         this.#run(workspace, [
           "log",
+          "--topo-order",
           "--all",
           `--max-count=${safeLimit}`,
           `--pretty=format:%H${FIELD_SEPARATOR}%h${FIELD_SEPARATOR}%P${FIELD_SEPARATOR}%D${FIELD_SEPARATOR}%an${FIELD_SEPARATOR}%ae${FIELD_SEPARATOR}%aI${FIELD_SEPARATOR}%s${LOG_SEPARATOR}`,
@@ -932,7 +934,7 @@ export class GitWorkspace {
     paths?: readonly string[];
     environment: NodeJS.ProcessEnv;
   }): Promise<GitGeneratedMessage> {
-    return this.#serial(async () => {
+    const { connection, payload, model } = await this.#serial(async () => {
       const workspace = this.#absoluteWorkspace(input.cwd);
       const model = input.model.trim();
       if (!model) throw new GitWorkspaceError("请选择模型后再生成提交消息。");
@@ -952,59 +954,59 @@ export class GitWorkspace {
       const diff = { stdout: diffs.map((result) => result.stdout).join("") };
       const payload = `${status.stdout}\n\n${diff.stdout}`.slice(0, MESSAGE_INPUT_MAX_CHARS);
       if (!payload.trim()) throw new GitWorkspaceError("当前没有可生成消息的变更。");
-      const completionUrl = new URL(connection.url);
-      completionUrl.pathname = completionUrl.pathname.replace(/\/models$/u, "/chat/completions");
-      const headers = {
-        ...Object.fromEntries(connection.headers),
-        "Content-Type": "application/json",
-      };
-      const request = async (
-        maxTokens: number,
-      ): Promise<{ message: string; truncated: boolean }> => {
-        const response = await fetch(completionUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: GIT_MESSAGE_SYSTEM_PROMPT },
-              { role: "user", content: payload },
-            ],
-            stream: false,
-            store: false,
-            max_tokens: maxTokens,
-          }),
-          redirect: "error",
-          signal: AbortSignal.timeout(MESSAGE_TIMEOUT_MS),
-        });
-        if (!response.ok) {
-          throw new GitWorkspaceError(`生成提交消息失败：HTTP ${response.status}`);
-        }
-        const body = (await response.json()) as { choices?: unknown };
-        const choice = Array.isArray(body.choices) ? body.choices[0] : null;
-        const record =
-          choice && typeof choice === "object" ? (choice as Record<string, unknown>) : null;
-        const rawMessage = record?.message;
-        const content =
-          rawMessage &&
-          typeof rawMessage === "object" &&
-          "content" in rawMessage &&
-          typeof (rawMessage as { content?: unknown }).content === "string"
-            ? (rawMessage as { content: string }).content.trim()
-            : "";
-        if (content) return { message: content, truncated: false };
-        // 只有模型确实因为输出额度用尽（含全部花在推理上）才值得加额度重试；
-        // 其他空回复按原样报错，避免把真实故障伪装成慢重试。
-        return { message: "", truncated: record?.finish_reason === "length" };
-      };
-      let result = { message: "", truncated: false };
-      for (const maxTokens of MESSAGE_OUTPUT_ATTEMPT_TOKENS) {
-        result = await request(maxTokens);
-        if (result.message || !result.truncated) break;
-      }
-      if (!result.message) throw new GitWorkspaceError("模型没有返回提交消息。");
-      return { message: gitCommitMessageSchema.parse(result.message), model };
+      return { connection, payload, model };
     });
+    // 模型服务可能耗时数分钟，等待期间释放 Git 队列供状态和写操作使用。
+    const completionUrl = new URL(connection.url);
+    completionUrl.pathname = completionUrl.pathname.replace(/\/models$/u, "/chat/completions");
+    const headers = {
+      ...Object.fromEntries(connection.headers),
+      "Content-Type": "application/json",
+    };
+    const request = async (maxTokens: number): Promise<{ message: string; truncated: boolean }> => {
+      const response = await fetch(completionUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: GIT_MESSAGE_SYSTEM_PROMPT },
+            { role: "user", content: payload },
+          ],
+          stream: false,
+          store: false,
+          max_tokens: maxTokens,
+        }),
+        redirect: "error",
+        signal: AbortSignal.timeout(MESSAGE_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        throw new GitWorkspaceError(`生成提交消息失败：HTTP ${response.status}`);
+      }
+      const body = (await response.json()) as { choices?: unknown };
+      const choice = Array.isArray(body.choices) ? body.choices[0] : null;
+      const record =
+        choice && typeof choice === "object" ? (choice as Record<string, unknown>) : null;
+      const rawMessage = record?.message;
+      const content =
+        rawMessage &&
+        typeof rawMessage === "object" &&
+        "content" in rawMessage &&
+        typeof (rawMessage as { content?: unknown }).content === "string"
+          ? (rawMessage as { content: string }).content.trim()
+          : "";
+      if (content) return { message: content, truncated: false };
+      // 只有模型确实因为输出额度用尽（含全部花在推理上）才值得加额度重试；
+      // 其他空回复按原样报错，避免把真实故障伪装成慢重试。
+      return { message: "", truncated: record?.finish_reason === "length" };
+    };
+    let result = { message: "", truncated: false };
+    for (const maxTokens of MESSAGE_OUTPUT_ATTEMPT_TOKENS) {
+      result = await request(maxTokens);
+      if (result.message || !result.truncated) break;
+    }
+    if (!result.message) throw new GitWorkspaceError("模型没有返回提交消息。");
+    return { message: gitCommitMessageSchema.parse(result.message), model };
   }
 
   // 进行中的相同写操作共用结果；成功或失败后均允许用户显式重试。
@@ -1135,13 +1137,22 @@ export class GitWorkspace {
 
   async #statusUnlocked(cwd: string): Promise<GitWorkspaceStatus> {
     const workspace = this.#absoluteWorkspace(cwd);
+    // 文件变更和子模块脏状态共用一次扫描，保留子模块内部改动。
+    const status = this.#run(workspace, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--branch",
+      "--untracked-files=all",
+      "--ignore-submodules=none",
+    ]);
     const [{ stdout }, head, submoduleStates, operation] = await Promise.all([
-      this.#run(workspace, ["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"]),
+      status,
       this.#run(workspace, ["rev-parse", "--short", "HEAD"]).catch(() => ({
         stdout: "",
         stderr: "",
       })),
-      submodules(workspace, (worktree, arguments_) => this.#run(worktree, arguments_)),
+      submodules(workspace, (worktree, arguments_) => this.#run(worktree, arguments_), status),
       operationState(
         workspace,
         (worktree, arguments_) => this.#run(worktree, arguments_),

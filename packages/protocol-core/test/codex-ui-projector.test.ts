@@ -30,6 +30,56 @@ function projector(): CodexTurnProjector {
 }
 
 describe("Codex UI projector", () => {
+  it.each(["", "\r\n", "Initial\r\n", "Initial"])(
+    "preserves streamed Reasoning deltas after initial text %j",
+    (initial) => {
+      const value = projector();
+      const reasoningId = itemId("incremental-reasoning");
+      value.project({ type: "turn.started", turnId });
+      const started = value.project({
+        type: "item.started",
+        turnId,
+        item: { type: "reasoning", itemId: reasoningId, text: initial },
+      });
+      let raw = initial;
+      let displayed = "";
+      const collect = (messages: typeof started.messages): void => {
+        for (const message of messages) {
+          if (message.method === "item/commandExecution/outputDelta") {
+            const params = message.params as { delta: string };
+            displayed += params.delta;
+          }
+        }
+      };
+      collect(started.messages);
+      for (const text of ["\n", "", "\r\n", "Next\n", "\n", " ", "Last\r\n"]) {
+        raw += text;
+        collect(
+          value.project({
+            type: "item.updated",
+            turnId,
+            itemId: reasoningId,
+            update: { type: "text.append", text },
+          }).messages,
+        );
+        expect(displayed).toBe(raw.replace(/[\r\n]+$/u, ""));
+      }
+      expect(
+        value.project({
+          type: "item.completed",
+          turnId,
+          snapshot: {
+            item: { type: "reasoning", itemId: reasoningId, text: raw },
+            outcome: { status: "succeeded" },
+          },
+        }).messages,
+      ).toMatchObject([
+        { params: { item: { summary: [displayed] } } },
+        { params: { item: { aggregatedOutput: displayed } } },
+      ]);
+    },
+  );
+
   it("omits terminal Reasoning line breaks in live and historical Desktop text", () => {
     const value = projector();
     const reasoningId = itemId("line-break-reasoning");

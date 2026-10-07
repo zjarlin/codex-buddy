@@ -25,6 +25,7 @@ import { REASONING_TRANSCRIPT_COMMAND } from "@codexhost/shared-contracts";
 import { createTwoFilesPatch } from "diff";
 import path from "node:path";
 import { summarizeFileChanges } from "./file-change-summary.js";
+import { appendReasoningDisplayText, reasoningDisplayText } from "./reasoning-text.js";
 
 import {
   projectCodexApprovalRequest,
@@ -68,6 +69,7 @@ interface ProjectedItem {
   item: HostItem;
   outcome: HostItemOutcome | null;
   reasoningPartStarted: boolean;
+  reasoningTrailingLineBreaks: string;
   streamedCommandOutput: boolean;
   wireStarted: boolean;
   startedAtMs?: number;
@@ -579,10 +581,6 @@ export function reasoningPreviewItemId(itemId: HostItemId): string {
   return `${itemId}-summary`;
 }
 
-function reasoningDisplayText(text: string): string {
-  return text.replace(/[\r\n]+$/u, "");
-}
-
 /**
  * Codex renders Reasoning summary deltas as an ephemeral one-line preview but
  * keeps no text after the Turn. The Command Execution lane is the one that
@@ -887,6 +885,10 @@ export class CodexTurnProjector {
       item: event.item,
       outcome: null,
       reasoningPartStarted: false,
+      reasoningTrailingLineBreaks:
+        event.item.type === "reasoning"
+          ? event.item.text.slice(reasoningDisplayText(event.item.text).length)
+          : "",
       streamedCommandOutput: false,
       wireStarted: false,
       startedAtMs,
@@ -950,9 +952,12 @@ export class CodexTurnProjector {
           },
         });
       } else if (next.type === "reasoning") {
-        const previousText =
-          previous.type === "reasoning" ? reasoningDisplayText(previous.text) : "";
-        const delta = reasoningDisplayText(next.text).slice(previousText.length);
+        // 只规范化新增片段；暂存尾部换行，避免每次增量重新扫描全部推理文本。
+        const { delta, trailingLineBreaks } = appendReasoningDisplayText(
+          projected.reasoningTrailingLineBreaks,
+          event.update.text,
+        );
+        projected.reasoningTrailingLineBreaks = trailingLineBreaks;
         if (!delta) return { messages };
         if (!projected.wireStarted) {
           messages.push(

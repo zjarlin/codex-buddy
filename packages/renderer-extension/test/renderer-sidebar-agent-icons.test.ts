@@ -271,9 +271,10 @@ describe("Renderer sidebar Agent ownership", () => {
     await settle();
 
     expect(client.listThreadOwnership).toHaveBeenCalledTimes(1);
-    expect(client.listThreadOwnership).toHaveBeenCalledWith({
-      threadIds: ["codex-thread", "pi-thread", "claude-thread", "unknown-thread"],
-    });
+    expect(client.listThreadOwnership).toHaveBeenCalledWith(
+      { threadIds: ["codex-thread", "pi-thread", "claude-thread", "unknown-thread"] },
+      { priority: "background" },
+    );
     expect(rows.map((row) => row.agent)).toEqual([null, "pi", "claude-code", null]);
     control.dispose();
   });
@@ -303,8 +304,14 @@ describe("Renderer sidebar Agent ownership", () => {
     await settle();
     expect(localRow.agent).toBe("pi");
     expect(remoteRow.agent).toBeNull();
-    expect(localClient.listThreadOwnership).toHaveBeenCalledWith({ threadIds: [threadId] });
-    expect(remoteClient.listThreadOwnership).toHaveBeenCalledWith({ threadIds: [threadId] });
+    expect(localClient.listThreadOwnership).toHaveBeenCalledWith(
+      { threadIds: [threadId] },
+      { priority: "background" },
+    );
+    expect(remoteClient.listThreadOwnership).toHaveBeenCalledWith(
+      { threadIds: [threadId] },
+      { priority: "background" },
+    );
 
     resolveRemote?.({
       threads: [
@@ -580,5 +587,41 @@ describe("Renderer sidebar Agent ownership", () => {
         harnessId: FUTURE_HARNESS_ID,
       }),
     ).toBeNull();
+  });
+
+  it("keeps the bounded ownership retry budget across in-place refresh calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const row = new FakeRow("pi-thread");
+      const dom = new FakeDom([row]);
+      const listThreadOwnership = vi.fn(
+        async ({ threadIds }: ThreadOwnershipListParams): Promise<ThreadOwnershipListResult> => ({
+          threads: threadIds.map((threadId) => ({ threadId, owner: "codex" as const })),
+        }),
+      );
+      const client = clientWith(listThreadOwnership);
+      const control = installRendererSidebarAgentIcons({
+        getClient: () => client,
+        ownershipClient: () => client,
+        dom,
+      });
+
+      await vi.runAllTimersAsync();
+      expect(listThreadOwnership).toHaveBeenCalledTimes(6);
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Unrelated Renderer events call refresh() constantly. None of them may
+      // restart the retry budget, or a stable official Thread would be
+      // re-requested forever and saturate the shared Desktop request queue.
+      for (let index = 0; index < 5; index += 1) {
+        control.refresh();
+        await vi.runAllTimersAsync();
+      }
+      expect(listThreadOwnership).toHaveBeenCalledTimes(6);
+      expect(vi.getTimerCount()).toBe(0);
+      control.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

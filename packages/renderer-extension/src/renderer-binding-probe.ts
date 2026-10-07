@@ -806,6 +806,8 @@ export function installRendererBindingProbe(
   };
   const sidebarAgentIcons = installRendererSidebarAgentIcons({
     getClient: (hostId) => modelClientForHost(hostId),
+    // 侧栏图标只是装饰：连接身份用于限制重试预算，绝不占用交互请求通道。
+    ownershipClient: () => modelClientForHost(activeModelHostId() ?? "local"),
     getLocalAgent: localAgentForSidebarThread,
   });
   const sidebarContinuation = installSidebarContinuation({

@@ -7,7 +7,10 @@ import {
 import type { RendererAgent } from "./agent-selection-state.js";
 import { createRendererAgentIcon, RENDERER_AGENT_LABELS } from "./renderer-agent-icon.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
-import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
+import {
+  RendererMethodUnavailableError,
+  type RendererRequestOptions,
+} from "./renderer-request-sender.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
 
@@ -323,6 +326,9 @@ class BrowserSidebarAgentIconDom implements SidebarAgentIconDom {
 
 export function installRendererSidebarAgentIcons(options: {
   getClient(hostId: string): RendererModelClient | null;
+  /** Stable identity of the active ownership connection. A new identity means a
+   * new connection, which is the only event that re-arms the retry budget. */
+  ownershipClient?(): RendererModelClient | null;
   getLocalAgent?(input: {
     hostId: string;
     threadId: string | null;
@@ -339,6 +345,10 @@ export function installRendererSidebarAgentIcons(options: {
   const ownershipRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let disposed = false;
   let scanScheduled = false;
+  // Bounded retries are per connection: a reconnect may re-arm them, but
+  // repeated in-place refresh() calls on the same connection may not. Seed the
+  // identity at install time so the first refresh is not mistaken for a change.
+  let ownershipClientSeen: RendererModelClient | null = options.ownershipClient?.() ?? null;
 
   const ownershipKey = (hostId: string, threadId: string): string =>
     JSON.stringify([hostId, threadId]);
@@ -390,8 +400,9 @@ export function installRendererSidebarAgentIcons(options: {
     for (const threadId of threadIds) pending.add(ownershipKey(hostId, threadId));
     let succeeded = false;
     let retryable = true;
+    const requestOptions: RendererRequestOptions = { priority: "background" };
     void Promise.resolve()
-      .then(() => client.listThreadOwnership({ threadIds }))
+      .then(() => client.listThreadOwnership({ threadIds }, requestOptions))
       .then(({ threads }) => {
         if (disposed) return;
         for (const ownership of threads) {
@@ -399,6 +410,9 @@ export function installRendererSidebarAgentIcons(options: {
           ownershipByThread.set(key, rendererAgentForThreadOwnership(ownership));
           failed.delete(key);
           if (ownership.owner === "codex") {
+            // Cold start may answer `codex` before the external mapping exists.
+            // The retry budget is bounded per Thread and per connection, so this
+            // recovers a late mapping without becoming an unbounded loop.
             provisionalCodex.add(key);
             scheduleOwnershipRetry(hostId, ownership.threadId);
           } else {
@@ -499,11 +513,20 @@ export function installRendererSidebarAgentIcons(options: {
   return {
     refresh() {
       failed.clear();
-      for (const timer of ownershipRetryTimers.values()) clearTimeout(timer);
-      ownershipRetryTimers.clear();
-      ownershipRetryAttempts.clear();
-      for (const key of provisionalCodex) ownershipByThread.delete(key);
-      provisionalCodex.clear();
+      // Many unrelated Renderer events call refresh(). Only a new ownership
+      // connection may restart the bounded retry budget, cancel a pending
+      // retry, or discard a confirmed official-Thread classification; doing
+      // that on every call turns a stale mapping into an unbounded request
+      // loop that saturates the shared Desktop request queue.
+      const ownershipClient = options.ownershipClient?.() ?? null;
+      if (ownershipClient !== ownershipClientSeen) {
+        ownershipClientSeen = ownershipClient;
+        for (const timer of ownershipRetryTimers.values()) clearTimeout(timer);
+        ownershipRetryTimers.clear();
+        ownershipRetryAttempts.clear();
+        for (const key of provisionalCodex) ownershipByThread.delete(key);
+        provisionalCodex.clear();
+      }
       scheduleScan();
     },
     dispose() {

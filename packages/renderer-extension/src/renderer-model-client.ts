@@ -567,7 +567,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   inspectHarnessCommands(input: HarnessCommandsInspectParams): Promise<HarnessCommandCatalog>;
   inspectThreadCommands(input: ThreadCommandsInspectParams): Promise<HarnessCommandCatalog>;
   executeThreadCommand(input: ThreadCommandExecuteParams): Promise<ThreadCommandExecuteResult>;
-  listThreadOwnership(input: ThreadOwnershipListParams): Promise<ThreadOwnershipListResult>;
+  listThreadOwnership(
+    input: ThreadOwnershipListParams,
+    options?: RendererRequestOptions,
+  ): Promise<ThreadOwnershipListResult>;
   inspectThreadUsage(input: ThreadUsageInspectionParams): Promise<ThreadUsageInspection>;
   subscribeThreadUsage?(listener: (update: ThreadUsageInspection) => void): () => void;
   selectThreadModel(input: ThreadModelSelectParams): Promise<HarnessModelSelectionState>;
@@ -1395,9 +1398,13 @@ export function createRendererModelClient(
     executeThreadCommand,
     async listThreadOwnership(
       input: ThreadOwnershipListParams,
+      options?: RendererRequestOptions,
     ): Promise<ThreadOwnershipListResult> {
       const params = threadOwnershipListParamsSchema.parse(input);
-      const value = await manager.sendRequest(THREAD_OWNERSHIP_LIST_METHOD, params);
+      const value =
+        options === undefined
+          ? await manager.sendRequest(THREAD_OWNERSHIP_LIST_METHOD, params)
+          : await manager.sendRequest(THREAD_OWNERSHIP_LIST_METHOD, params, options);
       const result = threadOwnershipListResultSchema.parse(value);
       if (
         result.threads.length !== params.threadIds.length ||

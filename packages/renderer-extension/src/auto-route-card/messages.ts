@@ -1,5 +1,13 @@
 const en = {
   title: "Auto routed",
+  translation: "Translation",
+  image_generation: "Image generation",
+  video_generation: "Video generation",
+  queued: "Queued",
+  running: "Generating",
+  originalModel: "Requested model",
+  task: "Task",
+  artifact: "Open result",
   selected: "Trying",
   responding: "Responding",
   completed: "Completed",
@@ -36,6 +44,14 @@ const en = {
 };
 const zh: typeof en = {
   title: "Auto routed",
+  translation: "翻译",
+  image_generation: "图片生成",
+  video_generation: "视频生成",
+  queued: "已排队",
+  running: "生成中",
+  originalModel: "请求模型",
+  task: "任务",
+  artifact: "打开结果",
   selected: "正在尝试",
   responding: "响应中",
   completed: "已完成",

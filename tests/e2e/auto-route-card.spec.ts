@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { build } from "esbuild";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 
 const threadId = "019ccb31-9520-7120-bc17-556e9a92d860";
 const { outputFiles } = await build({
@@ -19,10 +20,11 @@ const { outputFiles } = await build({
       let selectedModel = config.selectedModel;
       const route = () => ({
         request_id: '019ccb31-9520-7120-bc17-556e9a92d861', session_id: config.threadId, turn_id: 'turn-1',
-        requested_model: 'auto', selected_model: 'model-first',
+        requested_model: config.requestedModel || 'auto', selected_model: 'model-first',
         ...(state === 'selected' ? {} : { resolved_model: config.model || 'gpt-5.6' }),
-        attempted_models: ['model-first', 'gpt-5.6'], state, started_at: 1790651972645, updated_at: version,
+        attempted_models: config.operation ? [config.model || 'translation'] : ['model-first', 'gpt-5.6'], state, started_at: 1790651972645, updated_at: version,
         ...(config.candidates ? { candidates: config.candidates } : {}),
+        ...(config.operation ? { operation: config.operation } : {}),
       });
       globalThis.calls = [];
       const client = { readAutoModelRoutes: async (id, runId) => {
@@ -125,6 +127,91 @@ for (const dark of [false, true]) {
     await expect(card).toHaveCount(0);
   });
 }
+
+test("translation shows provider and language details for a fixed model", async ({ page }) => {
+  await setup(page, {
+    selectedModel: "fixed",
+    requestedModel: "ask",
+    operation: {
+      kind: "translation",
+      provider: "caiyun",
+      source_language: "zh",
+      target_language: "en",
+    },
+  });
+  const card = page.getByRole("complementary", { name: "翻译", exact: true });
+  await expect(card).toContainText("已完成");
+  await expect(card).toContainText("caiyun");
+  await card.getByRole("button", { name: "路由详情" }).click();
+  await expect(card).toContainText("zh → en");
+  await expect(card).toContainText("请求模型: ask");
+  await page.screenshot({ path: test.info().outputPath("translation-card.png") });
+});
+
+test("video submission stays queued until the provider confirms completion", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  await setup(
+    page,
+    {
+      selectedModel: "fixed",
+      requestedModel: "custom-model",
+      state: "queued",
+      operation: {
+        kind: "video_generation",
+        provider: "grok",
+        task_id: "video-123",
+      },
+    },
+    true,
+  );
+  const card = page.getByRole("complementary", { name: "视频生成", exact: true });
+  await expect(card).toContainText("已排队");
+  await expect(card).not.toContainText("已完成");
+  await card.getByRole("button", { name: "路由详情" }).click();
+  await expect(card).toContainText("video-123");
+  expect(await card.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(false);
+  await page.screenshot({ path: test.info().outputPath("video-queued-card.png") });
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  await expect(card).toContainText("已完成");
+  await expect(card.getByRole("button", { name: "路由详情" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+});
+
+test("image card renders its real artifact without overflowing on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 740 });
+  const artifact = await readFile(
+    path.resolve(import.meta.dirname, "../../packages/renderer-extension/src/assets/codexhost-logo.png"),
+  );
+  await page.route("https://fixture.invalid/result.png", (route) =>
+    route.fulfill({
+      contentType: "image/png",
+      body: artifact,
+    }),
+  );
+  await setup(page, {
+    selectedModel: "fixed",
+    requestedModel: "gpt-6-astra",
+    operation: {
+      kind: "image_generation",
+      provider: "grok",
+      artifacts: [{ kind: "image", url: "https://fixture.invalid/result.png" }],
+    },
+  });
+  const card = page.getByRole("complementary", { name: "图片生成", exact: true });
+  const image = card.getByRole("img", { name: "图片生成" });
+  await expect(image).toBeVisible();
+  await expect
+    .poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
+    .toBeGreaterThan(1);
+  await expect(card.getByRole("link", { name: "打开结果" })).toHaveAttribute(
+    "href",
+    "https://fixture.invalid/result.png",
+  );
+  expect(await card.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(false);
+  await page.screenshot({ path: test.info().outputPath("image-result-card.png") });
+});
 
 test("narrow viewport wraps a long model identifier and failed state", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 740 });

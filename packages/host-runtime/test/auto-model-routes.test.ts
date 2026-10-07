@@ -41,6 +41,48 @@ async function fixture() {
 }
 
 describe("gateway Auto route observations", () => {
+  it("preserves vertical operations for explicit models and pending video tasks", async () => {
+    const input = await fixture();
+    const video = {
+      ...route,
+      requested_model: "ask",
+      state: "queued",
+      operation: {
+        kind: "video_generation",
+        provider: "grok",
+        task_id: "video-123",
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ object: "list", data: [video] })),
+    );
+    expect((await readAutoModelRoutes(input)).routes[0]).toEqual(video);
+  });
+
+  it("rejects executable artifact protocols", async () => {
+    const input = await fixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          object: "list",
+          data: [
+            {
+              ...route,
+              operation: {
+                kind: "image_generation",
+                artifacts: [{ kind: "image", url: "javascript:alert(1)" }],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    await expect(readAutoModelRoutes(input)).rejects.toThrow(
+      "Unable to read Auto route observations",
+    );
+  });
   it("queries a persisted run and rejects a mismatched run", async () => {
     const input = await fixture();
     const scoped = { ...input, params: { threadId, runId: "turn-1" } };

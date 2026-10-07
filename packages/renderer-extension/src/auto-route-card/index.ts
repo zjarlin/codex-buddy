@@ -5,6 +5,9 @@ import Check from "lucide/dist/esm/icons/check.mjs";
 import CircleDashed from "lucide/dist/esm/icons/circle-dashed.mjs";
 import CircleAlert from "lucide/dist/esm/icons/circle-alert.mjs";
 import ChevronDown from "lucide/dist/esm/icons/chevron-down.mjs";
+import Languages from "lucide/dist/esm/icons/languages.mjs";
+import Image from "lucide/dist/esm/icons/image.mjs";
+import Video from "lucide/dist/esm/icons/video.mjs";
 import type { AutoModelRoute, AutoModelRoutesResult } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { autoRouteMessages } from "./messages.js";
@@ -30,15 +33,25 @@ function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean)
   const messages = autoRouteMessages(locale);
   const latest = routes.at(-1);
   if (!latest) throw new Error("Cannot render an empty Auto route group");
+  const operation = latest.operation;
+  const title = operation ? messages[operation.kind] : messages.title;
   const card = element("aside", "");
   card.dataset.codexhostAutoRoute = latest.turn_id;
   card.dataset.state = latest.state;
-  card.setAttribute("aria-label", messages.title);
+  card.setAttribute("aria-label", title);
   const top = element("div", "route-top");
   const heading = element("div", "route-heading");
   const symbol = element("span", "route-symbol");
-  symbol.append(createElement(Route, { width: 17, height: 17, "aria-hidden": "true" }));
-  heading.append(symbol, element("span", "", messages.title));
+  const icon =
+    operation?.kind === "translation"
+      ? Languages
+      : operation?.kind === "image_generation"
+        ? Image
+        : operation?.kind === "video_generation"
+          ? Video
+          : Route;
+  symbol.append(createElement(icon, { width: 17, height: 17, "aria-hidden": "true" }));
+  heading.append(symbol, element("span", "", title));
   const state = element("span", "route-state");
   const stateIcon =
     latest.state === "completed"
@@ -51,9 +64,16 @@ function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean)
     messages[latest.state],
   );
   top.append(heading, state);
-  const model = latest.resolved_model ?? latest.attempted_models.at(-1) ?? latest.selected_model;
+  const model =
+    operation?.provider ??
+    latest.resolved_model ??
+    latest.attempted_models.at(-1) ??
+    latest.selected_model;
   const footer = element("div", "route-footer");
-  const fallbacks = routes.reduce((total, route) => total + route.attempted_models.length - 1, 0);
+  const fallbacks = routes.reduce(
+    (total, route) => total + Math.max(0, route.attempted_models.length - 1),
+    0,
+  );
   const counts = [messages.requests(routes.length)];
   if (fallbacks > 0) counts.push(messages.fallbacks(fallbacks));
   if (latest.candidates)
@@ -87,6 +107,22 @@ function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean)
     attempts.append(row);
   }
   details.append(attempts);
+  if (operation) {
+    details.append(
+      element("div", "route-time", `${messages.originalModel}: ${latest.requested_model}`),
+    );
+    if (operation.task_id)
+      details.append(element("div", "route-path", `${messages.task}: ${operation.task_id}`));
+    if (operation.target_language) {
+      details.append(
+        element(
+          "div",
+          "route-path",
+          `${operation.source_language ?? "auto"} → ${operation.target_language}`,
+        ),
+      );
+    }
+  }
   if (latest.candidates) {
     const plan = element("section", "route-plan");
     plan.append(element("strong", "", messages.candidates));
@@ -142,7 +178,40 @@ function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean)
     toggle.setAttribute("aria-expanded", String(!details.hidden));
   });
   card.append(top, element("strong", "route-model", model), footer, details);
-  if (!latest.resolved_model && latest.state !== "selected") {
+  if (operation?.artifacts?.length) {
+    const artifacts = element("div", "route-artifacts");
+    for (const artifact of operation.artifacts) {
+      // 即使测试或本地入口绕过 schema，也不允许把任意协议放进媒体元素。
+      let url: URL;
+      try {
+        url = new URL(artifact.url);
+      } catch {
+        continue;
+      }
+      if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) continue;
+      if (artifact.kind === "image") {
+        const preview = element("img", "route-image");
+        preview.src = artifact.url;
+        preview.alt = title;
+        preview.loading = "lazy";
+        preview.referrerPolicy = "no-referrer";
+        artifacts.append(preview);
+      } else {
+        const preview = element("video", "route-video");
+        preview.src = artifact.url;
+        preview.controls = true;
+        preview.preload = "none";
+        artifacts.append(preview);
+      }
+      const link = element("a", "route-result", messages.artifact);
+      link.href = artifact.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      artifacts.append(link);
+    }
+    card.append(artifacts);
+  }
+  if (!operation && !latest.resolved_model && latest.state !== "selected") {
     card.append(element("div", "route-notice", messages.unconfirmed));
   }
   return card;
@@ -198,6 +267,7 @@ export function installAutoRouteCards(options: {
         r.selected_model,
         r.resolved_model,
         r.attempted_models,
+        r.operation,
         r.candidates?.map((c) => [c.model, c.eligible, c.order, c.reason]),
       ]),
     ]);
@@ -210,7 +280,7 @@ export function installAutoRouteCards(options: {
       .at(-1);
     if (
       !composer?.isConnected ||
-      context?.selectedModel !== "auto" ||
+      (context?.selectedModel !== "auto" && !latestGroup?.at(-1)?.operation) ||
       result?.unavailableReason === "private" ||
       (latestGroup?.[0] && cards.has(latestGroup[0].turn_id))
     ) {
@@ -314,6 +384,7 @@ export function installAutoRouteCards(options: {
   async function tick() {
     if (disposed) return;
     const current = options.getContext();
+    const selectionChanged = context?.selectedModel !== current?.selectedModel;
     if (!sameContext(context, current)) {
       context = current;
       generation += 1;
@@ -326,6 +397,7 @@ export function installAutoRouteCards(options: {
     }
     // 同一会话可以切换下一回合的模型，不能只在会话身份变化时更新选模状态。
     context = current;
+    if (selectionChanged) render();
     if (document.hidden || !context?.client.readAutoModelRoutes) return;
     // 卡片直接挂在回合锚点内部，随原生 DOM 保持位置，不需要每个 tick 都
     // 全量重扫 transcript（turnAnchors 会对每个回合做 getClientRects 强制布局）。
@@ -387,7 +459,7 @@ export function installAutoRouteCards(options: {
             (route) => route.session_id === requestContext.threadId && route.turn_id === turnId,
           );
           const active = records.some(
-            (route) => route.state === "selected" || route.state === "responding",
+            (route) => ["selected", "responding", "queued", "running"].includes(route.state),
           );
           turnRecords.set(turnId, {
             routes: records,

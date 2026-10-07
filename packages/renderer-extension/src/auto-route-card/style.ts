@@ -1,4 +1,7 @@
 export const autoRouteCardStyle = `
+[data-codexhost-auto-route] .route-artifacts { display: grid; gap: 8px; margin-top: 10px; }
+[data-codexhost-auto-route] :is(.route-image, .route-video) { display: block; width: 100%; max-height: 320px; object-fit: contain; border-radius: 4px; background: light-dark(#f2f3f4, #202224); }
+[data-codexhost-auto-route] .route-result { font-size: 12px; color: var(--route-accent); overflow-wrap: anywhere; }
 :is([data-codexhost-auto-route], [data-codexhost-auto-route-status]) {
   --route-accent: light-dark(#06745e, #63dcbc);
   box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%;

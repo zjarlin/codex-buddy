@@ -4,6 +4,8 @@
 
 ## DOM 观察与扫描
 
+生产 Renderer 扩展先通过 `@codexhost/desktop-control/renderer-bindings` 的 `installRendererWindowHostRouting` 安装原生 Host 路由，再绑定 Composer。此入口复用 Desktop Controller 的连接发现、响应归属和草稿策略；Controller 已安装路由时返回同一实例。独立网页 Renderer 可以加载同一扩展而无需另写 Harness 或模型路由循环。Composer 尚未挂载时不额外启动轮询，现有 Adapter 在相关 DOM 变化后重新取得原生连接。
+
 - Composer 绑定只响应输入区、会话标识、标题栏和导航栏的相关变化。初次安装同步绑定，后续扫描按动画帧合并；Host 路由事件显式刷新绑定目标。发送前的身份与路由校验仍然执行。
 - `renderer-dom-mutations.ts` 只检查变更节点、祖先和变更子树。普通消息文字和无关消息元素不触发 Composer、侧栏行、项目菜单或 Git 面板的全页扫描。
 - 侧栏图标、聊天操作和续接按钮只响应侧栏行变化。行清理使用集合查询；控件属性只在值改变时写入。

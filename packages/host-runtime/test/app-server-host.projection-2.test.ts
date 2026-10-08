@@ -1356,7 +1356,6 @@ describe("AppServerHost HarnessAdapter projection", () => {
       method: "turn/start",
       params: {
         threadId,
-        model: "gpt-5.6-luna",
         input: [{ type: "text", text: "existing Pi turn" }],
       },
     });

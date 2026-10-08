@@ -42,9 +42,11 @@ describe("Thread folder model", () => {
     expect(threadFolderProject(updated, "project")).toEqual({
       folders: [{ id: "done", name: "完成" }],
       assignments: {},
-      selected: null,
+      selected: UNASSIGNED_THREAD_FOLDER_ID,
     });
-    expect(selectedThreadFolder(threadFolderProject(updated, "project"))).toBeNull();
+    expect(selectedThreadFolder(threadFolderProject(updated, "project"))).toBe(
+      UNASSIGNED_THREAD_FOLDER_ID,
+    );
   });
 
   it("supports the unassigned filter and manual removal from a folder", () => {

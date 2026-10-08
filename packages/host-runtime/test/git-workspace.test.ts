@@ -261,6 +261,14 @@ describe("GitWorkspace", () => {
     ).toBe(false);
     expect(isMissingGitDirectory({ code: "ENOENT", syscall: "spawn git" })).toBe(false);
     expect(isMissingGitDirectory({ code: "ENOENT", syscall: "realpath" })).toBe(true);
+    expect(isMissingGitDirectory({ code: "ENOTDIR", syscall: "stat" })).toBe(true);
+    expect(isMissingGitDirectory({ code: "EACCES", syscall: "stat" })).toBe(false);
+    expect(isMissingGitDirectory({ code: "EINVAL", syscall: "stat" })).toBe(false);
+    expect(
+      isMissingGitDirectory(
+        new GitWorkspaceError("invalid", "", "fatal: cannot change to '/repo': Invalid argument"),
+      ),
+    ).toBe(false);
   });
 
   it("shows an untracked file diff", async () => {

@@ -143,7 +143,8 @@ export function isMissingGitDirectory(error: unknown): boolean {
   }
   const failure = error as NodeJS.ErrnoException | null;
   return (
-    failure?.syscall === "realpath" && (failure.code === "ENOENT" || failure.code === "ENOTDIR")
+    (failure?.syscall === "realpath" || failure?.syscall === "stat") &&
+    (failure.code === "ENOENT" || failure.code === "ENOTDIR")
   );
 }
 
@@ -505,11 +506,17 @@ export class GitWorkspace {
   }
 
   async root(cwd: string): Promise<string | null> {
+    const workspace = this.#absoluteWorkspace(cwd);
+    // 本机先确认目录类型，避免 Windows Git 将普通文件报告为含糊的 Invalid argument。
+    if (!this.runtime && !(await stat(workspace)).isDirectory()) {
+      throw Object.assign(new Error("当前 Git 路径不是目录。"), {
+        code: "ENOTDIR",
+        syscall: "stat",
+        path: workspace,
+      });
+    }
     try {
-      const result = await this.#run(this.#absoluteWorkspace(cwd), [
-        "rev-parse",
-        "--show-toplevel",
-      ]);
+      const result = await this.#run(workspace, ["rev-parse", "--show-toplevel"]);
       return (this.runtime?.realpath ?? realpath)(result.stdout.trim());
     } catch (error) {
       if (isMissingGitRepository(error)) {

@@ -613,7 +613,10 @@ describe("Buddy native routing", () => {
   });
 
   it("exposes multiple supported economic executors without inheriting the old single-model pin", async () => {
-    const f = await fixture({ modelIds: ["gpt-planner", "deepseek-flash", "other-mini"] });
+    const f = await fixture({
+      modelIds: ["gpt-planner", "deepseek-flash", "other-mini"],
+      classify: { role: "executor" },
+    });
     await mkdir(join(f.home, "model-router"));
     await writeFile(
       join(f.home, "model-router/policy.json"),
@@ -825,7 +828,7 @@ describe("Buddy native routing", () => {
     expect((await f.router.snapshot()).decisions[0]?.phase).toBe("executing");
   });
   it("does not request unavailable persisted history for an ephemeral thread", async () => {
-    const f = await fixture({ ephemeral: true });
+    const f = await fixture({ ephemeral: true, classify: { role: "executor" } });
     await f.router.route(f.turn("设计数据库迁移"));
     expect(f.requested.some((request) => request.method === "thread/items/list")).toBe(false);
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
@@ -862,6 +865,7 @@ describe("Buddy native routing", () => {
   });
   it("uses the thread provider for model discovery and ignores candidates below the input limit", async () => {
     const f = await fixture({
+      classify: { role: "executor" },
       modelRows: [
         { id: "gpt-planner", contextWindow: 32_000 },
         { id: "tiny-flash", contextWindow: 13_000 },

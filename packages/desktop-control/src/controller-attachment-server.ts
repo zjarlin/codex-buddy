@@ -10,6 +10,7 @@ export interface StartControllerAttachmentServerOptions {
   port: number;
   nonce: string;
   attach(): Promise<void>;
+  webRuntime?: { rendererCdpEndpoint: string; rendererPath: string };
 }
 
 function validPort(value: number): boolean {
@@ -62,6 +63,11 @@ export async function startControllerAttachmentServer(
       if (newline < 0) return;
       handled = true;
       const line = request.slice(0, newline).replace(/\r$/, "");
+      // 网页伴随服务只读取当前 Renderer 的本机入口，不触发窗口激活或恢复。
+      if (line === `WEB ${options.nonce}` && options.webRuntime) {
+        socket.end(`${JSON.stringify({ schemaVersion: 1, ...options.webRuntime })}\n`);
+        return;
+      }
       if (line === `ATTACH ${options.nonce}`) {
         if (attachment) {
           respond(socket, "busy");

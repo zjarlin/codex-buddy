@@ -107,11 +107,12 @@ describe("provider catalog refresh", () => {
     },
   );
 
-  it("asks for a restart when upstream returns an empty list", async () => {
+  it("reports an empty upstream list without rejecting custom model availability", async () => {
     const { options } = catalogFixture(undefined, []);
-    await expect(refreshNativeModelCatalog(options)).rejects.toThrow(
-      "供应商返回 0 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。",
-    );
+    await expect(refreshNativeModelCatalog(options)).resolves.toEqual({
+      returned: 0,
+      synchronized: 0,
+    });
   });
 
   it("reports the overlap without waiting for React when lists partially match", async () => {
@@ -122,11 +123,12 @@ describe("provider catalog refresh", () => {
     expect(props.onSelectModel).not.toHaveBeenCalled();
   });
 
-  it("asks for a restart when the native catalog shares no model with upstream", async () => {
+  it("reports zero overlap without rejecting custom model availability", async () => {
     const { options } = catalogFixture(["kept"], ["added", "other"]);
-    await expect(refreshNativeModelCatalog(options)).rejects.toThrow(
-      "供应商返回 2 个模型，但客户端目录尚未包含任何匹配项；如需运行时切换，请重启客户端以加载最新 catalog.json。",
-    );
+    await expect(refreshNativeModelCatalog(options)).resolves.toEqual({
+      returned: 2,
+      synchronized: 0,
+    });
   });
 
   it("keeps the prior list and does not refetch when provider synchronization fails", async () => {

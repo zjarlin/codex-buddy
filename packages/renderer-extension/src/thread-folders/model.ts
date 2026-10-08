@@ -43,7 +43,9 @@ export function withThreadFolders(
   const ids = new Set(folders.map((folder) => folder.id));
   const selected =
     current.selected === null
-      ? (folders.length > 0 ? UNASSIGNED_THREAD_FOLDER_ID : null)
+      ? folders.length > 0
+        ? UNASSIGNED_THREAD_FOLDER_ID
+        : null
       : current.selected === UNASSIGNED_THREAD_FOLDER_ID
         ? current.selected
         : ids.has(current.selected)

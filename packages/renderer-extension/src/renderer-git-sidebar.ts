@@ -117,7 +117,10 @@ const OFFICIAL_PANEL_LABELS = {
     /^(?:显示\/隐藏文件树|切换文件树显示|文件树)$/u,
     /^(?:show or hide file tree|toggle file tree)$/iu,
   ],
-  terminal: [/^切换底部面板显示$/u, /^show or hide bottom panel$/iu, /^toggle bottom panel$/iu],
+  terminal: [
+    /^(?:显示\/隐藏底部面板|切换底部面板显示)$/u,
+    /^(?:show or hide bottom panel|toggle bottom panel)$/iu,
+  ],
 } as const;
 
 type OfficialPanel = keyof typeof OFFICIAL_PANEL_LABELS;
@@ -791,10 +794,8 @@ export function installRendererGitSidebar(options: {
       const pressed = String(target?.getAttribute("aria-pressed") === "true");
       if (button.getAttribute("aria-pressed") !== pressed)
         button.setAttribute("aria-pressed", pressed);
-      const title =
-        target || panel === "files"
-          ? (button.getAttribute("aria-label") ?? "")
-          : `${button.getAttribute("aria-label") ?? ""}（不可用）`;
+      // files 与 terminal 都在未找到官方按钮时回退到官方命令，不再标记为不可用。
+      const title = button.getAttribute("aria-label") ?? "";
       if (button.title !== title) button.title = title;
     }
   };
@@ -1769,7 +1770,10 @@ export function installRendererGitSidebar(options: {
   terminal.addEventListener(
     "click",
     () => {
-      officialPanelButton(document, "terminal")?.click();
+      // 官方底部面板切换按钮仅在可用时渲染；缺失时走官方命令，避免点击无响应。
+      const target = officialPanelButton(document, "terminal");
+      if (target) target.click();
+      else runNativeWorkspaceCommand(document, "toggleBottomPanel");
       syncOfficialPanelState();
     },
     listenerOptions,

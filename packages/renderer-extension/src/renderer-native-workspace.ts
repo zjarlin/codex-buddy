@@ -50,7 +50,7 @@ function record(value: unknown): Record<string, unknown> | null {
 // 使用官方命令入口，保持原生面板、Provider 和文件读取链路的所有权。
 export function runNativeWorkspaceCommand(
   document: Document,
-  id: "openReviewTab" | "toggleFileTreePanel",
+  id: "openReviewTab" | "toggleFileTreePanel" | "toggleBottomPanel",
 ): void {
   const ownerWindow = document.defaultView;
   if (!ownerWindow) {

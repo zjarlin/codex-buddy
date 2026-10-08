@@ -76,7 +76,7 @@ const { outputFiles } = await build({
           document.body.append(button);
         };
         addOfficialButton("切换文件树显示", "files");
-        addOfficialButton("切换底部面板显示", "terminal");
+        addOfficialButton("显示/隐藏底部面板", "terminal");
         const client = {
           inspectGitStatus: async (input) => { calls.push(["status", input]); return structuredClone(input.repository ? submoduleStatus : status); },
           inspectGitDiff: async (input) => { calls.push(["diff", input]); return { path:input.path, diff:input.repository ? "+child changed" : input.path === "vendor/lib" ? "-Subproject commit abc123\\n+Subproject commit abc123-dirty" : "+changed", truncated:false }; },
@@ -341,7 +341,7 @@ async function setup(page: Page): Promise<void> {
   await page.evaluate(() => Reflect.get(globalThis, "setupGitSidebar")());
 }
 
-test("tracks native terminal replacement and label changes without relying on message updates", async ({
+test("tracks the native bottom-panel toggle across replacement and label changes", async ({
   page,
 }) => {
   await page.route("http://localhost/git-sidebar-test", (route) =>
@@ -351,9 +351,10 @@ test("tracks native terminal replacement and label changes without relying on me
   const terminal = page.locator("[data-codexhost-git-sidebar-terminal]");
   await expect(terminal).toHaveAttribute("title", "终端");
   await page
-    .locator('body > button[aria-label="切换底部面板显示"]')
+    .locator('body > button[aria-label="显示/隐藏底部面板"]')
     .evaluate((button) => button.remove());
-  await expect(terminal).toHaveAttribute("title", "终端（不可用）");
+  // 未找到官方按钮时回退到官方命令，因此不再标记为不可用。
+  await expect(terminal).toHaveAttribute("title", "终端");
   await page.evaluate(() => {
     const replacement = document.createElement("button");
     replacement.id = "replacement-terminal";
@@ -366,11 +367,10 @@ test("tracks native terminal replacement and label changes without relying on me
   await page
     .locator("#replacement-terminal")
     .evaluate((button) => button.setAttribute("aria-label", "Copy output"));
-  await expect(terminal).toHaveAttribute("title", "终端（不可用）");
   await expect(terminal).toHaveAttribute("aria-pressed", "false");
   await page
     .locator("#replacement-terminal")
-    .evaluate((button) => button.setAttribute("aria-label", "切换底部面板显示"));
+    .evaluate((button) => button.setAttribute("aria-label", "显示/隐藏底部面板"));
   await expect(terminal).toHaveAttribute("title", "终端");
   await expect(terminal).toHaveAttribute("aria-pressed", "true");
 });
@@ -547,6 +547,23 @@ test("reports unsupported native review and never sends data to a different host
     await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").nativeReviewCalls),
   ).toEqual([]);
   await expect(page.locator("[data-codexhost-git-content]")).toHaveCount(0);
+});
+
+test("uses the official bottom-panel command when its toolbar button is absent", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() =>
+    document.querySelector('button[aria-label="显示/隐藏底部面板"]')?.remove(),
+  );
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.getByRole("button", { name: "终端", exact: true }).click();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").officialCalls),
+  ).toEqual(["toggleBottomPanel"]);
 });
 
 test("uses the official file-tree command when its toolbar button is absent", async ({ page }) => {

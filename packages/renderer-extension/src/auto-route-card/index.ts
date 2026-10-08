@@ -458,8 +458,8 @@ export function installAutoRouteCards(options: {
           const records = turnResponse.routes.filter(
             (route) => route.session_id === requestContext.threadId && route.turn_id === turnId,
           );
-          const active = records.some(
-            (route) => ["selected", "responding", "queued", "running"].includes(route.state),
+          const active = records.some((route) =>
+            ["selected", "responding", "queued", "running"].includes(route.state),
           );
           turnRecords.set(turnId, {
             routes: records,

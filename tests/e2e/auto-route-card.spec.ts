@@ -182,7 +182,10 @@ test("video submission stays queued until the provider confirms completion", asy
 test("image card renders its real artifact without overflowing on mobile", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 740 });
   const artifact = await readFile(
-    path.resolve(import.meta.dirname, "../../packages/renderer-extension/src/assets/codexhost-logo.png"),
+    path.resolve(
+      import.meta.dirname,
+      "../../packages/renderer-extension/src/assets/codexhost-logo.png",
+    ),
   );
   await page.route("https://fixture.invalid/result.png", (route) =>
     route.fulfill({

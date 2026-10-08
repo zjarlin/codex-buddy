@@ -165,6 +165,10 @@ describe("production Desktop Controller", () => {
     expect(startAttachmentServer).toHaveBeenCalledWith({
       port: 43124,
       nonce: attachmentNonce,
+      webRuntime: {
+        rendererCdpEndpoint: controllerOptions().rendererCdpEndpoint,
+        rendererPath: controllerOptions().rendererPath,
+      },
       attach: expect.any(Function),
     });
     expect(ready).toHaveBeenCalledWith({

@@ -5,6 +5,7 @@ import {
   installRendererDraftPrewarmPolicyDirect,
 } from "../src/renderer-draft-prewarm-policy.js";
 import type { RendererHostRouting as Routing } from "../src/renderer-host-routing.js";
+import { installRendererWindowHostRouting } from "../src/renderer-bindings.js";
 
 function setup(initialHostId: string) {
   const manager = (hostId: string) => ({
@@ -58,6 +59,25 @@ function setup(initialHostId: string) {
   };
   return { renderer, target, local, remote, managers, manager, fiber, editors };
 }
+
+it("starts a browser Renderer before its editor mounts and shares one routing instance", () => {
+  const fixture = setup("remote-ssh-discovered:linux");
+  const editor = fixture.editors.pop();
+  if (!editor) throw new Error("浏览器测试缺少编辑器初始状态");
+  const root = { querySelectorAll: () => fixture.editors };
+  const routing = installRendererWindowHostRouting(root, fixture.target);
+  try {
+    expect(routing.forComposer()).toBeNull();
+    expect(installRendererWindowHostRouting(root, fixture.target)).toBe(routing);
+    fixture.editors.push(editor);
+    expect(routing.forComposer()?.manager).toBe(fixture.remote);
+    fixture.fiber.memoizedProps.executionTargetHostId = "local";
+    expect(routing.forComposer()?.manager).toBe(fixture.local);
+    expect(routing.forHost(fixture.remote.getHostId())?.manager).toBe(fixture.remote);
+  } finally {
+    routing.dispose();
+  }
+});
 
 it.each(["local", "remote-ssh-discovered:linux"])(
   "keeps both Hosts addressable and switches immediately from %s without a Controller poll",

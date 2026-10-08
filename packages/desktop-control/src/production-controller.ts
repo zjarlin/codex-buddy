@@ -336,6 +336,10 @@ export async function runDesktopController(
     attachmentServer = await dependencies.startAttachmentServer({
       port: options.attachmentPort,
       nonce: options.attachmentNonce,
+      webRuntime: {
+        rendererCdpEndpoint: options.rendererCdpEndpoint,
+        rendererPath: options.rendererPath,
+      },
       attach: () =>
         useSession(async () => {
           const current = await recoverSession();

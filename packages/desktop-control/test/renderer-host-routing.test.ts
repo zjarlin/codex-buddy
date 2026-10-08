@@ -40,7 +40,7 @@ function setup(initialHostId: string) {
     memoizedState: { memoizedState: registry, next: { memoizedState: local, next: null } },
     return: null,
   };
-  const editor = { __reactFiber$host: fiber, parentElement: null };
+  const editor = { __reactFiber$host: fiber, parentElement: null, querySelectorAll: () => [] };
   const editors = [editor];
   const target: Record<string, unknown> = {};
   const renderer = {

@@ -37,6 +37,7 @@ interface NativeReviewTab {
 export interface NativeGitReviewRequest {
   threadId: string;
   hostId: string;
+  cwd?: string;
   repository?: string;
   path: string;
   staged: boolean;
@@ -194,7 +195,7 @@ export async function openNativeGitReview(
     params: {
       conversationId: request.threadId,
       hostId: request.hostId,
-      cwd: target.tab.durableRoute.params.cwd,
+      cwd: request.cwd ?? target.tab.durableRoute.params.cwd,
       repositoryRoot: request.repository ?? null,
       diffFilter,
     },
@@ -217,6 +218,7 @@ export async function openNativeGitReview(
       const next = nativeReviewTarget(document, request);
       const params = next?.tab.durableRoute.params;
       return params?.diffFilter === diffFilter &&
+        params.cwd === descriptor.params.cwd &&
         (params.repositoryRoot ?? null) === (request.repository ?? null)
         ? next
         : null;

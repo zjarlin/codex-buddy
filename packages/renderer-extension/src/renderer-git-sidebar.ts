@@ -64,6 +64,7 @@ export interface RendererGitClient extends Partial<GitRepositoryClient> {
 export interface RendererGitContext {
   hostId: string | null;
   cwd?: string | undefined;
+  projectCwd?: string | undefined;
   repository?: string | undefined;
   threadId: HostThreadId | null;
   client: RendererGitClient | null;
@@ -1047,7 +1048,8 @@ export function installRendererGitSidebar(options: {
     remoteProjectsView.deactivate();
     head.hidden = false;
     branch.hidden = false;
-    const workspacePath = current?.workspace ?? selectedRepository ?? context().cwd ?? "";
+    const workspacePath =
+      current?.workspace ?? selectedRepository ?? context().projectCwd ?? context().cwd ?? "";
     projectName.textContent = workspacePath
       ? (workspacePath.split(/[/\\]/u).filter(Boolean).at(-1) ?? workspacePath)
       : hasGitTarget(context())
@@ -1283,6 +1285,7 @@ export function installRendererGitSidebar(options: {
         {
           threadId: request.threadId,
           hostId: request.hostId,
+          ...(request.projectCwd ? { cwd: request.projectCwd } : {}),
           ...(repository ? { repository } : {}),
           path: pathValue,
           staged: changeTab === "staged",

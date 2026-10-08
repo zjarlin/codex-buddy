@@ -8,6 +8,7 @@ const { outputFiles } = await build({
       import { installRendererGitSidebar } from "./packages/renderer-extension/src/renderer-git-sidebar.ts";
       import { RendererMethodUnavailableError } from "./packages/renderer-extension/src/renderer-request-sender.ts";
       import { createRendererHostClients } from "./packages/renderer-extension/src/renderer-host-clients.ts";
+      import { nativeGitProjectWorkspace } from "./packages/renderer-extension/src/renderer-git-project-context.ts";
       import { hostThreadIdSchema } from "./packages/shared-contracts/src/index.ts";
 
       globalThis.RendererMethodUnavailableError = RendererMethodUnavailableError;
@@ -288,7 +289,12 @@ const { outputFiles } = await build({
           }
         });
         const control = installRendererGitSidebar({
-          getContext: () => activeContext,
+          getContext: () => ({
+            ...activeContext,
+            projectCwd: activeContext.threadId && activeContext.hostId
+              ? nativeGitProjectWorkspace(document, activeContext.hostId, activeContext.threadId)
+              : undefined,
+          }),
           getProjectSyncClient: () => projectSyncClient,
         });
         globalThis.gitSidebarFixture = {
@@ -1528,6 +1534,135 @@ test("switching draft projects ignores stale status and preserves the name on re
   await page.getByRole("button", { name: "Clear project", exact: true }).click();
   await expect(project).toHaveText("未选择项目");
 });
+
+for (const nativeSsh of [false, true]) {
+  test(`uses the current remote project when an existing chat retains its old cwd (${nativeSsh ? "SSH fallback" : "Host RPC"})`, async ({
+    page,
+  }, testInfo) => {
+    await page.route("http://localhost/git-sidebar-test", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><html><body></body></html>",
+      }),
+    );
+    await setup(page);
+    await page.evaluate(
+      ({ nativeSsh }) => {
+        const f = Reflect.get(globalThis, "gitSidebarFixture");
+        const hostId = "remote-ssh-discovered:okm252";
+        const cwd = "/opt/cloud-dev/zjarlin/aio/workspace/公司的项目/iot-platform";
+        const previous = "/opt/cloud-dev/zjarlin/aio/workspace/公司的项目/iot-app";
+        const project = document.createElement("div");
+        project.setAttribute("role", "listitem");
+        project.setAttribute("data-sidebar-project-kind", "remote");
+        project.setAttribute("data-sidebar-project-container-id", "project:iot");
+        project.textContent = "remote_iot-platform";
+        Reflect.set(project, "__reactFiber$fixture", {
+          memoizedProps: {
+            group: {
+              projectId: "iot",
+              projectKind: "remote",
+              hostId,
+              label: "remote_iot-platform",
+              path: cwd,
+              threadKeys: ["local:old-chat"],
+            },
+          },
+        });
+        document.getElementById("native-projects")?.append(project);
+        f.status.workspace = cwd;
+        f.status.submodules = [];
+        f.status.changes = [f.status.changes[0]];
+        f.nativeTab.durableRoute.params.cwd = previous;
+        f.transportCalls = [];
+        const runGit = async (method: string, params: Record<string, unknown>) => {
+          if (params.cwd !== cwd || "threadId" in params)
+            throw new Error(`cannot change to '${previous}': No such file or directory`);
+          switch (method) {
+            case "codexhost/git/status":
+              return structuredClone(f.status);
+            case "codexhost/git/repositories":
+              return { project: cwd, repositories: [{ path: cwd, primary: true }] };
+            case "codexhost/git/message-models":
+              return f.client.listGitMessageModels();
+            case "codexhost/git/stage":
+              return f.client.stageGitPaths(params);
+            case "codexhost/git/commit":
+              f.status.ahead = 0;
+              return f.client.commitGit(params);
+            default:
+              throw new Error(`Unexpected method ${method}`);
+          }
+        };
+        const routes = new Map([
+          [
+            hostId,
+            {
+              hostId,
+              manager: {
+                async sendRequest(method: string, params: Record<string, unknown>) {
+                  f.transportCalls.push(["remote", method, params]);
+                  if (method === "thread/read") return { thread: { cwd: previous } };
+                  if (nativeSsh) throw { code: -32601 };
+                  return runGit(method, params);
+                },
+              },
+            },
+          ],
+          [
+            "local",
+            {
+              hostId: "local",
+              manager: {
+                async sendRequest(method: string, params: Record<string, unknown>) {
+                  f.transportCalls.push(["local", method, params]);
+                  if (method !== "codexhost/ssh/git" || params.hostId !== hostId)
+                    throw new Error("Wrong Host");
+                  return runGit(String(params.method), params.params as Record<string, unknown>);
+                },
+              },
+            },
+          ],
+        ]);
+        const clients = Reflect.get(
+          globalThis,
+          "createRendererHostClients",
+        )(() => ({ forHost: (id: string) => routes.get(id) ?? null }));
+        f.setContext("old-chat", clients.forHost(hostId), hostId);
+      },
+      { nativeSsh },
+    );
+    const root = page.locator("[data-codexhost-git-sidebar]");
+    await root.locator("[data-codexhost-git-sidebar-commits]").click();
+    await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText("iot-platform");
+    await expect(root.getByRole("button", { name: "关联仓库", exact: true })).toBeEnabled();
+    await expect(root.locator("[data-codexhost-git-sidebar-push]")).toBeEnabled();
+    await root.screenshot({ path: testInfo.outputPath("moved-project-ready.png") });
+    await root.getByRole("button", { name: "审查", exact: true }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            Reflect.get(globalThis, "gitSidebarFixture").nativeReviewCalls[0]?.descriptor.params,
+        ),
+      )
+      .toMatchObject({
+        conversationId: "old-chat",
+        hostId: "remote-ssh-discovered:okm252",
+        cwd: "/opt/cloud-dev/zjarlin/aio/workspace/公司的项目/iot-platform",
+        diffFilter: "uncommitted",
+      });
+    await root.locator("[data-codexhost-git-sidebar-stage-all]").click();
+    await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: moved project");
+    await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
+    await expect(root.getByText(/推送成功，已与上游同步/)).toBeVisible();
+    const calls = await page.evaluate(
+      () => Reflect.get(globalThis, "gitSidebarFixture").transportCalls,
+    );
+    expect(calls.some(([, method]: string[]) => method === "thread/read")).toBe(false);
+    await root.screenshot({ path: testInfo.outputPath("moved-project-pushed.png") });
+  });
+}
 
 for (const { hasThread, width, dark } of [
   { hasThread: false, width: 180, dark: false },

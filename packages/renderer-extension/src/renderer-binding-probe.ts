@@ -1,6 +1,7 @@
 import { installTurnActionCards } from "./turn-action-card/index.js";
 import { createSessionRouting } from "./renderer-session-routing.js";
 import { sessionDraftText } from "./renderer-session-targets.js";
+import { nativeGitProjectWorkspace } from "./renderer-git-project-context.js";
 import { installAutoRouteCards } from "./auto-route-card/index.js";
 import { installTranslateCards } from "./translate-card/index.js";
 import { installRendererGitWorkflowControl } from "./renderer-git-workflow-control.js";
@@ -903,9 +904,11 @@ export function installRendererBindingProbe(
       const threadId = threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer));
       const hostId = activeModelHostId() ?? mounted.hostId;
       const cwd = !threadId && hostId ? draftWorkspaces.get(hostId) : undefined;
+      const projectCwd =
+        threadId && hostId ? nativeGitProjectWorkspace(document, hostId, threadId) : undefined;
       if (!threadId && !cwd) continue;
       const client = hostId ? modelClientForHost(hostId) : null;
-      return { anchor: mounted.composer, threadId, cwd, hostId, client };
+      return { anchor: mounted.composer, threadId, cwd, projectCwd, hostId, client };
     }
     return null;
   };
@@ -936,6 +939,7 @@ export function installRendererBindingProbe(
         ? {
             threadId: current.threadId,
             cwd: current.cwd,
+            projectCwd: current.projectCwd,
             hostId: current.hostId,
             client: current.client?.inspectGitStatus ? (current.client as RendererGitClient) : null,
           }

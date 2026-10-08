@@ -135,3 +135,24 @@ test("coalesces history and invalidates it after writes", async () => {
   await cache.history(client, { threadId });
   expect(read).toHaveBeenCalledTimes(3);
 });
+
+test("isolates moved project paths and chat identities while sending only cwd", async () => {
+  const cache = new RendererGitCache();
+  const read = vi.fn(async ({ cwd }: GitWorkspaceParams) => ({
+    ...status,
+    workspace: cwd ?? "/old",
+  }));
+  const client = clientWith(read);
+  const original = { threadId, projectCwd: "/iot-app" };
+  const moved = { threadId, projectCwd: "/iot-platform" };
+  await cache.status(client, original);
+  expect(cache.peekStatus(client, moved)).toBeNull();
+  await cache.status(client, moved);
+  expect(
+    cache.peekStatus(client, { ...moved, threadId: hostThreadIdSchema.parse("another") }),
+  ).toBeNull();
+  expect(read.mock.calls.map(([input]) => input)).toEqual([
+    { cwd: "/iot-app" },
+    { cwd: "/iot-platform" },
+  ]);
+});

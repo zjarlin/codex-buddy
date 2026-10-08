@@ -72,11 +72,13 @@
 
 Git RPC 接受互斥的 `threadId` 或 `cwd`：前者由 Host 解析，后者必须是接收请求的 Host 上的绝对路径。关联仓库和子模块继续按主项目校验；禁止同时指定两种目标，避免目录覆盖已有聊天的归属。
 
+远程项目移动或重命名后，旧聊天的创建目录可能仍指向已删除的路径。Renderer 从原生侧栏已提交的项目绑定核对 Host 与聊天成员，向 Git RPC 传入该项目的当前 `cwd`；状态、模型、历史、暂存、提交及推送沿用同一目标。缓存和过期请求校验同时包含聊天身份与项目路径，目录变化即切换目标。绑定缺失或冲突时仍由 Host 解析原会话目录，不根据项目名称猜测路径；本地聊天与 worktree 的目录语义保持原样。官方审查保留原 Host／聊天 Scope，同时携带已核对的新目录并校验恢复结果。此过程不修改聊天历史中的 cwd。
+
 ### 原生 SSH 的 Git 通道
 
 参考 [VS Code Remote Development](https://code.visualstudio.com/docs/remote/remote-overview) 将工具放在工作区所在机器执行的原则，以及其 [Git 扩展在仓库 cwd 启动 Git 进程](https://github.com/microsoft/vscode/blob/main/extensions/git/src/git.ts) 的实现。codexhost 优先使用远端 Git RPC；只有明确返回“不支持该方法”时，`renderer-ssh-git.ts` 才转交本机 `codexhost/ssh/git`。网络失败、超时、提交或推送失败不会触发另一路重试，避免重复写操作。
 
-已有会话先通过同一远端连接的 `thread/read` 解析 cwd，再转交 Host ID 和远端绝对目录；草稿直接使用当前 Host 的项目目录。本机 Host 不解析远端 Thread ID，也不访问本机同名目录。连接替换或失效会取消尚未转交的请求。
+已有会话在 Renderer 已核对原生远程项目绑定时直接使用该项目当前目录；其余会话通过同一远端连接的 `thread/read` 解析 cwd，再转交 Host ID 和远端绝对目录。草稿直接使用当前 Host 的项目目录。本机 Host 不解析远端 Thread ID，也不访问本机同名目录。连接替换或失效会取消尚未转交的请求。
 
 `ssh-git.ts` 从 Desktop 保存的连接读取 SSH 别名、主机、端口和密钥配置，通过系统 SSH 在远端调用 Git，复用 `GitWorkspace` 的状态、暂存、提交、推送、同步和子模块语义。协议仅允许指定 Git 方法，不接受任意命令或 SSH 选项；路径、文件正文和 Git 元数据读取也使用远端执行器。SSH 使用非交互模式与超时；Git 认证及签名使用远端环境，失败正常报告。基础 Git 操作无需远端安装 codexhost，远端须提供 Git 和 POSIX shell。
 

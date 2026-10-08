@@ -8,6 +8,7 @@ import type { RendererSettingsLocale } from "./settings/localization.js";
 interface Context {
   anchor: Element;
   threadId: HostThreadId;
+  projectCwd?: string | undefined;
   hostId: string | null;
   client: RendererGitClient;
 }
@@ -67,6 +68,7 @@ export function installRendererGitBranchControl(options: {
 
   const sameContext = (next: Context | null): boolean =>
     context?.threadId === next?.threadId &&
+    context?.projectCwd === next?.projectCwd &&
     context?.hostId === next?.hostId &&
     context?.client === next?.client;
 

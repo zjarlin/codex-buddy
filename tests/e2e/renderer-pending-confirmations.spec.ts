@@ -60,7 +60,15 @@ const { outputFiles } = await build({
           callbacks.push(callback);
           return () => {};
         }};
+        const announced = [];
+        const replayed = [];
+        const speech = {
+          announce: (entry) => announced.push([entry.threadId, entry.summary]),
+          replay: (entry) => replayed.push([entry.threadId, entry.summary]),
+        };
+        globalThis.speech = { announced, replayed };
         const control = installRendererPendingConfirmations({
+          speech,
           getClient: () => client,
           getManager: () => manager,
           getHostIds: () => ["local"],
@@ -225,6 +233,28 @@ test("a newer Turn replaces the old pending item and repeated completion stays i
   );
   expect(state).toHaveLength(1);
   expect(state[0]).toMatchObject({ turnId: "turn-2", summary: "新结果", state: "pending" });
+});
+
+test("completion announces once and the modal offers a manual replay", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "播报结果。"),
+  );
+  // Automatic announcement fires on the same completion notification as the modal.
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "speech").announced))
+    .toEqual([["thread-b", "播报结果。"]]);
+
+  const replay = page.getByRole("button", { name: "重播语音" });
+  await expect(replay).toBeVisible();
+  await replay.click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "speech").replayed))
+    .toEqual([["thread-b", "播报结果。"]]);
 });
 
 test("composer input sends a follow-up into the pending conversation", async ({ page }) => {

@@ -77,6 +77,8 @@ export interface RendererSettingsMessages {
   readonly threadAutoArchiveInvalid: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
+  readonly speechAnnouncementTitle: string;
+  readonly speechAnnouncementDescription: string;
   readonly terminalSection: string;
   readonly terminalTitle: string;
   readonly terminalDescription: string;
@@ -385,6 +387,9 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   threadAutoArchiveInvalid: "Enter a whole number from 1 to 3650.",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
+  speechAnnouncementTitle: "Speak the result when a conversation finishes",
+  speechAnnouncementDescription:
+    "Play a short voice summary through the gateway Manbo voice. Only when the app is in front and the conversation is not the one you are viewing.",
   terminalSection: "Terminal",
   terminalTitle: "Default terminal",
   terminalDescription: "Opens official Codex threads with codex resume in this terminal.",
@@ -729,6 +734,9 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   threadAutoArchiveInvalid: "请输入 1～3650 之间的整数。",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
+  speechAnnouncementTitle: "会话完成语音播报",
+  speechAnnouncementDescription:
+    "会话结束时用网关曼波配音朗读结果摘要。仅在应用处于前台、且完成的是非当前会话时播放。",
   terminalSection: "终端",
   terminalTitle: "默认终端",
   terminalDescription: "使用 codex resume 在该终端中续接官方 Codex 会话。",

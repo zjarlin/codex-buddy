@@ -207,10 +207,14 @@ import {
   type ThreadArchiveCompletedResult,
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_SPEECH_METHOD,
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
+  buddySpeechRequestSchema,
+  buddySpeechResultSchema,
+  type BuddySpeechResult,
   type BuddyPrivateRequest,
   type BuddyPrivateSnapshot,
   BUDDY_MODELS_METHOD,
@@ -522,6 +526,9 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     text: string;
     targetLocale: string;
   }): Promise<{ translated: string; model: string; latencyMs: number }>;
+  /** 让 Host 用当前网关的曼波配音合成该文本，返回可直接播放的 base64 音频。
+   * 只在整个回合结束时按用户开关触发，不进入原生历史或工具链。 */
+  synthesizeSpeech?(input: { text: string; locale?: string }): Promise<BuddySpeechResult>;
   buddyStatus?(): Promise<BuddySnapshot>;
   buddyModels?(): Promise<BuddySnapshot>;
   modelAvailability?(input: ModelAvailabilityParams): Promise<ModelAvailabilitySnapshot>;
@@ -1194,6 +1201,15 @@ export function createRendererModelClient(
       }
       return buddyTranslateResultSchema.parse(
         await manager.sendRequest(BUDDY_TRANSLATE_METHOD, params.data),
+      );
+    },
+    synthesizeSpeech: async (input: { text: string; locale?: string }) => {
+      const params = buddySpeechRequestSchema.safeParse(input);
+      if (!params.success) {
+        throw new Error("Invalid speech request");
+      }
+      return buddySpeechResultSchema.parse(
+        await manager.sendRequest(BUDDY_SPEECH_METHOD, params.data),
       );
     },
     buddyStatus: async () =>

@@ -8,6 +8,8 @@ import { installRendererGitWorkflowControl } from "./renderer-git-workflow-contr
 import { installSidebarContinuation } from "./buddy/continuation.js";
 import { installRendererSidebarUnread } from "./renderer-sidebar-unread.js";
 import { PendingConfirmationsModel } from "./pending-confirmations-state.js";
+import { createRendererSpeechAnnouncer } from "./renderer-speech.js";
+import { readRendererSpeechEnabled } from "./renderer-speech-preference.js";
 import { installRendererPendingConfirmations } from "./renderer-pending-confirmations.js";
 import { installRendererSidebarVisits } from "./renderer-sidebar-visits.js";
 import { installBuddyControl } from "./buddy/control.js";
@@ -848,6 +850,17 @@ export function installRendererBindingProbe(
   const sidebarVisits = installRendererSidebarVisits({
     getLocale: rendererLocale,
   });
+  // 会话完成播报默认开启，用户可在“外观”里关闭；播报复用完成弹窗的触发点。
+  const speechAnnouncer = createRendererSpeechAnnouncer(
+    {
+      getLocale: rendererLocale,
+      getClient: (hostId) => {
+        const client = modelClientForHost(hostId);
+        return client?.synthesizeSpeech ? client : null;
+      },
+    },
+    () => readRendererSpeechEnabled(window),
+  );
   const pendingConfirmationPanel = installRendererPendingConfirmations({
     getClient: (hostId) => modelClientForHost(hostId),
     getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
@@ -866,6 +879,10 @@ export function installRendererBindingProbe(
     activeThread: viewedThread,
     getLocale: rendererLocale,
     model: pendingConfirmations,
+    speech: {
+      announce: (entry) => speechAnnouncer.announce(entry),
+      replay: (entry) => speechAnnouncer.replay(entry),
+    },
   });
   const titlebarProjectName = installRendererTitlebarProjectName({ getActiveThread: viewedThread });
   const sidebarThreadAlign = installRendererSidebarThreadAlign({ getActiveThread: viewedThread });
@@ -3675,6 +3692,7 @@ export function installRendererBindingProbe(
       sidebarContinuation.dispose();
       sidebarUnread.dispose();
       pendingConfirmationPanel.dispose();
+      speechAnnouncer.dispose();
       sidebarVisits.dispose();
       sidebarStatusFilter.dispose();
       threadActions.dispose();

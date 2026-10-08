@@ -56,11 +56,13 @@ import {
 } from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
 import { BuddyTranslator } from "./buddy/translator.js";
+import { BuddySpeech } from "./buddy/speech.js";
 import {
   AUTO_MODEL_ROUTES_METHOD,
   SSH_AUTO_MODEL_ROUTES_METHOD,
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_SPEECH_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
 } from "@codexhost/shared-contracts";
@@ -712,6 +714,7 @@ export class AppServerHost {
   );
   #privateChat: BuddyPrivateChat | undefined;
   #translator: BuddyTranslator | undefined;
+  #speech: BuddySpeech | undefined;
   readonly #options: Required<
     Pick<AppServerHostOptions, "desktopInput" | "desktopOutput" | "diagnosticOutput">
   > &
@@ -922,6 +925,7 @@ export class AppServerHost {
     if (options.buddyRouting) {
       this.#privateChat = new BuddyPrivateChat(environment);
       this.#translator = new BuddyTranslator(environment);
+      this.#speech = new BuddySpeech(environment);
       this.#buddy = new BuddyRouter({
         environment,
         activeWorkChanged: () => this.#signalActiveWorkChanged(),
@@ -1518,6 +1522,22 @@ export class AppServerHost {
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32092, errorMessage(error)));
+      }
+      return;
+    }
+    if (request.method === BUDDY_SPEECH_METHOD) {
+      try {
+        if (!this.#speech) {
+          throw new Error("当前 Host 不支持语音播报；未配置 Buddy。");
+        }
+        // 播报会把回合摘要送到网关，隐私模式下必须保持静默。
+        if (await this.#buddy?.privateMode()) {
+          throw new Error("隐私模式已阻止语音播报。");
+        }
+        const result = await this.#speech.synthesize(request.params);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32093, errorMessage(error)));
       }
       return;
     }

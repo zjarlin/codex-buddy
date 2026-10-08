@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { homePath, readConnection } from "@codexhost/buddy-engine";
 import {
   buddyTranslateRequestSchema,
@@ -8,6 +6,7 @@ import {
   type BuddyTranslateRequest,
   type BuddyTranslateResult,
 } from "@codexhost/shared-contracts";
+import { gatewayJsonRequest } from "./gateway-request.js";
 
 // locale -> ISO 639-1（与 Sub2API langmap.go 对齐）
 const LOCALE_TO_ISO: Record<string, string> = {
@@ -42,57 +41,21 @@ function detectSourceLang(text: string): string {
   return "en";
 }
 
-async function gatewayPost(
-  url: URL,
-  headers: Headers,
-  body: unknown,
-  signal: AbortSignal,
-): Promise<unknown> {
-  const payload = JSON.stringify(body);
-  const send = url.protocol === "https:" ? httpsRequest : httpRequest;
-  return new Promise((resolve, reject) => {
-    const req = send(
-      url,
-      {
-        method: "POST",
-        agent: false,
-        signal,
-        headers: {
-          ...Object.fromEntries(headers),
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
-        },
-      },
-      (res) => {
-        if (res.statusCode !== 200) {
-          res.resume();
-          reject(new Error(`HTTP ${res.statusCode}`));
-          return;
-        }
-        const chunks: Buffer[] = [];
-        let len = 0;
-        res.on("data", (c: Buffer) => {
-          len += c.length;
-          if (len > 1_048_576) {
-            res.destroy();
-            reject(new Error("Too large"));
-          }
-          chunks.push(c);
-        });
-        res.on("error", () => reject(new Error("Read failed")));
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString()));
-          } catch {
-            reject(new Error("Invalid JSON"));
-          }
-        });
-      },
-    );
-    req.on("error", (e) => reject(signal.aborted ? new Error("Aborted") : e));
-    req.end(payload);
-  });
+type TranslateResponse = {
+  translations?: Array<{ text?: string; detected_language?: string }>;
+  provider?: string;
+};
+
+/**
+ * Sub2API 的 `/api/v1/translate` 用 `{code,message,data}` 包一层，
+ * 但同一网关的历史版本直接返回翻译体；两种形状都接受，避免静默翻译失败。
+ */
+function readTranslateResponse(value: unknown): TranslateResponse | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const nested = record.data;
+  if (nested && typeof nested === "object") return nested as TranslateResponse;
+  return Array.isArray(record.translations) ? (record as TranslateResponse) : null;
 }
 
 /**
@@ -154,22 +117,22 @@ export class BuddyTranslator {
     }
 
     const t0 = Date.now();
-    const resp = (await gatewayPost(
-      cfg.url,
-      cfg.headers,
-      {
-        q: [req.text],
-        source,
-        target,
-        format: "text",
-      },
-      AbortSignal.timeout(15_000),
-    )) as {
-      translations?: Array<{ text?: string; detected_language?: string }>;
-      provider?: string;
-    };
+    const resp = readTranslateResponse(
+      await gatewayJsonRequest(
+        cfg.url,
+        cfg.headers,
+        {
+          q: [req.text],
+          source,
+          target,
+          format: "text",
+        },
+        AbortSignal.timeout(15_000),
+        1_048_576,
+      ),
+    );
 
-    const translated = resp.translations?.[0]?.text;
+    const translated = resp?.translations?.[0]?.text;
     if (!translated) throw new Error("翻译服务未返回结果");
 
     const result = buddyTranslateResultSchema.parse({

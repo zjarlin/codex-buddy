@@ -190,6 +190,38 @@ test("General groups appearance and idle release controls without dialogs or lon
   await expect(archiveDays).toHaveValue("60");
 });
 
+test("speech announcement defaults on, persists locally, and syncs across windows", async ({
+  page,
+  context,
+}) => {
+  await setup(page);
+  const speech = page.getByRole("switch", { name: "会话完成语音播报" });
+  await expect(speech).toBeChecked();
+  await expect(page.getByText("会话结束时用网关曼波配音朗读结果摘要")).toBeVisible();
+  // No Host setting is involved: the switch is purely a local preference.
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "idleFixture").calls.at(-1).method))
+    .toBe("codexhost/settings/thread-auto-archive/set");
+
+  await speech.uncheck();
+  expect(await page.evaluate(() => localStorage.getItem("codexhost.speech-announcement.v1"))).toBe(
+    "false",
+  );
+  const other = await context.newPage();
+  await setup(other);
+  await expect(other.getByRole("switch", { name: "会话完成语音播报" })).not.toBeChecked();
+
+  await page.reload();
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => Reflect.get(globalThis, "setupIdleRelease")());
+  await expect(speech).not.toBeChecked();
+  await speech.check();
+  expect(await page.evaluate(() => localStorage.getItem("codexhost.speech-announcement.v1"))).toBe(
+    "true",
+  );
+  await other.close();
+});
+
 test("another window's change updates both the UI and the Host without stale cached settings", async ({
   page,
   context,

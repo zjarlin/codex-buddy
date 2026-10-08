@@ -58,6 +58,9 @@ describe("Renderer settings localization", () => {
       "If Codex Buddy has helped you, please Star it on GitHub. It means a lot to us 👉",
     );
     expect(chinese.updateStarLink).toBe("GitHub");
+    expect(chinese.speechAnnouncementTitle).toBe("会话完成语音播报");
+    expect(chinese.speechAnnouncementDescription).toContain("曼波配音");
+    expect(english.speechAnnouncementTitle).toBe("Speak the result when a conversation finishes");
     expect(chinese.pageLabels.about).toBe("关于");
     expect(chinese.pageLabels["session-import"]).toBe("会话导入");
     expect(chinese.sessionImportAvailabilityNote).toContain("可选 Harness 来自当前 Host");

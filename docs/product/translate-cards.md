@@ -19,6 +19,10 @@
 
 内存缓存 24 小时，上限 500 条，LRU 淘汰。同一内容不重复请求。
 
+## 网关响应形状
+
+Sub2API 的 `/api/v1/translate` 用 `{code,message,data}` 包一层，`host-runtime/buddy/translator.ts` 会先取 `data`，并把没有包裹的旧形状也当作有效响应；两种形状都不再静默失败。
+
 ## 架构
 
 - `shared-contracts/buddy-translate.ts`: RPC schema + method name

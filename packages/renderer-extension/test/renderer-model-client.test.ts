@@ -700,6 +700,7 @@ describe("Renderer fixed Model request client", () => {
       "syncGit",
       "syncProjectSync",
       "syncRemoteProjects",
+      "synthesizeSpeech",
       "threadOpenTarget",
       "translate",
       "unlinkGitRepository",

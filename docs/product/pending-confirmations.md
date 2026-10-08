@@ -16,6 +16,15 @@ Renderer 为官方 Codex 与外部 Harness Thread 维护统一的“待确认”
 
 每次连接建立后，Renderer 读取各 Host 的未归档近期 Thread，只检查最新 Turn。只有已完成、失败或中断的最新 Turn 且不在本地记录中时，才补入待确认队列；不批量回灌全部历史完成记录。旧 Host 不支持分页读取时该项跳过，不影响其他 Host。
 
+## 语音播报
+
+同一次完成通知在弹出待确认卡片时，还会用当前网关的曼波配音朗读最后一轮结果摘要（`POST /v1/media/tts`，由 Host 复用 Codex 网关凭据调用，返回 base64 WAV）。播报是纯通知增强：不写入原生历史、不进入工具链，也不改变待确认状态机。
+
+- 全局开关位于「外观」页，默认开启，仅保存在本机 `localStorage`（`codexhost.speech-announcement.v1`），关闭只影响自动播报。
+- 与弹窗一致，只有应用处于前台且完成的是非当前会话（且不是标题生成回合）时才自动播报；后台完成仍保留侧栏蓝点与待确认数量。
+- 摘要先剥离 Markdown 与代码块，再截断到上限后合成；网关未启用媒体、合成失败或音频超过上限时静默跳过，不影响完成提醒本身。
+- 卡片左下角的「重播语音」按需重新合成播放，不受开关与窗口焦点限制。同一时间只播一条，新播报会停止上一条。
+
 ## 提醒边界
 
 Codex 为 Thread 生成标题时会在后台跑一个内部 Turn，其唯一 `agentMessage` 是 `{"title","description"}` 形状的 JSON。这类 Turn 属于内部维护而非用户发起的工作，不会进入待确认队列，也不弹卡片；该判断按 Turn 内容识别，因此对通知订阅与重启对账两条路径同时生效。
@@ -28,3 +37,6 @@ Codex 为 Thread 生成标题时会在后台跑一个内部 Turn，其唯一 `ag
 - `packages/renderer-extension/src/renderer-pending-confirmations.ts`：通知订阅、弹窗、阅读计时、归档和重启对账。
 - `packages/renderer-extension/src/renderer-sidebar-unread.ts`：待确认项的侧栏补充蓝点。
 - `packages/renderer-extension/src/renderer-sidebar-status-filter.ts`：全部、进行中、待确认三种侧栏视图。
+- `packages/renderer-extension/src/renderer-speech.ts`：完成摘要清洗、网关合成调用与单条音频播放。
+- `packages/renderer-extension/src/renderer-speech-preference.ts`：默认开启的播报开关与变更事件。
+- `packages/host-runtime/src/buddy/speech.ts`：曼波 TTS 合成、语种映射与音频上限校验。

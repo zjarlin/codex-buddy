@@ -3,6 +3,7 @@ import Archive from "lucide/dist/esm/icons/archive.mjs";
 import Check from "lucide/dist/esm/icons/check.mjs";
 import Eye from "lucide/dist/esm/icons/eye.mjs";
 import Send from "lucide/dist/esm/icons/send.mjs";
+import Volume2 from "lucide/dist/esm/icons/volume-2.mjs";
 import X from "lucide/dist/esm/icons/x.mjs";
 
 import { hostThreadIdSchema, type HostThreadId } from "@codexhost/shared-contracts";
@@ -38,6 +39,13 @@ interface PendingConfirmationDomOptions {
   model?: PendingConfirmationsModel;
   openThread?(threadId: HostThreadId, options: { hostId: string }): Promise<void>;
   subscribeHosts?(listener: () => void): () => void;
+  /** 会话完成语音播报：自动播报与弹窗内手动重播都走这一条链路。 */
+  speech?: PendingConfirmationSpeech;
+}
+
+interface PendingConfirmationSpeech {
+  announce(entry: PendingConfirmationRecord): void;
+  replay(entry: PendingConfirmationRecord): void;
 }
 
 interface HostSubscription {
@@ -81,6 +89,7 @@ function messages(locale: Locale) {
         read: "标为已读",
         archive: "归档",
         close: "关闭",
+        replay: "重播语音",
         model: "续发模型",
         currentModel: "使用原模型",
         modelLoading: "正在读取收藏模型…",
@@ -102,6 +111,7 @@ function messages(locale: Locale) {
         read: "Mark read",
         archive: "Archive",
         close: "Close",
+        replay: "Replay voice",
         model: "Follow-up model",
         currentModel: "Use current model",
         modelLoading: "Loading favorite models…",
@@ -217,6 +227,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const view = document.createElement("button");
   const read = document.createElement("button");
   const archive = document.createElement("button");
+  const replay = document.createElement("button");
   const close = document.createElement("button");
   const composer = document.createElement("div");
   const modelSelect = document.createElement("select");
@@ -279,6 +290,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
 [${MODAL}] .codexhost-pending-actions button[data-primary="true"]{border-color:Highlight;background:Highlight;color:HighlightText}
+[${MODAL}] .codexhost-pending-actions button.codexhost-pending-replay{margin-right:auto}
 [${MODAL}] .codexhost-pending-actions button:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-notice{min-height:18px;margin:-6px 16px 0;color:#c2410c;font-size:12px;overflow-wrap:anywhere}
 [${MODAL}] .codexhost-pending-notice:empty{visibility:hidden}
@@ -306,13 +318,15 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   send.append(createElement(Send, { width: 15, height: 15, "aria-hidden": "true" }));
   composer.append(modelSelect, input, send);
   body.append(kind, conversation, summary, time, composer);
-  view.type = read.type = archive.type = "button";
+  view.type = read.type = archive.type = replay.type = "button";
   view.dataset.primary = "true";
   view.append(createElement(Eye, { width: 15, height: 15, "aria-hidden": "true" }));
   read.append(createElement(Check, { width: 15, height: 15, "aria-hidden": "true" }));
   archive.append(createElement(Archive, { width: 15, height: 15, "aria-hidden": "true" }));
+  replay.className = "codexhost-pending-replay";
+  replay.append(createElement(Volume2, { width: 15, height: 15, "aria-hidden": "true" }));
   actions.className = "codexhost-pending-actions";
-  actions.append(view, read, archive);
+  actions.append(replay, view, read, archive);
   notice.className = "codexhost-pending-notice";
   notice.setAttribute("role", "alert");
   panel.append(heading, body, notice, actions);
@@ -471,6 +485,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     view.textContent = copy.view;
     read.textContent = copy.read;
     archive.textContent = copy.archive;
+    replay.textContent = copy.replay;
+    replay.title = copy.replay;
+    replay.setAttribute("aria-label", copy.replay);
+    replay.disabled = !options.speech;
     close.title = copy.close;
     close.setAttribute("aria-label", copy.close);
     const entryIdentity = entryKey(entry);
@@ -675,6 +693,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 expanded = true;
                 visibleEntry = entry;
                 dismissedEntryKey = null;
+                // 语音播报与弹窗同一触发点：真正属于用户的回合完成通知。
+                options.speech?.announce(entry);
               }
               render();
             },
@@ -811,6 +831,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   });
   archive.addEventListener("click", () => {
     if (visibleEntry) void archiveEntry(visibleEntry);
+  });
+  replay.addEventListener("click", () => {
+    if (visibleEntry) options.speech?.replay(visibleEntry);
   });
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || modal.hidden) return;

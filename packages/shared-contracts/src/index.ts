@@ -618,6 +618,14 @@ export {
 } from "./buddy-translate.js";
 export type { BuddyTranslateRequest, BuddyTranslateResult } from "./buddy-translate.js";
 export {
+  BUDDY_SPEECH_METHOD,
+  BUDDY_SPEECH_AUDIO_MAX_BYTES,
+  BUDDY_SPEECH_TEXT_MAX_CHARACTERS,
+  buddySpeechRequestSchema,
+  buddySpeechResultSchema,
+} from "./buddy-speech.js";
+export type { BuddySpeechRequest, BuddySpeechResult } from "./buddy-speech.js";
+export {
   GIT_WORKFLOW_STATUS_METHOD,
   GIT_WORKFLOW_RUN_METHOD,
   gitWorkflowSnapshotSchema,

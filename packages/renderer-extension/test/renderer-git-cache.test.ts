@@ -156,3 +156,19 @@ test("isolates moved project paths and chat identities while sending only cwd", 
     { cwd: "/iot-platform" },
   ]);
 });
+
+test("reuses model catalogs across repositories and Git writes without sharing between hosts", async () => {
+  const cache = new RendererGitCache();
+  const models = { models: [{ id: "ask" }], defaultModel: "ask" };
+  const read = vi.fn().mockResolvedValue(models);
+  const client = { listGitMessageModels: read } as unknown as RendererGitClient;
+  const first = cache.models(client, { threadId });
+  expect(cache.models(client, { cwd: "/other" }, "/child")).toBe(first);
+  await first;
+  cache.invalidate(client);
+  expect(await cache.models(client, { threadId }, "/child")).toBe(models);
+  expect(read).toHaveBeenCalledTimes(1);
+  const other = { listGitMessageModels: read } as unknown as RendererGitClient;
+  await cache.models(other, { threadId });
+  expect(read).toHaveBeenCalledTimes(2);
+});

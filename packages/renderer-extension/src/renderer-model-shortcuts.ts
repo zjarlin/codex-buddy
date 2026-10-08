@@ -522,6 +522,8 @@ export function mountModelShortcuts(
   window.addEventListener("storage", favoritesChanged);
   return {
     root,
+    // Git 面板只复用当前收藏菜单已取得的目录，不额外发出上游刷新。
+    snapshot: () => ({ view, harness, context }),
     update(next: ModelShortcutView, harnessId: string, locale: string, contextId = harnessId) {
       if (harness !== harnessId || context !== contextId) {
         generation++;

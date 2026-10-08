@@ -27,6 +27,7 @@ import {
 import { readConnection } from "@codexhost/buddy-engine";
 import { readGitContent, type GitContentFileSystem } from "./git-content.js";
 import { readGitSubmoduleStatus } from "./git-submodule-status.js";
+import { gitMessageChanges, readGitMessageRevision } from "./git-message-revision.js";
 
 const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -101,6 +102,7 @@ function localizedGitError(detail: string): string {
 }
 
 export interface GitWorkspaceRuntime {
+  messageRevision?(status: GitWorkspaceStatus): Promise<string | null>;
   run(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult>;
   paths: typeof path;
   realpath(directory: string): Promise<string>;
@@ -864,68 +866,67 @@ export class GitWorkspace {
   }
 
   async messageModels(environment: NodeJS.ProcessEnv): Promise<GitMessageModels> {
-    return this.#serial(async () => {
-      const home = path.resolve(
-        environment.CODEX_HOME ?? path.join(environment.HOME ?? process.env.HOME ?? "", ".codex"),
-      );
-      let connection;
-      try {
-        connection = await readConnection(home, environment);
-      } catch {
-        return { models: [], defaultModel: null };
-      }
-      try {
-        const response = await fetch(connection.url, {
-          headers: connection.headers,
-          redirect: "error",
-          signal: AbortSignal.timeout(8_000),
-        });
-        if (!response.ok) return { models: [], defaultModel: null };
-        const body = (await response.json()) as { data?: unknown };
-        const ids = Array.isArray(body.data)
-          ? body.data.flatMap((item) =>
-              item && typeof item === "object" && "id" in item && typeof item.id === "string"
-                ? [item.id]
-                : [],
-            )
-          : [];
-        const unavailable =
-          /(?:embedding|rerank|moderation|whisper|tts|image|audio|vision-only|safety)/iu;
-        const models = [...new Set(ids)].map((id, catalogIndex) => ({
-          id,
-          label: id,
-          catalogIndex,
-          tier: /(?:^|[/:])(?:gpt|claude)(?=[\d._-]|$)/iu.test(id)
-            ? ("夯" as const)
-            : ("垃" as const),
-          eligible: !unavailable.test(id),
-          recommended: false,
-        }));
-        const ranked = [...models].sort((left, right) => {
-          const leftWeak = left.tier === "垃" ? 1 : 0;
-          const rightWeak = right.tier === "垃" ? 1 : 0;
-          return (
-            Number(right.eligible) - Number(left.eligible) ||
-            rightWeak - leftWeak ||
-            Number(FAST_MESSAGE_MODEL.test(right.id)) - Number(FAST_MESSAGE_MODEL.test(left.id)) ||
-            left.catalogIndex - right.catalogIndex
-          );
-        });
-        const defaultModel = ranked.find((model) => model.eligible)?.id ?? null;
-        return {
-          models: models.map((model) => ({
-            id: model.id,
-            label: model.label,
-            tier: model.tier,
-            eligible: model.eligible,
-            recommended: model.id === defaultModel,
-          })),
-          defaultModel,
-        };
-      } catch {
-        return { models: [], defaultModel: null };
-      }
-    });
+    const home = path.resolve(
+      environment.CODEX_HOME ?? path.join(environment.HOME ?? process.env.HOME ?? "", ".codex"),
+    );
+    let connection;
+    try {
+      connection = await readConnection(home, environment);
+    } catch {
+      return { models: [], defaultModel: null };
+    }
+    try {
+      const response = await fetch(connection.url, {
+        headers: connection.headers,
+        redirect: "error",
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!response.ok) return { models: [], defaultModel: null };
+      const body = (await response.json()) as { data?: unknown };
+      const ids = Array.isArray(body.data)
+        ? body.data.flatMap((item) =>
+            item && typeof item === "object" && "id" in item && typeof item.id === "string"
+              ? [item.id]
+              : [],
+          )
+        : [];
+      const unavailable =
+        /(?:embedding|rerank|moderation|whisper|tts|image|audio|vision-only|safety)/iu;
+      const models = [...new Set(ids)].map((id, catalogIndex) => ({
+        id,
+        label: id,
+        catalogIndex,
+        tier: /(?:^|[/:])(?:gpt|claude)(?=[\d._-]|$)/iu.test(id)
+          ? ("夯" as const)
+          : ("垃" as const),
+        eligible: !unavailable.test(id),
+        recommended: false,
+      }));
+      const ranked = [...models].sort((left, right) => {
+        const leftWeak = left.tier === "垃" ? 1 : 0;
+        const rightWeak = right.tier === "垃" ? 1 : 0;
+        return (
+          Number(right.eligible) - Number(left.eligible) ||
+          Number(right.id.toLowerCase() === "ask") - Number(left.id.toLowerCase() === "ask") ||
+          rightWeak - leftWeak ||
+          Number(FAST_MESSAGE_MODEL.test(right.id)) - Number(FAST_MESSAGE_MODEL.test(left.id)) ||
+          left.catalogIndex - right.catalogIndex
+        );
+      });
+      const defaultModel = ranked.find((model) => model.eligible)?.id ?? null;
+      return {
+        models: models.map((model) => ({
+          id: model.id,
+          label: model.label,
+          tier: model.tier,
+          eligible: model.eligible,
+          recommended: model.id === defaultModel,
+        })),
+        defaultModel,
+      };
+    } catch {
+      return { models: [], defaultModel: null };
+    }
   }
 
   async generateMessage(input: {
@@ -934,7 +935,7 @@ export class GitWorkspace {
     paths?: readonly string[];
     environment: NodeJS.ProcessEnv;
   }): Promise<GitGeneratedMessage> {
-    const { connection, payload, model } = await this.#serial(async () => {
+    const { connection, payload, model, revision } = await this.#serial(async () => {
       const workspace = this.#absoluteWorkspace(input.cwd);
       const model = input.model.trim();
       if (!model) throw new GitWorkspaceError("请选择模型后再生成提交消息。");
@@ -943,18 +944,48 @@ export class GitWorkspace {
           path.join(input.environment.HOME ?? process.env.HOME ?? "", ".codex"),
       );
       const connection = await readConnection(home, input.environment);
-      const paths = (input.paths ?? []).map((pathValue) => gitFilePathSchema.parse(pathValue));
-      const pathArguments = paths.length > 0 ? ["--", ...paths] : [];
-      const status = await this.#run(workspace, ["status", "--short", ...pathArguments]);
-      const diffs = await Promise.all(
-        paths.length > 0
-          ? paths.map((pathValue) => this.#diffUnlocked(workspace, pathValue))
-          : [this.#diffUnlocked(workspace)],
+      const status = await this.#statusUnlocked(workspace);
+      if (status.conflicts.length) throw new GitWorkspaceError("请先解决冲突再生成提交消息。");
+      const changes = gitMessageChanges(status, input.paths);
+      if (!changes.length) throw new GitWorkspaceError("当前没有可生成消息的变更。");
+      const paths = changes.map((change) => gitFilePathSchema.parse(change.path));
+      const revision = this.runtime ? undefined : await readGitMessageRevision(status, paths);
+      const staged = changes.filter((change) => change.staged).map((change) => change.path);
+      const tracked = changes
+        .filter((change) => !change.staged && !change.untracked)
+        .map((change) => change.path);
+      const diffs: GitCommandResult[] = [];
+      if (staged.length) {
+        diffs.push(
+          await this.#run(workspace, [
+            "diff",
+            "--cached",
+            "--no-ext-diff",
+            "--no-color",
+            "--unified=3",
+            "--",
+            ...staged,
+          ]),
+        );
+      }
+      if (tracked.length) diffs.push(await this.#diffUnlocked(workspace, undefined, tracked));
+      for (const change of changes.filter((entry) => entry.untracked)) {
+        diffs.push(await this.#untrackedDiff(workspace, change.path));
+      }
+      const summary = changes
+        .map(
+          (change) =>
+            `${change.staged ? change.indexStatus : change.workTreeStatus} ${change.path}`,
+        )
+        .join("\n");
+      const payload = `${summary}\n\n${diffs.map((result) => result.stdout).join("")}`.slice(
+        0,
+        MESSAGE_INPUT_MAX_CHARS,
       );
-      const diff = { stdout: diffs.map((result) => result.stdout).join("") };
-      const payload = `${status.stdout}\n\n${diff.stdout}`.slice(0, MESSAGE_INPUT_MAX_CHARS);
-      if (!payload.trim()) throw new GitWorkspaceError("当前没有可生成消息的变更。");
-      return { connection, payload, model };
+      if (revision && (await readGitMessageRevision(status, paths)) !== revision) {
+        throw new GitWorkspaceError("文件已变化，请重新生成提交消息。");
+      }
+      return { connection, payload, model, revision };
     });
     // 模型服务可能耗时数分钟，等待期间释放 Git 队列供状态和写操作使用。
     const completionUrl = new URL(connection.url);
@@ -1006,7 +1037,17 @@ export class GitWorkspace {
       if (result.message || !result.truncated) break;
     }
     if (!result.message) throw new GitWorkspaceError("模型没有返回提交消息。");
-    return { message: gitCommitMessageSchema.parse(result.message), model };
+    if (revision) {
+      const latest = await this.status(input.cwd);
+      if ((await readGitMessageRevision(latest, input.paths)) !== revision) {
+        throw new GitWorkspaceError("文件已变化，请重新生成提交消息。");
+      }
+    }
+    return {
+      message: gitCommitMessageSchema.parse(result.message),
+      model,
+      ...(revision ? { revision } : {}),
+    };
   }
 
   // 进行中的相同写操作共用结果；成功或失败后均允许用户显式重试。
@@ -1082,8 +1123,12 @@ export class GitWorkspace {
     }
   }
 
-  async #diffUnlocked(cwd: string, filePath?: string): Promise<GitCommandResult> {
-    const pathArguments = filePath ? ["--", filePath] : [];
+  async #diffUnlocked(
+    cwd: string,
+    filePath?: string,
+    files?: readonly string[],
+  ): Promise<GitCommandResult> {
+    const pathArguments = files?.length ? ["--", ...files] : filePath ? ["--", filePath] : [];
     let result: GitCommandResult;
     if (await this.#hasHead(cwd)) {
       result = await this.#run(cwd, [
@@ -1169,7 +1214,7 @@ export class GitWorkspace {
       ...change,
       submodule: submoduleStates.submodules.find((entry) => entry.path === change.path) ?? null,
     }));
-    return {
+    const result: GitWorkspaceStatus = {
       workspace,
       ...branch,
       head: head.stdout.trim() || null,
@@ -1179,5 +1224,13 @@ export class GitWorkspace {
       operation,
       conflicts: changes.filter((change) => change.conflicted).map((change) => change.path),
     };
+    try {
+      if (this.runtime?.messageRevision)
+        result.messageRevision = await this.runtime.messageRevision(result);
+      else if (!this.runtime) result.messageRevision = await readGitMessageRevision(result);
+    } catch {
+      result.warnings = [...(result.warnings ?? []), "无法检测提交内容变化，请手动生成提交消息。"];
+    }
+    return result;
   }
 }

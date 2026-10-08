@@ -212,6 +212,12 @@ export const gitWorkspaceStatusSchema = z
     operation: z.enum(["merge", "rebase"]).nullable().default(null),
     // 冲突文件路径，便于界面与模型直接定位而无需再次扫描 changes。
     conflicts: z.array(gitFilePathSchema).default([]),
+    // 缺省表示旧 Host 不支持内容检测；null 表示没有可生成消息的变更。
+    messageRevision: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .nullable()
+      .optional(),
   })
   .strict();
 export type GitWorkspaceStatus = z.infer<typeof gitWorkspaceStatusSchema>;
@@ -290,6 +296,10 @@ export const gitGeneratedMessageSchema = z
   .object({
     message: gitCommitMessageSchema,
     model: z.string().min(1).max(512),
+    revision: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/u)
+      .optional(),
   })
   .strict();
 export type GitGeneratedMessage = z.infer<typeof gitGeneratedMessageSchema>;

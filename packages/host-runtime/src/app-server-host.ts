@@ -4034,11 +4034,13 @@ export class AppServerHost {
         const cwd = await resolveWorkspace(params.data);
         await this.#writer.json(
           rpcEnvelope(request, {
-            result: await services.generateMessage({
-              cwd,
-              model: params.data.model,
-              paths: params.data.paths,
-            }),
+            result: jsonValueSchema.parse(
+              await services.generateMessage({
+                cwd,
+                model: params.data.model,
+                paths: params.data.paths,
+              }),
+            ),
           }),
         );
         return;

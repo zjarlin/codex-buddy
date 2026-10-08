@@ -72,7 +72,11 @@ it("reads models and generates a message from the remote Codex home and Git work
       { kind: "generate", cwd: fixture.cwd, model: "remote-fast", paths: [] },
       fixture.environment,
     ),
-  ).resolves.toEqual({ message: "fix: use remote SSH provider", model: "remote-fast" });
+  ).resolves.toEqual({
+    message: "fix: use remote SSH provider",
+    model: "remote-fast",
+    revision: expect.stringMatching(/^[0-9a-f]{64}$/u),
+  });
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
 

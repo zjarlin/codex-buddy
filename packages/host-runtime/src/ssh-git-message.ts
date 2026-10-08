@@ -5,6 +5,7 @@ import {
   gitMessageModelsSchema,
   type GitGeneratedMessage,
   type GitMessageModels,
+  type GitWorkspaceStatus,
 } from "@codexhost/shared-contracts";
 import type { DesktopSshConnection } from "./desktop-ssh-connection.js";
 import { GitWorkspaceError } from "./git-workspace.js";
@@ -12,7 +13,9 @@ import { GitWorkspaceError } from "./git-workspace.js";
 declare const __CODEXHOST_SSH_GIT_MESSAGE_WORKER__: string;
 
 type Request =
-  { kind: "models" } | { kind: "generate"; cwd: string; model: string; paths: readonly string[] };
+  | { kind: "models" }
+  | { kind: "generate"; cwd: string; model: string; paths: readonly string[] }
+  | { kind: "revision"; status: GitWorkspaceStatus };
 
 type Execute = (input: {
   arguments: string[];
@@ -62,6 +65,14 @@ export class SshGitMessageService {
     private readonly environment: NodeJS.ProcessEnv,
     private readonly options: { execute?: Execute; workerSource?: () => Promise<string> } = {},
   ) {}
+
+  async messageRevision(status: GitWorkspaceStatus): Promise<string | null> {
+    if (!status.changes.length || status.conflicts.length) return null;
+    const result = await this.#request({ kind: "revision", status });
+    if (result === null || (typeof result === "string" && /^[0-9a-f]{64}$/u.test(result)))
+      return result;
+    throw new GitWorkspaceError("远端提交内容指纹无效。");
+  }
 
   async messageModels(): Promise<GitMessageModels> {
     try {

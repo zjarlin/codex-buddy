@@ -858,7 +858,12 @@ export function renderComposerAgentControl(
   // Clear cache when switching away from codex agent to avoid stale models.
   const controlWithCache = control as ComposerAgentControl & {
     cachedNativeModelView?: ModelShortcutView | undefined;
+    cachedNativeModelContext?: string | undefined;
   };
+  if (controlWithCache.cachedNativeModelContext !== modelContext) {
+    controlWithCache.cachedNativeModelView = undefined;
+    controlWithCache.cachedNativeModelContext = modelContext;
+  }
   if (state.agent !== "codex") {
     controlWithCache.cachedNativeModelView = undefined;
   } else if (native?.view && native.view.models.length > 0) {

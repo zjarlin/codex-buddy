@@ -291,6 +291,7 @@ const { outputFiles } = await build({
         const control = installRendererGitSidebar({
           getContext: () => ({
             ...activeContext,
+            modelCatalog: globalThis.gitSidebarFixture?.modelCatalog,
             projectCwd: activeContext.threadId && activeContext.hostId
               ? nativeGitProjectWorkspace(document, activeContext.hostId, activeContext.threadId)
               : undefined,
@@ -751,6 +752,10 @@ test("keeps generated messages and commit operations bound to their original pro
         fixture.resolveMessage = () =>
           resolve({ message: "old project message", model: "deepseek-flash" });
       });
+    fixture.client.inspectGitStatus = async (input: { threadId: string }) => ({
+      ...structuredClone(fixture.status),
+      workspace: input.threadId === "thread-2" ? "/other-project" : "/repo",
+    });
     fixture.client.stageGitPaths = () =>
       new Promise((resolve) => {
         fixture.resolveStage = () => resolve(fixture.status);
@@ -769,7 +774,7 @@ test("keeps generated messages and commit operations bound to their original pro
   );
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveMessage());
   await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
-  await expect(message).toHaveValue("");
+  await expect(message).toHaveValue("old project message");
   await message.fill("new draft");
   await root.locator("[data-codexhost-git-sidebar-commit-push]").click();
   await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").setContext("thread-2"));
@@ -893,7 +898,8 @@ test("shows pending actions, ignores repeated clicks and permits retry after fai
     });
     await expect(button).toHaveAttribute("aria-busy", "true");
     await expect(button).toBeDisabled();
-    await expect(refresh).toBeDisabled();
+    if (action === "generate") await expect(refresh).toBeEnabled();
+    else await expect(refresh).toBeDisabled();
     const calls = await page.evaluate(
       () => Reflect.get(globalThis, "gitSidebarFixture").pendingCalls,
     );
@@ -1845,3 +1851,156 @@ for (const { hasThread, width, dark } of [
     expect(errors).toEqual([]);
   });
 }
+
+test("uses favorite model cache and generates only for new content, preserving manual edits", async ({
+  page,
+}, testInfo) => {
+  await page.clock.install();
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.messageRevision = "a".repeat(64);
+    fixture.modelCatalog = {
+      models: [
+        { id: "deepseek-flash", label: "Flash" },
+        { id: "ask", label: "Ask" },
+      ],
+    };
+    localStorage.setItem("codexhost.model-favorites.v1:codex", JSON.stringify(["ask"]));
+    fixture.client.listGitMessageModels = () => {
+      fixture.calls.push(["models-network"]);
+      return new Promise(() => {});
+    };
+    fixture.client.generateGitMessage = async (input: { model: string }) => {
+      fixture.calls.push(["generate", input]);
+      return {
+        model: input.model,
+        message: `fix: content ${fixture.status.messageRevision[0]}`,
+        revision: fixture.status.messageRevision,
+      };
+    };
+    for (const revision of ["b", "c"]) {
+      const button = document.createElement("button");
+      button.textContent = `Change content ${revision}`;
+      button.onclick = () => {
+        fixture.status.messageRevision = revision.repeat(64);
+      };
+      document.body.append(button);
+    }
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  const message = root.locator("[data-codexhost-git-sidebar-message]");
+  await expect(root.locator("[data-codexhost-git-sidebar-model]")).toHaveValue("ask");
+  await expect(message).toHaveValue("fix: content a");
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  await root.locator("[data-codexhost-git-sidebar-projects]").click();
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await expect(message).toHaveValue("fix: content a");
+  await page.getByRole("button", { name: "Change content b" }).click();
+  await page.clock.fastForward(15_000);
+  await expect(message).toHaveValue("fix: content b");
+  await message.fill("fix: my own message");
+  await page.getByRole("button", { name: "Change content c" }).click();
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(message).toHaveValue("fix: my own message");
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  expect(calls.filter(([method]: string[]) => method === "models-network")).toHaveLength(0);
+  expect(calls.filter(([method]: string[]) => method === "generate")).toHaveLength(2);
+  await root.screenshot({ path: testInfo.outputPath("cached-ask-manual-draft.png") });
+  await root.locator("[data-codexhost-git-sidebar-projects]").click();
+  await page.clock.fastForward(30_000);
+  const hiddenCalls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  expect(hiddenCalls.filter(([method]: string[]) => method === "status")).toHaveLength(
+    calls.filter(([method]: string[]) => method === "status").length,
+  );
+});
+
+test("keeps Git responsive and preserves typing while automatic generation waits", async ({
+  page,
+}, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.messageRevision = "d".repeat(64);
+    fixture.modelCatalog = { models: [{ id: "ask", label: "Ask" }] };
+    const finish = document.createElement("button");
+    finish.textContent = "Finish model request";
+    document.body.append(finish);
+    fixture.client.generateGitMessage = (input: { model: string }) =>
+      new Promise((resolve) => {
+        fixture.calls.push(["generate", input]);
+        finish.onclick = () =>
+          resolve({
+            message: "fix: late model result",
+            model: input.model,
+            revision: fixture.status.messageRevision,
+          });
+      });
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  await expect(root.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
+  const message = root.locator("[data-codexhost-git-sidebar-message]");
+  await message.fill("fix: typed while waiting");
+  await page.getByRole("button", { name: "Finish model request" }).click();
+  await expect(root.locator("[data-codexhost-git-sidebar-generate]")).toBeEnabled();
+  await expect(message).toHaveValue("fix: typed while waiting");
+  await root.screenshot({ path: testInfo.outputPath("typing-during-generation.png") });
+});
+
+test("reuses a pending message after switching to another chat in the same repository", async ({
+  page,
+}, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.messageRevision = "e".repeat(64);
+    fixture.modelCatalog = { models: [{ id: "ask", label: "Ask" }] };
+    const switchChat = document.createElement("button");
+    switchChat.textContent = "Switch chat";
+    switchChat.onclick = () => fixture.setContext("thread-2");
+    const finish = document.createElement("button");
+    finish.textContent = "Finish model request";
+    document.body.append(switchChat, finish);
+    fixture.client.generateGitMessage = (input: { model: string }) =>
+      new Promise((resolve) => {
+        fixture.calls.push(["generate", input]);
+        finish.onclick = () =>
+          resolve({
+            message: "fix: shared repository message",
+            model: input.model,
+            revision: fixture.status.messageRevision,
+          });
+      });
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  const generate = root.locator("[data-codexhost-git-sidebar-generate]");
+  await expect(generate).toHaveAttribute("aria-busy", "true");
+  await page.getByRole("button", { name: "Switch chat", exact: true }).click();
+  await expect(generate).toHaveAttribute("aria-busy", "true");
+  await page.getByRole("button", { name: "Finish model request" }).click();
+  await expect(root.locator("[data-codexhost-git-sidebar-message]")).toHaveValue(
+    "fix: shared repository message",
+  );
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  expect(calls.filter(([method]: string[]) => method === "generate")).toHaveLength(1);
+  await root.screenshot({ path: testInfo.outputPath("same-repository-pending-message.png") });
+});

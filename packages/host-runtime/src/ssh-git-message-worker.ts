@@ -3,13 +3,16 @@ import {
   gitGeneratedMessageSchema,
   gitMessageGenerateParamsSchema,
   gitMessageModelsSchema,
+  gitWorkspaceStatusSchema,
   type GitGeneratedMessage,
   type GitMessageModels,
 } from "@codexhost/shared-contracts";
 import { GitWorkspace } from "./git-workspace.js";
+import { readGitMessageRevision } from "./git-message-revision.js";
 
 const requestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("models") }).strict(),
+  z.object({ kind: z.literal("revision"), status: gitWorkspaceStatusSchema }).strict(),
   z
     .object({
       kind: z.literal("generate"),
@@ -24,8 +27,9 @@ const requestSchema = z.discriminatedUnion("kind", [
 export async function readSshGitMessageOnHost(
   request: unknown,
   environment: NodeJS.ProcessEnv = process.env,
-): Promise<GitMessageModels | GitGeneratedMessage> {
+): Promise<GitMessageModels | GitGeneratedMessage | string | null> {
   const input = requestSchema.parse(request);
+  if (input.kind === "revision") return readGitMessageRevision(input.status);
   const git = new GitWorkspace(environment);
   if (input.kind === "models")
     return gitMessageModelsSchema.parse(await git.messageModels(environment));

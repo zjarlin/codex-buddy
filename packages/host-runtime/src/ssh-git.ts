@@ -140,6 +140,8 @@ export class SshGitWorkspaces {
     const cached = this.#hosts.get(hostId);
     if (cached?.key === key) return cached;
     const runtime = createSshGitRuntime(connection, this.environment);
+    const messages = new SshGitMessageService(connection, this.environment);
+    runtime.messageRevision = (status) => messages.messageRevision(status);
     const git = new GitWorkspace(this.environment, runtime);
     const links = new GitRepositoryLinks(
       path.join(this.home, "ssh-git", key),
@@ -147,7 +149,6 @@ export class SshGitWorkspaces {
       (cwd, submodule) => git.submoduleRoot(cwd, submodule),
       { paths: runtime.paths, realpath: runtime.realpath },
     );
-    const messages = new SshGitMessageService(connection, this.environment);
     const services = {
       git,
       links,

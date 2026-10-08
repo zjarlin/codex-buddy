@@ -6,6 +6,7 @@ import type {
   GitCommitParams,
   GitMessageGenerateParams,
   GitMessageModel,
+  GitGeneratedMessage,
   GitStageParams,
   GitSubmoduleUpdateParams,
   GitWorkspaceParams,
@@ -21,6 +22,9 @@ import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import { gitTargetKey, gitTargetParams, hasGitTarget } from "./renderer-git-target.js";
 import { RendererGitCache } from "./renderer-git-cache.js";
+import { cachedGitMessageModels } from "./renderer-git-models.js";
+import { GitMessageDrafts } from "./renderer-git-message-drafts.js";
+import type { ModelShortcutView } from "./renderer-model-shortcuts.js";
 import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 import { openNativeGitReview, runNativeWorkspaceCommand } from "./renderer-native-workspace.js";
 import { installNativeFileTreeLayout } from "./renderer-native-file-tree-layout.js";
@@ -54,7 +58,7 @@ export interface RendererGitClient extends Partial<GitRepositoryClient> {
     models: GitMessageModel[];
     defaultModel: string | null;
   }>;
-  generateGitMessage(input: GitMessageGenerateParams): Promise<{ message: string; model: string }>;
+  generateGitMessage(input: GitMessageGenerateParams): Promise<GitGeneratedMessage>;
   listGitSubmodules?(
     input: GitWorkspaceParams,
   ): Promise<{ submodules: { path: string; status: string }[] }>;
@@ -68,6 +72,7 @@ export interface RendererGitContext {
   repository?: string | undefined;
   threadId: HostThreadId | null;
   client: RendererGitClient | null;
+  modelCatalog?: ModelShortcutView | undefined;
 }
 
 export const GIT_SIDEBAR_ROOT_ATTRIBUTE = "data-codexhost-git-sidebar";
@@ -305,6 +310,15 @@ export function installRendererGitSidebar(options: {
 }): RendererGitSidebar {
   const document = options.ownerDocument ?? window.document;
   const cache = options.cache ?? new RendererGitCache();
+  const drafts = new GitMessageDrafts(
+    (() => {
+      try {
+        return document.defaultView?.localStorage;
+      } catch {
+        return null;
+      }
+    })(),
+  );
   const historyView = createGitHistory(document, cache);
   const listenerOptions: AddEventListenerOptions | undefined = options.signal
     ? { signal: options.signal }
@@ -667,11 +681,15 @@ export function installRendererGitSidebar(options: {
       } else {
         render();
       }
+      syncMessageDraft();
     }
   };
   let modelsLoaded = false;
   let modelsLoadingContext: number | null = null;
   let modelsRead = false;
+  let draftKey = "";
+  let draftRevision = "";
+  let selectedMessageModel = "";
   let generation = 0;
   let disposed = false;
   let reviewGeneration = 0;
@@ -736,6 +754,9 @@ export function installRendererGitSidebar(options: {
     historyView.reset();
     model.replaceChildren();
     message.value = "";
+    draftKey = "";
+    draftRevision = "";
+    selectedMessageModel = "";
     changeTab = "changes";
     expandedDirectories.clear();
     expansionRevision += 1;
@@ -1361,12 +1382,14 @@ export function installRendererGitSidebar(options: {
       isBusy() ||
       !client ||
       !(current?.changes.some((change) => !change.conflicted && change.staged) ?? false);
-    generate.disabled = isBusy() || !client || !current || !modelsLoaded || !model.value;
+    const generating = Boolean(draftKey && drafts.pending(draftKey));
+    generate.disabled =
+      isBusy() || generating || !client || !current || !modelsLoaded || !model.value;
     commit.disabled = isBusy() || !client || !hasCommittable;
     commitPush.disabled = commit.disabled;
     push.disabled = isBusy() || !client || !current;
     sync.disabled = isBusy() || !client?.syncGit || !current;
-    model.disabled = isBusy() || !current || !modelsLoaded;
+    model.disabled = isBusy() || generating || !current || !modelsLoaded;
     refresh.disabled = isBusy() || !client;
     fetchUpstream.disabled = isBusy() || !client?.fetchGit || !current;
     mergeContinue.disabled =
@@ -1376,6 +1399,7 @@ export function installRendererGitSidebar(options: {
     for (const button of shadow.querySelectorAll<HTMLButtonElement>("button[data-git-action]")) {
       button.setAttribute("aria-busy", String(button.dataset.gitAction === pendingAction()));
     }
+    generate.setAttribute("aria-busy", String(generating));
     for (const row of list.querySelectorAll<HTMLElement>(".codexhost-git-change")) {
       row.setAttribute("aria-selected", String(row.dataset.path === selectedChange));
       const action = row.querySelector<HTMLButtonElement>("button");
@@ -1393,7 +1417,9 @@ export function installRendererGitSidebar(options: {
     if (modelsRead || modelsLoadingContext === request.generation) return;
     modelsLoadingContext = request.generation;
     try {
-      const result = await cache.models(request.client, request, request.repository);
+      const result =
+        cachedGitMessageModels(request.modelCatalog) ??
+        (await cache.models(request.client, request, request.repository));
       if (!isCurrentRequest(request)) return;
       model.replaceChildren();
       for (const item of result.models.filter((candidate) => candidate.eligible)) {
@@ -1402,7 +1428,15 @@ export function installRendererGitSidebar(options: {
         option.textContent = `${item.recommended ? "★ " : ""}${item.label}`;
         model.append(option);
       }
-      if (result.defaultModel) model.value = result.defaultModel;
+      const preferred =
+        result.models.find((item) => item.eligible && item.id.toLowerCase() === "ask")?.id ??
+        result.defaultModel;
+      if (
+        selectedMessageModel &&
+        result.models.some((item) => item.eligible && item.id === selectedMessageModel)
+      )
+        model.value = selectedMessageModel;
+      else if (preferred) model.value = preferred;
       modelsLoaded = model.childElementCount > 0;
       if (!modelsLoaded) setNotice("没有可用的提交消息模型");
     } catch (error) {
@@ -1413,6 +1447,7 @@ export function installRendererGitSidebar(options: {
       if (modelsLoadingContext === request.generation) modelsLoadingContext = null;
       if (isCurrentRequest(request)) modelsRead = true;
       if (isCurrentRequest(request)) updateBusy();
+      if (isCurrentRequest(request)) syncMessageDraft();
     }
   };
 
@@ -1522,6 +1557,8 @@ export function installRendererGitSidebar(options: {
       expandedDirectories.clear();
       expansionRevision += 1;
       message.value = "";
+      drafts.clear(JSON.stringify([request.hostId, status?.workspace]));
+      draftRevision = "";
       repositoryMessages.set(repository ?? "", "");
       const pushed = result.pushed;
       const commitLabel = result.commit ? ` (${result.commit})` : "";
@@ -1678,6 +1715,7 @@ export function installRendererGitSidebar(options: {
       view = "commits";
       historyVisible = false;
       clearTimeout(warmTimer);
+      clearTimeout(autoMessageTimer);
       render();
       void load();
     },
@@ -1793,38 +1831,94 @@ export function installRendererGitSidebar(options: {
   };
   stageAll.addEventListener("click", () => void updateAllStaged(true), listenerOptions);
   unstageAll.addEventListener("click", () => void updateAllStaged(false), listenerOptions);
-  generate.addEventListener(
-    "click",
+  let autoMessageTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function syncMessageDraft(): void {
+    if (disposed || view !== "commits" || historyVisible || !current || !workspaceRead) return;
+    const request = context();
+    const key = JSON.stringify([request.hostId, current.workspace]);
+    const revision = current.messageRevision ?? "";
+    draftKey = key;
+    draftRevision = revision;
+    const savedMessage = drafts.read(key, revision);
+    if (message.value !== savedMessage) message.value = savedMessage;
+    clearTimeout(autoMessageTimer);
+    if (
+      revision &&
+      modelsLoaded &&
+      model.value &&
+      !isBusy() &&
+      drafts.shouldGenerate(key, revision)
+    ) {
+      autoMessageTimer = setTimeout(() => void generateMessage(true), 500);
+    }
+    updateBusy();
+  }
+
+  async function generateMessage(automatic: boolean): Promise<void> {
+    if (disposed || (automatic && (view !== "commits" || historyVisible || document.hidden)))
+      return;
+    const request = context();
+    if (!hasGitTarget(request) || !request.client || !model.value || !current || isBusy()) return;
+    const key = JSON.stringify([request.hostId, current.workspace]);
+    const revision = current.messageRevision ?? "";
+    if (drafts.pending(key) || (automatic && (!revision || !drafts.shouldGenerate(key, revision))))
+      return;
+    const version = drafts.start(key, revision);
+    const inputValue = message.value;
+    setNotice(automatic ? "正在自动生成提交消息…" : "正在生成提交消息…");
+    updateBusy();
+    try {
+      const result = await request.client.generateGitMessage({
+        ...gitTargetParams(request),
+        ...(request.repository ? { repository: request.repository } : {}),
+        model: model.value,
+        paths: current.changes
+          .filter((change) => change.staged && !change.conflicted)
+          .map((change) => change.path),
+      });
+      const generatedRevision = result.revision ?? revision;
+      if (!drafts.complete(key, generatedRevision, result.message, version)) {
+        if (
+          isCurrentRequest(request) &&
+          /正在(?:自动)?生成提交消息/u.test(notice.textContent ?? "")
+        ) {
+          setNotice("已保留手动编辑的提交消息。");
+        }
+        return;
+      }
+      if (!isCurrentRequest(request) || key !== draftKey || message.value !== inputValue) return;
+      if (revision && current?.messageRevision !== generatedRevision) {
+        setNotice("变更内容已更新，正在准备新的提交消息。");
+        return;
+      }
+      message.value = result.message;
+      setNotice(`已使用 ${result.model} 生成提交消息。`);
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      drafts.finish(key);
+      if (!disposed) syncMessageDraft();
+      if (!disposed) updateBusy();
+    }
+  }
+
+  message.addEventListener(
+    "input",
     () => {
-      const request = context();
-      if (!hasGitTarget(request) || !request.client || !model.value || isBusy()) return;
-      generation += 1;
-      beginAction(request, "generate");
-      setNotice("正在生成提交消息…");
-      render();
-      void request.client
-        .generateGitMessage({
-          ...gitTargetParams(request),
-          ...(request.repository ? { repository: request.repository } : {}),
-          model: model.value,
-          paths:
-            current?.changes.filter((change) => change.staged).map((change) => change.path) ?? [],
-        })
-        .then((result) => {
-          if (!isCurrentRequest(request)) return;
-          message.value = result.message;
-          setNotice(`已使用 ${result.model} 生成提交消息。`);
-        })
-        .catch((error) => {
-          if (isCurrentRequest(request))
-            setNotice(error instanceof Error ? error.message : String(error));
-        })
-        .finally(() => {
-          finishAction(request);
-        });
+      if (draftKey) drafts.edit(draftKey, draftRevision, message.value);
     },
     listenerOptions,
   );
+  model.addEventListener(
+    "change",
+    () => {
+      selectedMessageModel = model.value;
+    },
+    listenerOptions,
+  );
+  generate.addEventListener("click", () => void generateMessage(false), listenerOptions);
   commit.addEventListener("click", () => void submit(false), listenerOptions);
   commitPush.addEventListener("click", () => void submit(true), listenerOptions);
   push.addEventListener(
@@ -1989,6 +2083,19 @@ export function installRendererGitSidebar(options: {
     listenerOptions,
   );
 
+  // 仅在可见的提交面板检查；离开面板或窗口隐藏时不扫描工作区。
+  const messageMonitor = setInterval(() => {
+    if (
+      !disposed &&
+      !document.hidden &&
+      view === "commits" &&
+      !historyVisible &&
+      current?.messageRevision !== undefined &&
+      !isBusy()
+    )
+      void load(true);
+  }, 15_000);
+
   const mount = (): void => {
     if (disposed) return;
     if (
@@ -2076,6 +2183,8 @@ export function installRendererGitSidebar(options: {
       disposed = true;
       historyView.reset();
       clearTimeout(warmTimer);
+      clearTimeout(autoMessageTimer);
+      clearInterval(messageMonitor);
       cache.clear();
       stopObserving();
       nativeFileTreeLayout.dispose();

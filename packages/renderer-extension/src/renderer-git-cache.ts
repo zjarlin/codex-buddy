@@ -16,9 +16,13 @@ interface Entry {
   bytes: number;
 }
 
-// 缓存状态、历史与模型目录；并发读取共用请求，写入后失效。
+// 状态与历史在 Git 写入后失效；Provider 模型目录按 Host 独立复用。
 export class RendererGitCache {
   readonly #entries: Entry[] = [];
+  #models = new WeakMap<
+    RendererGitClient,
+    { expiresAt: number; request: ReturnType<RendererGitClient["listGitMessageModels"]> }
+  >();
 
   #find(client: RendererGitClient, target: RendererGitTarget, key: string): Entry | undefined {
     return this.#entries.find(
@@ -103,12 +107,25 @@ export class RendererGitCache {
   }
 
   models(client: RendererGitClient, target: RendererGitTarget, repository?: string) {
-    return this.#read(client, target, JSON.stringify([repository, "models"]), () =>
-      client.listGitMessageModels({
+    const cached = this.#models.get(client);
+    if (cached && cached.expiresAt > Date.now()) return cached.request;
+    const entry = {
+      expiresAt: Infinity,
+      request: client.listGitMessageModels({
         ...gitTargetParams(target),
         ...(repository ? { repository } : {}),
       }),
+    };
+    this.#models.set(client, entry);
+    void entry.request.then(
+      (result) => {
+        entry.expiresAt = Date.now() + (result.models.length ? 300_000 : 5_000);
+      },
+      () => {
+        if (this.#models.get(client) === entry) this.#models.delete(client);
+      },
     );
+    return entry.request;
   }
 
   history(
@@ -154,5 +171,6 @@ export class RendererGitCache {
 
   clear(): void {
     this.#entries.length = 0;
+    this.#models = new WeakMap();
   }
 }

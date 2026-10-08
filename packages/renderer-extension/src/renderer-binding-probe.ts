@@ -908,7 +908,18 @@ export function installRendererBindingProbe(
         threadId && hostId ? nativeGitProjectWorkspace(document, hostId, threadId) : undefined;
       if (!threadId && !cwd) continue;
       const client = hostId ? modelClientForHost(hostId) : null;
-      return { anchor: mounted.composer, threadId, cwd, projectCwd, hostId, client };
+      const snapshot = mounted.control.modelShortcuts?.snapshot();
+      const modelContext = JSON.stringify([
+        mounted.hostId ?? activeModelHostId(),
+        mounted.modelTarget,
+      ]);
+      const modelCatalog =
+        snapshot?.harness === "codex" &&
+        (mounted.hostId ?? activeModelHostId()) === hostId &&
+        snapshot.context === modelContext
+          ? snapshot.view
+          : undefined;
+      return { anchor: mounted.composer, threadId, cwd, projectCwd, hostId, client, modelCatalog };
     }
     return null;
   };
@@ -940,6 +951,7 @@ export function installRendererBindingProbe(
             threadId: current.threadId,
             cwd: current.cwd,
             projectCwd: current.projectCwd,
+            modelCatalog: current.modelCatalog,
             hostId: current.hostId,
             client: current.client?.inspectGitStatus ? (current.client as RendererGitClient) : null,
           }

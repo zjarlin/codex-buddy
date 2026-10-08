@@ -53,6 +53,7 @@ it("keeps Provider reads and durable invocation receipts on the remote Host", as
   vi.stubGlobal("fetch", fetch);
   const snapshot = await readSshTurnActionsOnHost(f.params, f.environment);
   expect(snapshot).toMatchObject({ recommendation: { state: "unsupported" }, private: false });
+  expect(fetch.mock.calls.map(([, options]) => options.method)).toEqual(["GET", "POST"]);
   const invocation = {
     threadId: hostThreadIdSchema.parse(f.params.target.threadId),
     sourceTurnId: "turn-1",
@@ -72,7 +73,7 @@ it("keeps Provider reads and durable invocation receipts on the remote Host", as
       f.environment,
     ),
   ).rejects.toThrow("执行 ID");
-  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
 it("rejects mismatched remote Provider and honors remote privacy before querying or claiming", async () => {
   const f = await fixture();

@@ -52,6 +52,30 @@ describe("Controller attachment server", () => {
     }
   });
 
+  it("discloses web runtime only to the exact local nonce without activating Desktop", async () => {
+    const port = await availablePort();
+    const attach = vi.fn(async () => {});
+    const runtime = {
+      rendererCdpEndpoint: "http://127.0.0.1:43123",
+      rendererPath: "/opt/buddy/renderer.js",
+    };
+    const server = await startControllerAttachmentServer({
+      port,
+      nonce,
+      attach,
+      webRuntime: runtime,
+    });
+    try {
+      const response = await request(port, `WEB ${nonce}\n`);
+      expect(JSON.parse(response)).toEqual({ schemaVersion: 1, ...runtime });
+      expect(response).not.toContain(nonce);
+      await expect(request(port, `WEB ${"0".repeat(32)}\n`)).resolves.toBe("rejected\n");
+      expect(attach).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("keeps attachment recovery single-flight while duplicate launchers retry", async () => {
     const port = await availablePort();
     const recovery = Promise.withResolvers<undefined>();

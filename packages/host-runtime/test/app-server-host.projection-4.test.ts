@@ -1300,7 +1300,11 @@ describe("AppServerHost HarnessAdapter projection", () => {
     ).resolves.toMatchObject({
       result: {
         harnessId: "claude-code",
-        transportModelId: encodeClaudeTransportModel(secondModel),
+        transportModelId: encodeClaudeTransportModel(
+          firstModel,
+          undefined,
+          claudeAdapter.sessions[0]?.state.effectiveThinkingOptionId,
+        ),
         effectiveModel: firstModel,
         resolvedModelLabel: "fake-runtime-primary",
       },
@@ -1320,7 +1324,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
     ).resolves.toMatchObject({
       error: {
         code: -32602,
-        message: "Turn Model carrier does not belong to the Thread Harness",
+        message: "Turn Model does not belong to the Thread Harness",
       },
     });
     expect(claudeAdapter.sessions[1]?.state.effectiveModel).toEqual(firstModel);
@@ -1354,7 +1358,7 @@ describe("AppServerHost HarnessAdapter projection", () => {
     ).resolves.toMatchObject({
       error: {
         code: -32078,
-        message: "External Harness does not support Model selection",
+        message: "Model state was not confirmed: External Harness does not support Model selection",
       },
     });
     expect(claudeSession.state.effectiveModel).toEqual(claudeAdapter.catalog.defaultModel);

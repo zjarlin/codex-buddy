@@ -1718,7 +1718,7 @@ describe("AppServerHost project Git workflow", () => {
       const execute = vi.spyOn(session, "execute");
       expect(await ok("codexhost/git/workflow/run")).toMatchObject({ phase: "running" });
       expect(execute.mock.calls.at(-1)?.[0]).toMatchObject({
-        input: [{ type: "text", text: expect.stringContaining(backend) }],
+        input: [{ type: "text", text: expect.stringContaining(JSON.stringify(backend)) }],
       });
     } finally {
       await stopFixture(fixture);

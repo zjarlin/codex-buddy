@@ -31,6 +31,7 @@ import {
   type ClassificationEnvironment,
 } from "./classification.js";
 import { AutomaticRecovery } from "./recovery.js";
+import { NativeContextCompaction } from "./context-compaction.js";
 import { InterruptedConversations } from "./continuation.js";
 import { GitPushBypassScores, gitPushSkills, gitWorkflowGuidance } from "./git-push-bypass.js";
 import { createJevClient, type SystemOneCommand } from "./judgment.js";
@@ -71,6 +72,7 @@ export class BuddyRouter {
   #jevKey: string | null = null;
   #jevBaseUrl: string | null = null;
   readonly #recovery: AutomaticRecovery;
+  readonly #compaction: NativeContextCompaction;
   readonly #recoveryContext = new Map<string, JsonObject>();
   #settings = buddySettingsSchema.parse({});
   #models: BuddyModel[] = [];
@@ -87,11 +89,17 @@ export class BuddyRouter {
       (id) => this.#active.has(id) || this.#jobs.has(id),
       async () => {
         await this.#loadSettings();
-        return this.#settings.enabled && !this.#settings.privateMode;
+        return !this.#settings.privateMode;
       },
     );
+    this.#compaction = new NativeContextCompaction(options.request);
     this.#recovery = new AutomaticRecovery({
       changed: () => options.activeWorkChanged?.(),
+      compact: async (threadId, turnId, signal) => {
+        await this.#loadSettings();
+        if (this.#settings.privateMode) throw new Error("自动压缩已关闭。");
+        return this.#compaction.compact(threadId, turnId, signal);
+      },
       nextModel: async (threadId, excluded, signal) => {
         await this.#loadSettings();
         if (!this.#settings.enabled || this.#settings.privateMode)
@@ -106,14 +114,15 @@ export class BuddyRouter {
         });
         return inventory.executors.find((candidate) => !excluded.has(candidate.id))?.id ?? null;
       },
-      resume: async (threadId, turnId, model, signal) => {
+      resume: async (threadId, turnId, model, signal, afterCompaction) => {
         const context = this.#recoveryContext.get(threadId) ?? {};
         const mode = object(context.collaborationMode) as JsonObject;
         const nextTurnId = await continuation.continue(threadId, turnId, {
           signal,
           model,
           context,
-          ...(mode
+          ...(afterCompaction ? { afterCompaction: true } : {}),
+          ...(typeof mode.mode === "string"
             ? {
                 collaborationMode: {
                   ...mode,
@@ -134,6 +143,23 @@ export class BuddyRouter {
       },
       report: (threadId, reason, model, stopped, waiting) => {
         if (stopped) this.#recoveryContext.delete(threadId);
+        if (!this.#decisions.has(threadId)) {
+          this.#setDecision(threadId, {
+            threadId,
+            turnId: null,
+            phase: "retrying",
+            role: "executor",
+            difficulty: "standard",
+            score: 0,
+            reason,
+            executorModel: model,
+            acceptedModel: model,
+            involvedModels: [model],
+            command: null,
+            exitCode: null,
+            updatedAt: new Date().toISOString(),
+          });
+        }
         this.#update(threadId, {
           reason,
           executorModel: model,
@@ -399,6 +425,28 @@ export class BuddyRouter {
   }
 
   track(request: JsonRpcRequest): void {
+    if (request.method === "turn/start" && !this.#settings.enabled && !this.#settings.privateMode) {
+      const params = object(request.params) as JsonObject;
+      const threadId = params.threadId;
+      const model =
+        params.model ??
+        object(object(params.collaborationMode).settings).model ??
+        (typeof threadId === "string" ? this.#threads.get(threadId)?.model : undefined);
+      const mode =
+        object(params.collaborationMode).mode ??
+        (typeof threadId === "string" ? this.#threads.get(threadId)?.mode : undefined);
+      if (
+        typeof threadId === "string" &&
+        typeof model === "string" &&
+        mode !== "plan" &&
+        Array.isArray(params.input) &&
+        params.input.length > 0 &&
+        !params.toolOutput &&
+        params.outputSchema == null
+      ) {
+        this.#watchRecovery(threadId, model, params, false, true);
+      }
+    }
     if (["thread/start", "thread/resume", "thread/fork", "turn/start"].includes(request.method)) {
       this.#tracked.set(request.id, request);
     }
@@ -453,6 +501,15 @@ export class BuddyRouter {
   }
 
   observe(message: JsonValue): boolean {
+    if (this.#compaction.observe(message)) {
+      const value = object(message);
+      const threadId = object(value.params).threadId;
+      if (typeof threadId === "string") {
+        if (value.method === "turn/started") this.#active.add(threadId);
+        else this.#active.delete(threadId);
+      }
+      return false;
+    }
     if (this.#dispatch.handle(message)) {
       return true;
     }
@@ -1003,24 +1060,33 @@ export class BuddyRouter {
     });
     this.track(rewritten);
     if (!modelBypass && !answerModel && !nativePlanning && typeof model === "string") {
-      this.#recovery.watch(threadId, model, !fixedExecutor);
-      const recoveryContext: JsonObject = {};
-      const original = object(rewritten.params) as JsonObject;
-      for (const key of [
-        "collaborationMode",
-        "cwd",
-        "approvalPolicy",
-        "sandboxPolicy",
-        "permissions",
-        "permissionProfile",
-        "outputSchema",
-      ]) {
-        if (original[key] !== undefined) recoveryContext[key] = original[key];
-      }
-      this.#recoveryContext.set(threadId, recoveryContext);
+      this.#watchRecovery(threadId, model, object(rewritten.params) as JsonObject, !fixedExecutor);
     }
     this.#active.add(threadId);
     await this.options.forward(rewritten);
+  }
+
+  #watchRecovery(
+    threadId: string,
+    model: string,
+    params: JsonObject,
+    allowModelSwitch: boolean,
+    contextOnly = false,
+  ): void {
+    this.#recovery.watch(threadId, model, allowModelSwitch, contextOnly);
+    const context: JsonObject = {};
+    for (const key of [
+      "collaborationMode",
+      "cwd",
+      "approvalPolicy",
+      "sandboxPolicy",
+      "permissions",
+      "permissionProfile",
+      "outputSchema",
+    ]) {
+      if (params[key] !== undefined) context[key] = params[key];
+    }
+    this.#recoveryContext.set(threadId, context);
   }
 
   close(): void {

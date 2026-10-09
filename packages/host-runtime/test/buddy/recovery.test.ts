@@ -27,6 +27,105 @@ function fixture() {
 }
 
 describe("automatic recovery", () => {
+  it("does not enable transient retries for context-only watches", async () => {
+    const f = fixture();
+    f.service.watch("thread", "model", false, true);
+    await f.fail("turn");
+    expect(f.wait).not.toHaveBeenCalled();
+    expect(f.resume).not.toHaveBeenCalled();
+    expect(f.nextModel).not.toHaveBeenCalled();
+    expect(f.service.threadIds).toEqual([]);
+  });
+  it.each([
+    { message: "prompt is too long: 1232704 tokens > 1048576 maximum" },
+    { code: 11115 },
+    { code: "prompt_too_long" },
+    { codexErrorInfo: "contextWindowExceeded" },
+    { message: "HTTP 400", error: { code: "context_length_exceeded" } },
+  ])(
+    "compacts an overflow once before continuing, without backoff or switching: %j",
+    async (error) => {
+      const compact = vi.fn(async () => "compact-turn");
+      const resume = vi.fn(async () => {});
+      const wait = vi.fn(async () => {});
+      const nextModel = vi.fn(async () => "other");
+      const report = vi.fn();
+      const service = new AutomaticRecovery({ compact, resume, wait, nextModel, report });
+      services.push(service);
+      service.watch("thread", "deepseek-v4.1-flash");
+      service.started("thread", "failed-turn");
+      service.completed("thread", "failed-turn", "failed", error);
+      service.completed("thread", "failed-turn", "failed", error);
+      await flush();
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(resume).toHaveBeenCalledWith(
+        "thread",
+        "compact-turn",
+        "deepseek-v4.1-flash",
+        expect.any(AbortSignal),
+        true,
+      );
+      expect(wait).not.toHaveBeenCalled();
+      expect(nextModel).not.toHaveBeenCalled();
+      service.started("thread", "continued-turn");
+      service.completed("thread", "continued-turn", "failed", error);
+      await flush();
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(service.started("thread", "another-turn")).toBe(false);
+    },
+  );
+
+  it("never resumes when compaction fails or the user cancels it", async () => {
+    for (const cancelled of [false, true]) {
+      let finish: () => void = () => {};
+      const compact = vi.fn(
+        () =>
+          new Promise<string>((resolve, reject) => {
+            finish = () =>
+              cancelled ? resolve("compact-turn") : reject(new Error("compaction failed"));
+          }),
+      );
+      const resume = vi.fn(async () => {});
+      const report = vi.fn();
+      const service = new AutomaticRecovery({
+        compact,
+        resume,
+        report,
+        nextModel: async () => null,
+      });
+      services.push(service);
+      service.watch("thread", "model");
+      service.started("thread", "turn");
+      service.completed("thread", "turn", "failed", { code: 11115 });
+      if (cancelled) service.cancel("thread");
+      finish();
+      await flush();
+      expect(resume).not.toHaveBeenCalled();
+      expect(service.pending).toBe(false);
+      if (!cancelled)
+        expect(report).toHaveBeenLastCalledWith(
+          "thread",
+          expect.stringContaining("compaction failed"),
+          "model",
+          true,
+        );
+    }
+  });
+
+  it.each(["prompt_too_long", "prompt is too long", "11115"])(
+    "does not retry overflow without a native compaction capability: %s",
+    async (message) => {
+      const f = fixture();
+      f.service.started("thread", "turn");
+      f.service.completed("thread", "turn", "failed", { message });
+      await flush();
+      expect(f.wait).not.toHaveBeenCalled();
+      expect(f.resume).not.toHaveBeenCalled();
+      expect(f.nextModel).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps an explicitly selected executor and stops after three failures", async () => {
     const f = fixture();
     f.service.watch("thread", "cheap-a", false);

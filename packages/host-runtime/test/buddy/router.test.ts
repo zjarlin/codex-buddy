@@ -126,6 +126,7 @@ async function fixture(
     modelRows?: JsonObject[];
     threadProvider?: string;
     recovery?: boolean;
+    compact?: boolean;
     skills?: JsonObject[];
     skillsError?: boolean;
     jev?: TypeSafeClient;
@@ -207,6 +208,27 @@ async function fixture(
             return { result: { turn: { id: turnId } } };
           }
           throw new Error(`Unexpected internal model call: ${method}`);
+        }
+        case "thread/compact/start": {
+          if (!options.compact) throw new Error("Unexpected compaction");
+          router.observe({
+            method: "turn/started",
+            params: { threadId: "work", turn: { id: "compact" } },
+          });
+          router.observe({
+            method: "item/completed",
+            params: { threadId: "work", turnId: "compact", item: { type: "contextCompaction" } },
+          });
+          options.historyTurns?.splice(0, options.historyTurns.length, {
+            id: "compact",
+            status: "completed",
+            items: [{ type: "contextCompaction" }],
+          });
+          router.observe({
+            method: "turn/completed",
+            params: { threadId: "work", turn: { id: "compact", status: "completed" } },
+          });
+          return { result: {} };
         }
         default:
           return { result: {} };
@@ -468,6 +490,124 @@ describe("Buddy family policy", () => {
     expect(f.sent).toEqual([]);
     expect(f.providerRequests()).toBe(0);
     expect((await f.router.snapshot()).decisions).toEqual([]);
+  });
+
+  it.each(["prompt_too_long", "network reset"])(
+    "keeps native sends unchanged with Auto Router off and only compacts overflow: %s",
+    async (message) => {
+      const historyTurns: JsonObject[] = [{ id: "initial", status: "failed" }];
+      const f = await fixture({ recovery: true, compact: true, historyTurns });
+      await f.router.configure({ enabled: false });
+      const request = f.turn("继续", {
+        model: "deepseek-flash",
+        approvalPolicy: "on-request",
+        sandboxPolicy: { type: "readOnly" },
+        cwd: f.home,
+      });
+      const original = structuredClone(request);
+      expect(await f.router.route(request)).toBe(false);
+      expect(request).toEqual(original);
+      f.router.track(request);
+      f.router.observe({
+        method: "turn/started",
+        params: { threadId: "work", turn: { id: "initial" } },
+      });
+      f.router.observe({
+        method: "turn/completed",
+        params: { threadId: "work", turn: { id: "initial", status: "failed", error: { message } } },
+      });
+      if (message === "prompt_too_long") {
+        await vi.waitFor(() =>
+          expect(f.requested.filter((entry) => entry.method === "turn/start")).toHaveLength(1),
+        );
+        expect(f.requested.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
+          model: "deepseek-flash",
+          approvalPolicy: "on-request",
+          sandboxPolicy: { type: "readOnly" },
+          cwd: f.home,
+        });
+        expect(
+          f.requested.find((entry) => entry.method === "turn/start")?.params.collaborationMode,
+        ).toBeUndefined();
+        expect(f.requested.filter((entry) => entry.method === "thread/compact/start")).toHaveLength(
+          1,
+        );
+      } else {
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(f.requested).toEqual([]);
+        expect(f.router.hasActiveWork).toBe(false);
+      }
+      expect(f.providerRequests()).toBe(0);
+      expect(f.forwarded).toEqual([]);
+    },
+  );
+
+  it("automatically compacts an overflow and continues with the original model and permissions", async () => {
+    const historyTurns: JsonObject[] = [{ id: "initial", status: "failed" }];
+    const f = await fixture({
+      recovery: true,
+      compact: true,
+      historyTurns,
+      classify: { conversational: true, role: "executor" },
+    });
+    await f.router.route(
+      f.turn("hi", {
+        approvalPolicy: "on-request",
+        sandboxPolicy: { type: "readOnly" },
+        cwd: f.home,
+      }),
+    );
+    const initial = (f.forwarded[0]?.params as JsonObject)?.model;
+    f.router.observe({
+      method: "turn/started",
+      params: { threadId: "work", turn: { id: "initial" } },
+    });
+    f.router.observe({
+      method: "turn/completed",
+      params: {
+        threadId: "work",
+        turn: {
+          id: "initial",
+          status: "failed",
+          error: {
+            message: "HTTP 400 prompt is too long: 1232704 tokens > 1048576 maximum",
+            code: 11115,
+          },
+        },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(f.requested.filter((entry) => entry.method === "turn/start")).toHaveLength(1),
+    );
+    const resumed = f.requested.find((entry) => entry.method === "turn/start");
+    expect(resumed?.params).toMatchObject({
+      model: initial,
+      approvalPolicy: "on-request",
+      sandboxPolicy: { type: "readOnly" },
+      cwd: f.home,
+    });
+    expect(resumed?.params.collaborationMode).toMatchObject({ settings: { model: initial } });
+    expect(resumed?.params.input).toEqual([
+      { type: "text", text: expect.stringContaining("不要盲目重放") },
+    ]);
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      turnId: "continued-1",
+      acceptedModel: initial,
+      phase: "executing",
+      reason: expect.stringContaining("历史保存已确认"),
+    });
+    expect(f.requested.filter((entry) => entry.method === "thread/compact/start")).toHaveLength(1);
+    historyTurns.splice(0, historyTurns.length, { id: "continued-1", status: "failed" });
+    f.router.observe({
+      method: "turn/completed",
+      params: {
+        threadId: "work",
+        turn: { id: "continued-1", status: "failed", error: { code: 11115 } },
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(f.requested.filter((entry) => entry.method === "turn/start")).toHaveLength(1);
+    expect(f.router.hasActiveWork).toBe(false);
   });
 
   it("automatically continues native failures and changes both model fields after three failures", async () => {

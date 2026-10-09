@@ -1,6 +1,7 @@
 import type { BuddyInterrupted, ThreadArchiveCompletedResult } from "@codexhost/shared-contracts";
 import type { JsonObject } from "@codexhost/protocol-core";
 import { object, result, type NativeRequest } from "./native.js";
+import { isCompletedCompaction } from "./context-compaction.js";
 
 const continuation =
   "继续本会话上一次尚未完成的请求。先核对已有回答、工具结果和当前实际状态，从中断处继续；不要盲目重放已完成的命令、修改或外部操作。若上次请求已经完成，简要说明即可。";
@@ -194,6 +195,7 @@ export class InterruptedConversations {
       model?: string;
       collaborationMode?: JsonObject;
       context?: JsonObject;
+      afterCompaction?: boolean;
     },
   ): Promise<string> {
     if (this.#pending.has(threadId)) throw new Error("该会话正在续接，请勿重复点击。");
@@ -205,7 +207,10 @@ export class InterruptedConversations {
         const { thread, turn } = await this.#read(threadId);
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
-        if (turn.id !== turnId || recoverableStatus(thread, turn) === null) {
+        const eligible = options?.afterCompaction
+          ? isCompletedCompaction(turn)
+          : recoverableStatus(thread, turn) !== null;
+        if (turn.id !== turnId || !eligible) {
           throw new Error("会话状态已改变，请刷新列表。");
         }
       };

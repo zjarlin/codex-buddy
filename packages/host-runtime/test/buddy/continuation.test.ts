@@ -50,6 +50,47 @@ function fixture() {
 }
 
 describe("interrupted conversations", () => {
+  it.each([true, false])(
+    "only allows an explicitly confirmed completed compact turn to continue: %s",
+    async (compacted) => {
+      const request = vi.fn<NativeRequest>(async (method) => {
+        if (method === "thread/read")
+          return {
+            result: {
+              thread: {
+                status: { type: "idle" },
+                turns: [
+                  {
+                    id: "compact",
+                    status: "completed",
+                    items: [{ type: compacted ? "contextCompaction" : "agentMessage" }],
+                  },
+                ],
+              },
+            },
+          };
+        if (method === "turn/start") return { result: { turn: { id: "continued" } } };
+        return { result: {} };
+      });
+      const service = new InterruptedConversations(
+        request,
+        () => false,
+        async () => true,
+      );
+      await expect(service.continue("thread", "compact")).rejects.toThrow("会话状态已改变");
+      if (compacted) {
+        await expect(
+          service.continue("thread", "compact", { afterCompaction: true }),
+        ).resolves.toBe("continued");
+      } else {
+        await expect(
+          service.continue("thread", "compact", { afterCompaction: true }),
+        ).rejects.toThrow("会话状态已改变");
+        expect(request.mock.calls.map(([method]) => method)).not.toContain("turn/start");
+      }
+    },
+  );
+
   it("scans every official page so older failed turns are not hidden", async () => {
     const request = vi.fn<NativeRequest>(async (method, params) => {
       if (method === "thread/list") {

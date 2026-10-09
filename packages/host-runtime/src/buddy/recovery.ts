@@ -6,6 +6,8 @@ interface RecoveryState {
   used: Set<string>;
   failures: number;
   total: number;
+  compacted: boolean;
+  contextOnly: boolean;
   turnId: string | null;
   seen: Set<string>;
   controller: AbortController;
@@ -15,7 +17,14 @@ interface RecoveryOptions {
   changed?(): void;
   wait?(milliseconds: number, signal: AbortSignal): Promise<void>;
   nextModel(threadId: string, excluded: Set<string>, signal: AbortSignal): Promise<string | null>;
-  resume(threadId: string, turnId: string, model: string, signal: AbortSignal): Promise<void>;
+  compact?(threadId: string, turnId: string, signal: AbortSignal): Promise<string>;
+  resume(
+    threadId: string,
+    turnId: string,
+    model: string,
+    signal: AbortSignal,
+    afterCompaction?: boolean,
+  ): Promise<void>;
   report(
     threadId: string,
     reason: string,
@@ -40,7 +49,7 @@ export class AutomaticRecovery {
     return [...this.#states.keys()];
   }
 
-  watch(threadId: string, model: string, allowModelSwitch = true): void {
+  watch(threadId: string, model: string, allowModelSwitch = true, contextOnly = false): void {
     this.cancel(threadId);
     this.#states.set(threadId, {
       model,
@@ -48,6 +57,8 @@ export class AutomaticRecovery {
       used: new Set([model]),
       failures: 0,
       total: 0,
+      compacted: false,
+      contextOnly,
       turnId: null,
       seen: new Set(),
       controller: new AbortController(),
@@ -70,6 +81,35 @@ export class AutomaticRecovery {
     }
     state.seen.add(turnId);
     const description = JSON.stringify(error ?? "");
+    // 供应商可能只透出业务码或文本；在通用 HTTP 400/参数错误之前识别上下文超限。
+    if (
+      /\b11115\b|prompt[_ -](?:too[_ -]long)|prompt is too long|context[_ -]?window[_ -]?exceeded|context[_ -]?length[_ -]?exceeded|exceeds? (?:the )?(?:model.?s? )?(?:context|token) (?:window|limit)|上下文.{0,8}(?:超限|过长)/iu.test(
+        description,
+      )
+    ) {
+      if (!this.options.compact || state.compacted || state.total >= 8) {
+        this.options.report(
+          threadId,
+          "上下文超限，已停止自动续接；未重发原请求。",
+          state.model,
+          true,
+        );
+        this.cancel(threadId);
+        return;
+      }
+      state.compacted = true;
+      state.total++;
+      this.#waiting++;
+      void this.#compact(threadId, turnId, state).finally(() => {
+        this.#waiting--;
+        this.options.changed?.();
+      });
+      return;
+    }
+    if (state.contextOnly) {
+      this.cancel(threadId);
+      return;
+    }
     // 请求格式错误不会因重试或换模消失，尤其不能重复携带非法工具名的历史。
     if (
       /invalid[_ -]?(?:string|request|argument|parameter)|string does not match pattern|unknown parameter|missing required parameter|unsupported parameter|\b(?:HTTP|status)\s*[:=]?\s*(?:400|422)\b|"(?:httpStatusCode|http_status_code|statusCode|status)"\s*:\s*(?:400|422)\b/iu.test(
@@ -158,6 +198,32 @@ export class AutomaticRecovery {
       if (!signal.aborted) {
         const message = error instanceof Error ? error.message : String(error);
         this.options.report(threadId, `自动续接停止：${message}`, state.model, true);
+        this.cancel(threadId);
+      }
+    }
+  }
+
+  async #compact(threadId: string, turnId: string, state: RecoveryState): Promise<void> {
+    const signal = state.controller.signal;
+    try {
+      this.options.report(
+        threadId,
+        "上下文超限，正在尝试一次原生压缩；确认历史保存后才续接。",
+        state.model,
+        false,
+        true,
+      );
+      const compact = this.options.compact;
+      if (!compact) throw new Error("原生压缩能力不可用。");
+      const compactTurnId = await compact(threadId, turnId, signal);
+      signal.throwIfAborted();
+      await this.options.resume(threadId, compactTurnId, state.model, signal, true);
+      if (!signal.aborted && !state.seen.has(state.turnId ?? ""))
+        this.options.report(threadId, "原生压缩和历史保存已确认，已自动续接。", state.model, false);
+    } catch (error) {
+      if (!signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.report(threadId, `自动压缩停止：${message}`, state.model, true);
         this.cancel(threadId);
       }
     }

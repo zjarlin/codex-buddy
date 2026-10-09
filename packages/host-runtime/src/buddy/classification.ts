@@ -54,7 +54,8 @@ export function dispatchCandidates(project: Project, cwd: string | undefined): S
       ]
     : [];
   const seen = new Set<string>();
-  return [...discovered, ...builtins].filter((item) => {
+  // 内建只读入口优先，避免项目清单较大时被判断候选的十二项上限挤掉。
+  return [...builtins, ...discovered].filter((item) => {
     if (seen.has(item.command)) return false;
     seen.add(item.command);
     return true;
@@ -199,6 +200,7 @@ export async function classifyWithFallback(
     cwd: string | undefined;
     project: Project;
     threadId: string;
+    fallbackReason?: string;
   },
 ): Promise<ClassifiedRoute> {
   // 兜底路径无法判断承接关系，直接读取有界历史交给本地评级；失败按空历史处理。
@@ -210,6 +212,7 @@ export async function classifyWithFallback(
     assessment.intent = "git";
     assessment.reason = "本地规则命中推送请求（System One 不可用）；由单个模型直接处理。";
   }
+  assessment.reason = `${path.fallbackReason ?? "未调用 System One"}，使用本地规则：${assessment.reason}`;
   return {
     assessment,
     role: resolveRole(environment.settings, null, path.text, assessment, modelBypass),
@@ -217,7 +220,7 @@ export async function classifyWithFallback(
     modelBypass,
     gitAction: modelBypass ? "commit-push" : "none",
     needsCommitMessage: modelBypass,
-    judgment: undefined,
+    judgment: { source: "local-rules", model: null, decisions: {} },
     commandIndex: null,
     reason: assessment.reason,
     source: "local-rules",

@@ -25,7 +25,8 @@ Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 System 
 - 用户显式指定的执行角色（`settings.role != "auto"`）优先于 System One；未指定时以 System One 判定为准，缺少服务时回退本地 `specialist` 规则。
 - Git 模型旁路以 System One 的 `gitAction` / `isPush` 为准；缺少服务时退回正则预筛 `isGitPushRequest`。正则是纯离线兜底，不再是进入旁路的第一判断层。
 - 精确 CLI 入口以 System One 选中的 `commandIndex` 为准；缺少服务时不执行零模型旁路。
-- System One 超时（默认 4 秒）、认证、限流、网络或协议错误全部由 `BuddyRouter` 捕获并 `diagnose`，随后使用本地兜底完成该回合，不阻断原生请求。
+- System One 超时（单次 10 秒且不重试）、认证、限流、网络或协议错误全部由 `BuddyRouter` 捕获并 `diagnose`，随后使用本地兜底完成该回合。兜底快照明确记录 `judgment.source=local-rules`、`model=null`、空逐题答案与原因，设置页展示真实来源；取消请求直接停止，不执行本地兜底。
+- 普通回合保留原生 developer instructions，不追加通用执行角色或模型身份提示词；System One 结论保留在路由元数据中，仅纯问答旁路和已确认 Git 工作流追加必要的执行约束。
 - `buddySettingsSchema.jev`（默认开启）关闭时完全不调用 System One，退回本地兜底。
 - 隐私模式不经过普通 `#route`，因此不会调用 System One；System One 只服务在线普通路由。
 

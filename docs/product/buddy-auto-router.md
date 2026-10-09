@@ -126,9 +126,11 @@ Auto Router 开启时，本进程路由的普通执行回合若收到原生 `tur
 
 ## JEV 回合判断
 
-开启“System One 判断”（默认开启）时，普通在线回合批量判断路由入口、复杂度、破坏性、Git 动作、提交消息、执行角色、普通问答、承接上文及精确 CLI 入口。只有判定为承接上文时才读取历史再复评；因此它仍可能产生额外的判断请求。关闭该开关会使用本地规则，不调用判断模型。逐题依据以 `judgment` 保留在 Host 快照；模型可在设置窗口选择 JEV 或本地 Laya。
+自动路由与“System One 判断”均开启且密钥已配置时，普通在线回合批量判断路由入口、复杂度、破坏性、Git 动作、提交消息、执行角色、普通问答、承接上文及精确 CLI 入口。只有判定为承接上文时才读取历史再复评。自动路由关闭时不会执行发送前判断；判断开关关闭、缺少密钥或调用失败时使用本地规则。设置页显示实际生效的开关状态，以及最近一次判断的来源和原因；本地兜底以 `judgment.source=local-rules`、`model=null` 保留在 Host 快照，成功判断记录 `source=system-one` 和真实决策模型。
 
-JEV 只回答原子判断，不做推理、不执行工具、不授予权限。它使用 `@typesafe-ai/sdk` 的 `POST /v1/systemone`，默认模型 `jev-latest`，默认总预算 4 秒且不重试；可选 `TYPESAFE_BASE_URL`、`TYPESAFE_DEFAULT_MODEL`。面板关闭该开关时不调用 JEV。
+普通回合保留原生 developer instructions，不额外注入通用角色或模型身份提示词。执行角色保留为路由元数据；只有纯问答旁路与已确认的 Git 工作流追加对应的执行约束。旧版规划安装留下的 `CODEX_HOME/AGENTS.md` 中“Auto Router 规划与执行”章节属于独立配置，关闭路由不能阻止原生 Codex 读取它，清理时应只移除该章节并保留其他用户说明。
+
+JEV 只回答原子判断，不做推理、不执行工具、不授予权限。它使用 `@typesafe-ai/sdk` 的 `POST /v1/systemone`，默认模型 `typesafe/jev`，单次总预算 10 秒且不重试；可选 `TYPESAFE_BASE_URL`。模型由当前 Host 的 `systemOneModel` 设置选择，可切换为本地 Laya。
 
 “JEV 判断”下方提供 System One 模型选择（JEV / Laya）、API Key 与网关地址。密钥写入 `CODEX_HOME/buddy-jev.json`（权限 `0600`，独立于设置文件），优先级高于 `TYPESAFE_API_KEY` / `TYPESAFE_BASE_URL` 环境变量；Host 每回合重新加载。网关地址留空表示使用官方 `https://api.typesafe.ai`，也可填自建 Sub2API 网关（需转发 `/v1/systemone`）。快照只回传“已配置/未配置”和网关地址，密钥输入框为密码类型且保存后立即清空，密钥不回传浏览器、不写入 `settings`。清除按钮同时清空密钥与网关地址并停止 JEV 判断。
 

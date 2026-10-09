@@ -86,7 +86,8 @@ export interface JudgmentInput {
   commands: SystemOneCommand[];
 }
 
-const timeoutMs = 4_000;
+// JEV 经网关转发的实测延迟超过四秒，沿用 SDK 的十秒单次预算且不重试。
+const timeoutMs = 10_000;
 
 const policies = {
   route: { automatic: 0.85, review: 0.6 },

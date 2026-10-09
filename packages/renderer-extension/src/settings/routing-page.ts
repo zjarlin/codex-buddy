@@ -30,6 +30,13 @@ const copy = {
     configured: "密钥已配置",
     notConfigured: "密钥未配置",
     unavailable: "当前连接不支持路由设置。",
+    routerOff: "自动路由已关闭，发送前不会调用 System One。",
+    judgeOff: "System One 判断已关闭，使用本地规则。",
+    noKey: "System One 密钥未配置，使用本地规则。",
+    ready: "发送前由 System One 判断意图、难度与动作。",
+    lastDecision: "最近一次判断",
+    localRules: "本地规则",
+    noDecision: "未调用 System One",
   },
   en: {
     enabled: "Automatic routing",
@@ -54,6 +61,13 @@ const copy = {
     configured: "Key configured",
     notConfigured: "Key not configured",
     unavailable: "Routing settings are unavailable on this connection.",
+    routerOff: "Automatic routing is off. System One will not run before sending.",
+    judgeOff: "System One judgment is off. Local rules are used.",
+    noKey: "No System One key is configured. Local rules are used.",
+    ready: "System One judges intent, difficulty, and actions before sending.",
+    lastDecision: "Latest judgment",
+    localRules: "Local rules",
+    noDecision: "System One was not called",
   },
 } as const;
 
@@ -71,6 +85,10 @@ export function createRoutingSettingsPage(
       const heading = document.createElement("h1");
       heading.className = "settings-section-label";
       heading.textContent = messages.pageLabels.routing;
+      const routingStatus = document.createElement("p");
+      routingStatus.className = "settings-routing-judgment";
+      const lastDecision = document.createElement("p");
+      lastDecision.className = "settings-routing-decision";
       const status = document.createElement("p");
       status.setAttribute("role", "status");
       status.className = "settings-routing-status";
@@ -173,6 +191,26 @@ export function createRoutingSettingsPage(
       };
       const populate = (value: BuddySnapshot): void => {
         snapshot = value;
+        routingStatus.textContent =
+          value.settings.privateMode || !value.settings.enabled
+            ? m.routerOff
+            : !value.settings.jev
+              ? m.judgeOff
+              : !value.jevKeyConfigured
+                ? m.noKey
+                : m.ready;
+        const latest = value.decisions.toSorted((a, b) =>
+          b.updatedAt.localeCompare(a.updatedAt),
+        )[0];
+        lastDecision.hidden = !latest;
+        const source = latest?.judgment;
+        const label =
+          source?.source === "system-one"
+            ? `System One · ${source.model}`
+            : source?.source === "local-rules"
+              ? m.localRules
+              : m.noDecision;
+        lastDecision.textContent = latest ? `${m.lastDecision}：${label} · ${latest.reason}` : "";
         for (const [name, control] of controls) {
           if (control instanceof HTMLInputElement) control.checked = Boolean(value.settings[name]);
           else if (name !== "executorModel") {
@@ -311,7 +349,7 @@ export function createRoutingSettingsPage(
       fields.addEventListener("change", synchronize);
       form.addEventListener("submit", (event) => event.preventDefault());
       form.append(fields, actions, recoveries);
-      context.content.append(heading, status, form);
+      context.content.append(heading, routingStatus, lastDecision, status, form);
       run(async (target) => {
         if (!target.buddyStatus) throw new Error(m.unavailable);
         return target.buddyStatus();

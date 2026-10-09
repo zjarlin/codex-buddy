@@ -410,6 +410,34 @@ const jevClient = (body: unknown) =>
   });
 
 describe("Buddy family policy", () => {
+  it("uses System One metadata without adding role or identity prompts to ordinary turns", async () => {
+    const f = await fixture({ classify: { role: "io" } });
+    const request = f.turn("检查当前构建结果");
+    request.params = {
+      ...(request.params as JsonObject),
+      collaborationMode: {
+        mode: "default",
+        settings: { developer_instructions: "保留原生说明" },
+      },
+    };
+    await f.router.route(request);
+    expect(f.forwarded[0]?.params).toMatchObject({
+      collaborationMode: { settings: { developer_instructions: "保留原生说明" } },
+    });
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      role: "io",
+      judgment: { source: "system-one", model: "typesafe/jev" },
+    });
+  });
+
+  it("records an unconfigured System One client as local fallback", async () => {
+    const f = await fixture();
+    await f.router.route(f.turn("检查当前构建结果"));
+    const decision = (await f.router.snapshot()).decisions[0];
+    expect(decision?.judgment).toEqual({ source: "local-rules", model: null, decisions: {} });
+    expect(decision?.reason).toContain("System One 未配置，使用本地规则");
+  });
+
   it("routes questions to Doubao and the next action back to the Agent", async () => {
     const f = await fixture({
       modelIds: ["gpt-planner", "deepseek-flash", "doubao"],
@@ -449,6 +477,7 @@ describe("Buddy family policy", () => {
     const f = await fixture({ classify: { conversational: true } });
     await f.router.route(f.turn("什么是数据库事务？"));
     expect(f.forwarded[0]?.params).toMatchObject({ model: "deepseek-flash" });
+    expect(JSON.stringify(f.forwarded[0]?.params)).toContain("本回合是纯问答旁路");
     expect((await f.router.snapshot()).decisions[0]?.reason).toContain("没有可用 Doubao");
   });
 
@@ -890,6 +919,28 @@ describe("Buddy native routing", () => {
       });
       expect(f.router.hasActiveWork).toBe(false);
       expect(f.sent[0]).toMatchObject({ id: 2, result: { turn: { id: "shell" } } });
+    },
+  );
+  it.runIf(process.platform !== "win32")(
+    "keeps built-in directory inspection available when the project has more than twelve commands",
+    async () => {
+      const f = await fixture({
+        jev: jevClient(
+          jevResponse("inspect", 0, 0.02, "io", { exactCommand: 0.98, command: "c1" }),
+        ),
+      });
+      await writeFile(
+        join(f.home, "package.json"),
+        JSON.stringify({
+          scripts: Object.fromEntries(
+            Array.from({ length: 20 }, (_, index) => [`build:target${index}`, "node --version"]),
+          ),
+        }),
+      );
+      await f.router.route(f.turn("查看当前目录文件"));
+      expect(f.providerRequests()).toBe(0);
+      expect(f.forwarded[0]?.method).toBe("thread/shellCommand");
+      expect((await f.router.snapshot()).decisions[0]?.command).toContain("'ls' '-la'");
     },
   );
   it.runIf(process.platform === "win32")(
@@ -1457,7 +1508,8 @@ describe("JEV judgment integration", () => {
     await f.router.route(f.turn("推送代码"));
     const decision = (await f.router.snapshot()).decisions[0];
     expect(decision?.modelBypass).toMatchObject({ kind: "git-push" });
-    expect(decision?.judgment).toBeUndefined();
+    expect(decision?.judgment).toEqual({ source: "local-rules", model: null, decisions: {} });
+    expect(decision?.reason).toContain("System One 调用失败，使用本地规则");
   });
 
   it("does not call JEV when the switch is off or no client exists", async () => {
@@ -1476,7 +1528,12 @@ describe("JEV judgment integration", () => {
     await f.router.configure({ jev: false });
     await f.router.route(f.turn("推送代码"));
     expect(fetch).not.toHaveBeenCalled();
-    expect((await f.router.snapshot()).decisions[0]?.judgment).toBeUndefined();
+    expect((await f.router.snapshot()).decisions[0]?.judgment).toEqual({
+      source: "local-rules",
+      model: null,
+      decisions: {},
+    });
+    expect((await f.router.snapshot()).decisions[0]?.reason).toContain("System One 已关闭");
     expect((await f.router.snapshot()).decisions[0]?.modelBypass).toMatchObject({
       kind: "git-push",
     });

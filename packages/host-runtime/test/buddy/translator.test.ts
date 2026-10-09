@@ -2,12 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BuddyTranslator } from "../../src/buddy/translator.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(cleanups.splice(0).map((clean) => clean()));
 });
 
@@ -90,5 +91,70 @@ describe("gateway translation", () => {
     await expect(f.translator.translate({ text: "无结果", targetLocale: "en" })).rejects.toThrow(
       "翻译服务未返回结果",
     );
+  });
+
+  it.each([
+    [500, { message: "所有翻译服务均不可用" }],
+    [503, { error: { message: "Provider temporarily unavailable" } }],
+    [429, { error: "Translation quota exceeded" }],
+  ])("reports HTTP %i with the gateway reason and request ID", async (status, payload) => {
+    const f = await fixture((_body, res) => {
+      res.writeHead(status, { "x-request-id": "translation-fixture-123" });
+      res.end(JSON.stringify(payload));
+    });
+    const reason =
+      "message" in payload
+        ? payload.message
+        : typeof payload.error === "string"
+          ? payload.error
+          : payload.error.message;
+
+    await expect(
+      f.translator.translate({ text: "Please translate this message.", targetLocale: "zh-CN" }),
+    ).rejects.toThrow(`翻译服务返回 HTTP ${status}：${reason}（请求 ID：translation-fixture-123）`);
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it.each([
+    ["HTML error page", 502, "<html>private upstream error page</html>", "翻译服务返回 HTTP 502"],
+    [
+      "oversized error",
+      503,
+      JSON.stringify({ message: "x".repeat(5000) }),
+      "翻译服务返回 HTTP 503",
+    ],
+    ["invalid JSON", 200, "not JSON", "翻译服务返回了无效的 JSON 响应"],
+    ["oversized result", 200, "x".repeat(1_048_577), "翻译服务响应超过大小限制"],
+  ])("reports %s without dumping the response body", async (_name, status, body, message) => {
+    const f = await fixture((_body, res) => {
+      res.writeHead(status);
+      res.end(body);
+    });
+
+    await expect(
+      f.translator.translate({ text: "Please translate this message.", targetLocale: "zh-CN" }),
+    ).rejects.toThrow(new Error(message));
+  });
+
+  it("bounds JSON error reasons and does not expose other response fields", async () => {
+    const f = await fixture((_body, res) => {
+      res.writeHead(500);
+      res.end(JSON.stringify({ message: "x".repeat(1000), diagnostic: "fixture-private-detail" }));
+    });
+
+    await expect(
+      f.translator.translate({ text: "Please translate this message.", targetLocale: "zh-CN" }),
+    ).rejects.toThrow(new Error(`翻译服务返回 HTTP 500：${"x".repeat(300)}`));
+  });
+
+  it("reports the translation timeout instead of a generic abort", async () => {
+    const f = await fixture(() => {});
+    const realTimeout = AbortSignal.timeout;
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(25));
+
+    await expect(
+      f.translator.translate({ text: "Please translate this message.", targetLocale: "zh-CN" }),
+    ).rejects.toThrow("翻译请求超时（15 秒），网关未及时返回结果");
+    expect(timeout).toHaveBeenCalledWith(15_000);
   });
 });

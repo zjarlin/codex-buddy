@@ -35,21 +35,32 @@ function needsTranslation(lang: "cjk" | "latin" | "other", locale: string): bool
 }
 
 function extractText(node: HTMLElement): string {
-  const clone = node.cloneNode(true) as HTMLElement;
-  for (const pre of clone.querySelectorAll("pre")) pre.remove();
+  const content = node.querySelector('[data-markdown-text-style="assistant-message"]') ?? node;
+  const clone = content.cloneNode(true) as HTMLElement;
+  for (const excluded of clone.querySelectorAll(
+    "pre, .sr-only, [data-codexhost-translate], [data-codexhost-turn-actions]",
+  )) {
+    excluded.remove();
+  }
   return (clone.textContent?.trim() ?? "").slice(0, 8000);
 }
 
 function findMessages(root: HTMLElement, threadId: string): Map<string, HTMLElement> {
   const map = new Map<string, HTMLElement>();
-  for (const turn of root.querySelectorAll<HTMLElement>("[data-turn-key]")) {
-    const id = turn.getAttribute("data-turn-key")?.replace(/^history-content:turn:/, "");
-    if (!id || id.startsWith("history-content:")) continue;
-    const resp = turn.querySelector<HTMLElement>(
-      `[data-response-annotation-conversation="${threadId}"]`,
-    );
-    if (!resp?.getClientRects().length) continue;
-    if (resp.querySelector(".markdown, .prose, [class*='message']")) map.set(id, resp);
+  for (const response of root.querySelectorAll<HTMLElement>(
+    "[data-response-annotation-conversation]",
+  )) {
+    if (response.getAttribute("data-response-annotation-conversation") !== threadId) continue;
+    if (!response.getClientRects().length) continue;
+    const turn = response.closest("[data-content-search-turn-key], [data-turn-key]");
+    if (!turn) continue;
+    const id =
+      turn.getAttribute("data-content-search-turn-key") ?? turn.getAttribute("data-turn-key");
+    if (!id) continue;
+    // 同一回合可以包含多段进度消息，各段独立翻译。
+    const siblings = Array.from(turn.querySelectorAll("[data-response-annotation-conversation]"));
+    const messageId = response.getAttribute("data-response-annotation-target");
+    map.set(`${threadId}:${id}:${messageId ?? siblings.indexOf(response)}`, response);
   }
   return map;
 }
@@ -94,10 +105,14 @@ export function installTranslateCards(options: Options) {
       el("span", "", msgs.translating),
     );
     card.append(hdr);
-    cards.set(turnId, { node: card, signature: "", abortController: ac });
+    cards.set(turnId, {
+      node: card,
+      signature: JSON.stringify([text, locale]),
+      abortController: ac,
+    });
 
     try {
-      const ck = `${locale}:${text.slice(0, 200)}`;
+      const ck = `${locale}:${text}`;
       let result = cache.get(ck);
       if (!result) {
         result = await client.translate({ text, targetLocale: locale });
@@ -154,10 +169,10 @@ export function installTranslateCards(options: Options) {
       }
     }
     for (const [id, node] of messages) {
-      if (cards.has(id)) continue;
       const text = extractText(node);
       if (!text || text.length < 20) continue;
       if (!needsTranslation(detectLanguage(text), locale)) continue;
+      if (cards.get(id)?.signature === JSON.stringify([text, locale])) continue;
       void doTranslate(id, node, text, locale, ctx.client);
     }
   }

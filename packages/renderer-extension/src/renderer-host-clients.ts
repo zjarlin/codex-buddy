@@ -7,6 +7,7 @@ import {
   TURN_ACTIONS_INSPECT_METHOD,
   TURN_ACTION_EXECUTE_METHOD,
   AUTO_MODEL_ROUTES_METHOD,
+  BUDDY_TRANSLATE_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
   sshGitMethods,
@@ -14,7 +15,11 @@ import {
 import { createRendererModelClient, type RendererModelClient } from "./renderer-model-client.js";
 import { installRendererExternalQueue } from "./renderer-external-queue.js";
 import { installRendererExternalSteering } from "./renderer-external-steering.js";
-import type { RendererRequestOptions } from "./renderer-request-sender.js";
+import {
+  createRendererRequestSender,
+  RendererMethodUnavailableError,
+  type RendererRequestOptions,
+} from "./renderer-request-sender.js";
 import { createRendererSshGitSender } from "./renderer-ssh-git.js";
 import { createRendererSshAutoModelRoutesSender } from "./renderer-ssh-auto-model-routes.js";
 import { createRendererSshRemoteProjectsSender } from "./renderer-ssh-remote-projects.js";
@@ -79,8 +84,23 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
         send: sendRequest,
         sendGit: git,
       });
+      const remoteTranslate = createRendererRequestSender(sendRequest);
+      const localTranslate = createRendererRequestSender(ssh.sendLocal);
+      // 官方 SSH 服务没有 Buddy 翻译方法时，使用本机配置的网关翻译服务。
+      const translate = async (params: unknown, options?: RendererRequestOptions) => {
+        try {
+          return await remoteTranslate(BUDDY_TRANSLATE_METHOD, params, options);
+        } catch (error) {
+          if (!(error instanceof RendererMethodUnavailableError)) throw error;
+        }
+        if (!isCurrent()) throw new Error("SSH 连接已变化，请重新翻译。");
+        const result = await localTranslate(BUDDY_TRANSLATE_METHOD, params, options);
+        if (!isCurrent()) throw new Error("SSH 连接已变化，请重新翻译。");
+        return result;
+      };
       const gitMethods = new Set<string>(sshGitMethods);
       send = (method, params, options) => {
+        if (method === BUDDY_TRANSLATE_METHOD) return translate(params, options);
         if (method === TURN_ACTIONS_INSPECT_METHOD || method === TURN_ACTION_EXECUTE_METHOD)
           return actions(method, params, options);
         if (method === AUTO_MODEL_ROUTES_METHOD) return auto(method, params, options);

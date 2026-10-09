@@ -103,7 +103,7 @@
 | [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | 路由设置中的 q3 隐私开关、复用网关目录、发送阻断与保护范围；处理敏感文本前阅读。 |
 | [`product/emergency-provider.md`](product/emergency-provider.md) | 应急供应商故障转移反向代理：配置、工作原理与安全边界。 |
 | [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 单模型路由与设置表单、模型目录热更新、持久 Pin、Auto routed 卡片和 System One 回合动作。 |
-| [`product/translate-cards.md`](product/translate-cards.md) | 模型回答语言与 UI 不一致时，自动使用 ask 模型异步翻译展示。 |
+| [`product/translate-cards.md`](product/translate-cards.md) | 模型回答及进度消息的自动翻译展示、网关接口与 SSH 会话兼容。 |
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
 | [`product/remote-shared-projects.md`](product/remote-shared-projects.md) | SSH 主机共享项目发现、身份隔离与原生项目／会话恢复。 |
 | [`product/project-actions.md`](product/project-actions.md) | 项目分类 Tab、前缀规则、手动归属，以及 Doubao 桌面客户端入口。 |

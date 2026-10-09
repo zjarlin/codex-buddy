@@ -42,6 +42,21 @@ async function fixture(respond: (body: Record<string, unknown>, res: ServerRespo
 }
 
 describe("gateway translation", () => {
+  it("keeps messages with a shared prefix separate in the translation cache", async () => {
+    const f = await fixture((body, res) => {
+      const text = (body.q as string[])[0];
+      res.end(JSON.stringify({ translations: [{ text }], provider: "baidu" }));
+    });
+    const prefix = "Let me inspect the server capacity. ".repeat(20);
+    const first = { text: `${prefix}First result.`, targetLocale: "zh-CN" };
+    const second = { text: `${prefix}Updated result.`, targetLocale: "zh-CN" };
+
+    expect((await f.translator.translate(first)).translated).toBe(first.text);
+    expect((await f.translator.translate(second)).translated).toBe(second.text);
+    await f.translator.translate(second);
+    expect(f.requests).toHaveLength(2);
+  });
+
   it("reads the Sub2API {code,message,data} envelope", async () => {
     const f = await fixture((_body, res) => {
       res.end(

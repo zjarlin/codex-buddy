@@ -86,7 +86,7 @@ export class BuddyTranslator {
 
   #ck(req: BuddyTranslateRequest): string {
     return createHash("sha256")
-      .update(`${req.targetLocale}:${req.text.slice(0, 500)}`)
+      .update(`${req.targetLocale}:${req.text}`)
       .digest("hex")
       .slice(0, 16);
   }

@@ -5,6 +5,10 @@ import {
 
 import type { PendingConfirmationRecord } from "./pending-confirmations-state.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
+import {
+  RENDERER_SPEECH_CHANGE_EVENT,
+  RENDERER_SPEECH_STORAGE_KEY,
+} from "./renderer-speech-preference.js";
 
 type SpeechClient = Pick<RendererModelClient, "synthesizeSpeech">;
 
@@ -17,7 +21,7 @@ export interface RendererSpeechAnnouncer {
   /** 为一次完成通知播报摘要；未开启、不可见或已不可用时静默跳过。 */
   announce(entry: PendingConfirmationRecord): void;
   /** 用户手动重播：不受开关与窗口焦点限制。 */
-  replay(entry: PendingConfirmationRecord): void;
+  replay(entry: PendingConfirmationRecord): Promise<void>;
   dispose(): void;
 }
 
@@ -47,7 +51,8 @@ function dataUrl(result: BuddySpeechResult): string {
 
 /**
  * 完成播报只调用 Host 的网关语音合成，再由本模块播放音频。
- * 同一时间只播一条：新播报会停掉上一条；合成或播放失败都不打断用户工作。
+ * 同一窗口只播一条，最新请求替换此前音频与尚未完成的合成。
+ * 自动播报在失焦时取消；手动重播将合成和播放错误交给卡片显示。
  */
 export function createRendererSpeechAnnouncer(
   options: RendererSpeechOptions,
@@ -56,45 +61,61 @@ export function createRendererSpeechAnnouncer(
   let audio: HTMLAudioElement | null = null;
   let generation = 0;
   let disposed = false;
+  let automaticPlayback = false;
   const announced = new Map<string, true>();
 
   const stop = (): void => {
     generation += 1;
+    automaticPlayback = false;
     if (!audio) return;
     audio.pause();
     audio.removeAttribute("src");
     audio = null;
   };
 
-  const play = (result: BuddySpeechResult): void => {
+  const run = async (entry: PendingConfirmationRecord, automatic: boolean): Promise<void> => {
     stop();
     const version = generation;
-    const element = new Audio(dataUrl(result));
-    audio = element;
-    element.addEventListener("ended", () => {
-      if (version === generation && audio === element) audio = null;
-    });
-    void element.play().catch(() => {
-      if (version === generation && audio === element) audio = null;
-    });
-  };
-
-  const run = async (entry: PendingConfirmationRecord): Promise<void> => {
+    automaticPlayback = automatic;
+    const chinese = options.getLocale().startsWith("zh");
     const text = spokenText(entry.summary);
-    if (!text) return;
+    if (!text) throw new Error(chinese ? "没有可播报的摘要。" : "No summary to read aloud.");
     const client = options.getClient(entry.hostId);
-    if (!client?.synthesizeSpeech) return;
-    const version = generation;
-    const result = await client.synthesizeSpeech({ text, locale: options.getLocale() });
-    if (disposed || version !== generation) return;
-    play(result);
+    if (!client?.synthesizeSpeech) {
+      throw new Error(
+        chinese ? "当前 Host 不支持语音播报。" : "This Host does not support speech.",
+      );
+    }
+    try {
+      const result = await client.synthesizeSpeech({ text, locale: options.getLocale() });
+      if (disposed || version !== generation) return;
+      if (automatic && (!isEnabled() || document.hidden || !document.hasFocus())) return;
+      const element = new Audio(dataUrl(result));
+      audio = element;
+      element.addEventListener("ended", () => {
+        if (audio === element) audio = null;
+      });
+      await element.play();
+    } catch (error) {
+      if (disposed || version !== generation) return;
+      stop();
+      throw error;
+    }
   };
 
-  const speak = (entry: PendingConfirmationRecord): void => {
-    void run(entry).catch(() => {
-      /* 网关未启用媒体或合成失败时保持静默，不改变完成提醒本身。 */
-    });
+  const onBlur = (): void => {
+    if (automaticPlayback && (document.hidden || !document.hasFocus())) stop();
   };
+  const onPreferenceChanged = (): void => {
+    if (automaticPlayback && !isEnabled()) stop();
+  };
+  const onStorage = (event: StorageEvent): void => {
+    if (event.key === null || event.key === RENDERER_SPEECH_STORAGE_KEY) onPreferenceChanged();
+  };
+  window.addEventListener("blur", onBlur);
+  document.addEventListener("visibilitychange", onBlur);
+  window.addEventListener(RENDERER_SPEECH_CHANGE_EVENT, onPreferenceChanged);
+  window.addEventListener("storage", onStorage);
 
   return {
     announce(entry) {
@@ -109,15 +130,21 @@ export function createRendererSpeechAnnouncer(
         if (oldest === undefined) break;
         announced.delete(oldest);
       }
-      speak(entry);
+      void run(entry, true).catch((error: unknown) => {
+        console.warn("[codexhost] Speech announcement failed", error);
+      });
     },
     // 手动重播来自用户点击完成弹窗，不受开关与焦点限制。
     replay(entry) {
-      if (disposed) return;
-      speak(entry);
+      if (disposed) return Promise.resolve();
+      return run(entry, false);
     },
     dispose() {
       disposed = true;
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onBlur);
+      window.removeEventListener(RENDERER_SPEECH_CHANGE_EVENT, onPreferenceChanged);
+      window.removeEventListener("storage", onStorage);
       stop();
     },
   };

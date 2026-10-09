@@ -24,15 +24,17 @@ function fixture(initial: string | null = null) {
 }
 
 describe("Renderer speech preference", () => {
-  it("defaults to enabled and only explicit false turns it off", () => {
+  it("defaults to disabled and requires explicit opt-in in the new preference", () => {
     const f = fixture();
-    expect(readRendererSpeechEnabled(f.owner)).toBe(true);
-    for (const raw of ["true", "1", "yes", "broken"]) {
-      f.values.set(RENDERER_SPEECH_STORAGE_KEY, raw);
-      expect(readRendererSpeechEnabled(f.owner)).toBe(true);
-    }
-    f.values.set(RENDERER_SPEECH_STORAGE_KEY, "false");
     expect(readRendererSpeechEnabled(f.owner)).toBe(false);
+    f.values.set("codexhost.speech-announcement.v1", "true");
+    expect(readRendererSpeechEnabled(f.owner)).toBe(false);
+    for (const raw of ["false", "1", "yes", "broken"]) {
+      f.values.set(RENDERER_SPEECH_STORAGE_KEY, raw);
+      expect(readRendererSpeechEnabled(f.owner)).toBe(false);
+    }
+    f.values.set(RENDERER_SPEECH_STORAGE_KEY, "true");
+    expect(readRendererSpeechEnabled(f.owner)).toBe(true);
   });
 
   it("persists the switch and notifies the settings page", () => {
@@ -45,7 +47,7 @@ describe("Renderer speech preference", () => {
     expect(f.events).toHaveLength(2);
   });
 
-  it("keeps the default on when the preference store is unavailable", () => {
+  it("stays disabled when the preference store is unavailable", () => {
     const owner = Object.assign(new EventTarget(), {
       localStorage: {
         getItem: () => {
@@ -56,7 +58,7 @@ describe("Renderer speech preference", () => {
         },
       },
     }) as unknown as Window;
-    expect(readRendererSpeechEnabled(owner)).toBe(true);
+    expect(readRendererSpeechEnabled(owner)).toBe(false);
     expect(writeRendererSpeechEnabled(owner, false)).toBe(false);
   });
 });

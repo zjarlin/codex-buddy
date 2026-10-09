@@ -190,34 +190,38 @@ test("General groups appearance and idle release controls without dialogs or lon
   await expect(archiveDays).toHaveValue("60");
 });
 
-test("speech announcement defaults on, persists locally, and syncs across windows", async ({
+test("speech announcement defaults off after upgrade, persists locally, and syncs across windows", async ({
   page,
   context,
 }) => {
+  await page.addInitScript(() => localStorage.setItem("codexhost.speech-announcement.v1", "true"));
   await setup(page);
   const speech = page.getByRole("switch", { name: "会话完成语音播报" });
-  await expect(speech).toBeChecked();
-  await expect(page.getByText("会话结束时用网关曼波配音朗读结果摘要")).toBeVisible();
+  await expect(speech).not.toBeChecked();
+  await expect(
+    page.getByText("自动播报默认关闭。手动点击完成卡片右上角的小喇叭", { exact: false }),
+  ).toBeVisible();
   // No Host setting is involved: the switch is purely a local preference.
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "idleFixture").calls.at(-1).method))
     .toBe("codexhost/settings/thread-auto-archive/set");
 
-  await speech.uncheck();
-  expect(await page.evaluate(() => localStorage.getItem("codexhost.speech-announcement.v1"))).toBe(
-    "false",
+  await speech.check();
+  expect(await page.evaluate(() => localStorage.getItem("codexhost.speech-announcement.v2"))).toBe(
+    "true",
   );
   const other = await context.newPage();
   await setup(other);
-  await expect(other.getByRole("switch", { name: "会话完成语音播报" })).not.toBeChecked();
+  await expect(other.getByRole("switch", { name: "会话完成语音播报" })).toBeChecked();
 
   await page.reload();
   await page.addScriptTag({ content: bundle });
   await page.evaluate(() => Reflect.get(globalThis, "setupIdleRelease")());
-  await expect(speech).not.toBeChecked();
-  await speech.check();
-  expect(await page.evaluate(() => localStorage.getItem("codexhost.speech-announcement.v1"))).toBe(
-    "true",
+  await expect(speech).toBeChecked();
+  await speech.uncheck();
+  await expect(other.getByRole("switch", { name: "会话完成语音播报" })).not.toBeChecked();
+  expect(await page.evaluate(() => localStorage.getItem("codexhost.speech-announcement.v2"))).toBe(
+    "false",
   );
   await other.close();
 });

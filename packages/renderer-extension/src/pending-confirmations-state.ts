@@ -11,6 +11,7 @@ export interface PendingConfirmationRecord {
   status: PendingConfirmationStatus;
   title: string;
   summary: string;
+  project?: string;
   completedAt: number;
   state: PendingConfirmationState;
   confirmedAt: number | null;
@@ -25,6 +26,7 @@ export interface PendingConfirmationTurn {
   hostId: string;
   threadId: string;
   title: string;
+  project?: string;
   turnId: string;
   status: unknown;
   items?: unknown;
@@ -144,6 +146,7 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
     status,
     title: compact(text(entry.title) || "未命名会话", 300),
     summary: compact(text(entry.summary), 2_000),
+    project: text(entry.project),
     completedAt: timestamp(entry.completedAt, 0),
     state,
     confirmedAt: state === "confirmed" ? timestamp(entry.confirmedAt, Date.now()) : null,
@@ -264,6 +267,7 @@ export class PendingConfirmationsModel {
     if (!threadId || !turnId || !status) return null;
     const item: PendingConfirmationTurn = {
       hostId: text(value.hostId),
+      project: text(value.project) || text(value.cwd) || text(thread?.cwd),
       threadId,
       title:
         titleFromEvent ||
@@ -294,6 +298,7 @@ export class PendingConfirmationsModel {
       status,
       title: compact(input.title || "未命名会话", 300),
       summary: pendingConfirmationSummary({ ...input, status }),
+      project: input.project ?? "",
       completedAt: timestamp(input.completedAt, this.now()),
       state: "pending",
       confirmedAt: null,

@@ -23,6 +23,16 @@ function memoryStorage(initial?: string): PendingConfirmationStore & { value: st
 }
 
 describe("pending confirmation state", () => {
+  it("persists the project from thread metadata", () => {
+    const storage = memoryStorage();
+    const model = new PendingConfirmationsModel(storage);
+    model.link({
+      hostId: "local",
+      thread: { id: "thread", cwd: "/workspace/project" },
+      turn: { id: "turn", status: "completed" },
+    });
+    expect(new PendingConfirmationsModel(storage).pending()[0]?.project).toBe("/workspace/project");
+  });
   it("normalizes terminal statuses and extracts the final agent text", () => {
     expect(pendingConfirmationStatus("succeeded")).toBe("completed");
     expect(pendingConfirmationStatus("cancelled")).toBe("interrupted");

@@ -40,3 +40,5 @@ Codex 为 Thread 生成标题时会在后台跑一个内部 Turn，其唯一 `ag
 - `packages/renderer-extension/src/renderer-speech.ts`：完成摘要清洗、网关合成调用与单条音频播放。
 - `packages/renderer-extension/src/renderer-speech-preference.ts`：默认开启的播报开关与变更事件。
 - `packages/host-runtime/src/buddy/speech.ts`：曼波 TTS 合成、语种映射与音频上限校验。
+
+完成提醒在会话标题上方显示 Host 与项目面包屑。优先使用原生侧栏项目标签，其次使用会话工作目录；旧提醒通过 `thread/read` 补齐项目，不借用当前打开会话的项目。侧栏分页控件尚未异步挂载时持续检查，默认最多等待 15 秒；分页点击仍限流并有轮次上限。

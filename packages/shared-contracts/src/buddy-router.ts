@@ -132,7 +132,8 @@ export const buddyDecisionSchema = z.object({
   updatedAt: z.string(),
 });
 export const buddySnapshotSchema = z.object({
-  settings: buddySettingsSchema,
+  // 旧 Host 的状态可能包含已移除的规划字段；读取时剥离，设置写入仍严格校验。
+  settings: buddySettingsFileSchema,
   models: z.array(buddyModelSchema),
   modelRefresh: buddyModelRefreshSchema.optional(),
   decisions: z.array(buddyDecisionSchema),

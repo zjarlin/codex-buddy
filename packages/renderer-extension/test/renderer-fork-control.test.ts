@@ -358,6 +358,47 @@ describe("Renderer external Thread Fork control", () => {
     expect(target.click).toHaveBeenCalledOnce();
   });
 
+  it("waits for an asynchronously mounted load-more control", async () => {
+    const rows: HTMLElement[] = [];
+    const target = sidebarRow("paged-thread", "local");
+    const onExpandedChange = vi.fn(() => rows.push(target));
+    const reveal = { click: onExpandedChange } as unknown as HTMLButtonElement;
+    Object.defineProperty(reveal, "__reactFiber$test", {
+      value: {
+        memoizedProps: { expanded: true, hasMoreItems: true, onExpandedChange },
+        return: null,
+      },
+    });
+    let queries = 0;
+    const sidebar = {
+      querySelectorAll: (selector: string) =>
+        selector === "button" && ++queries > 1 ? [reveal] : [],
+    };
+    class FakeMutationObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector === "#app-shell-sidebar" ? sidebar : null),
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-thread-row]" ? rows : [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    await openRendererThread(hostThreadIdSchema.parse("paged-thread"), {
+      hostId: "local",
+      timeoutMs: 60_000,
+    });
+
+    expect(reveal.click).toHaveBeenCalledOnce();
+    expect(target.click).toHaveBeenCalledOnce();
+  });
+
   it("stops paginating once the native list has no more items", async () => {
     const reveal = { click: vi.fn() } as unknown as HTMLButtonElement;
     Object.defineProperty(reveal, "__reactFiber$test", {

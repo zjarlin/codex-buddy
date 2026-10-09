@@ -167,7 +167,7 @@ test.beforeEach(async ({ context }) => {
         ? { contentType: "application/javascript", body: bundle }
         : {
             contentType: "text/html",
-            body: '<!doctype html><body></body><script src="/fixture.js"></script>',
+            body: '<!doctype html><style>:root{color-scheme:light dark}</style><body></body><script src="/fixture.js"></script>',
           },
     ),
   );
@@ -332,7 +332,9 @@ test("manual speaker displays a synthesis error and lets the user retry", async 
   await page.screenshot({ path: testInfo.outputPath("manual-speaker-error-after.png") });
 });
 
-test("composer input sends a follow-up into the pending conversation", async ({ page }) => {
+test("composer input sends a follow-up into the pending conversation", async ({
+  page,
+}, testInfo) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
   });
@@ -343,11 +345,23 @@ test("composer input sends a follow-up into the pending conversation", async ({ 
     Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "结果。"),
   );
   await expect(modal).toBeVisible();
+  const send = modal.getByRole("button", { name: "发送", exact: true });
+  await expect(send).toHaveText("");
+  await expect(send.locator("svg")).toBeVisible();
+  await expect(send).toHaveCSS("background-color", "rgb(13, 13, 13)");
+  await expect(send).toHaveCSS("color", "rgb(255, 255, 255)");
+  await expect(send).toHaveCSS("width", "28px");
+  await expect(send).toHaveCSS("height", "28px");
+  await page.screenshot({ path: testInfo.outputPath("send-button-light.png") });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(send).toHaveCSS("background-color", "rgb(243, 243, 243)");
+  await expect(send).toHaveCSS("color", "rgb(13, 13, 13)");
+  await page.screenshot({ path: testInfo.outputPath("send-button-dark.png") });
   const modelSelect = modal.getByRole("combobox", { name: "续发模型" });
   await expect(modelSelect).toBeVisible();
   await modelSelect.selectOption("gpt-5.6");
   await modal.getByPlaceholder("输入续发内容…").fill("再补充一点");
-  await modal.getByRole("button", { name: "发送" }).click();
+  await send.click();
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").sent))
     .toEqual([["thread-b", "再补充一点", "gpt-5.6"]]);

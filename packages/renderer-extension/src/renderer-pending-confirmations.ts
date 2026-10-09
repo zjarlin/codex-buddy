@@ -2,7 +2,7 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import Archive from "lucide/dist/esm/icons/archive.mjs";
 import Check from "lucide/dist/esm/icons/check.mjs";
 import Eye from "lucide/dist/esm/icons/eye.mjs";
-import Send from "lucide/dist/esm/icons/send.mjs";
+import ArrowUp from "lucide/dist/esm/icons/arrow-up.mjs";
 import Volume2 from "lucide/dist/esm/icons/volume-2.mjs";
 import X from "lucide/dist/esm/icons/x.mjs";
 
@@ -297,7 +297,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-model{flex:0 1 180px;min-width:130px;max-width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit}
 [${MODAL}] .codexhost-pending-input{flex:1;min-height:36px;max-height:120px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit;resize:vertical}
 [${MODAL}] .codexhost-pending-input:focus-visible{outline:2px solid Highlight;outline-offset:1px}
-[${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:6px 11px;border:1px solid Highlight;border-radius:6px;background:Highlight;color:HighlightText;font:inherit;cursor:pointer}
+[${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--spacing-token-button-composer,28px);height:var(--spacing-token-button-composer,28px);margin-bottom:4px;padding:0;border:0;border-radius:50%;background:var(--color-background-composer-primary,var(--color-token-text-primary,light-dark(#0d0d0d,#f3f3f3)));color:var(--color-text-composer-primary,var(--color-token-main-surface-primary,light-dark(#fff,#0d0d0d)));cursor:pointer;transition:opacity .15s}
+[${MODAL}] .codexhost-pending-send:hover:not(:disabled){opacity:.85}
 [${MODAL}] .codexhost-pending-send:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-start;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
@@ -326,7 +327,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   input.rows = 2;
   send.type = "button";
   send.className = "codexhost-pending-send";
-  send.append(createElement(Send, { width: 15, height: 15, "aria-hidden": "true" }));
+  send.append(
+    createElement(ArrowUp, { width: 20, height: 20, "stroke-width": 1.75, "aria-hidden": "true" }),
+  );
   composer.append(modelSelect, input, send);
   body.append(kind, project, conversation, summary, time, composer);
   view.type = read.type = archive.type = replay.type = "button";
@@ -568,9 +571,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     modelSelect.setAttribute("aria-label", copy.model);
     input.placeholder = copy.placeholder;
     input.disabled = sending;
-    send.textContent = copy.send;
     send.title = copy.send;
     send.setAttribute("aria-label", copy.send);
+    send.setAttribute("aria-busy", String(sending));
     send.disabled = sending;
     notice.textContent = noticeMessage;
     view.disabled = read.disabled = archive.disabled = false;

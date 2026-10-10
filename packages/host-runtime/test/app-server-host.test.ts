@@ -1595,13 +1595,41 @@ describe("AppServerHost linked Git repositories", () => {
       expect(git(backend, "diff", "--cached", "--name-only")).toBe("");
       expect(readFileSync(path.join(backend, "app.txt"), "utf8")).toBe("backend draft\n");
       expect(await ok("codexhost/git/status")).toMatchObject({ workspace: backend });
+      const peer = path.join(directory, "peer");
+      execFileSync("git", ["clone", "-q", "-b", "main", remote, peer]);
+      git(peer, "config", "user.name", "Test");
+      git(peer, "config", "user.email", "test@example.com");
+      git(peer, "config", "commit.gpgsign", "false");
+      writeFileSync(path.join(peer, "app.txt"), "upstream conflict\n");
+      git(peer, "commit", "-qam", "upstream");
+      git(peer, "push", "-q");
+      writeFileSync(path.join(frontend, "app.txt"), "local conflict\n");
+      await ok("codexhost/git/stage", { repository: frontend, paths: ["app.txt"] });
+      expect(
+        await rpc("codexhost/git/commit", {
+          repository: frontend,
+          message: "feat: conflicting frontend",
+          push: true,
+        }),
+      ).toMatchObject({
+        error: {
+          code: -32094,
+          data: {
+            kind: "sync-conflict",
+            status: { workspace: frontend, operation: "merge", conflicts: ["app.txt"] },
+          },
+        },
+      });
+      expect(git(frontend, "log", "-1", "--format=%s")).toBe("feat: conflicting frontend");
+      expect(git(backend, "rev-parse", "HEAD")).toBe(backendHead);
+      await ok("codexhost/git/merge/abort", { repository: frontend });
       // 项目工作流使用整个关联清单，不接受手动面板的单仓库选择参数。
       expect(await rpc("codexhost/git/workflow/run", { repository: frontend })).toHaveProperty(
         "error",
       );
       await ok("codexhost/git/repository/unlink", { repository: frontend });
       expect(await rpc("codexhost/git/push", { repository: frontend })).toHaveProperty("error");
-      expect(readFileSync(path.join(frontend, "app.txt"), "utf8")).toBe("frontend saved\n");
+      expect(readFileSync(path.join(frontend, "app.txt"), "utf8")).toBe("local conflict\n");
     } finally {
       await stopFixture(fixture);
       await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

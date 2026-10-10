@@ -237,6 +237,11 @@ export const gitSyncResultSchema = z
   .strict();
 export type GitSyncResult = z.infer<typeof gitSyncResultSchema>;
 
+// 自动同步遇到真实文件冲突时，错误携带工作区状态供界面启动冲突消解回合。
+export const gitSyncConflictErrorDataSchema = z
+  .object({ kind: z.literal("sync-conflict"), status: gitWorkspaceStatusSchema })
+  .strict();
+
 export const gitDiffResultSchema = z
   .object({
     path: gitFilePathSchema,

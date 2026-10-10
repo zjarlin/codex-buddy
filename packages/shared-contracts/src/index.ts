@@ -495,6 +495,7 @@ export {
   gitCommitResultSchema,
   gitSyncStrategySchema,
   gitSyncResultSchema,
+  gitSyncConflictErrorDataSchema,
   gitMessageModelSchema,
   gitMessageModelsSchema,
   gitGeneratedMessageSchema,

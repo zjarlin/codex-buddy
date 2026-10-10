@@ -24,6 +24,11 @@ import { gitTargetKey, gitTargetParams, hasGitTarget } from "./renderer-git-targ
 import { RendererGitCache } from "./renderer-git-cache.js";
 import { cachedGitMessageModels } from "./renderer-git-models.js";
 import { GitMessageDrafts } from "./renderer-git-message-drafts.js";
+import {
+  gitSyncConflictStatus,
+  startGitConflictWorkflow,
+} from "./renderer-git-conflict-workflow.js";
+import type { RendererModelClient } from "./renderer-model-client.js";
 import type { ModelShortcutView } from "./renderer-model-shortcuts.js";
 import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 import { openNativeGitReview, runNativeWorkspaceCommand } from "./renderer-native-workspace.js";
@@ -38,7 +43,8 @@ import {
   type RendererRemoteProjectsClient,
 } from "./renderer-remote-projects-panel.js";
 
-export interface RendererGitClient extends Partial<GitRepositoryClient> {
+export interface RendererGitClient
+  extends Partial<GitRepositoryClient>, Pick<RendererModelClient, "sendThreadMessage"> {
   inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   stageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
   unstageGitPaths(input: GitStageParams): Promise<GitWorkspaceStatus>;
@@ -1023,6 +1029,7 @@ export function installRendererGitSidebar(options: {
       if (group) group.status = status;
       setNotice(pushNotice(status));
     } catch (error) {
+      if (await handleSyncConflict(request, error, true)) return;
       if (isCurrentRequest(request))
         setNotice(error instanceof Error ? error.message : String(error));
     } finally {
@@ -1100,9 +1107,9 @@ export function installRendererGitSidebar(options: {
       const label = operation === "rebase" ? "变基" : "合并";
       conflictText.textContent =
         conflicts.length > 0
-          ? `${label}进行中：${conflicts.length} 个冲突文件待解决。把冲突交给 AI 解决后回到此处继续。`
+          ? `${label}进行中：${conflicts.length} 个冲突文件待解决，可交给 AI 解决并继续。`
           : `${label}进行中：冲突已解决，可继续完成${label}。`;
-      mergeContinue.disabled = isBusy() || conflicts.length > 0;
+      mergeContinue.disabled = isBusy();
       mergeAbort.disabled = isBusy();
     }
     if (historyVisible) {
@@ -1386,7 +1393,7 @@ export function installRendererGitSidebar(options: {
     const generating = Boolean(draftKey && drafts.pending(draftKey));
     generate.disabled =
       isBusy() || generating || !client || !current || !modelsLoaded || !model.value;
-    commit.disabled = isBusy() || !client || !hasCommittable;
+    commit.disabled = isBusy() || !client || !hasCommittable || Boolean(current?.conflicts.length);
     commitPush.disabled = commit.disabled;
     push.disabled = isBusy() || !client || !current;
     sync.disabled = isBusy() || !client?.syncGit || !current;
@@ -1394,7 +1401,10 @@ export function installRendererGitSidebar(options: {
     refresh.disabled = isBusy() || !client;
     fetchUpstream.disabled = isBusy() || !client?.fetchGit || !current;
     mergeContinue.disabled =
-      isBusy() || !client?.continueGitMerge || (current?.conflicts?.length ?? 0) > 0;
+      isBusy() ||
+      ((current?.conflicts.length ?? 0) > 0
+        ? !client?.sendThreadMessage || !context().threadId
+        : !client?.continueGitMerge);
     mergeAbort.disabled = isBusy() || !client?.abortGitMerge;
     repositorySelector.setBusy(isBusy() || !current);
     for (const button of shadow.querySelectorAll<HTMLButtonElement>("button[data-git-action]")) {
@@ -1483,6 +1493,47 @@ export function installRendererGitSidebar(options: {
     }
   };
 
+  const resolveSyncConflicts = async (
+    request: ReturnType<typeof context>,
+    status: GitWorkspaceStatus,
+    pushAfterMerge: boolean,
+  ): Promise<void> => {
+    if (!request.client) return;
+    cache.update(request.client, request, status, request.repository);
+    if (!isCurrentRequest(request)) return;
+    if (request.repository === selectedRepository) current = status;
+    const group = repositoryGroups.find((entry) => entry.path === request.repository);
+    if (group) group.status = status;
+    setNotice("同步产生冲突，正在启动 AI 解决工作流…");
+    render();
+    try {
+      const notice = await startGitConflictWorkflow(
+        request.client,
+        request.threadId,
+        status,
+        pushAfterMerge,
+      );
+      if (isCurrentRequest(request)) setNotice(notice);
+    } catch (error) {
+      if (isCurrentRequest(request)) {
+        setNotice(
+          `同步产生冲突，AI 工作流未能启动：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  };
+
+  const handleSyncConflict = async (
+    request: ReturnType<typeof context>,
+    error: unknown,
+    pushAfterMerge: boolean,
+  ): Promise<boolean> => {
+    const status = gitSyncConflictStatus(error);
+    if (!status) return false;
+    await resolveSyncConflicts(request, status, pushAfterMerge);
+    return true;
+  };
+
   const submit = async (
     pushAfterCommit: boolean,
     repository = selectedRepository,
@@ -1568,6 +1619,14 @@ export function installRendererGitSidebar(options: {
       );
     } catch (error) {
       if (!isCurrentRequest(request)) return;
+      if (await handleSyncConflict(request, error, pushAfterCommit)) {
+        if (!isCurrentRequest(request)) return;
+        message.value = "";
+        drafts.clear(JSON.stringify([request.hostId, status?.workspace]));
+        draftRevision = "";
+        repositoryMessages.set(repository ?? "", "");
+        return;
+      }
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
       finishAction(request);
@@ -1949,7 +2008,8 @@ export function installRendererGitSidebar(options: {
           expansionRevision += 1;
           setNotice(pushNotice(status));
         })
-        .catch((error) => {
+        .catch(async (error) => {
+          if (await handleSyncConflict(request, error, true)) return;
           if (isCurrentRequest(request))
             setNotice(error instanceof Error ? error.message : String(error));
         })
@@ -1960,7 +2020,7 @@ export function installRendererGitSidebar(options: {
     listenerOptions,
   );
 
-  // 拉取并同步：远端有新提交时快进或合并；发生冲突时保留合并态并提示交给 AI 解决。
+  // 拉取同步先由 Git 完成，只有真实文件冲突才启动当前聊天的 AI 回合。
   sync.addEventListener(
     "click",
     () => {
@@ -1976,7 +2036,7 @@ export function installRendererGitSidebar(options: {
           ...gitTargetParams(request),
           ...(request.repository ? { repository: request.repository } : {}),
         })
-        .then((result) => {
+        .then(async (result) => {
           if (client && hasGitTarget(request))
             cache.update(client, request, result.status, request.repository);
           if (!isCurrentRequest(request)) return;
@@ -1984,6 +2044,10 @@ export function installRendererGitSidebar(options: {
           cancelReview();
           expandedDirectories.clear();
           expansionRevision += 1;
+          if (result.strategy === "conflict") {
+            await resolveSyncConflicts(request, result.status, false);
+            return;
+          }
           setNotice(syncNotice(result));
         })
         .catch((error) => {
@@ -2052,7 +2116,14 @@ export function installRendererGitSidebar(options: {
       const request = context();
       const client = request.client;
       const continueMerge = client?.continueGitMerge;
-      if (!continueMerge || !hasGitTarget(request)) return;
+      if (!client || !hasGitTarget(request) || isBusy()) return;
+      if (current?.conflicts.length) {
+        generation += 1;
+        beginAction(request, "merge-continue");
+        void resolveSyncConflicts(request, current, false).finally(() => finishAction(request));
+        return;
+      }
+      if (!continueMerge) return;
       void finishOperation(
         () =>
           continueMerge.call(client, {

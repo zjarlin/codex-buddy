@@ -730,7 +730,7 @@ describe("GitWorkspace", () => {
     expect(remote).toBeTruthy();
   });
 
-  it("treats a non-fast-forward push as a structured rejection with the behind count", async () => {
+  it("syncs before pushing and preserves conflicting local commits for the AI workflow", async () => {
     const { clone, advanceRemote } = await divergedClone();
     // 远端前进后本地也提交，推送必然被拒。
     await advanceRemote();
@@ -738,9 +738,177 @@ describe("GitWorkspace", () => {
     await execFileAsync("git", ["-C", clone, "commit", "-qam", "local"]);
 
     await expect(new GitWorkspace(testGitEnvironment).push(clone)).rejects.toMatchObject({
+      name: "GitSyncConflictError",
+      status: { workspace: clone, behind: 1, operation: "merge", conflicts: ["tracked.txt"] },
+    });
+    expect(await readFile(path.join(clone, "tracked.txt"), "utf8")).toContain("<<<<<<< HEAD");
+    expect(
+      (await execFileAsync("git", ["-C", clone, "log", "-1", "--format=%s"])).stdout.trim(),
+    ).toBe("local");
+  });
+
+  it("fast-forwards before pushing even when merge.ff is disabled and keeps untracked work", async () => {
+    const { clone, remote, advanceRemote } = await cloneWithRemote();
+    await advanceRemote();
+    await execFileAsync("git", ["-C", clone, "config", "merge.ff", "false"]);
+    await writeFile(path.join(clone, "scratch.txt"), "keep\n");
+
+    const status = await new GitWorkspace(testGitEnvironment).push(clone);
+
+    expect(status).toMatchObject({ ahead: 0, behind: 0, operation: null, conflicts: [] });
+    expect(status.changes).toEqual([
+      expect.objectContaining({ path: "scratch.txt", untracked: true }),
+    ]);
+    expect((await execFileAsync("git", ["-C", clone, "rev-parse", "HEAD"])).stdout).toBe(
+      (await execFileAsync("git", ["-C", remote, "rev-parse", "main"])).stdout,
+    );
+    expect(
+      (await execFileAsync("git", ["-C", clone, "rev-list", "--count", "HEAD"])).stdout.trim(),
+    ).toBe("2");
+  });
+
+  it("commits the index, merges remote history and pushes while preserving unstaged edits", async () => {
+    const { clone, remote, advanceRemote } = await cloneWithRemote();
+    await advanceRemote();
+    const workspace = new GitWorkspace(testGitEnvironment);
+    await writeFile(path.join(clone, "local.txt"), "staged\n");
+    await workspace.stage(clone, ["local.txt"]);
+    await writeFile(path.join(clone, "local.txt"), "unstaged\n");
+
+    const result = await workspace.commit(clone, "feat: local work", true);
+
+    expect(result).toMatchObject({
+      pushed: true,
+      status: { ahead: 0, behind: 0, operation: null },
+    });
+    expect((await execFileAsync("git", ["-C", remote, "show", "main:local.txt"])).stdout).toBe(
+      "staged\n",
+    );
+    expect((await execFileAsync("git", ["-C", remote, "show", "main:tracked.txt"])).stdout).toBe(
+      "remote\n",
+    );
+    expect(await readFile(path.join(clone, "local.txt"), "utf8")).toBe("unstaged\n");
+    expect(result.status.changes).toEqual([
+      expect.objectContaining({ path: "local.txt", unstaged: true }),
+    ]);
+    const parents = (
+      await execFileAsync("git", ["-C", clone, "show", "-s", "--format=%P", "HEAD"])
+    ).stdout
+      .trim()
+      .split(" ");
+    expect(parents).toHaveLength(2);
+  });
+
+  it("preserves a successful local commit when commit-and-push encounters a merge conflict", async () => {
+    const { clone, remote, advanceRemote } = await cloneWithRemote();
+    await advanceRemote();
+    const workspace = new GitWorkspace(testGitEnvironment);
+    await writeFile(path.join(clone, "tracked.txt"), "local\n");
+    await workspace.stage(clone, ["tracked.txt"]);
+
+    await expect(workspace.commit(clone, "feat: local work", true)).rejects.toMatchObject({
+      name: "GitSyncConflictError",
+      status: { operation: "merge", conflicts: ["tracked.txt"] },
+    });
+    expect(
+      (await execFileAsync("git", ["-C", clone, "log", "-1", "--format=%s"])).stdout.trim(),
+    ).toBe("feat: local work");
+    expect((await execFileAsync("git", ["-C", remote, "show", "main:tracked.txt"])).stdout).toBe(
+      "remote\n",
+    );
+    await expect(workspace.sync(clone)).resolves.toMatchObject({
+      strategy: "conflict",
+      conflicts: ["tracked.txt"],
+    });
+    await writeFile(path.join(clone, "tracked.txt"), "resolved\n");
+    await workspace.stage(clone, ["tracked.txt"]);
+    await workspace.mergeContinue(clone);
+    await expect(workspace.push(clone)).resolves.toMatchObject({
+      ahead: 0,
+      behind: 0,
+      conflicts: [],
+    });
+  });
+
+  function workspaceWithPushRace(
+    clone: string,
+    commands: string[][],
+    beforePush: () => Promise<void>,
+  ): GitWorkspace {
+    return new GitWorkspace(testGitEnvironment, {
+      paths: path,
+      realpath,
+      files: { stat, readFile },
+      nullDevice: process.platform === "win32" ? "NUL" : "/dev/null",
+      exists: (target) =>
+        stat(target).then(
+          () => true,
+          () => false,
+        ),
+      run: async (cwd, args) => {
+        commands.push([...args]);
+        if (cwd === clone && args[0] === "push") await beforePush();
+        try {
+          return await execFileAsync("git", ["-C", cwd, ...args], {
+            env: { ...process.env, ...testGitEnvironment },
+          });
+        } catch (error) {
+          const failure = error as Error & { stdout: string; stderr: string };
+          throw new GitWorkspaceError(failure.message, failure.stdout, failure.stderr);
+        }
+      },
+    });
+  }
+
+  it("syncs and retries once when the remote advances between fetch and push", async () => {
+    const { clone, advanceRemote } = await cloneWithRemote();
+    const commands: string[][] = [];
+    let pushes = 0;
+    const workspace = workspaceWithPushRace(clone, commands, async () => {
+      if (++pushes === 1) await advanceRemote();
+    });
+    await writeFile(path.join(clone, "local.txt"), "local\n");
+    await workspace.stage(clone, ["local.txt"]);
+
+    await expect(workspace.commit(clone, "feat: local", true)).resolves.toMatchObject({
+      pushed: true,
+      status: { ahead: 0, behind: 0 },
+    });
+    expect(commands.filter((args) => args[0] === "push")).toHaveLength(2);
+  });
+
+  it("stops after one retry if the remote keeps advancing", async () => {
+    const { clone, advanceRemote } = await cloneWithRemote();
+    const commands: string[][] = [];
+    let pushes = 0;
+    const workspace = workspaceWithPushRace(clone, commands, async () => {
+      await advanceRemote(`remote ${++pushes}\n`);
+    });
+    await writeFile(path.join(clone, "local.txt"), "local\n");
+    await workspace.stage(clone, ["local.txt"]);
+
+    await expect(workspace.commit(clone, "feat: local", true)).rejects.toMatchObject({
       name: "GitPushRejectedError",
       behind: 1,
     });
+    expect(commands.filter((args) => args[0] === "push")).toHaveLength(2);
+    expect((await workspace.status(clone)).operation).toBeNull();
+  });
+
+  it("does not treat a remote hook rejection as history divergence", async () => {
+    const { clone } = await cloneWithRemote();
+    const commands: string[][] = [];
+    const workspace = workspaceWithPushRace(clone, commands, async () => {
+      throw new GitWorkspaceError(
+        "blocked",
+        "",
+        "[remote rejected] main -> main (pre-receive hook declined)\nerror: failed to push some refs",
+      );
+    });
+
+    await expect(workspace.push(clone)).rejects.toMatchObject({ name: "GitWorkspaceError" });
+    expect(commands.filter((args) => args[0] === "push")).toHaveLength(1);
+    expect(commands.filter((args) => args[0] === "fetch")).toHaveLength(1);
   });
 
   it("aborts an in-progress merge", async () => {

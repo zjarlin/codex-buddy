@@ -953,6 +953,209 @@ test("shows pending actions, ignores repeated clicks and permits retry after fai
   expect(errors).toEqual([]);
 });
 
+for (const action of ["push", "commit-push", "sync"] as const) {
+  test(`starts the AI conflict workflow only after Git reports conflicts (${action})`, async ({
+    page,
+  }, testInfo) => {
+    await page.route("http://localhost/git-sidebar-test", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><html><body></body></html>",
+      }),
+    );
+    await setup(page);
+    await page.evaluate(
+      ({ action }) => {
+        const f = Reflect.get(globalThis, "gitSidebarFixture");
+        const linked = action === "commit-push";
+        const target = {
+          ...structuredClone(f.status),
+          workspace: linked ? "/linked" : "/repo",
+          ahead: 0,
+          behind: 13,
+          submodules: [],
+          changes: [
+            {
+              ...f.status.changes[0],
+              staged: true,
+              unstaged: false,
+              indexStatus: "M",
+              workTreeStatus: " ",
+            },
+          ],
+        };
+        f.client.listGitRepositories = async () => ({
+          project: "/repo",
+          repositories: [
+            { path: "/repo", primary: true },
+            { path: "/linked", primary: false },
+          ],
+        });
+        f.client.linkGitRepository = async () => {
+          throw new Error("Unused link operation");
+        };
+        f.client.unlinkGitRepository = async () => {
+          throw new Error("Unused unlink operation");
+        };
+        f.client.inspectGitStatus = async (input: { repository?: string }) =>
+          structuredClone(input.repository ? target : f.status);
+        const conflict = () => {
+          target.operation = "merge";
+          target.conflicts = ["src/app.ts"];
+          target.changes = [
+            { ...target.changes[0], conflicted: true, indexStatus: "U", workTreeStatus: "U" },
+          ];
+          return structuredClone(target);
+        };
+        const reject = async (input: unknown) => {
+          f.calls.push([action, input]);
+          throw Object.assign(new Error("sync conflict"), {
+            data: { kind: "sync-conflict", status: conflict() },
+          });
+        };
+        f.client.pushGit = reject;
+        f.client.commitGit = reject;
+        f.client.syncGit = async (input: unknown) => {
+          f.calls.push(["sync", input]);
+          return {
+            strategy: "conflict",
+            behind: 13,
+            conflicts: ["src/app.ts"],
+            output: "",
+            status: conflict(),
+          };
+        };
+        f.client.sendThreadMessage = async (threadId: string, prompt: string) => {
+          f.calls.push(["ai-conflict", threadId, prompt]);
+          return "conflict-turn";
+        };
+        f.setContext("thread-1", { ...f.client });
+      },
+      { action },
+    );
+    const root = page.locator("[data-codexhost-git-sidebar]");
+    await root.locator("[data-codexhost-git-sidebar-commits]").click();
+    if (action === "commit-push") {
+      await root.getByRole("combobox", { name: "操作仓库" }).selectOption("/linked");
+      await root.locator("[data-codexhost-git-sidebar-message]").fill("feat: local changes");
+    }
+    await root.screenshot({ path: testInfo.outputPath("before-conflict.png") });
+    await root.locator(`[data-codexhost-git-sidebar-${action}]`).click();
+    await expect(
+      root.getByText("同步产生冲突，已在当前聊天启动 AI 解决工作流，请查看回合结果。"),
+    ).toBeVisible();
+    await expect(root.locator("[data-codexhost-git-sidebar-conflict]")).toContainText(
+      "1 个冲突文件待解决",
+    );
+    await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeDisabled();
+    if (action === "commit-push")
+      await expect(root.locator("[data-codexhost-git-sidebar-message]")).toHaveValue("");
+    const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+    const ai = calls.filter(([kind]: string[]) => kind === "ai-conflict");
+    expect(ai).toHaveLength(1);
+    expect(ai[0][1]).toBe("thread-1");
+    expect(ai[0][2]).toContain(`"repository":"${action === "commit-push" ? "/linked" : "/repo"}"`);
+    expect(ai[0][2]).toContain(
+      action === "sync" ? "本次只完成拉取同步和冲突解决，不推送" : "完成合并后继续本次推送",
+    );
+    await root.screenshot({ path: testInfo.outputPath("ai-conflict-started.png") });
+  });
+}
+
+test("finishes a synchronized push without starting the AI conflict workflow", async ({
+  page,
+}, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const f = Reflect.get(globalThis, "gitSidebarFixture");
+    f.client.pushGit = async () => {
+      f.status.ahead = 0;
+      f.status.behind = 0;
+      return structuredClone(f.status);
+    };
+    f.client.sendThreadMessage = async () => {
+      f.calls.push(["ai-conflict"]);
+      return "turn";
+    };
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.screenshot({ path: testInfo.outputPath("before-push.png") });
+  await root.locator("[data-codexhost-git-sidebar-push]").click();
+  await expect(root.getByText("推送成功，已与上游同步。")).toBeVisible();
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+        ([kind]: string[]) => kind === "ai-conflict",
+      ),
+    ),
+  ).toEqual([]);
+  await root.screenshot({ path: testInfo.outputPath("pushed-without-ai.png") });
+});
+
+test("ignores late conflict errors after the selected chat changes", async ({ page }, testInfo) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const f = Reflect.get(globalThis, "gitSidebarFixture");
+    let rejectPush: (error: unknown) => void;
+    f.client.pushGit = async () =>
+      new Promise((_, reject) => {
+        rejectPush = reject;
+      });
+    f.client.sendThreadMessage = async () => {
+      f.calls.push(["ai-conflict"]);
+      return "turn";
+    };
+    const switchChat = document.createElement("button");
+    switchChat.textContent = "Switch chat and finish old push";
+    switchChat.addEventListener("click", () => {
+      f.setContext("thread-2", {
+        ...f.client,
+        inspectGitStatus: async () => ({ ...f.status, workspace: "/other" }),
+      });
+      rejectPush(
+        Object.assign(new Error("conflict"), {
+          data: {
+            kind: "sync-conflict",
+            status: {
+              ...f.status,
+              workspace: "/repo",
+              operation: "merge",
+              conflicts: ["src/app.ts"],
+            },
+          },
+        }),
+      );
+    });
+    document.querySelector("main")?.append(switchChat);
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.locator("[data-codexhost-git-sidebar-push]").click();
+  await expect(root.locator("[data-codexhost-git-sidebar-push]")).toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  await root.screenshot({ path: testInfo.outputPath("old-push-pending.png") });
+  await page.getByRole("button", { name: "Switch chat and finish old push" }).click();
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText("other");
+  await expect(root.locator("[data-codexhost-git-sidebar-conflict]")).toBeHidden();
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+        ([kind]: string[]) => kind === "ai-conflict",
+      ),
+    ),
+  ).toEqual([]);
+  await root.screenshot({ path: testInfo.outputPath("new-chat-unaffected.png") });
+});
+
 test("pulls and syncs from the sidebar and surfaces an in-progress merge", async ({ page }) => {
   await page.route("http://localhost/git-sidebar-test", (route) =>
     route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),

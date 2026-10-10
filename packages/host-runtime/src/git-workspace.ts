@@ -149,8 +149,7 @@ export function isMissingGitDirectory(error: unknown): boolean {
 }
 
 /**
- * 推送被远端拒绝（通常因为本地落后）。保留结构化信息，让路由层可以自动
- * 进入"拉取并同步"，而不是把 raw git stderr 直接抛给用户。
+ * 自动同步并重试后仍被远端拒绝时，保留落后提交数供界面报告和手动重试。
  */
 export class GitPushRejectedError extends GitWorkspaceError {
   constructor(
@@ -161,6 +160,13 @@ export class GitPushRejectedError extends GitWorkspaceError {
   ) {
     super(message, stdout, stderr);
     this.name = "GitPushRejectedError";
+  }
+}
+
+export class GitSyncConflictError extends GitWorkspaceError {
+  constructor(readonly status: GitWorkspaceStatus) {
+    super("拉取同步产生文件冲突，需要 AI 解决后继续。");
+    this.name = "GitSyncConflictError";
   }
 }
 
@@ -358,7 +364,7 @@ async function pathExists(target: string): Promise<boolean> {
 
 // 远端拒绝推送时 git 的措辞在不同版本和传输层略有差异，这里统一识别常见的 non-fast-forward 信号。
 function isNonFastForward(detail: string): boolean {
-  return /non-fast-forward|fetch first|Updates were rejected|failed to push some refs|tip of your current branch is behind|cannot lock ref|stale info/iu.test(
+  return /non-fast-forward|fetch first|tip of your current branch is behind|Updates were rejected because the remote contains work/iu.test(
     detail,
   );
 }
@@ -649,55 +655,72 @@ export class GitWorkspace {
    * 由上层交给模型消解，不做自动冲突合并。
    */
   async sync(cwd: string): Promise<GitSyncResult> {
-    return this.#mutation(cwd, ["sync"], async () => {
-      const workspace = this.#absoluteWorkspace(cwd);
-      const before = await this.#statusUnlocked(workspace);
-      const upstream = before.upstream;
-      if (!upstream) {
-        throw new GitWorkspaceError("当前分支没有上游远程分支，无法拉取同步。");
-      }
-      await this.#fetchUnlocked(workspace);
-      const fetched = await this.#statusUnlocked(workspace);
-      if (fetched.behind === 0) {
+    return this.#mutation(cwd, ["sync"], () => this.#syncUnlocked(this.#absoluteWorkspace(cwd)));
+  }
+
+  async #syncUnlocked(workspace: string): Promise<GitSyncResult> {
+    const before = await this.#statusUnlocked(workspace);
+    if (before.conflicts.length > 0) {
+      return {
+        strategy: "conflict",
+        behind: before.behind,
+        conflicts: before.conflicts,
+        output: "工作区仍有未解决的文件冲突。",
+        status: before,
+      };
+    }
+    if (before.operation) {
+      throw new GitWorkspaceError("请先完成或中止当前合并／变基，再拉取同步。");
+    }
+    const upstream = before.upstream;
+    if (!upstream) {
+      throw new GitWorkspaceError("当前分支没有上游远程分支，无法拉取同步。");
+    }
+    await this.#fetchUnlocked(workspace);
+    const fetched = await this.#statusUnlocked(workspace);
+    if (fetched.behind === 0) {
+      return {
+        strategy: "up-to-date",
+        behind: 0,
+        conflicts: [],
+        output: "远端没有新的提交，工作区已是最新。",
+        status: fetched,
+      };
+    }
+    const behind = fetched.behind;
+    // ahead 为 0 时可以快进，避免产生多余的合并提交；否则执行真正合并。
+    const strategy: GitSyncStrategy = fetched.ahead === 0 ? "fast-forward" : "merged";
+    try {
+      await this.#run(workspace, [
+        "merge",
+        strategy === "fast-forward" ? "--ff-only" : "--no-edit",
+        upstream,
+      ]);
+    } catch (error) {
+      const failure = error as GitWorkspaceError;
+      const after = await this.#statusUnlocked(workspace);
+      if (after.conflicts.length > 0) {
         return {
-          strategy: "up-to-date",
-          behind: 0,
-          conflicts: [],
-          output: "远端没有新的提交，工作区已是最新。",
-          status: fetched,
+          strategy: "conflict",
+          behind,
+          conflicts: after.conflicts,
+          output: (failure.stdout || failure.stderr || failure.message).trim(),
+          status: after,
         };
       }
-      const behind = fetched.behind;
-      // ahead 为 0 时可以快进，避免产生多余的合并提交；否则执行真正合并。
-      const strategy: GitSyncStrategy = fetched.ahead === 0 ? "fast-forward" : "merged";
-      try {
-        await this.#run(workspace, ["merge", "--no-edit", upstream]);
-      } catch (error) {
-        const failure = error as GitWorkspaceError;
-        const after = await this.#statusUnlocked(workspace);
-        if (after.conflicts.length > 0) {
-          return {
-            strategy: "conflict",
-            behind,
-            conflicts: after.conflicts,
-            output: (failure.stdout || failure.stderr || failure.message).trim(),
-            status: after,
-          };
-        }
-        throw error;
-      }
-      const after = await this.#statusUnlocked(workspace);
-      return {
-        strategy,
-        behind,
-        conflicts: [],
-        output:
-          strategy === "fast-forward"
-            ? `已快进到远端 ${behind} 个提交。`
-            : `已合并远端 ${behind} 个提交。`,
-        status: after,
-      };
-    });
+      throw error;
+    }
+    const after = await this.#statusUnlocked(workspace);
+    return {
+      strategy,
+      behind,
+      conflicts: [],
+      output:
+        strategy === "fast-forward"
+          ? `已快进到远端 ${behind} 个提交。`
+          : `已合并远端 ${behind} 个提交。`,
+      status: after,
+    };
   }
 
   /** 冲突消解并暂存后，提交合并结果。 */
@@ -1079,33 +1102,42 @@ export class GitWorkspace {
     return this.#run(cwd, ["fetch", "--prune"]);
   }
 
-  /**
-   * 推送当前分支；non-fast-forward 被拒时抛结构化错误并带上落后提交数，
-   * 让路由层可以自动进入"拉取并同步"或把冲突交给模型，而不是只显示 raw stderr。
-   */
+  // 推送前自动同步；推送期间远端再次前进时只恢复一次，真实文件冲突交给模型回合。
   async #pushUnlocked(cwd: string): Promise<GitCommandResult> {
-    try {
-      return await this.#run(cwd, ["push"]);
-    } catch (error) {
-      const failure = error as GitWorkspaceError;
-      const detail = `${failure.stdout}\n${failure.stderr}\n${failure.message}`;
-      if (isNonFastForward(detail)) {
-        let behind = 0;
-        try {
-          // 推送失败时本地跟踪引用可能还是旧的，先 fetch 才能得到真实落后提交数。
-          await this.#fetchUnlocked(cwd);
-          behind = (await this.#statusUnlocked(cwd)).behind;
-        } catch {
-          behind = 0;
-        }
-        throw new GitPushRejectedError(
-          "推送被远端拒绝：本地与远端已分叉，需要先拉取并同步。",
-          behind,
-          failure.stdout,
-          failure.stderr,
-        );
+    for (let attempt = 0; ; attempt += 1) {
+      const before = await this.#statusUnlocked(cwd);
+      if (before.conflicts.length > 0) throw new GitSyncConflictError(before);
+      if (before.operation) {
+        throw new GitWorkspaceError("请先完成或中止当前合并／变基，再推送。");
       }
-      throw error;
+      if (before.upstream) {
+        const result = await this.#syncUnlocked(cwd);
+        if (result.strategy === "conflict") throw new GitSyncConflictError(result.status);
+      }
+      try {
+        return await this.#run(cwd, ["push"]);
+      } catch (error) {
+        const failure = error as GitWorkspaceError;
+        const detail = `${failure.stdout}\n${failure.stderr}\n${failure.message}`;
+        if (isNonFastForward(detail)) {
+          if (attempt === 0 && before.upstream) continue;
+          let behind = 0;
+          try {
+            // 推送失败时本地跟踪引用可能还是旧的，先 fetch 才能得到真实落后提交数。
+            await this.#fetchUnlocked(cwd);
+            behind = (await this.#statusUnlocked(cwd)).behind;
+          } catch {
+            behind = 0;
+          }
+          throw new GitPushRejectedError(
+            "自动同步后远端仍拒绝推送，请检查远端分支后重试。",
+            behind,
+            failure.stdout,
+            failure.stderr,
+          );
+        }
+        throw error;
+      }
     }
   }
 

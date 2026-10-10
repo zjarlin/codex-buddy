@@ -360,7 +360,12 @@ import {
   OfficialRuntimeScope,
 } from "./codex-runtime/official-runtime-scope.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
-import { GitPushRejectedError, GitWorkspace, GitWorkspaceError } from "./git-workspace.js";
+import {
+  GitPushRejectedError,
+  GitSyncConflictError,
+  GitWorkspace,
+  GitWorkspaceError,
+} from "./git-workspace.js";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -4242,7 +4247,19 @@ export class AppServerHost {
       });
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
-      // 推送被拒时回带结构化数据，界面据此提示"拉取并同步"，而不是只显示 raw stderr。
+      // 真正的文件冲突回带工作区状态；认证、权限和网络故障仍按普通错误报告。
+      if (error instanceof GitSyncConflictError) {
+        await this.#writer.json(
+          rpcEnvelope(request, {
+            error: {
+              code: -32094,
+              message: error.message,
+              data: jsonValueSchema.parse({ kind: "sync-conflict", status: error.status }),
+            },
+          }),
+        );
+        return;
+      }
       if (error instanceof GitPushRejectedError) {
         await this.#writer.json(
           rpcEnvelope(request, {

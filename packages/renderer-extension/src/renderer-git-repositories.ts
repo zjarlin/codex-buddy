@@ -31,6 +31,7 @@ export function createGitRepositorySelector(options: {
   getContext(): Context;
   onSelect(repository: string | undefined): void;
   onNotice(message: string): void;
+  onRepositories?(repositories: GitRepositories): void;
 }) {
   const root = document.createElement("div");
   root.className = "codexhost-git-repositories";
@@ -234,7 +235,10 @@ export function createGitRepositorySelector(options: {
     void Promise.resolve()
       .then(() => list.call(client, gitTargetParams(next)))
       .then((value) => {
-        if (generation === version) data = value;
+        if (generation === version) {
+          data = value;
+          options.onRepositories?.(value);
+        }
       })
       .catch((error) => {
         if (generation === version) {
@@ -260,6 +264,7 @@ export function createGitRepositorySelector(options: {
       const value = await method.call(request.client, { ...gitTargetParams(request), repository });
       if (generation !== version) return;
       data = value;
+      options.onRepositories?.(value);
       selected =
         value.repositories.find(
           (entry) => !entry.primary && (!previous.has(entry.path) || entry.path === repository),
@@ -296,6 +301,7 @@ export function createGitRepositorySelector(options: {
       });
       if (generation !== version) return;
       data = value;
+      options.onRepositories?.(value);
       selected = "";
       options.onSelect(undefined);
       options.onNotice("已解除关联，仓库文件保留。");

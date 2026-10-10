@@ -1,3 +1,13 @@
+import { createGitRepositoryCard } from "./renderer-git-repository-card.js";
+import {
+  gitIconButton as iconButton,
+  gitCommitMenu,
+  gitMessagePlaceholder,
+  gitRepositoryBranch,
+  gitRepositoryIcon,
+  gitScmStyles,
+  renderGitChanges,
+} from "./renderer-git-scm.js";
 import {
   createGitRepositorySelector,
   type GitRepositoryClient,
@@ -15,6 +25,7 @@ import type {
   GitLogResult,
   GitLogParams,
   HostThreadId,
+  GitRepositories,
 } from "@codexhost/shared-contracts";
 import { createGitHistory } from "./renderer-git-history.js";
 import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
@@ -138,44 +149,6 @@ interface SidebarAnchor {
   contentStyle: { height: string; minHeight: string; paddingLeft: string };
 }
 
-type GitChange = GitWorkspaceStatus["changes"][number];
-
-interface GitDirectory {
-  name: string;
-  path: string;
-  directories: Map<string, GitDirectory>;
-  changes: GitChange[];
-  count: number;
-}
-
-function buildGitTree(changes: readonly GitChange[]): GitDirectory {
-  const root: GitDirectory = { name: "", path: "", directories: new Map(), changes: [], count: 0 };
-  for (const change of changes) {
-    const parts = change.path.split("/").filter(Boolean);
-    const name = parts.pop();
-    if (!name) continue;
-    root.count += 1;
-    let directory = root;
-    for (const part of parts) {
-      let child = directory.directories.get(part);
-      if (!child) {
-        child = {
-          name: part,
-          path: directory.path ? `${directory.path}/${part}` : part,
-          directories: new Map(),
-          changes: [],
-          count: 0,
-        };
-        directory.directories.set(part, child);
-      }
-      child.count += 1;
-      directory = child;
-    }
-    directory.changes.push(change);
-  }
-  return root;
-}
-
 function isVisible(element: HTMLElement): boolean {
   const bounds = element.getBoundingClientRect();
   return bounds.width > 0 && bounds.height > 0;
@@ -236,48 +209,6 @@ function restoreSidebarAnchor(anchor: SidebarAnchor): void {
   anchor.content.style.paddingLeft = content.paddingLeft;
 }
 
-function iconButton(document: Document, label: string, path: string): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "18");
-  svg.setAttribute("height", "18");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "1.8");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  const shape = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  shape.setAttribute("d", path);
-  svg.append(shape);
-  button.append(svg);
-  return button;
-}
-
-function gitChangeStatus(
-  change: GitChange,
-  action: "stage" | "unstage",
-): {
-  code: string;
-  label: string;
-} {
-  if (change.conflicted) return { code: "!", label: "冲突" };
-  if (change.untracked) return { code: "U", label: "未跟踪" };
-  if (action === "unstage") return { code: "S", label: "已暂存" };
-  const code = change.workTreeStatus !== " " ? change.workTreeStatus : change.indexStatus;
-  const labels: Record<string, string> = {
-    A: "新增",
-    D: "删除",
-    M: "已修改",
-    R: "重命名",
-    C: "复制",
-  };
-  return { code: code === " " ? "M" : code, label: labels[code] ?? "已修改" };
-}
-
 function matchesOfficialPanel(button: Element, panel: OfficialPanel): boolean {
   const label = button.getAttribute("aria-label")?.trim() ?? "";
   return (
@@ -307,6 +238,9 @@ interface RepositoryGroup {
   loading: boolean;
   initialized?: boolean;
   error: string | null;
+  parentRepository?: string | undefined;
+  modulePath?: string;
+  read?: boolean;
 }
 
 export function installRendererGitSidebar(options: {
@@ -355,7 +289,6 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-head button { min-height:26px; padding:3px 6px; color:inherit; background:transparent; border:0; border-radius:2px; cursor:pointer; }
     .codexhost-git-head button:hover, .codexhost-git-head button[aria-selected="true"] { background:color-mix(in srgb,currentColor 10%,transparent); }
     .codexhost-git-head button:disabled { cursor:default; opacity:.4; }
-    .codexhost-git-branch { display:flex; min-height:26px; align-items:center; gap:8px; padding:3px 12px; color:inherit; font-size:10px; opacity:.72; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
     .codexhost-git-history { display:flex; min-height:0; flex:1; flex-direction:column; overflow:auto; }
     .codexhost-git-history-title { padding:8px 10px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 12%,transparent)); font-size:11px; font-weight:600; }
     .codexhost-git-history-list { min-height:0; overflow:auto; }
@@ -371,14 +304,6 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-conflict-actions button:hover:not(:disabled) { background:color-mix(in srgb,currentColor 12%,transparent); }
     .codexhost-git-conflict-actions button:disabled { cursor:default; opacity:.4; }
     .codexhost-git-workspace { display:flex; min-height:0; flex:1; flex-direction:column; }
-    .codexhost-git-status-tabs { display:flex; align-items:center; min-height:30px; padding:1px 6px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
-    .codexhost-git-status-tab { position:relative; display:flex; align-items:center; min-width:0; min-height:28px; gap:3px; padding:3px 4px; color:inherit; background:transparent; border:0; border-radius:0; cursor:pointer; font-size:10px; opacity:.66; }
-    .codexhost-git-status-tab:hover { background:color-mix(in srgb,currentColor 7%,transparent); opacity:1; }
-    .codexhost-git-status-tab[aria-selected="true"] { opacity:1; }
-    .codexhost-git-status-tab[aria-selected="true"]::after { position:absolute; right:6px; bottom:0; left:6px; height:1px; background:var(--text-link,#007acc); content:""; }
-    .codexhost-git-status-tab[aria-selected="true"] { font-weight:600; }
-    .codexhost-git-status-tab span { min-width:10px; color:inherit; font-size:10px; text-align:right; opacity:.58; }
-    .codexhost-git-status-tab span:first-child { min-width:0; white-space:nowrap; }
     .codexhost-git-tree-toggle { display:grid; place-items:center; width:26px; height:26px; margin-left:auto; padding:0; color:inherit; background:transparent; border:0; border-radius:5px; cursor:pointer; opacity:.62; }
     .codexhost-git-tree-toggle:hover, .codexhost-git-tree-toggle[aria-pressed="true"] { background:color-mix(in srgb,currentColor 10%,transparent); opacity:1; }
     .codexhost-git-list { display:flex; min-height:0; flex:1; overflow:auto; flex-direction:column; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 9%,transparent)); }
@@ -396,10 +321,6 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-change-action[data-action="unstage"] { color:color-mix(in srgb,currentColor 58%,transparent); opacity:.58; }
     .codexhost-git-change-action:disabled { opacity:.25; }
     .codexhost-git-empty { margin:0; padding:14px 10px; font-size:11px; opacity:.58; }
-    .codexhost-git-modules { flex:none; max-height:32%; overflow:auto; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 10%,transparent)); }
-    .codexhost-git-modules-title { padding:6px 9px; color:inherit; font-size:10px; font-weight:600; opacity:.58; }
-    .codexhost-git-submodule { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; padding:6px 8px 6px 18px; border-top:1px solid var(--border-default, color-mix(in srgb,currentColor 7%,transparent)); font-size:11px; }
-    .codexhost-git-submodule button { padding:2px 6px; color:inherit; background:transparent; border:1px solid currentColor; border-radius:4px; cursor:pointer; }
     .codexhost-git-repository-groups { display:flex; min-height:0; flex:none; max-height:45%; overflow:auto; flex-direction:column; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 10%,transparent)); }
     .codexhost-git-repository-group { display:flex; min-height:0; flex-direction:column; border-top:1px solid var(--border-default,color-mix(in srgb,currentColor 12%,transparent)); }
     .codexhost-git-repository-header { display:flex; min-height:30px; align-items:center; gap:6px; padding:4px 8px; color:inherit; background:transparent; border:0; cursor:pointer; text-align:left; font-size:11px; }
@@ -408,9 +329,7 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-repository-meta { flex:none; color:inherit; font-size:9px; opacity:.58; white-space:nowrap; }
     .codexhost-git-repository-body { display:flex; min-height:0; flex-direction:column; }
     .codexhost-git-repository-changes { display:flex; min-height:0; flex-direction:column; overflow:auto; border-top:1px solid var(--border-default,color-mix(in srgb,currentColor 7%,transparent)); }
-    .codexhost-git-repository-change { box-sizing:border-box; display:grid; flex:none; grid-template-columns:minmax(0,1fr) 16px 22px; align-items:center; gap:4px; min-height:24px; padding:0 6px 0 10px; color:inherit; background:transparent; cursor:pointer; font-size:11px; }
     .codexhost-git-repository-change:hover { background:color-mix(in srgb,currentColor 9%,transparent); }
-    .codexhost-git-repository-change > span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .codexhost-git-repository-commit { display:grid; gap:5px; padding:7px 8px; border-top:1px solid var(--border-default,color-mix(in srgb,currentColor 8%,transparent)); }
     .codexhost-git-repository-error { margin:0; padding:8px 10px; color:var(--text-link,inherit); font-size:10px; line-height:1.4; }
     .codexhost-git-commit-box { display:grid; flex:none; gap:6px; padding:8px 12px 10px; border-bottom:1px solid var(--border-default, color-mix(in srgb,currentColor 14%,transparent)); }
@@ -425,6 +344,7 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-commit-actions button { display:grid; place-items:center; min-width:0; padding:4px; white-space:nowrap; }
     .codexhost-git-commit-actions button:not([data-primary="true"]) { border-color:transparent; }
     .codexhost-git-commit-actions button[data-primary="true"] { grid-column:1 / -1; grid-row:1; color:white; background:#007acc; border-color:#007acc; }
+    ${gitScmStyles}
     .codexhost-git-notice { min-height:0; margin:0; padding:6px 10px; color:var(--text-link,inherit); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
   `;
   const shell = document.createElement("div");
@@ -463,7 +383,7 @@ export function installRendererGitSidebar(options: {
   projectName.setAttribute("data-codexhost-git-sidebar-project", "v1");
   const headText = document.createElement("span");
   headText.textContent = "源代码管理";
-  heading.append(projectName, headText);
+  heading.append(headText);
   const refresh = iconButton(document, "刷新", "M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6");
   const review = iconButton(document, "审查", "M4 4h16v16H4zM12 4v16M7 8h2M15 12h2");
   head.append(heading, review, refresh);
@@ -473,8 +393,46 @@ export function installRendererGitSidebar(options: {
   const historyToggle = iconButton(document, "历史", "M4 5h16M4 12h16M4 19h10M17 17l2 2 4-4");
   const fetchUpstream = iconButton(document, "获取上游", "M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4");
   fetchUpstream.dataset.gitAction = "fetch";
-  head.insertBefore(historyToggle, refresh);
-  head.insertBefore(fetchUpstream, refresh);
+  const graphBar = document.createElement("div");
+  graphBar.className = "codexhost-git-history-title";
+  historyToggle.textContent = "▸ 图表";
+  historyToggle.style.cssText =
+    "flex:none;color:inherit;background:transparent;border:0;font:inherit;font-size:11px;font-weight:600;cursor:pointer";
+  const graphSelect = document.createElement("select");
+  graphSelect.setAttribute("aria-label", "图表仓库");
+  graphBar.append(historyToggle, graphSelect, fetchUpstream);
+  let graphRepository: string | undefined;
+  const syncGraphRepositories = () => {
+    const paths = new Set(
+      [
+        current?.workspace,
+        ...repositoryGroups
+          .filter((group) => group.initialized !== false)
+          .map((group) => group.path),
+      ].filter((path): path is string => Boolean(path)),
+    );
+    const selected = graphRepository ?? current?.workspace ?? "";
+    const signature = JSON.stringify([...paths]);
+    if (graphSelect.dataset.repositories !== signature) {
+      graphSelect.replaceChildren(
+        ...[...paths].map((path) => {
+          const option = document.createElement("option");
+          option.value = path;
+          option.textContent = path.split(/[/\\]/u).filter(Boolean).at(-1) ?? path;
+          option.title = path;
+          return option;
+        }),
+      );
+      graphSelect.dataset.repositories = signature;
+    }
+    graphSelect.value = paths.has(selected) ? selected : (current?.workspace ?? "");
+  };
+  graphSelect.addEventListener("change", () => {
+    graphRepository =
+      graphSelect.value === current?.workspace ? selectedRepository : graphSelect.value;
+    historyView.reset();
+    if (historyVisible) void historyView.load(contextFor(graphRepository));
+  });
   // 冲突/合并进行中横幅：说明当前处于合并态并提供继续或中止；仅在有操作时显示。
   const conflictBanner = document.createElement("div");
   conflictBanner.className = "codexhost-git-conflict";
@@ -496,47 +454,19 @@ export function installRendererGitSidebar(options: {
   conflictBanner.append(conflictText, conflictActions);
   const workspace = document.createElement("div");
   workspace.className = "codexhost-git-workspace";
-  const statusTabs = document.createElement("div");
-  statusTabs.className = "codexhost-git-status-tabs";
-  const changesTab = document.createElement("button");
-  changesTab.type = "button";
-  changesTab.className = "codexhost-git-status-tab";
-  changesTab.setAttribute(GIT_SIDEBAR_CHANGES_TAB_ATTRIBUTE, "v1");
-  const changesLabel = document.createElement("span");
-  const changesCount = document.createElement("span");
-  changesTab.append(changesLabel, changesCount);
-  const stagedTab = document.createElement("button");
-  stagedTab.type = "button";
-  stagedTab.className = "codexhost-git-status-tab";
-  stagedTab.setAttribute(GIT_SIDEBAR_STAGED_TAB_ATTRIBUTE, "v1");
-  const stagedLabel = document.createElement("span");
-  const stagedCount = document.createElement("span");
-  stagedTab.append(stagedLabel, stagedCount);
-  const treeToggle = iconButton(
-    document,
-    "切换目录树",
-    "M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6ZM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z",
-  );
+  const treeToggle = iconButton(document, "切换目录树", "M4 4h16M4 12h16M4 20h16M7 4v16");
   treeToggle.className = "codexhost-git-tree-toggle";
   treeToggle.setAttribute(GIT_SIDEBAR_TREE_ATTRIBUTE, "v1");
   treeToggle.setAttribute("aria-pressed", "false");
-  statusTabs.append(changesTab, stagedTab, treeToggle);
+  head.insertBefore(treeToggle, review);
   const list = document.createElement("div");
   list.className = "codexhost-git-list";
-  const submoduleList = document.createElement("div");
-  submoduleList.className = "codexhost-git-modules";
-  const submoduleTitle = document.createElement("div");
-  submoduleTitle.className = "codexhost-git-modules-title";
-  submoduleTitle.textContent = "模块";
-  submoduleList.append(submoduleTitle);
-  const diff = document.createElement("pre");
-  diff.className = "codexhost-git-diff";
-  diff.textContent = "选择文件查看差异";
+
   const commitBox = document.createElement("div");
   commitBox.className = "codexhost-git-commit-box";
   const message = document.createElement("textarea");
   message.className = "codexhost-git-message";
-  message.rows = 3;
+  message.rows = 2;
   message.placeholder = "填写提交消息；AI 生成后仍可编辑。";
   message.setAttribute(GIT_SIDEBAR_MESSAGE_ATTRIBUTE, "v1");
   message.setAttribute("aria-label", "提交消息");
@@ -545,11 +475,22 @@ export function installRendererGitSidebar(options: {
   const model = document.createElement("select");
   model.setAttribute(GIT_SIDEBAR_MODEL_ATTRIBUTE, "v1");
   model.setAttribute("aria-label", "生成提交消息模型");
-  const generate = document.createElement("button");
-  generate.type = "button";
-  generate.textContent = "AI 生成";
+  const generate = iconButton(
+    document,
+    "AI 生成",
+    "m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z",
+  );
+  generate.className = "codexhost-git-generate-inline";
   generate.setAttribute(GIT_SIDEBAR_GENERATE_ATTRIBUTE, "v1");
-  modelRow.append(model, generate);
+  modelRow.append(model);
+  const modelOptions = document.createElement("details");
+  modelOptions.className = "codexhost-git-model-options";
+  const modelSummary = document.createElement("summary");
+  modelSummary.textContent = "提交消息模型";
+  modelOptions.append(modelSummary, modelRow);
+  const messageRow = document.createElement("div");
+  messageRow.className = "codexhost-git-message-row";
+  messageRow.append(message, generate);
   const commitActions = document.createElement("div");
   commitActions.className = "codexhost-git-commit-actions";
   const stageAll = iconButton(
@@ -575,16 +516,41 @@ export function installRendererGitSidebar(options: {
     "M20 5v6h-6M4 19v-6h6M5.6 8a7 7 0 0 1 11.6-2L20 11M4 13l2.8 5A7 7 0 0 0 18.4 16",
   );
   sync.setAttribute(GIT_SIDEBAR_SYNC_ATTRIBUTE, "v1");
-  commitActions.append(stageAll, unstageAll, commit, commitPush, push, sync);
+  const primary = document.createElement("section");
+  primary.className = "codexhost-git-primary";
+  const primaryBar = document.createElement("div");
+  primaryBar.className = "codexhost-git-repository-bar";
+  const primaryHeader = document.createElement("button");
+  primaryHeader.type = "button";
+  primaryHeader.className = "codexhost-git-repository-header";
+  primaryHeader.setAttribute("aria-label", "折叠主仓库");
+  const primaryChevron = document.createElement("span");
+  primaryChevron.textContent = "▾";
+  projectName.className = "codexhost-git-repository-name";
+  branch.className = "codexhost-git-repository-meta codexhost-git-branch";
+  primaryHeader.append(primaryChevron, gitRepositoryIcon(document), projectName, branch);
+  const primaryToolbar = document.createElement("div");
+  primaryToolbar.className = "codexhost-git-repository-toolbar";
+  primaryToolbar.append(sync, commit, refresh);
+  primaryBar.append(primaryHeader, primaryToolbar);
+  const primaryBody = document.createElement("div");
+  primaryBody.className = "codexhost-git-repository-body";
+  primary.append(primaryBar, primaryBody);
+  const commitOnly = iconButton(document, "提交", "M20 6 9 17l-5-5");
+  commitOnly.addEventListener("click", () => {
+    if (!commit.disabled) void submit(false);
+  });
+  const commitOptions = gitCommitMenu(document, commitActions, commitPush, [commitOnly, push]);
   const notice = document.createElement("p");
   notice.className = "codexhost-git-notice";
   notice.setAttribute("role", "status");
   notice.hidden = true;
-  commitBox.append(message, modelRow, commitActions);
+  commitBox.append(messageRow, commitActions, modelOptions);
   const repositoryGroupsRoot = document.createElement("div");
   repositoryGroupsRoot.className = "codexhost-git-repository-groups";
   repositoryGroupsRoot.hidden = true;
-  workspace.append(statusTabs, list, submoduleList, repositoryGroupsRoot);
+  primaryBody.append(commitBox, list);
+  workspace.append(primary, repositoryGroupsRoot);
   const projectSyncView = createRendererProjectSyncPanel({
     ownerDocument: document,
     container: shadow,
@@ -611,28 +577,30 @@ export function installRendererGitSidebar(options: {
   warnings.setAttribute("role", "status");
   warnings.setAttribute("data-codexhost-git-warnings", "v1");
   warnings.hidden = true;
-  panel.append(head, branch, warnings, conflictBanner, notice, commitBox, history, workspace);
+  panel.append(head, warnings, conflictBanner, notice, workspace, graphBar, history);
   shell.append(rail, panel);
   shadow.append(style, shell);
 
   let anchor: SidebarAnchor | null = null;
   let view: "projects" | "commits" | "devices" | "remote-projects" = "projects";
   let historyVisible = false;
+  let primaryExpanded = true;
   let current: GitWorkspaceStatus | null = null;
   let workspaceRead = false;
   let workspaceError: Error | null = null;
   let repositoryGroups: RepositoryGroup[] = [];
   let selectedChange: string | null = null;
-  let changeTab: "changes" | "staged" = "changes";
-  let treeView = true;
+  let treeView = false;
+  const collapsedSections = new Set<string>();
   const expandedDirectories = new Set<string>();
   const expandedRepositories = new Set<string>();
-  const repositoryMessages = new Map<string, string>();
+  const collapsedRepositories = new Set<string>();
+  let knownRepositories: GitRepositories | null = null;
+  const repositoryReads = new Set<RepositoryGroup>();
   let expansionRevision = 0;
   let renderedList: {
     status: GitWorkspaceStatus | null;
     workspaceRead: boolean;
-    tab: string;
     tree: boolean;
     expansion: number;
   } | null = null;
@@ -651,13 +619,13 @@ export function installRendererGitSidebar(options: {
   const requestKey = (request: RendererGitContext): string =>
     JSON.stringify([gitTargetKey(request), request.repository]);
   const pending = new WeakMap<RendererGitClient, Map<string, string>>();
-  const pendingAction = (): string | undefined => {
-    const request = context();
+  const pendingAction = (request: RendererGitContext = context()): string | undefined => {
     return request.client && hasGitTarget(request)
       ? pending.get(request.client)?.get(requestKey(request))
       : undefined;
   };
-  const isBusy = (): boolean => pendingAction() !== undefined;
+  const isBusy = (request: RendererGitContext = context()): boolean =>
+    pendingAction(request) !== undefined;
   const beginAction = (request: RendererGitContext, action: string): void => {
     if (!request.client || !hasGitTarget(request)) return;
     let actions = pending.get(request.client);
@@ -667,7 +635,7 @@ export function installRendererGitSidebar(options: {
     }
     actions.set(requestKey(request), action);
   };
-  const finishAction = (request: RendererGitContext, repositoriesOnly = false): void => {
+  const finishAction = (request: ReturnType<typeof context>, repositoriesOnly = false): void => {
     if (!request.client || !hasGitTarget(request)) return;
     const action = pending.get(request.client)?.get(requestKey(request));
     pending.get(request.client)?.delete(requestKey(request));
@@ -676,21 +644,52 @@ export function installRendererGitSidebar(options: {
     if (
       active.client === request.client &&
       gitTargetKey(active) === gitTargetKey(request) &&
-      active.repository === request.repository
+      isCurrentRequest(request)
     ) {
-      current = cache.peekStatus(request.client, request, request.repository) ?? current;
+      if (active.repository === request.repository) {
+        current = cache.peekStatus(request.client, request, request.repository) ?? current;
+      }
       if (historyVisible && action && action !== "refresh" && action !== "generate") {
         historyView.reset();
-        void historyView.load(context());
+        void historyView.load(contextFor(graphRepository));
       }
-      if (current && !modelsLoaded && view === "commits" && !historyVisible) void loadModels();
-      if (repositoriesOnly && view === "commits" && !historyVisible) {
+      if (current && !modelsLoaded && view === "commits") void loadModels();
+      if ((repositoriesOnly || request.repository !== selectedRepository) && view === "commits") {
         renderRepositoryCards(repositoryGroups.filter((group) => !group.primary));
         updateBusy();
       } else {
         render();
       }
       syncMessageDraft();
+      if (request.repository && action && action !== "refresh" && action !== "generate") {
+        void refreshParentStatus(request.repository);
+      }
+    } else if (active.client === request.client && gitTargetKey(active) === gitTargetKey(request)) {
+      // 切换到正在操作的同一仓库后，锁释放即读取最终状态。
+      render();
+      if (active.repository === request.repository && view === "commits") void load();
+    }
+  };
+  const refreshParentStatus = async (repository: string): Promise<void> => {
+    const child = repositoryGroups.find((group) => group.path === repository);
+    if (!child?.modulePath) return;
+    const request = contextFor(child.parentRepository);
+    if (!request.client || isBusy(request)) return;
+    const primary = request.repository === selectedRepository;
+    const group = repositoryGroups.find((group) => group.path === request.repository);
+    const previous = primary ? current : group?.status;
+    try {
+      const status = await cache.status(request.client, request, request.repository);
+      if (!isCurrentRequest(request) || isBusy(request)) return;
+      if ((primary ? current : group?.status) !== previous) return;
+      if (primary) current = status;
+      if (group) group.status = status;
+      addSubmodules(status, request.repository);
+      render();
+      if (request.repository) void refreshParentStatus(request.repository);
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(`父仓库状态刷新失败：${error instanceof Error ? error.message : String(error)}`);
     }
   };
   let modelsLoaded = false;
@@ -760,14 +759,23 @@ export function installRendererGitSidebar(options: {
     modelsRead = false;
     modelsLoadingContext = null;
     historyVisible = false;
+    graphRepository = selectedRepository;
     historyView.reset();
     model.replaceChildren();
     message.value = "";
     draftKey = "";
     draftRevision = "";
     selectedMessageModel = "";
-    changeTab = "changes";
     expandedDirectories.clear();
+    collapsedSections.clear();
+    expandedRepositories.clear();
+    collapsedRepositories.clear();
+    repositoryReads.clear();
+    repositoryGroups = [];
+    repositoryCards.clear();
+    commitOptions.open = false;
+    repositoryGroupsRoot.replaceChildren();
+    primaryExpanded = true;
     expansionRevision += 1;
     setNotice("");
     render();
@@ -783,6 +791,7 @@ export function installRendererGitSidebar(options: {
       return false;
     activeContext = next;
     selectedRepository = undefined;
+    knownRepositories = null;
     resetGitView();
     return true;
   };
@@ -806,203 +815,315 @@ export function installRendererGitSidebar(options: {
     }
   };
 
-  const loadSubmodule = async (group: RepositoryGroup): Promise<void> => {
-    const request = context();
-    if (!request.client || !group.path || !group.initialized || group.loading) return;
+  const addSubmodules = (
+    status: GitWorkspaceStatus,
+    parentRepository: string | undefined,
+  ): void => {
+    const client = context().client;
+    for (const submodule of status.submodules) {
+      const child = pathJoin(status.workspace, submodule.path);
+      if (child === current?.workspace || repositoryGroups.some((group) => group.path === child))
+        continue;
+      const parentPath = status.submodules
+        .map((entry) => entry.path)
+        .filter((path) => submodule.path.startsWith(`${path}/`))
+        .sort((left, right) => right.length - left.length)[0];
+      const owner = parentPath ? pathJoin(status.workspace, parentPath) : parentRepository;
+      const modulePath = parentPath ? submodule.path.slice(parentPath.length + 1) : submodule.path;
+      if (submodule.status !== "uninitialized" && !collapsedRepositories.has(child))
+        expandedRepositories.add(child);
+      repositoryGroups.push({
+        path: child,
+        primary: false,
+        initialized: submodule.status !== "uninitialized",
+        status: client ? cache.peekStatus(client, context(), child) : null,
+        loading: false,
+        error: null,
+        parentRepository: owner,
+        modulePath,
+      });
+    }
+  };
+  const scheduleRepositoryReads = (): void => {
+    if (disposed || view !== "commits" || !current) return;
+    for (const group of repositoryGroups) {
+      if (repositoryReads.size >= 2) break;
+      if (
+        group.primary ||
+        group.initialized === false ||
+        group.read ||
+        group.loading ||
+        group.error
+      )
+        continue;
+      void loadSubmodule(group);
+    }
+  };
+  const loadSubmodule = async (group: RepositoryGroup, force = false): Promise<void> => {
+    const request = contextFor(group.path);
+    if (
+      !request.client ||
+      !group.path ||
+      group.initialized === false ||
+      group.loading ||
+      isBusy(request)
+    )
+      return;
     group.loading = true;
-    const requestGeneration = generation;
+    repositoryReads.add(group);
+    if (force) cache.invalidate(request.client);
+    if (force) beginAction(request, "refresh");
+    render(true);
     try {
       const status = await cache.status(request.client, request, group.path);
-      if (
-        isCurrentRequest(request) &&
-        repositoryGroups.includes(group) &&
-        requestGeneration === generation
-      ) {
-        group.status = status;
-        group.error = null;
-      }
+      if (!isCurrentRequest(request) || !repositoryGroups.includes(group)) return;
+      group.status = status;
+      group.error = null;
+      group.read = true;
+      addSubmodules(status, group.path);
     } catch (error) {
-      if (
-        isCurrentRequest(request) &&
-        repositoryGroups.includes(group) &&
-        requestGeneration === generation
-      ) {
+      if (isCurrentRequest(request) && repositoryGroups.includes(group)) {
         group.error = error instanceof Error ? error.message : String(error);
+        group.read = true;
       }
     } finally {
       group.loading = false;
-      if (isCurrentRequest(request) && repositoryGroups.includes(group)) render(true);
+      repositoryReads.delete(group);
+      if (force) finishAction(request, true);
+      else if (isCurrentRequest(request)) render(true);
+      if (isCurrentRequest(request)) scheduleRepositoryReads();
     }
   };
-
-  const renderRepositoryCards = (childGroups: RepositoryGroup[]): void => {
-    repositoryGroupsRoot.replaceChildren();
-    repositoryGroupsRoot.hidden = childGroups.length === 0;
-    for (const group of childGroups) {
-      const card = document.createElement("section");
-      card.className = "codexhost-git-repository-group";
-      card.dataset.repository = group.path;
-      const header = document.createElement("button");
-      header.type = "button";
-      header.className = "codexhost-git-repository-header";
-      const repositoryName = group.path?.split(/[/\\]/u).filter(Boolean).at(-1) ?? "子模块";
-      header.setAttribute("aria-label", `展开子模块 ${repositoryName}`);
-      const name = document.createElement("span");
-      name.className = "codexhost-git-repository-name";
-      name.textContent = repositoryName;
-      name.title = group.path ?? "";
-      const meta = document.createElement("span");
-      meta.className = "codexhost-git-repository-meta";
-      meta.textContent = group.loading
-        ? "读取中…"
-        : group.error
-          ? "读取失败"
-          : group.status?.branch
-            ? `${group.status.branch} · ${group.status.changes.length} 项变更 · ${group.status.ahead}↑ ${group.status.behind}↓`
-            : group.initialized
-              ? "展开读取状态"
-              : "未初始化";
-      header.append(name, meta);
-      header.addEventListener(
-        "click",
-        () => {
-          const repository = group.path ?? "";
-          if (expandedRepositories.has(repository)) expandedRepositories.delete(repository);
-          else {
-            expandedRepositories.add(repository);
-            void loadSubmodule(group);
-          }
-          renderRepositoryCards(childGroups);
-        },
-        listenerOptions,
-      );
-      card.append(header);
-      if (!expandedRepositories.has(group.path ?? "")) {
-        header.setAttribute("aria-expanded", "false");
-        repositoryGroupsRoot.append(card);
+  const addLinkedRepositories = (): void => {
+    const client = context().client;
+    for (const entry of knownRepositories?.repositories ?? []) {
+      if (
+        entry.path === current?.workspace ||
+        repositoryGroups.some((group) => group.path === entry.path)
+      )
         continue;
-      }
-      header.setAttribute("aria-expanded", "true");
-      const body = document.createElement("div");
-      body.className = "codexhost-git-repository-body";
-      if (group.error) {
-        const error = document.createElement("p");
-        error.className = "codexhost-git-repository-error";
-        error.textContent = group.error;
-        body.append(error);
-      } else {
-        const changes = document.createElement("div");
-        changes.className = "codexhost-git-repository-changes";
-        const groupChanges = group.status?.changes ?? [];
-        if (!group.status) {
-          const empty = document.createElement("p");
-          empty.className = "codexhost-git-empty";
-          empty.textContent = "尚未读取子模块状态。";
-          changes.append(empty);
-        } else if (!groupChanges.length) {
-          const empty = document.createElement("p");
-          empty.className = "codexhost-git-empty";
-          empty.textContent = "没有待提交的变更";
-          changes.append(empty);
-        } else {
-          for (const change of groupChanges) {
-            const row = document.createElement("div");
-            row.className = "codexhost-git-repository-change";
-            row.dataset.path = change.path;
-            row.dataset.repository = group.path;
-            row.title = change.path;
-            const copy = document.createElement("span");
-            copy.textContent = change.path;
-            const status = document.createElement("span");
-            status.className = "codexhost-git-status";
-            status.textContent = change.staged ? "S" : change.untracked ? "U" : "M";
-            const stage = iconButton(
-              document,
-              change.staged ? "取消暂存" : "暂存",
-              change.staged ? "M5 12h14" : "M12 5v14M5 12h14",
-            );
-            stage.className = "codexhost-git-change-action";
-            stage.disabled = isBusy();
-            stage.addEventListener("click", (event) => {
-              event.stopPropagation();
-              void updateStaged(change.path, !change.staged, group.path);
-            });
-            row.append(copy, status, stage);
-            row.addEventListener(
-              "click",
-              () => void openDiff(change.path, group.path),
-              listenerOptions,
-            );
-            changes.append(row);
-          }
-        }
-        body.append(changes);
-        const commit = document.createElement("div");
-        commit.className = "codexhost-git-repository-commit";
-        const message = document.createElement("textarea");
-        message.className = "codexhost-git-message";
-        message.rows = 2;
-        message.placeholder = "填写提交消息；AI 生成后仍可编辑。";
-        message.setAttribute("aria-label", `${name.textContent} 提交消息`);
-        message.value = repositoryMessages.get(group.path ?? "") ?? "";
-        message.addEventListener("input", () => {
-          repositoryMessages.set(group.path ?? "", message.value);
-          updateBusy();
-        });
-        const actions = document.createElement("div");
-        actions.className = "codexhost-git-commit-actions";
-        const stageAll = document.createElement("button");
-        stageAll.type = "button";
-        stageAll.textContent = "全部暂存";
-        stageAll.disabled =
-          isBusy() || !group.status?.changes.some((change) => !change.conflicted && !change.staged);
-        stageAll.addEventListener("click", () => {
-          if (!group.path || !group.status) return;
-          const paths = group.status.changes
-            .filter((change) => !change.conflicted && !change.staged)
-            .map((change) => change.path);
-          if (paths.length) void stagePaths(group.path, paths);
-        });
-        const commitButton = document.createElement("button");
-        commitButton.type = "button";
-        commitButton.textContent = "提交";
-        commitButton.dataset.primary = "true";
-        commitButton.disabled = isBusy() || !group.status?.changes.length;
-        commitButton.addEventListener("click", () => void submit(false, group.path, message.value));
-        const pushButton = document.createElement("button");
-        pushButton.type = "button";
-        pushButton.textContent = "推送";
-        pushButton.disabled = isBusy() || !group.status;
-        pushButton.addEventListener("click", () => {
-          if (group.path) void pushRepository(group.path);
-        });
-        actions.append(stageAll, commitButton, pushButton);
-        commit.append(message, actions);
-        body.append(commit);
-      }
-      card.append(body);
-      repositoryGroupsRoot.append(card);
+      if (!collapsedRepositories.has(entry.path)) expandedRepositories.add(entry.path);
+      repositoryGroups.push({
+        path: entry.path,
+        primary: false,
+        initialized: true,
+        status: client ? cache.peekStatus(client, context(), entry.path) : null,
+        loading: false,
+        error: null,
+      });
     }
   };
 
-  const stagePaths = async (repository: string, paths: string[]): Promise<void> => {
+  const repositoryCards = new Map<string, ReturnType<typeof createGitRepositoryCard>>();
+  const repositoryDraftKey = (group: RepositoryGroup): string =>
+    JSON.stringify([context().hostId, group.status?.workspace ?? group.path]);
+  const renderRepositoryCards = (childGroups: RepositoryGroup[]): void => {
+    repositoryGroupsRoot.hidden = childGroups.length === 0;
+    const paths = new Set(childGroups.map((group) => group.path));
+    for (const [path, card] of repositoryCards) {
+      if (!paths.has(path)) {
+        card.root.remove();
+        repositoryCards.delete(path);
+      }
+    }
+    for (const group of childGroups) {
+      if (!group.path) continue;
+      const repository = group.path;
+      let card = repositoryCards.get(repository);
+      if (!card) {
+        const getGroup = () => repositoryGroups.find((group) => group.path === repository);
+        card = createGitRepositoryCard(document, {
+          repository,
+          expandedDirectories,
+          collapsedSections,
+          initializeAction: group.modulePath ? `submodule:${group.modulePath}` : undefined,
+          onToggle: () => {
+            if (expandedRepositories.has(repository)) {
+              expandedRepositories.delete(repository);
+              collapsedRepositories.add(repository);
+            } else {
+              expandedRepositories.add(repository);
+              collapsedRepositories.delete(repository);
+            }
+            const group = getGroup();
+            if (group && !group.status && !group.loading && !group.error) void loadSubmodule(group);
+            renderRepositoryCards(repositoryGroups.filter((group) => !group.primary));
+          },
+          onToggleChanges: () => {
+            cancelReview();
+            expansionRevision++;
+            render(true);
+          },
+          onRefresh: () => {
+            const group = getGroup();
+            if (group) void loadSubmodule(group, true);
+          },
+          onOpen: (path, staged) => void openDiff(path, repository, staged),
+          onStage: (path, stage) => void updateStaged(path, stage, repository),
+          onStageAll: (stage) => {
+            const group = getGroup();
+            const paths =
+              group?.status?.changes
+                .filter(
+                  (change) =>
+                    !change.conflicted &&
+                    (stage ? !change.staged || change.unstaged : change.staged),
+                )
+                .map((change) => change.path) ?? [];
+            void stagePaths(repository, paths, stage);
+          },
+          onMessage: (value) => {
+            const group = getGroup();
+            if (group)
+              drafts.edit(repositoryDraftKey(group), group.status?.messageRevision ?? "", value);
+          },
+          onGenerate: () => {
+            const group = getGroup();
+            if (group) void generateRepositoryMessage(group);
+          },
+          onCommit: (push, message) => void submit(push, repository, message),
+          onPush: () => void pushRepository(repository),
+          onSync: () => void syncRepository(repository),
+          onContinue: () => void finishRepositoryOperation(repository, false),
+          onAbort: () => void finishRepositoryOperation(repository, true),
+          onInitialize: () => {
+            const group = getGroup();
+            if (group?.modulePath)
+              void updateSubmodule(group.modulePath, true, group.parentRepository);
+          },
+        });
+        repositoryCards.set(repository, card);
+      }
+      const request = contextFor(repository);
+      const key = repositoryDraftKey(group);
+      card.update({
+        status: group.status,
+        loading: group.loading,
+        error: group.error,
+        initialized: group.initialized !== false,
+        expanded: expandedRepositories.has(repository),
+        busy: isBusy(request),
+        initializing: Boolean(
+          group.modulePath &&
+          pendingAction(contextFor(group.parentRepository)) === `submodule:${group.modulePath}`,
+        ),
+        action: pendingAction(request),
+        generating: Boolean(drafts.pending(key)),
+        message: drafts.read(key, group.status?.messageRevision ?? ""),
+        canGenerate: modelsLoaded && Boolean(model.value),
+        canSync: Boolean(request.client?.syncGit),
+        canContinue: group.status?.conflicts.length
+          ? Boolean(request.client?.sendThreadMessage && request.threadId)
+          : Boolean(request.client?.continueGitMerge),
+        canAbort: Boolean(request.client?.abortGitMerge),
+        tree: treeView,
+        expansion: expansionRevision,
+      });
+      if (repositoryGroupsRoot.children[childGroups.indexOf(group)] !== card.root)
+        repositoryGroupsRoot.insertBefore(
+          card.root,
+          repositoryGroupsRoot.children[childGroups.indexOf(group)] ?? null,
+        );
+    }
+    syncGraphRepositories();
+  };
+
+  const generateRepositoryMessage = async (group: RepositoryGroup): Promise<void> => {
+    const request = contextFor(group.path);
+    if (!request.client || !group.status || !model.value || isBusy(request)) return;
+    const key = repositoryDraftKey(group);
+    if (drafts.pending(key)) return;
+    const revision = group.status.messageRevision ?? "";
+    const version = drafts.start(key, revision);
+    render(true);
+    try {
+      const result = await request.client.generateGitMessage({
+        ...gitTargetParams(request),
+        repository: group.path,
+        model: model.value,
+        paths: group.status.changes
+          .filter((change) => change.staged && !change.conflicted)
+          .map((change) => change.path),
+      });
+      drafts.complete(key, result.revision ?? revision, result.message, version);
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      drafts.finish(key);
+      if (isCurrentRequest(request)) render(true);
+    }
+  };
+
+  const syncRepository = async (repository: string): Promise<void> => {
     const request = contextFor(repository);
-    if (!hasGitTarget(request) || !request.client || isBusy() || paths.length === 0) return;
-    generation += 1;
-    beginAction(request, "stage-all");
+    const client = request.client;
+    if (!hasGitTarget(request) || !client?.syncGit || isBusy(request)) return;
+    beginAction(request, "sync");
+    render(true);
+    try {
+      const result = await client.syncGit({ ...gitTargetParams(request), repository });
+      cache.update(client, request, result.status, repository);
+      if (!isCurrentRequest(request)) return;
+      const group = repositoryGroups.find((entry) => entry.path === repository);
+      if (group) group.status = result.status;
+      if (result.strategy === "conflict") await resolveSyncConflicts(request, result.status, false);
+      else setNotice(syncNotice(result));
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      finishAction(request, true);
+    }
+  };
+
+  const finishRepositoryOperation = async (repository: string, abort: boolean): Promise<void> => {
+    const request = contextFor(repository);
+    const client = request.client;
+    const group = repositoryGroups.find((entry) => entry.path === repository);
+    const run = abort ? client?.abortGitMerge : client?.continueGitMerge;
+    if (!hasGitTarget(request) || !client || !group?.status || isBusy(request)) return;
+    if (!abort && group.status.conflicts.length) {
+      beginAction(request, "merge-continue");
+      render(true);
+      await resolveSyncConflicts(request, group.status, false).finally(() =>
+        finishAction(request, true),
+      );
+      return;
+    }
+    if (!run) return;
+    beginAction(request, abort ? "merge-abort" : "merge-continue");
+    render(true);
+    try {
+      const status = await run.call(client, { ...gitTargetParams(request), repository });
+      cache.update(client, request, status, repository);
+      if (isCurrentRequest(request)) group.status = status;
+    } catch (error) {
+      if (isCurrentRequest(request))
+        setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      finishAction(request, true);
+    }
+  };
+
+  const stagePaths = async (repository: string, paths: string[], stage = true): Promise<void> => {
+    const request = contextFor(repository);
+    if (!hasGitTarget(request) || !request.client || isBusy(request) || paths.length === 0) return;
+    if (request.repository === selectedRepository) generation += 1;
+    beginAction(request, stage ? "stage-all" : "unstage-all");
     setNotice("");
     render();
     try {
-      const status = await request.client.stageGitPaths({
+      const status = await (stage ? request.client.stageGitPaths : request.client.unstageGitPaths)({
         ...gitTargetParams(request),
-        ...(repository ? { repository } : {}),
+        repository,
         paths,
       });
       cache.update(request.client, request, status, repository);
       if (!isCurrentRequest(request)) return;
       const group = repositoryGroups.find((entry) => entry.path === repository);
       if (group) group.status = status;
-      setNotice("已暂存全部变更。");
+      setNotice(stage ? "已暂存全部变更。" : "已取出全部已暂存变更。");
     } catch (error) {
       if (isCurrentRequest(request))
         setNotice(error instanceof Error ? error.message : String(error));
@@ -1013,8 +1134,8 @@ export function installRendererGitSidebar(options: {
 
   const pushRepository = async (repository: string): Promise<void> => {
     const request = contextFor(repository);
-    if (!hasGitTarget(request) || !request.client || isBusy()) return;
-    generation += 1;
+    if (!hasGitTarget(request) || !request.client || isBusy(request)) return;
+    if (request.repository === selectedRepository) generation += 1;
     beginAction(request, "push");
     setNotice("正在推送…");
     render();
@@ -1089,12 +1210,18 @@ export function installRendererGitSidebar(options: {
           : "正在读取项目…"
         : "未选择项目";
     projectName.title = workspacePath;
-    workspace.hidden = historyVisible;
-    commitBox.hidden = historyVisible;
+    workspace.hidden = false;
+    primaryBody.hidden = !primaryExpanded;
+    if (!primaryExpanded) commitOptions.open = false;
+    primaryHeader.setAttribute("aria-expanded", String(primaryExpanded));
+    primaryChevron.textContent = primaryExpanded ? "▾" : "▸";
+    message.placeholder = gitMessagePlaceholder(current);
     historyToggle.setAttribute("aria-pressed", String(historyVisible));
+    historyToggle.setAttribute("aria-expanded", String(historyVisible));
+    historyToggle.textContent = `${historyVisible ? "▾" : "▸"} 图表`;
     fetchUpstream.hidden = !historyVisible;
-    branch.textContent = current?.branch
-      ? `${current.branch} · ${current.ahead}↑ ${current.behind}↓`
+    branch.textContent = current
+      ? gitRepositoryBranch(current)
       : hasGitTarget(context())
         ? projectName.textContent
         : "未选择项目";
@@ -1112,10 +1239,6 @@ export function installRendererGitSidebar(options: {
       mergeContinue.disabled = isBusy();
       mergeAbort.disabled = isBusy();
     }
-    if (historyVisible) {
-      updateBusy();
-      return;
-    }
     // 子模块回包只更新子模块卡片，不向主列表再次追加文件或重建目录树。
     if (repositoriesOnly) {
       renderRepositoryCards(repositoryGroups.filter((group) => !group.primary));
@@ -1125,178 +1248,61 @@ export function installRendererGitSidebar(options: {
     if (
       renderedList?.status === current &&
       renderedList.workspaceRead === workspaceRead &&
-      renderedList.tab === changeTab &&
       renderedList.tree === treeView &&
       renderedList.expansion === expansionRevision
     ) {
+      renderRepositoryCards(repositoryGroups.filter((group) => !group.primary));
       updateBusy();
       return;
     }
-    if (!repositoriesOnly) {
-      renderedList = {
-        status: current,
-        workspaceRead,
-        tab: changeTab,
-        tree: treeView,
-        expansion: expansionRevision,
-      };
-      list.replaceChildren();
-      submoduleList.replaceChildren(submoduleTitle);
-    }
-    repositoryGroupsRoot.replaceChildren();
+    renderedList = {
+      status: current,
+      workspaceRead,
+      tree: treeView,
+      expansion: expansionRevision,
+    };
     const childGroups = repositoryGroups.filter((group) => !group.primary);
-    repositoryGroupsRoot.hidden = childGroups.length === 0;
-    const entries = current?.changes ?? [];
-    const unstaged = entries.filter((change) => !change.staged || change.unstaged);
-    const staged = entries.filter((change) => change.staged);
-    const activeChanges = changeTab === "staged" ? staged : unstaged;
-    changesLabel.textContent = "变更";
-    stagedLabel.textContent = "已暂存";
-    changesCount.textContent = String(unstaged.length);
-    stagedCount.textContent = String(staged.length);
-    changesTab.setAttribute("aria-selected", String(changeTab === "changes"));
-    stagedTab.setAttribute("aria-selected", String(changeTab === "staged"));
     treeToggle.setAttribute("aria-pressed", String(treeView));
-    submoduleList.hidden = !treeView;
-    const renderChange = (
-      change: GitChange,
-      container: HTMLElement,
-      action: "stage" | "unstage",
-      displayPath = change.path,
-    ): void => {
-      const row = document.createElement("div");
-      row.className = "codexhost-git-change";
-      row.dataset.path = change.path;
-      row.setAttribute("aria-selected", String(selectedChange === change.path));
-      row.title = change.originalPath ? `${change.originalPath} → ${change.path}` : change.path;
-      const name = document.createElement("span");
-      name.textContent = change.submodule ? `${displayPath} · 子模块` : displayPath;
-      const status = document.createElement("span");
-      status.className = "codexhost-git-status";
-      const statusInfo = gitChangeStatus(change, action);
-      status.textContent = statusInfo.code;
-      status.title = statusInfo.label;
-      status.setAttribute("aria-label", statusInfo.label);
-      const actionButton = iconButton(
-        document,
-        action === "stage" ? "暂存" : "取消暂存",
-        action === "stage" ? "M12 5v14M5 12h14" : "M5 12h14",
-      );
-      actionButton.className = "codexhost-git-change-action";
-      actionButton.dataset.action = action;
-      actionButton.dataset.gitAction = `${action}:${change.path}`;
-      actionButton.disabled = isBusy();
-      actionButton.setAttribute(
-        action === "stage" ? GIT_SIDEBAR_STAGE_ATTRIBUTE : GIT_SIDEBAR_UNSTAGE_ATTRIBUTE,
-        "v1",
-      );
-      actionButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        void updateStaged(change.path, action === "stage");
-      });
-      row.append(name, status, actionButton);
-      row.addEventListener("click", () => void openDiff(change.path), listenerOptions);
-      container.append(row);
-    };
-    const renderDirectory = (
-      directory: GitDirectory,
-      container: HTMLElement,
-      depth: number,
-    ): void => {
-      const children = [...directory.directories.values()].sort((left, right) =>
-        left.name.localeCompare(right.name, "zh-CN", { numeric: true }),
-      );
-      for (const child of children) {
-        const collapsed = !expandedDirectories.has(child.path);
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "codexhost-git-directory";
-        row.title = child.path;
-        row.style.paddingLeft = `${8 + depth * 12}px`;
-        row.setAttribute("aria-expanded", String(!collapsed));
-        const icon = document.createElement("span");
-        icon.textContent = collapsed ? "▸" : "▾";
-        const name = document.createElement("span");
-        name.className = "codexhost-git-directory-name";
-        name.textContent = child.name;
-        const badge = document.createElement("span");
-        badge.className = "codexhost-git-directory-count";
-        badge.textContent = String(child.count);
-        row.append(icon, name, badge);
-        row.addEventListener(
-          "click",
-          () => {
-            if (collapsed) expandedDirectories.add(child.path);
-            else expandedDirectories.delete(child.path);
-            expansionRevision += 1;
-            render();
-          },
-          listenerOptions,
-        );
-        container.append(row);
-        if (!collapsed) renderDirectory(child, container, depth + 1);
-      }
-      const changes = [...directory.changes].sort((left, right) =>
-        (left.originalPath ?? left.path).localeCompare(right.originalPath ?? right.path, "zh-CN", {
-          numeric: true,
-        }),
-      );
-      for (const change of changes) {
-        const action = changeTab === "staged" ? "unstage" : "stage";
-        const displayPath = directory.path
-          ? change.path.slice(directory.path.length + 1)
-          : change.path;
-        renderChange(change, container, action, displayPath);
-      }
-    };
-    if (!workspaceRead && hasGitTarget(context())) {
-      const loading = document.createElement("p");
-      loading.className = "codexhost-git-empty";
-      loading.textContent = "正在读取项目…";
-      list.append(loading);
-    } else if (!current) {
+    renderGitChanges(document, {
+      root: list,
+      status: current,
+      repository: selectedRepository,
+      primary: true,
+      tree: treeView,
+      expandedDirectories,
+      collapsedSections,
+      stageAll,
+      unstageAll,
+      isBusy,
+      onToggle: () => {
+        cancelReview();
+        expansionRevision++;
+        render();
+      },
+      onOpen: (path, staged) => void openDiff(path, selectedRepository, staged),
+      onStage: (path, stage) => void updateStaged(path, stage),
+    });
+    if (!current) {
+      list.replaceChildren();
       const empty = document.createElement("p");
       empty.className = "codexhost-git-empty";
-      empty.textContent = hasGitTarget(context()) ? "无法读取 Git 状态" : "未选择项目";
+      empty.textContent = !hasGitTarget(context())
+        ? "未选择项目"
+        : workspaceRead
+          ? "无法读取 Git 状态"
+          : "正在读取项目…";
       list.append(empty);
-    } else if (!activeChanges.length) {
-      const empty = document.createElement("p");
-      empty.className = "codexhost-git-empty";
-      empty.textContent = changeTab === "staged" ? "没有已暂存文件" : "没有待提交的变更";
-      list.append(empty);
-    } else if (treeView) {
-      renderDirectory(buildGitTree(activeChanges), list, 0);
-    } else {
-      for (const change of activeChanges) {
-        renderChange(change, list, changeTab === "staged" ? "unstage" : "stage");
-      }
-    }
-    for (const submodule of current?.submodules ?? []) {
-      const row = document.createElement("div");
-      row.className = "codexhost-git-submodule";
-      const copy = document.createElement("span");
-      copy.textContent = `${submodule.path} · ${submodule.status}`;
-      const update = document.createElement("button");
-      update.type = "button";
-      update.textContent = submodule.status === "uninitialized" ? "初始化" : "更新";
-      update.dataset.gitAction = `submodule:${submodule.path}`;
-      update.dataset.current = String(submodule.status === "current");
-      update.disabled =
-        isBusy() || submodule.status === "current" || !context().client?.updateGitSubmodule;
-      update.addEventListener(
-        "click",
-        () => void updateSubmodule(submodule.path, submodule.status === "uninitialized"),
-        listenerOptions,
-      );
-      row.append(copy, update);
-      submoduleList.append(row);
     }
     renderRepositoryCards(childGroups);
     syncOfficialPanelState();
     updateBusy();
   };
 
-  const openDiff = async (pathValue: string, repository = selectedRepository): Promise<void> => {
+  const openDiff = async (
+    pathValue: string,
+    repository = selectedRepository,
+    staged = false,
+  ): Promise<void> => {
     const request = contextFor(repository);
     if (!request.hostId) return;
     if (!request.threadId) {
@@ -1317,7 +1323,7 @@ export function installRendererGitSidebar(options: {
           ...(request.projectCwd ? { cwd: request.projectCwd } : {}),
           ...(repository ? { repository } : {}),
           path: pathValue,
-          staged: changeTab === "staged",
+          staged,
         },
         isCurrent,
       );
@@ -1350,6 +1356,14 @@ export function installRendererGitSidebar(options: {
       void load();
     },
     onNotice: setNotice,
+    onRepositories(value) {
+      knownRepositories = value;
+      if (current) {
+        addLinkedRepositories();
+        render(true);
+        scheduleRepositoryReads();
+      }
+    },
   });
   head.after(repositorySelector.root);
 
@@ -1395,11 +1409,12 @@ export function installRendererGitSidebar(options: {
       isBusy() || generating || !client || !current || !modelsLoaded || !model.value;
     commit.disabled = isBusy() || !client || !hasCommittable || Boolean(current?.conflicts.length);
     commitPush.disabled = commit.disabled;
+    commitOnly.disabled = commit.disabled;
     push.disabled = isBusy() || !client || !current;
     sync.disabled = isBusy() || !client?.syncGit || !current;
     model.disabled = isBusy() || generating || !current || !modelsLoaded;
     refresh.disabled = isBusy() || !client;
-    fetchUpstream.disabled = isBusy() || !client?.fetchGit || !current;
+    fetchUpstream.disabled = isBusy(contextFor(graphRepository)) || !client?.fetchGit || !current;
     mergeContinue.disabled =
       isBusy() ||
       ((current?.conflicts.length ?? 0) > 0
@@ -1407,18 +1422,24 @@ export function installRendererGitSidebar(options: {
         : !client?.continueGitMerge);
     mergeAbort.disabled = isBusy() || !client?.abortGitMerge;
     repositorySelector.setBusy(isBusy() || !current);
-    for (const button of shadow.querySelectorAll<HTMLButtonElement>("button[data-git-action]")) {
+    for (const button of [
+      ...head.querySelectorAll<HTMLButtonElement>("button[data-git-action]"),
+      ...primary.querySelectorAll<HTMLButtonElement>("button[data-git-action]"),
+      mergeContinue,
+      mergeAbort,
+      fetchUpstream,
+    ]) {
       button.setAttribute("aria-busy", String(button.dataset.gitAction === pendingAction()));
     }
+    fetchUpstream.setAttribute(
+      "aria-busy",
+      String(pendingAction(contextFor(graphRepository)) === "fetch"),
+    );
     generate.setAttribute("aria-busy", String(generating));
     for (const row of list.querySelectorAll<HTMLElement>(".codexhost-git-change")) {
       row.setAttribute("aria-selected", String(row.dataset.path === selectedChange));
       const action = row.querySelector<HTMLButtonElement>("button");
       if (action) action.disabled = isBusy() || !client;
-    }
-    for (const button of submoduleList.querySelectorAll<HTMLButtonElement>("button")) {
-      button.disabled =
-        isBusy() || !client?.updateGitSubmodule || button.dataset.current === "true";
     }
   }
 
@@ -1457,7 +1478,10 @@ export function installRendererGitSidebar(options: {
     } finally {
       if (modelsLoadingContext === request.generation) modelsLoadingContext = null;
       if (isCurrentRequest(request)) modelsRead = true;
-      if (isCurrentRequest(request)) updateBusy();
+      if (isCurrentRequest(request)) {
+        updateBusy();
+        renderRepositoryCards(repositoryGroups.filter((group) => !group.primary));
+      }
       if (isCurrentRequest(request)) syncMessageDraft();
     }
   };
@@ -1468,8 +1492,8 @@ export function installRendererGitSidebar(options: {
     repository = selectedRepository,
   ): Promise<void> => {
     const request = contextFor(repository);
-    if (!hasGitTarget(request) || !request.client || isBusy()) return;
-    generation += 1;
+    if (!hasGitTarget(request) || !request.client || isBusy(request)) return;
+    if (request.repository === selectedRepository) generation += 1;
     beginAction(request, stage ? `stage:${pathValue}` : `unstage:${pathValue}`);
     setNotice("");
     render();
@@ -1540,7 +1564,7 @@ export function installRendererGitSidebar(options: {
     commitMessage = message.value,
   ): Promise<void> => {
     const request = contextFor(repository);
-    if (isBusy()) return;
+    if (isBusy(request)) return;
     if (!hasGitTarget(request) || !request.client) {
       setNotice("未选择可用的 Git 工作区。");
       render();
@@ -1569,7 +1593,7 @@ export function installRendererGitSidebar(options: {
       render();
       return;
     }
-    generation += 1;
+    if (request.repository === selectedRepository) generation += 1;
     beginAction(request, pushAfterCommit ? "commit-push" : "commit");
     setNotice(
       pushAfterCommit
@@ -1608,10 +1632,12 @@ export function installRendererGitSidebar(options: {
       cancelReview();
       expandedDirectories.clear();
       expansionRevision += 1;
-      message.value = "";
+      if (repository === selectedRepository) {
+        message.value = "";
+        draftRevision = "";
+      }
       drafts.clear(JSON.stringify([request.hostId, status?.workspace]));
-      draftRevision = "";
-      repositoryMessages.set(repository ?? "", "");
+
       const pushed = result.pushed;
       const commitLabel = result.commit ? ` (${result.commit})` : "";
       setNotice(
@@ -1621,10 +1647,12 @@ export function installRendererGitSidebar(options: {
       if (!isCurrentRequest(request)) return;
       if (await handleSyncConflict(request, error, pushAfterCommit)) {
         if (!isCurrentRequest(request)) return;
-        message.value = "";
+        if (repository === selectedRepository) {
+          message.value = "";
+          draftRevision = "";
+        }
         drafts.clear(JSON.stringify([request.hostId, status?.workspace]));
-        draftRevision = "";
-        repositoryMessages.set(repository ?? "", "");
+
         return;
       }
       setNotice(error instanceof Error ? error.message : String(error));
@@ -1671,28 +1699,13 @@ export function installRendererGitSidebar(options: {
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       workspaceRead = true;
       current = status;
-      const submodules: RepositoryGroup[] = status.submodules.map((submodule) => {
-        const child = pathJoin(status.workspace, submodule.path);
-        return {
-          path: child,
-          primary: false,
-          status: cache.peekStatus(client, request, child),
-          loading: false,
-          initialized: submodule.status !== "uninitialized",
-          error: null,
-        };
-      });
       repositoryGroups = [
         { path: request.repository, primary: true, status, loading: false, error: null },
-        ...submodules,
       ];
+      addSubmodules(status, request.repository);
+      addLinkedRepositories();
       render();
-      // 折叠子模块不发出额外扫描；仅补齐用户已展开的仓库。
-      if (view === "commits" && !historyVisible) {
-        for (const group of submodules) {
-          if (expandedRepositories.has(group.path ?? "")) void loadSubmodule(group);
-        }
-      }
+      scheduleRepositoryReads();
     } catch (error) {
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       workspaceRead = true;
@@ -1706,12 +1719,16 @@ export function installRendererGitSidebar(options: {
     }
   };
 
-  const updateSubmodule = async (pathValue: string, initialize: boolean): Promise<void> => {
-    const request = context();
+  const updateSubmodule = async (
+    pathValue: string,
+    initialize: boolean,
+    repository = selectedRepository,
+  ): Promise<void> => {
+    const request = contextFor(repository);
     const client = request.client;
     const update = client?.updateGitSubmodule;
-    if (!hasGitTarget(request) || !update || isBusy()) return;
-    generation += 1;
+    if (!hasGitTarget(request) || !update || isBusy(request)) return;
+    if (request.repository === selectedRepository) generation += 1;
     beginAction(request, `submodule:${pathValue}`);
     updateBusy();
     render();
@@ -1724,7 +1741,24 @@ export function installRendererGitSidebar(options: {
       });
       if (client) cache.update(client, request, status, request.repository);
       if (!isCurrentRequest(request)) return;
-      current = status;
+      if (repository === selectedRepository) current = status;
+      const group = repositoryGroups.find((entry) => entry.path === repository);
+      if (group) group.status = status;
+      addSubmodules(status, repository);
+      const initializedGroup = repositoryGroups.find(
+        (entry) => entry.path === pathJoin(status.workspace, pathValue),
+      );
+      if (
+        initializedGroup &&
+        status.submodules.some(
+          (entry) => entry.path === pathValue && entry.status !== "uninitialized",
+        )
+      ) {
+        initializedGroup.initialized = true;
+        initializedGroup.read = false;
+        expandedRepositories.add(initializedGroup.path ?? "");
+      }
+      scheduleRepositoryReads();
     } catch (error) {
       if (isCurrentRequest(request))
         setNotice(error instanceof Error ? error.message : String(error));
@@ -1733,6 +1767,19 @@ export function installRendererGitSidebar(options: {
     }
   };
 
+  primaryHeader.addEventListener("click", () => {
+    primaryExpanded = !primaryExpanded;
+    primaryBody.hidden = !primaryExpanded;
+    if (!primaryExpanded) commitOptions.open = false;
+    primaryHeader.setAttribute("aria-expanded", String(primaryExpanded));
+    primaryChevron.textContent = primaryExpanded ? "▾" : "▸";
+  });
+  message.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      if (!commit.disabled) void submit(false);
+    }
+  });
   projects.addEventListener(
     "click",
     () => {
@@ -1742,27 +1789,10 @@ export function installRendererGitSidebar(options: {
     },
     listenerOptions,
   );
-  changesTab.addEventListener(
-    "click",
-    () => {
-      cancelReview();
-      changeTab = "changes";
-      render();
-    },
-    listenerOptions,
-  );
-  stagedTab.addEventListener(
-    "click",
-    () => {
-      cancelReview();
-      changeTab = "staged";
-      render();
-    },
-    listenerOptions,
-  );
   treeToggle.addEventListener(
     "click",
     () => {
+      cancelReview();
       treeView = !treeView;
       render();
     },
@@ -1773,7 +1803,6 @@ export function installRendererGitSidebar(options: {
     () => {
       cancelReview();
       view = "commits";
-      historyVisible = false;
       clearTimeout(warmTimer);
       clearTimeout(autoMessageTimer);
       render();
@@ -1788,8 +1817,7 @@ export function installRendererGitSidebar(options: {
       view = "commits";
       historyVisible = !historyVisible;
       render();
-      if (historyVisible) void historyView.load(context());
-      else void load();
+      if (historyVisible) void historyView.load(contextFor(graphRepository));
     },
     listenerOptions,
   );
@@ -1847,7 +1875,7 @@ export function installRendererGitSidebar(options: {
       if (historyVisible) {
         historyView.reset();
         void load(true);
-        void historyView.load(context());
+        void historyView.load(contextFor(graphRepository));
       } else void load(true);
     },
     listenerOptions,
@@ -1870,7 +1898,7 @@ export function installRendererGitSidebar(options: {
       )
       .map((change) => change.path);
     if (!paths.length) return;
-    generation += 1;
+    if (request.repository === selectedRepository) generation += 1;
     beginAction(request, stage ? "stage-all" : "unstage-all");
     setNotice(stage ? "正在暂存全部变更…" : "正在取出全部已暂存变更…");
     render();
@@ -1897,7 +1925,7 @@ export function installRendererGitSidebar(options: {
   let autoMessageTimer: ReturnType<typeof setTimeout> | undefined;
 
   function syncMessageDraft(): void {
-    if (disposed || view !== "commits" || historyVisible || !current || !workspaceRead) return;
+    if (disposed || view !== "commits" || !current || !workspaceRead) return;
     const request = context();
     const key = JSON.stringify([request.hostId, current.workspace]);
     const revision = current.messageRevision ?? "";
@@ -1919,8 +1947,7 @@ export function installRendererGitSidebar(options: {
   }
 
   async function generateMessage(automatic: boolean): Promise<void> {
-    if (disposed || (automatic && (view !== "commits" || historyVisible || document.hidden)))
-      return;
+    if (disposed || (automatic && (view !== "commits" || document.hidden))) return;
     const request = context();
     if (!hasGitTarget(request) || !request.client || !model.value || !current || isBusy()) return;
     const key = JSON.stringify([request.hostId, current.workspace]);
@@ -1988,7 +2015,7 @@ export function installRendererGitSidebar(options: {
     "click",
     () => {
       const request = context();
-      if (!hasGitTarget(request) || !request.client || isBusy()) return;
+      if (!hasGitTarget(request) || !request.client || isBusy(request)) return;
       generation += 1;
       beginAction(request, "push");
       setNotice("正在推送…");
@@ -2066,11 +2093,11 @@ export function installRendererGitSidebar(options: {
     pending: string,
     done: string,
     action: string,
+    request = context(),
   ): Promise<void> => {
-    const request = context();
     const client = request.client;
-    if (!hasGitTarget(request) || !client || isBusy()) return;
-    generation += 1;
+    if (!hasGitTarget(request) || !client || isBusy(request)) return;
+    if (request.repository === selectedRepository) generation += 1;
     beginAction(request, action);
     setNotice(pending);
     render();
@@ -2078,7 +2105,9 @@ export function installRendererGitSidebar(options: {
       const status = await run();
       cache.update(client, request, status, request.repository);
       if (!isCurrentRequest(request)) return;
-      current = status;
+      if (request.repository === selectedRepository) current = status;
+      const group = repositoryGroups.find((entry) => entry.path === request.repository);
+      if (group) group.status = status;
       cancelReview();
       expandedDirectories.clear();
       expansionRevision += 1;
@@ -2093,7 +2122,7 @@ export function installRendererGitSidebar(options: {
   fetchUpstream.addEventListener(
     "click",
     () => {
-      const request = context();
+      const request = contextFor(graphRepository);
       const client = request.client;
       const fetch = client?.fetchGit;
       if (!fetch || !hasGitTarget(request)) return;
@@ -2106,6 +2135,7 @@ export function installRendererGitSidebar(options: {
         "正在获取上游…",
         "已获取上游。",
         "fetch",
+        request,
       );
     },
     listenerOptions,
@@ -2164,7 +2194,6 @@ export function installRendererGitSidebar(options: {
       !disposed &&
       !document.hidden &&
       view === "commits" &&
-      !historyVisible &&
       current?.messageRevision !== undefined &&
       !isBusy()
     )
@@ -2243,7 +2272,6 @@ export function installRendererGitSidebar(options: {
         if (view === "projects") warmCache();
         else if (view === "devices") projectSyncView.refresh();
         else if (view === "remote-projects") remoteProjectsView.refresh();
-        else if (historyVisible) void historyView.load(context());
         else void load();
       }
     },
@@ -2251,8 +2279,10 @@ export function installRendererGitSidebar(options: {
       syncContext();
       if (view === "devices") projectSyncView.refresh();
       else if (view === "remote-projects") remoteProjectsView.refresh();
-      else if (historyVisible) void historyView.load(context());
-      else if (view !== "projects") void load();
+      else if (view !== "projects") {
+        void load();
+        if (historyVisible) void historyView.load(contextFor(graphRepository));
+      }
     },
     dispose() {
       disposed = true;

@@ -121,12 +121,23 @@ export class GitRepositoryLinks {
       return repository;
     }
 
-    const relative = this.files.paths.relative(project, repository);
-    if (relative && !relative.startsWith("..") && !this.files.paths.isAbsolute(relative)) {
+    // 关联仓库的递归子模块也属于当前项目；普通嵌套仓库仍需显式关联。
+    for (const owner of known.repositories) {
+      const relative = this.files.paths.relative(owner.path, repository);
+      if (!relative || relative.startsWith("..") || this.files.paths.isAbsolute(relative)) {
+        continue;
+      }
+      const ownerRoot = await this.root(owner.path);
+      if (owner.primary && ownerRoot === null) {
+        continue;
+      }
+      if (ownerRoot !== owner.path) {
+        throw new GitWorkspaceError("关联仓库的位置已变化，请重新关联。");
+      }
       const submodulePath = relative.split(this.files.paths.sep).join("/");
-      const submoduleRoot = await this.submoduleRoot(project, submodulePath);
+      const submoduleRoot = await this.submoduleRoot(owner.path, submodulePath);
       if (!submoduleRoot) {
-        throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");
+        continue;
       }
       const submodule = await this.root(repository);
       if (!submodule) {
@@ -135,9 +146,8 @@ export class GitRepositoryLinks {
       if (submodule !== repository || submodule !== submoduleRoot) {
         throw new GitWorkspaceError("子模块的位置已变化，请重新更新子模块。");
       }
-    } else {
-      throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");
+      return repository;
     }
-    return repository;
+    throw new GitWorkspaceError("该仓库尚未关联当前项目，请先关联再操作。");
   }
 }

@@ -72,7 +72,7 @@ export function createGitHistory(document: Document, cache: RendererGitCache) {
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       svg.setAttribute("viewBox", `0 0 ${width} 48`);
       svg.setAttribute("width", String(width));
-      svg.setAttribute("height", "48");
+      svg.setAttribute("height", "28");
       svg.setAttribute("aria-hidden", "true");
       const layout = graph[index];
       if (!layout) continue;
@@ -108,9 +108,14 @@ export function createGitHistory(document: Document, cache: RendererGitCache) {
           ),
         ),
       ];
-      meta.textContent = `${commit.shortCommit} · ${refs.join(" · ") || commit.authorName}`;
       meta.title = `${refs.join("\n")}\n${commit.authorName} · ${commit.authoredAt}`;
-      body.append(subject, meta);
+      const author = document.createElement("span");
+      author.textContent = commit.authorName;
+      author.title = `${commit.authorName} · ${commit.authoredAt}`;
+      meta.className = "codexhost-git-ref";
+      meta.textContent = refs.join(" · ");
+      body.append(subject, author);
+      if (refs.length) body.append(meta);
       row.append(svg, body);
       fragment.append(row);
     }

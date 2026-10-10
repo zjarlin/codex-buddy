@@ -29,7 +29,7 @@
 | 文档 | 内容与阅读时机 |
 | --- | --- |
 | [`product/aio-web.md`](product/aio-web.md) | AIO 网页复用原版 Renderer、设备发现、独立原生窗口与版本兼容边界。 |
-| [`product/git-workspace.md`](product/git-workspace.md) | Git 侧栏、关联仓库切换、官方审查转发与项目空闲推送工作流；维护 Git 界面时阅读。 |
+| [`product/git-workspace.md`](product/git-workspace.md) | VS Code 式 Git 侧栏、递归子模块、独立提交与图表、官方审查转发及项目空闲推送；维护 Git 界面时阅读。 |
 | [`product/workspace-files.md`](product/workspace-files.md) | 官方文件区域放在对话左侧、文件树与编辑器复用，以及保留的 Host 文件接口；维护文件浏览器时阅读。 |
 | [`product/pending-confirmations.md`](product/pending-confirmations.md) | 会话完成后的待确认队列、中央卡片、已读/归档动作、重启对账与语音播报开关；维护完成提醒时阅读。 |
 | [`product/thread-auto-archive.md`](product/thread-auto-archive.md) | 长期未使用 Thread 的自动归档设置、时间依据、安全边界和官方/外部 Harness 归档语义。 |

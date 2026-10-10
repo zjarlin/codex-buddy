@@ -225,6 +225,48 @@ test("collects real linked worktrees and initialized submodules once and exclude
   ).toEqual([parent, frontend]);
 });
 
+test("authorizes recursive submodules of a linked repository and revokes them after unlink", async () => {
+  const { directory, parent, child, links, workspace } = await submoduleFixture();
+  const project = path.join(directory, "project");
+  await mkdir(project);
+  const leaf = path.join(directory, "leaf");
+  execFileSync("git", ["clone", "-q", child, leaf]);
+  const nested = path.join(parent, "vendor/child");
+  execFileSync("git", [
+    "-C",
+    nested,
+    "-c",
+    "protocol.file.allow=always",
+    "submodule",
+    "add",
+    leaf,
+    "vendor/leaf",
+  ]);
+  execFileSync("git", [
+    "-C",
+    nested,
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-qam",
+    "nested submodule",
+  ]);
+  const deepest = path.join(nested, "vendor/leaf");
+  const unrelated = path.join(parent, "unrelated");
+  execFileSync("git", ["init", "-q", unrelated]);
+
+  await expect(links.resolve(project, nested)).rejects.toThrow("尚未关联");
+  await links.link(project, parent);
+  expect(await links.resolve(project, nested)).toBe(nested);
+  expect(await links.resolve(project, deepest)).toBe(deepest);
+  expect((await workspace.status(deepest)).workspace).toBe(deepest);
+  await expect(links.resolve(project, unrelated)).rejects.toThrow("尚未关联");
+  await links.unlink(project, parent);
+  await expect(links.resolve(project, deepest)).rejects.toThrow("尚未关联");
+});
+
 test("fails discovery when a linked path has been replaced", async () => {
   const { directory, repository, links, workspace } = await fixture();
   const backend = await repository("backend");

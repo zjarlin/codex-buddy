@@ -1517,6 +1517,7 @@ describe("AppServerHost linked Git repositories", () => {
       }).trim();
     for (const repository of [backend, frontend]) {
       execFileSync("git", ["init", "-q", "-b", "main", repository]);
+      git(repository, "config", "core.autocrlf", "false");
       git(repository, "config", "user.name", "Test");
       git(repository, "config", "user.email", "test@example.com");
       git(repository, "config", "commit.gpgsign", "false");

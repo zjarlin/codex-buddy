@@ -75,18 +75,31 @@ it("keeps Provider reads and durable invocation receipts on the remote Host", as
   ).rejects.toThrow("执行 ID");
   expect(fetch).toHaveBeenCalledTimes(2);
 });
-it("rejects mismatched remote Provider and honors remote privacy before querying or claiming", async () => {
+it.each(["inspect", "claim"] as const)(
+  "rejects mismatched remote Provider before %s",
+  async (operation) => {
+    const f = await fixture();
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      readSshTurnActionsOnHost(
+        { ...f.params, operation, target: { ...f.params.target, modelProvider: "wrong" } },
+        f.environment,
+      ),
+    ).rejects.toThrow("ownership");
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+it("keeps remote observations and claims available with a legacy privacy setting", async () => {
   const f = await fixture();
-  const fetch = vi.fn();
+  const fetch = vi.fn(async () => new Response(null, { status: 404 }));
   vi.stubGlobal("fetch", fetch);
-  await expect(
-    readSshTurnActionsOnHost(
-      { ...f.params, target: { ...f.params.target, modelProvider: "wrong" } },
-      f.environment,
-    ),
-  ).rejects.toThrow("ownership");
   await writeFile(join(f.home, "buddy-router.json"), '{"privateMode":true}');
-  expect(await readSshTurnActionsOnHost(f.params, f.environment)).toMatchObject({ private: true });
+  expect(await readSshTurnActionsOnHost(f.params, f.environment)).toMatchObject({
+    private: false,
+    recommendation: { state: "unsupported" },
+  });
+  expect(fetch).toHaveBeenCalledTimes(2);
   await expect(
     readSshTurnActionsOnHost(
       {
@@ -102,8 +115,8 @@ it("rejects mismatched remote Provider and honors remote privacy before querying
       },
       f.environment,
     ),
-  ).rejects.toThrow("隐私");
-  expect(fetch).not.toHaveBeenCalled();
+  ).resolves.toMatchObject({ state: "starting" });
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
 
 it("runs the bundled action worker and preserves admission across separate processes", async () => {

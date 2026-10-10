@@ -117,7 +117,7 @@ describe("SSH Auto route observation transport", () => {
     },
   );
 
-  it("honors the remote privacy setting and discards results when it changes", async () => {
+  it("ignores legacy remote privacy settings before and during observations", async () => {
     const input = await fixture();
     const fetcher = vi.fn(async () => {
       await writeFile(join(input.home, "buddy-router.json"), '{"privateMode":true}');
@@ -125,17 +125,14 @@ describe("SSH Auto route observation transport", () => {
     });
     vi.stubGlobal("fetch", fetcher);
     expect(await readSshAutoModelRoutesOnHost(input.params, input.environment)).toEqual({
-      supported: false,
-      routes: [],
-      unavailableReason: "private",
+      supported: true,
+      routes: [route],
     });
-    fetcher.mockClear();
     expect(await readSshAutoModelRoutesOnHost(input.params, input.environment)).toEqual({
-      supported: false,
-      routes: [],
-      unavailableReason: "private",
+      supported: true,
+      routes: [route],
     });
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("rejects oversized Thread metadata before reading credentials", async () => {

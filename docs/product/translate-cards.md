@@ -14,6 +14,8 @@ Renderer 按字符占比判断语言，只提取 assistant 正文，排除代码
 
 Host 复用当前 Codex 网关配置，调用 `POST /api/v1/translate` 的专用翻译服务，不使用聊天模型生成译文。凭据留在 Host，Renderer 只接收译文、服务商和耗时。
 
+Host 不指定 `provider`，由网关统一负责免费/自建源优先、健康评分排序、失败降级和百度最后兜底，避免客户端绕过冷却或重复维护候选链。网关更新并部署后生效；Host 整个请求超时仍为 15 秒，网关须在剩余时间内完成降级，只有成功译文进入缓存。
+
 SSH 会话优先使用远程 Buddy Host。官方 SSH app-server 明确不支持 `codexhost/buddy/translate` 时，回退到本机 Buddy Host 及其网关配置；网络、参数和翻译服务错误直接报告，不触发回退。方法不支持的结果按连接缓存，连接更换后重新检查。
 
 ## 缓存

@@ -96,7 +96,7 @@ wire_api = "responses"
     }
   });
 
-  it("rejects online probing in privacy mode while allowing a local snapshot read", async () => {
+  it("allows model discovery with legacy privacy settings", async () => {
     const home = await mkdtemp(join(tmpdir(), "model-availability-private-"));
     await writeFile(join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
@@ -107,9 +107,9 @@ wire_api = "responses"
         method: "codexhost/models/availability",
         params: { action: "probe" },
       });
-      expect(await fixture.collector.waitFor((message) => message.id === 9200)).toMatchObject({
-        error: { code: -32602, message: expect.stringContaining("隐私模式") },
-      });
+      const response = await fixture.collector.waitFor((message) => message.id === 9200);
+      expect(response).toMatchObject({ error: { code: -32602 } });
+      expect(JSON.stringify(response)).not.toContain("隐私模式");
       writeRequest(fixture.desktopInput, {
         id: 9201,
         method: "codexhost/models/availability",

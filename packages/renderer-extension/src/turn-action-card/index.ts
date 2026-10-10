@@ -91,15 +91,15 @@ export function installTurnActionCards(options: { getContext(): Context | null }
     const header = document.createElement("header");
     const title = document.createElement("strong");
     const judgment = snapshot.recommendation;
-    title.textContent =
-      judgment && (judgment.source !== "none" || judgment.state === "pending")
-        ? "System One"
-        : "回合动作";
+    title.textContent = "回合动作";
+    const hasSystemOne = Boolean(
+      judgment && (judgment.source !== "none" || judgment.state === "pending"),
+    );
     const state = document.createElement("span");
     state.className = "muted";
     const current = snapshot.sourceTurnId === snapshot.latestTurnId;
     state.textContent = current
-      ? (states[judgment?.state ?? "unsupported"] ?? "")
+      ? `${hasSystemOne ? "System One · " : ""}${states[judgment?.state ?? "unsupported"] ?? ""}`
       : "历史推荐 · 只读";
     header.append(title, state);
     section.append(header);
@@ -138,6 +138,24 @@ export function installTurnActionCards(options: { getContext(): Context | null }
     status.textContent =
       error ||
       (latestReceipt ? (latestReceipt.message ?? executionStates[latestReceipt.state] ?? "") : "");
+    if (!current) {
+      const summary = document.createElement("div");
+      summary.className = "features muted";
+      summary.textContent = recommendations
+        .map((recommendation) => {
+          const action = snapshot.actions.find(
+            (entry) =>
+              entry.actionId === recommendation.action_id &&
+              entry.version === recommendation.version,
+          );
+          return `${action?.label ?? recommendation.action_id} · ${(recommendation.confidence * 100).toFixed(0)}%`;
+        })
+        .join(" · ");
+      if (summary.textContent) section.append(summary);
+      section.append(status);
+      shadow.append(css, section);
+      return node;
+    }
     const version = generation;
     const addButton = (action: TurnActionDescriptor, parent: HTMLElement) => {
       const key = `${request.hostId}:${request.threadId}:${sourceTurnId}:${action.actionId}`;

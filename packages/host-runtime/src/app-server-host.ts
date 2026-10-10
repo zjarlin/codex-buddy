@@ -54,7 +54,7 @@ import {
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,
 } from "@codexhost/shared-contracts";
-import { BuddyPrivateChat, explicitlyPrivate, privacySafeRequest } from "./buddy/private-chat.js";
+import { BuddyPrivateChat, privacySafeRequest } from "./buddy/private-chat.js";
 import { BuddyTranslator } from "./buddy/translator.js";
 import { BuddySpeech } from "./buddy/speech.js";
 import {
@@ -1701,28 +1701,6 @@ export class AppServerHost {
         await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
       }
       return;
-    }
-    if (this.#buddy) {
-      try {
-        const privateMode = await this.#buddy.privateMode();
-        if (
-          privateMode &&
-          request.method !== "turn/start" &&
-          !privacySafeRequest(request.method, request.params)
-        ) {
-          throw new Error(
-            "隐私模式已阻止普通任务、工具和在线发送。请关闭隐私 chip 或使用原生输入发起 q3 隐私回合。",
-          );
-        }
-        if (!privateMode && explicitlyPrivate(request.params)) {
-          throw new Error(
-            "检测到明确隐私标记，内容尚未发送。请先开启隐私 chip 并在垃 chip 选择 q3-4b 或 q3-14b。",
-          );
-        }
-      } catch (error) {
-        await this.#writer.json(rpcError(request, -32091, errorMessage(error)));
-        return;
-      }
     }
     if (request.method === "model/list" && this.#liveCodexModels) {
       this.#dispatchDesktopRequest(async () => {

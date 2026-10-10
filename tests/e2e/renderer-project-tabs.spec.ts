@@ -117,9 +117,21 @@ const { outputFiles } = await build({
         }
         const actions = installRendererProjectActions({ getClient: () => ({}), getLocale: () => "zh-CN" });
         let hostConfig = null;
+        let saveGate = null;
+        let releaseSave = null;
+        globalThis.pauseProjectTabSaves = () => {
+          saveGate = new Promise(resolve => { releaseSave = resolve; });
+        };
+        globalThis.resumeProjectTabSaves = () => {
+          saveGate = null;
+          releaseSave?.();
+        };
         const hostClient = {
           getProjectTabs: async () => ({ config: hostConfig }),
-          setProjectTabs: async (config) => ({ config: hostConfig = structuredClone(config) }),
+          setProjectTabs: async (config) => {
+            if (saveGate) await saveGate;
+            return { config: hostConfig = structuredClone(config) };
+          },
         };
         const projectTabsOptions = () => ({
           getLocale: () => "zh-CN",
@@ -273,6 +285,36 @@ test("migrates local tabs to the Host and restores them without localStorage", a
   await page.evaluate(() => Reflect.get(globalThis, "restartProjectTabs")(true));
   await expect(category(page, "自定义")).toHaveAttribute("aria-pressed", "true");
   await expect(rows(page)).toContainText("other-project");
+});
+
+test("switches immediately during a blocked Host save and preserves the latest selection and button focus", async ({
+  page,
+}) => {
+  await setup(page, { persistentHost: true });
+  await page.evaluate(() => Reflect.get(globalThis, "pauseProjectTabSaves")());
+  const company = category(page, "公司的项目");
+  const companyButton = await company.elementHandle();
+  await company.click();
+  await expect(company).toHaveAttribute("aria-pressed", "true");
+  await expect(company).toBeFocused();
+  await expect(rows(page)).toHaveCount(2);
+  await category(page, "个人的项目").click();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).toContainText("remote_zjarlin_codex-host");
+  await company.click();
+  await expect(company).toHaveAttribute("aria-pressed", "true");
+  expect(await companyButton?.evaluate((element) => element.isConnected)).toBe(true);
+  const infrequent = category(page, "不常用");
+  await infrequent.click();
+  await expect(infrequent).toHaveAttribute("aria-pressed", "true");
+  await expect(rows(page)).toHaveCount(0);
+  await page.evaluate(() => Reflect.get(globalThis, "resumeProjectTabSaves")());
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()?.selected))
+    .toBe("infrequent");
+  await expect(infrequent).toBeFocused();
+  await page.evaluate(() => Reflect.get(globalThis, "restartProjectTabs")(true));
+  await expect(category(page, "不常用")).toHaveAttribute("aria-pressed", "true");
 });
 
 test("prefix tabs intersect native activity filters and survive row rerendering", async ({

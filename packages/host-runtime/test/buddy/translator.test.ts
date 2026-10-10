@@ -72,6 +72,7 @@ describe("gateway translation", () => {
 
     expect(result.translated).toBe("Session completed");
     expect(result.model).toBe("sub2api:baidu");
+    expect(f.requests[0]).not.toHaveProperty("provider");
     expect(f.requests[0]).toMatchObject({ q: ["会话已完成"], source: "zh-CN", target: "en" });
   });
 

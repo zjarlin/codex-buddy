@@ -9,7 +9,6 @@ import { createPreferenceSwitch, preferenceId } from "./preference-ui.js";
 const copy = {
   "zh-CN": {
     enabled: "自动路由",
-    privateMode: "隐私模式",
     bypass: "工具与 Git 旁路",
     jev: "System One 判断",
     model: "System One 模型",
@@ -33,7 +32,6 @@ const copy = {
   },
   en: {
     enabled: "Automatic routing",
-    privateMode: "Private mode",
     bypass: "Tool and Git bypass",
     jev: "System One judgment",
     model: "System One model",
@@ -89,14 +87,13 @@ export function createRoutingSettingsPage(
         wrapper.append(title, control);
         fields.append(wrapper);
       };
-      const toggle = (key: "enabled" | "privateMode" | "bypass" | "jev") => {
+      const toggle = (key: "enabled" | "bypass" | "jev") => {
         const control = createPreferenceSwitch(document, preferenceId(key), "");
         controls.set(key, control);
         row(m[key], control);
         return control;
       };
       const enabledControl = toggle("enabled");
-      const privateModeControl = toggle("privateMode");
       toggle("bypass");
       const jevControl = toggle("jev");
       const select = (
@@ -151,23 +148,20 @@ export function createRoutingSettingsPage(
         return element;
       };
       const synchronize = (): void => {
-        const privateMode = privateModeControl.checked;
         const enabled = enabledControl.checked;
         const jev = jevControl.checked;
         fields.disabled = busy || !snapshot;
         for (const [name, control] of controls) {
-          control.disabled =
-            name === "privateMode" ? false : privateMode || (name !== "enabled" && !enabled);
+          control.disabled = name !== "enabled" && !enabled;
         }
         systemOneModel.disabled ||= !jev;
-        url.disabled = key.disabled = privateMode || !enabled || !jev || !client?.buddyJevKey;
+        url.disabled = key.disabled = !enabled || !jev || !client?.buddyJevKey;
         for (const element of actions.querySelectorAll("button"))
           element.disabled = busy || !snapshot;
         save.disabled ||= !client?.buddyConfigure;
-        refresh.disabled ||= privateMode || !client?.buddyModels;
+        refresh.disabled ||= !client?.buddyModels;
         saveKey.disabled ||= url.disabled;
         clearKey.disabled ||= url.disabled;
-        recoveries.hidden = privateMode;
         for (const element of recoveries.querySelectorAll("button"))
           element.disabled = busy || !snapshot || !client?.buddyCancel;
       };

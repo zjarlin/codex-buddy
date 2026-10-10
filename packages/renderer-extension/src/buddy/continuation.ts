@@ -110,16 +110,15 @@ export function installSidebarContinuation(options: {
     state.updatedAt = Date.now();
     state.resumeEnabled = false;
     try {
-      let snapshot;
       try {
-        snapshot = await state.client.buddyStatus?.();
+        await state.client.buddyStatus?.();
       } catch (failure) {
         if (!(failure instanceof RendererMethodUnavailableError)) throw failure;
       }
       if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
         return;
-      // 路由状态缺失时独立探测恢复能力，续接仍由 Host 检查隐私；其他状态错误保持禁用。
-      state.resumeEnabled = !snapshot?.settings.privateMode;
+      // 路由状态缺失时独立探测恢复能力；其他状态错误保持禁用。
+      state.resumeEnabled = true;
       const result = await state.client.buddyInterrupted();
       if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
         return;

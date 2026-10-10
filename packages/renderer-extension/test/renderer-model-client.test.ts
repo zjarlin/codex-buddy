@@ -46,6 +46,7 @@ import {
 
 import { RendererSessionImportUnavailableError } from "../src/renderer-session-import-client.js";
 import { BUDDY_SETTINGS_CHANGED_EVENT } from "../src/buddy/settings-events.js";
+import { selectFixedModel } from "../src/renderer-fixed-model-selection.js";
 
 const piHarnessId = harnessIdSchema.parse("pi");
 const model = harnessModelRefSchema.parse({ id: "pi-model-v1.synthetic" });
@@ -81,6 +82,32 @@ const inspection = {
 };
 
 describe("Renderer fixed Model request client", () => {
+  it("selects a fixed model when an older Host returns retired planning settings", async () => {
+    const legacySettings = {
+      ...buddySettingsSchema.parse({ executorModel: "worker", privateMode: true }),
+      planning: true,
+      plannerModel: "planner",
+    };
+    const sendRequest = vi.fn(async (_method: string, params: unknown) => ({
+      settings: { ...legacySettings, ...(params as object) },
+      models: [],
+      decisions: [],
+    }));
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic Buddy client was not created");
+    await expect(client.buddyModels?.()).resolves.toMatchObject({ models: [] });
+    const select = vi.fn();
+
+    await selectFixedModel(client, () => true, select);
+
+    expect(select).toHaveBeenCalledOnce();
+    expect(sendRequest).toHaveBeenCalledWith(BUDDY_SETTINGS_METHOD, {
+      ...buddySettingsSchema.parse({ executorModel: "worker", privateMode: true }),
+      enabled: false,
+      privateMode: false,
+    });
+  });
+
   it("notifies recovery only after routing settings are accepted", async () => {
     const settings = buddySettingsSchema.parse({ privateMode: true });
     const snapshot = { settings, models: [], decisions: [] };

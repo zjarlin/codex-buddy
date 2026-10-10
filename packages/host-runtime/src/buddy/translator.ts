@@ -60,7 +60,7 @@ function readTranslateResponse(value: unknown): TranslateResponse | null {
 
 /**
  * 翻译器调用 Sub2API 网关的 POST /api/v1/translate 接口。
- * 复用 Codex 网关凭据认证，后端服务商优先级：腾讯 > 百度 > 有道。
+ * 复用 Codex 网关凭据认证，候选选择、健康评分和失败降级由网关统一负责，免费源优先、百度最后。
  * 不消耗 LLM token。
  */
 export class BuddyTranslator {

@@ -389,7 +389,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
   speechAnnouncementTitle: "Speak the result when a conversation finishes",
   speechAnnouncementDescription:
-    "Play a short voice summary through the gateway Manbo voice. Only when the app is in front and the conversation is not the one you are viewing.",
+    "Automatic speech is off by default. Click the speaker in the completion card's top right to play a summary through the gateway Manbo voice.",
   terminalSection: "Terminal",
   terminalTitle: "Default terminal",
   terminalDescription: "Opens official Codex threads with codex resume in this terminal.",
@@ -736,7 +736,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
   speechAnnouncementTitle: "会话完成语音播报",
   speechAnnouncementDescription:
-    "会话结束时用网关曼波配音朗读结果摘要。仅在应用处于前台、且完成的是非当前会话时播放。",
+    "自动播报默认关闭。手动点击完成卡片右上角的小喇叭，用网关曼波配音朗读结果摘要。",
   terminalSection: "终端",
   terminalTitle: "默认终端",
   terminalDescription: "使用 codex resume 在该终端中续接官方 Codex 会话。",

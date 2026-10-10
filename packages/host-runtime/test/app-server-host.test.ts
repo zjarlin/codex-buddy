@@ -1127,7 +1127,7 @@ describe("Buddy catalog synchronization boundary", () => {
     }
   });
 
-  it("rejects a refresh in private mode before invoking the synchronizer", async () => {
+  it("does not reject catalog refresh for a legacy privacy setting", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "buddy-catalog-private-"));
     writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
@@ -1140,7 +1140,7 @@ describe("Buddy catalog synchronization boundary", () => {
       });
       const reply = await fixture.collector.waitFor((message) => message.id === 7001);
       expect(reply).toMatchObject({ error: { code: -32602 } });
-      expect(JSON.stringify(reply)).toContain("隐私模式");
+      expect(JSON.stringify(reply)).not.toContain("隐私模式");
     } finally {
       await stopFixture(fixture);
       rmSync(home, { recursive: true, force: true });
@@ -1148,7 +1148,7 @@ describe("Buddy catalog synchronization boundary", () => {
   });
 });
 
-describe("Buddy privacy send boundary", () => {
+describe("Buddy legacy privacy migration", () => {
   async function startModelCatalog(ids: string[]) {
     const server = createServer((req, res) => {
       res.setHeader("Content-Type", "application/json");
@@ -1173,7 +1173,7 @@ describe("Buddy privacy send boundary", () => {
     };
   }
 
-  it("keeps startup metadata available while privacy mode stays enabled", async () => {
+  it("keeps startup metadata available with legacy privacy settings", async () => {
     const home = mkdtempSync(path.join(tmpdir(), "buddy-private-startup-"));
     writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
@@ -1214,7 +1214,7 @@ describe("Buddy privacy send boundary", () => {
     }
   });
 
-  it("blocks private input when no deployed q3 model is available", async () => {
+  it("reports an unavailable migrated q3 model through normal routing", async () => {
     const catalog = await startModelCatalog(["gpt-6", "q3-4b-online"]);
     const home = mkdtempSync(path.join(tmpdir(), "buddy-private-host-"));
     writeFileSync(
@@ -1232,6 +1232,7 @@ describe("Buddy privacy send boundary", () => {
           method: "turn/start",
           params: {
             threadId: "synthetic-thread",
+            cwd: "/synthetic",
             input: [{ type: "text", text: "SYNTHETIC_PRIVATE_CANARY" }],
           },
         }) + "\n",
@@ -1270,7 +1271,7 @@ describe("Buddy privacy send boundary", () => {
   });
 
   it.each([null, "gpt-6", "q3-4b"])(
-    "automatically forwards private input with preference %s without leaking the internal marker",
+    "forwards migrated fixed-model input with preference %s",
     async (executorModel) => {
       const catalog = await startModelCatalog(["gpt-6", "q3-4b", "q3-14b"]);
       const home = mkdtempSync(path.join(tmpdir(), "buddy-private-native-"));
@@ -1345,75 +1346,68 @@ describe("Buddy privacy send boundary", () => {
     },
   );
 
-  it("blocks non-turn task entry points before any private text is forwarded", async () => {
-    const home = mkdtempSync(path.join(tmpdir(), "buddy-private-host-"));
+  it("forwards native task requests and approval replies despite a legacy privacy setting", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "buddy-legacy-private-"));
     writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ privateMode: true }));
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
-    const native = new JsonLineCollector(fixture.official.stdin);
     await fixture.ready;
     try {
-      const methods = [
-        "turn/steer",
-        "thread/start",
-        "thread/resume",
-        "thread/fork",
-        "review/start",
-        "thread/compact/start",
-        "thread/name/set",
-        "codexhost/thread/command/execute",
-        "codexhost/thread/fork",
-      ];
-      for (const [index, method] of methods.entries()) {
+      for (const [index, method] of ["turn/steer"].entries()) {
         const id = 720 + index;
-        fixture.desktopInput.write(
-          JSON.stringify({
-            id,
-            method,
-            params: {
-              threadId: "synthetic-thread",
-              input: [{ type: "text", text: "SYNTHETIC_PRIVATE_CANARY" }],
-            },
-          }) + "\n",
-        );
+        const params = {
+          threadId: "synthetic-thread",
+          input: [{ type: "text", text: "【隐私】ordinary input" }],
+        };
+        writeRequest(fixture.desktopInput, { id, method, params });
+        const forwarded = await readJsonLine(fixture.official.stdin);
+        expect(forwarded).toMatchObject({ method, params });
+        writeRequest(fixture.official.stdout, { id: requiredMessageId(forwarded), result: {} });
         await expect(
           fixture.collector.waitFor((message) => message.id === id),
-        ).resolves.toMatchObject({ id, error: { code: -32091 } });
+        ).resolves.toMatchObject({ result: {} });
       }
-      expect(JSON.stringify(native.messages)).not.toContain("SYNTHETIC_PRIVATE_CANARY");
-      expect(fixture.adapter.sessions).toHaveLength(0);
-      expect(fixture.diagnosticOutput.read()?.toString() ?? "").not.toContain(
-        "SYNTHETIC_PRIVATE_CANARY",
+      writeRequest(fixture.official.stdout, {
+        id: "approval",
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "synthetic-thread", turnId: "turn", itemId: "item" },
+      });
+      const approval = await fixture.collector.waitFor(
+        (message) => message.method === "item/commandExecution/requestApproval",
       );
+      writeRequest(fixture.desktopInput, {
+        id: requiredMessageId(approval),
+        result: { decision: "accept" },
+      });
+      expect(await readJsonLine(fixture.official.stdin)).toMatchObject({
+        id: "approval",
+        result: { decision: "accept" },
+      });
     } finally {
       await stopFixture(fixture);
       rmSync(home, { recursive: true, force: true });
     }
   });
 
-  it("intercepts an explicit private marker even when ordinary routing is disabled", async () => {
-    const home = mkdtempSync(path.join(tmpdir(), "buddy-private-host-"));
-    writeFileSync(
-      path.join(home, "buddy-router.json"),
-      JSON.stringify({ enabled: false, privateMode: false }),
-    );
+  it("forwards explicit private text through the normal native path when routing is disabled", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "buddy-ordinary-native-"));
+    writeFileSync(path.join(home, "buddy-router.json"), JSON.stringify({ enabled: false }));
     const fixture = createFixture({ buddyRouting: true, environment: { CODEX_HOME: home } });
-    const native = new JsonLineCollector(fixture.official.stdin);
     await fixture.ready;
     try {
-      fixture.desktopInput.write(
-        JSON.stringify({
-          id: 800,
-          method: "turn/start",
-          params: {
-            threadId: "synthetic-thread",
-            input: [{ type: "text", text: "【隐私】SYNTHETIC_PRIVATE_CANARY" }],
-          },
-        }) + "\n",
-      );
+      const params = {
+        threadId: "synthetic-thread",
+        input: [{ type: "text", text: "【隐私】ordinary input" }],
+      };
+      writeRequest(fixture.desktopInput, { id: 800, method: "turn/start", params });
+      const forwarded = await readJsonLine(fixture.official.stdin);
+      expect(forwarded).toMatchObject({ method: "turn/start", params });
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(forwarded),
+        result: { turn: { id: "ordinary-turn" } },
+      });
       await expect(
         fixture.collector.waitFor((message) => message.id === 800),
-      ).resolves.toMatchObject({ error: { code: -32091 } });
-      expect(JSON.stringify(native.messages)).not.toContain("SYNTHETIC_PRIVATE_CANARY");
+      ).resolves.toMatchObject({ result: { turn: { id: "ordinary-turn" } } });
     } finally {
       await stopFixture(fixture);
       rmSync(home, { recursive: true, force: true });

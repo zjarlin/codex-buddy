@@ -1094,11 +1094,10 @@ describe("Buddy native routing", () => {
   });
   it.each([
     { ids: ["gpt-planner", "q3-4b", "q3-14b"], preferred: null, expected: "q3-14b" },
-    { ids: ["gpt-planner", "q3-4b"], preferred: "gpt-planner", expected: "q3-4b" },
+    { ids: ["gpt-planner", "q3-14b"], preferred: "gpt-planner", expected: "q3-14b" },
     { ids: ["q3-4b", "q3-14b"], preferred: "q3-4b", expected: "q3-4b" },
-    { ids: ["q3-14b"], preferred: "q3-4b", expected: "q3-14b" },
   ])(
-    "automatically selects private model $expected from $ids",
+    "migrates legacy privacy settings to ordinary fixed model $expected",
     async ({ ids, preferred, expected }) => {
       const f = await fixture({ modelIds: ids });
       await f.router.configure({ privateMode: true, enabled: false, executorModel: preferred });
@@ -1109,15 +1108,40 @@ describe("Buddy native routing", () => {
         collaborationMode: { settings: { model: expected } },
       });
       expect(f.requested.some((request) => request.method === "thread/start")).toBe(false);
-      expect((await f.router.snapshot()).settings.executorModel).toBe(preferred);
+      expect((await f.router.snapshot()).settings).toMatchObject({
+        privateMode: false,
+        executorModel: expected,
+      });
     },
   );
-  it("never falls back to an online or similarly named model in private mode", async () => {
+  it("preserves native planning, attachments and approvals for migrated q3 settings", async () => {
+    const f = await fixture({ modelIds: ["q3-4b"] });
+    await f.router.configure({ privateMode: true, executorModel: "q3-4b" });
+    const request = f.turn("继续任务");
+    request.params = {
+      ...(request.params as JsonObject),
+      input: [
+        { type: "text", text: "继续任务" },
+        { type: "image", url: "https://example.test/image.png" },
+      ],
+      approvalPolicy: "on-request",
+      collaborationMode: { mode: "plan", settings: {} },
+    };
+    await f.router.route(request);
+    expect(f.forwarded[0]?.params).toMatchObject({
+      model: "q3-4b",
+      input: (request.params as JsonObject).input,
+      approvalPolicy: "on-request",
+      collaborationMode: { mode: "plan", settings: { model: "q3-4b" } },
+    });
+  });
+  it("reports unavailable migrated fixed models through the ordinary route", async () => {
     const f = await fixture({ modelIds: ["gpt-planner", "deepseek-flash", "q3-4b-online"] });
     await f.router.configure({ privateMode: true });
-    await expect(f.router.route(f.turn("SYNTHETIC_PRIVATE"))).rejects.toThrow(
-      "没有可用的离线 q3 模型",
-    );
+    await f.router.route(f.turn("SYNTHETIC_PRIVATE"));
+    expect(f.sent).toEqual([
+      expect.objectContaining({ error: expect.objectContaining({ code: -32090 }) }),
+    ]);
     expect(f.forwarded).toEqual([]);
     expect(
       f.requested.every((request) => ["thread/read", "model/list"].includes(request.method)),

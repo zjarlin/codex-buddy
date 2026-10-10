@@ -27,7 +27,7 @@ Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 System 
 - 精确 CLI 入口以 System One 选中的 `commandIndex` 为准；缺少服务时不执行零模型旁路。
 - System One 超时（默认 4 秒）、认证、限流、网络或协议错误全部由 `BuddyRouter` 捕获并 `diagnose`，随后使用本地兜底完成该回合，不阻断原生请求。
 - `buddySettingsSchema.jev`（默认开启）关闭时完全不调用 System One，退回本地兜底。
-- 隐私模式不经过普通 `#route`，因此不会调用 System One；System One 只服务在线普通路由。
+- 旧隐私配置迁移为普通固定模型设置并关闭 System One 判断；q3 模型不建立额外执行隔离。
 
 ## API 与配置
 

@@ -75,6 +75,7 @@ export function installProjectTabs(options: {
   bar.setAttribute("data-codexhost-project-tabs", "");
   const group = document.createElement("div");
   group.setAttribute("role", "group");
+  let tabButtons: { id: string | null; element: HTMLButtonElement }[] = [];
   const actions = document.createElement("div");
   actions.setAttribute("data-codexhost-project-tab-actions", "");
   const empty = document.createElement("p");
@@ -119,7 +120,7 @@ export function installProjectTabs(options: {
     );
     return operation;
   };
-  const persist = async (next: ProjectTabsConfig): Promise<void> => {
+  const persist = async (next: ProjectTabsConfig, immediate = false): Promise<void> => {
     try {
       if (!options.getClient) {
         revision += 1;
@@ -131,6 +132,11 @@ export function installProjectTabs(options: {
       const client = persistenceClient();
       if (!client) throw new Error("Local Host project-tab persistence is unavailable");
       const requestedRevision = ++revision;
+      if (immediate) {
+        // 分类切换先更新界面，后台串行保存；旧请求返回时不得覆盖最新选择。
+        config = next;
+        refresh();
+      }
       const saved = await saveHost(client, next);
       if (!saved.config) throw new Error("Local Host returned an empty project-tab configuration");
       if (revision === requestedRevision) mirror(saved.config);
@@ -159,7 +165,10 @@ export function installProjectTabs(options: {
     dialog = configuration;
   };
   const select = (selected: string | null): void => {
-    void persist({ ...config, selected }).catch(() => undefined);
+    if (selected === config.selected && !failure) {
+      return;
+    }
+    void persist({ ...config, selected }, true).catch(() => undefined);
   };
   const search = createProjectTabSearch({
     getCurrent: () => config.selected,
@@ -360,16 +369,15 @@ export function installProjectTabs(options: {
       }
     }
     const m = projectTabsMessages(options.getLocale());
-    const nextSignature = JSON.stringify([options.getLocale(), config.tabs, config.selected]);
+    const nextSignature = JSON.stringify([options.getLocale(), config.tabs]);
     if (signature !== nextSignature) {
       signature = nextSignature;
       group.setAttribute("aria-label", m.title);
-      const items = [{ id: null, name: m.all }, ...config.tabs].map((tab) => {
+      tabButtons = [{ id: null, name: m.all }, ...config.tabs].map((tab) => {
         const item = button(tab.name, () => select(tab.id));
-        item.setAttribute("aria-pressed", String(config.selected === tab.id));
-        return item;
+        return { id: tab.id, element: item };
       });
-      group.replaceChildren(...items);
+      group.replaceChildren(...tabButtons.map(({ element }) => element));
       settings.setAttribute("aria-label", m.configure);
       settings.title = m.configure;
       if (!settings.querySelector("svg")) {
@@ -384,6 +392,13 @@ export function installProjectTabs(options: {
       }
       if (!bar.contains(group)) {
         bar.replaceChildren(group, actions);
+      }
+    }
+    // 仅更新选中标记，保留按钮节点与焦点，避免刷新打断正在进行的点击。
+    for (const { id, element } of tabButtons) {
+      const pressed = String(config.selected === id);
+      if (element.getAttribute("aria-pressed") !== pressed) {
+        element.setAttribute("aria-pressed", pressed);
       }
     }
     for (const row of hiddenRows) {

@@ -107,11 +107,9 @@ for (const width of [390, 1200]) {
       expect(
         await page.evaluate(() => Reflect.get(globalThis, "fixture").calls.writes[0]),
       ).toMatchObject({ executorModel: "gpt-6" });
-      await page.getByRole("switch", { name: "隐私模式", exact: true }).check();
-      await expect(page.getByLabel("执行模型", { exact: true })).toBeDisabled();
-      await expect(page.getByLabel("JEV API Key", { exact: true })).toBeDisabled();
-      await page.getByRole("button", { name: "保存设置", exact: true }).click();
-      await expect(page.locator(".settings-routing-status")).toHaveText("已保存");
+      await expect(page.getByRole("switch", { name: "隐私模式", exact: true })).toHaveCount(0);
+      await expect(page.getByLabel("执行模型", { exact: true })).toBeEnabled();
+      await expect(page.getByLabel("JEV API Key", { exact: true })).toBeEnabled();
       await page.screenshot({ path: `test-results/buddy-routing-${width}-${theme}.png` });
       expect(
         await page

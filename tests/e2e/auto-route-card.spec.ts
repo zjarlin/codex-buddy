@@ -436,3 +436,47 @@ test("confirmed selection appears before the reply and moves into its own turn",
   await expect(card).toContainText("已完成");
   await page.screenshot({ path: test.info().outputPath("auto-selected-after-reply.png") });
 });
+
+for (const preview of [false, true]) {
+  test(`candidate search survives polling, completion and native remount (preview=${preview})`, async ({
+    page,
+  }) => {
+    await setup(page, {
+      state: "responding",
+      selectedModel: "auto",
+      noResponse: preview,
+      candidates: Array.from({ length: 975 }, (_, index) => ({
+        model: index === 0 ? "deepseek-flash" : `model-${index}`,
+        platform: "openai",
+        eligible: true,
+        order: index + 1,
+      })),
+    });
+    const card = page.getByRole("complementary", { name: "Auto routed" });
+    await card.getByRole("button", { name: "路由详情" }).click();
+    const search = card.getByRole("searchbox");
+    await search.fill("deep");
+    const original = await search.elementHandle();
+    await search.press("ArrowLeft");
+    await expect(card.locator("tbody tr:visible")).toHaveCount(1);
+    await page.getByRole("button", { name: "Complete", exact: true }).click();
+    await search.focus();
+    await expect(card).toContainText("已完成");
+    await expect(search).toHaveValue("deep");
+    await expect(search).toBeFocused();
+    expect(
+      await original?.evaluate((node) => node === document.querySelector(".route-search")),
+    ).toBe(true);
+    expect(await search.evaluate((node: HTMLInputElement) => node.selectionStart)).toBe(3);
+    if (preview) await page.getByRole("button", { name: "Show reply" }).click();
+    else await page.getByRole("button", { name: "Remount turn" }).click();
+    await expect(
+      page.locator(`[data-response-annotation-conversation="${threadId}"] .route-search`),
+    ).toHaveValue("deep");
+    await expect(card.locator("tbody tr:visible")).toHaveCount(1);
+    expect(
+      await original?.evaluate((node) => node === document.querySelector(".route-search")),
+    ).toBe(true);
+    await page.screenshot({ path: test.info().outputPath("search-preserved.png") });
+  });
+}

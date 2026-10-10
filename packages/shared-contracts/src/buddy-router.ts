@@ -43,9 +43,27 @@ const buddySettingsShape = {
   executorModel: z.string().max(200).nullable().default(null),
 } as const;
 // 持久化读取忽略未知字段，兼容旧规划设置但不再向浏览器暴露。
-export const buddySettingsFileSchema = z.object(buddySettingsShape);
+// 旧隐私开关仅迁移为普通固定模型配置，不再建立执行隔离。
+function migratePrivateSettings(settings: z.infer<z.ZodObject<typeof buddySettingsShape>>) {
+  if (!settings.privateMode) return settings;
+  return {
+    ...settings,
+    privateMode: false,
+    enabled: true,
+    executorModel: settings.executorModel === "q3-4b" ? "q3-4b" : "q3-14b",
+    role: "executor" as const,
+    bypass: false,
+    jev: false,
+  };
+}
+export const buddySettingsFileSchema = z
+  .object(buddySettingsShape)
+  .transform(migratePrivateSettings);
 // 浏览器写入仍保持 strict，避免拼写错误或未声明字段静默落盘。
-export const buddySettingsSchema = z.object(buddySettingsShape).strict();
+export const buddySettingsSchema = z
+  .object(buddySettingsShape)
+  .strict()
+  .transform(migratePrivateSettings);
 export type BuddySettings = z.infer<typeof buddySettingsSchema>;
 // JEV 连接单独配置，不进入会回传浏览器的 settings，避免密钥泄露到 renderer。
 // apiKey 与 baseURL 均可选：省略表示保持不变，null/空串表示清除该项。
@@ -132,7 +150,8 @@ export const buddyDecisionSchema = z.object({
   updatedAt: z.string(),
 });
 export const buddySnapshotSchema = z.object({
-  settings: buddySettingsSchema,
+  // 旧 Host 的状态可能包含已移除的规划字段；读取时剥离，设置写入仍严格校验。
+  settings: buddySettingsFileSchema,
   models: z.array(buddyModelSchema),
   modelRefresh: buddyModelRefreshSchema.optional(),
   decisions: z.array(buddyDecisionSchema),

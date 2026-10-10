@@ -29,7 +29,12 @@ function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: strin
   return node;
 }
 
-function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean): HTMLElement {
+function renderCard(
+  routes: AutoModelRoute[],
+  locale: string,
+  expanded: boolean,
+  previous?: HTMLElement | null,
+): HTMLElement {
   const messages = autoRouteMessages(locale);
   const latest = routes.at(-1);
   if (!latest) throw new Error("Cannot render an empty Auto route group");
@@ -123,10 +128,17 @@ function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean)
       );
     }
   }
-  if (latest.candidates) {
+  const previousPlan = previous?.querySelector<HTMLElement>(".route-plan");
+  const planSignature = JSON.stringify([locale, latest.candidates]);
+  if (latest.candidates && previousPlan?.dataset.signature === planSignature) {
+    // 状态和请求数更新不重建候选表，保留搜索输入、光标及过滤结果。
+    details.append(previousPlan);
+  } else if (latest.candidates) {
     const plan = element("section", "route-plan");
+    plan.dataset.signature = planSignature;
     plan.append(element("strong", "", messages.candidates));
     const search = element("input", "route-search");
+    search.value = previousPlan?.querySelector<HTMLInputElement>("input")?.value ?? "";
     search.type = "search";
     search.placeholder = messages.search;
     search.setAttribute("aria-label", messages.search);
@@ -165,11 +177,13 @@ function renderCard(routes: AutoModelRoute[], locale: string, expanded: boolean)
       };
     });
     empty.hidden = rows.length > 0;
-    search.addEventListener("input", () => {
+    const filter = () => {
       const query = search.value.trim().toLowerCase();
       for (const entry of rows) entry.row.hidden = !entry.query.includes(query);
       empty.hidden = rows.some((entry) => !entry.row.hidden);
-    });
+    };
+    search.addEventListener("input", filter);
+    filter();
     plan.append(search, table, empty);
     details.append(plan);
   }
@@ -222,8 +236,7 @@ function sameContext(left: Context | null, right: Context | null): boolean {
     left?.threadId === right?.threadId &&
     left?.hostId === right?.hostId &&
     left?.client === right?.client &&
-    left?.root === right?.root &&
-    left?.composer === right?.composer
+    left?.root === right?.root
   );
 }
 
@@ -268,9 +281,35 @@ export function installAutoRouteCards(options: {
         r.resolved_model,
         r.attempted_models,
         r.operation,
-        r.candidates?.map((c) => [c.model, c.eligible, c.order, c.reason]),
+        r.candidates,
       ]),
     ]);
+  }
+
+  function updateCard(
+    group: AutoModelRoute[],
+    locale: string,
+    previous: HTMLElement | null | undefined,
+    mount: (node: HTMLElement) => void,
+  ): HTMLElement {
+    const focused = previous?.contains(document.activeElement) ? document.activeElement : null;
+    const oldSearch = previous?.querySelector<HTMLInputElement>(".route-search");
+    const selection = oldSearch
+      ? ([oldSearch.selectionStart, oldSearch.selectionEnd] as const)
+      : null;
+    const scrollTop = previous?.querySelector(".route-details")?.scrollTop ?? 0;
+    const expanded = previous?.querySelector("button")?.getAttribute("aria-expanded") === "true";
+    const node = renderCard(group, locale, expanded, previous);
+    previous?.remove();
+    mount(node);
+    const details = node.querySelector(".route-details");
+    if (details) details.scrollTop = scrollTop;
+    if (focused === oldSearch) {
+      const search = node.querySelector<HTMLInputElement>(".route-search");
+      search?.focus({ preventScroll: true });
+      if (search && selection) search.setSelectionRange(selection[0], selection[1]);
+    }
+    return node;
   }
 
   function renderFeedback(groups: AutoModelRoute[][]) {
@@ -310,9 +349,12 @@ export function installAutoRouteCards(options: {
     let node: HTMLElement;
     if (latestGroup) {
       // 记录已确认属于当前会话；回合 DOM 尚未出现时，在输入框前展示最新记录。
-      const expanded =
-        feedback?.node.querySelector("button")?.getAttribute("aria-expanded") === "true";
-      node = renderCard(latestGroup, locale, expanded);
+      const previous = feedback?.node;
+      const sameTurn = previous?.dataset.codexhostAutoRoute === latestGroup[0]?.turn_id;
+      node = updateCard(latestGroup, locale, sameTurn ? previous : null, (card) =>
+        composer.before(card),
+      );
+      if (!sameTurn) previous?.remove();
       node.dataset.codexhostAutoRoutePreview = "true";
       node.append(
         element("div", "route-notice", unavailable ? messages.unavailable : messages.latestRequest),
@@ -326,8 +368,10 @@ export function installAutoRouteCards(options: {
       heading.prepend(createElement(Route, { width: 17, height: 17, "aria-hidden": "true" }));
       node.append(heading, element("div", "route-notice", messages[state]));
     }
-    feedback?.node.remove();
-    composer.before(node);
+    if (!latestGroup) {
+      feedback?.node.remove();
+      composer.before(node);
+    }
     feedback = { node, signature };
   }
 
@@ -354,7 +398,7 @@ export function installAutoRouteCards(options: {
       group.sort((a, b) => a.started_at - b.started_at || a.request_id.localeCompare(b.request_id));
     }
     for (const [turnId, card] of cards) {
-      if (!byTurn.has(turnId) || !card.node.isConnected) {
+      if (!byTurn.has(turnId)) {
         card.node.remove();
         cards.delete(turnId);
       }
@@ -366,16 +410,22 @@ export function installAutoRouteCards(options: {
       const locale = options.getLocale();
       const signature = stableRouteSignature(group, locale, unavailable);
       const existing = cards.get(turnId);
-      if (existing?.signature === signature && existing.node.parentElement === anchor) continue;
+      if (existing?.signature === signature) {
+        if (existing.node.parentElement !== anchor) {
+          const focused = existing.node.querySelector<HTMLInputElement>(".route-search");
+          const restoreFocus = document.activeElement === focused;
+          anchor.prepend(existing.node);
+          if (restoreFocus) focused?.focus({ preventScroll: true });
+        }
+        continue;
+      }
       const previous =
         existing?.node ??
         (feedback?.node.dataset.codexhostAutoRoute === turnId ? feedback.node : null);
-      const expanded = previous?.querySelector("button")?.getAttribute("aria-expanded") === "true";
-      const node = renderCard(group, locale, expanded);
+      const node = updateCard(group, locale, previous, (card) => anchor.prepend(card));
       if (unavailable)
         node.append(element("div", "route-notice", autoRouteMessages(locale).unavailable));
-      existing?.node.remove();
-      anchor.prepend(node);
+
       cards.set(turnId, { node, signature });
     }
     renderFeedback(groups);

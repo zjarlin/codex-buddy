@@ -5,6 +5,7 @@ import {
 } from "../renderer-transcript-dom.js";
 import {
   RENDERER_SPEECH_CHANGE_EVENT,
+  RENDERER_SPEECH_STORAGE_KEY,
   readRendererSpeechEnabled,
   writeRendererSpeechEnabled,
 } from "../renderer-speech-preference.js";
@@ -55,11 +56,15 @@ export function createAppearanceSettingsPage(
           speechToggle.checked = readRendererSpeechEnabled(ownerWindow);
         }
       });
-      // 播报开关默认开启，其他窗口或存储事件的修改要立即反映到界面。
+      // 自动播报默认关闭；同窗口偏好事件与跨窗口存储修改均同步到界面。
       const syncSpeech = (): void => {
         speechToggle.checked = readRendererSpeechEnabled(ownerWindow);
       };
       ownerWindow.addEventListener(RENDERER_SPEECH_CHANGE_EVENT, syncSpeech);
+      const onSpeechStorage = (event: StorageEvent): void => {
+        if (event.key === null || event.key === RENDERER_SPEECH_STORAGE_KEY) syncSpeech();
+      };
+      ownerWindow.addEventListener("storage", onSpeechStorage);
       speechRow.item.append(speechToggle);
       card.append(speechRow.item);
 
@@ -92,6 +97,7 @@ export function createAppearanceSettingsPage(
         disposeTerminal();
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         ownerWindow.removeEventListener(RENDERER_SPEECH_CHANGE_EVENT, syncSpeech);
+        ownerWindow.removeEventListener("storage", onSpeechStorage);
         disposeIdleRelease();
       };
     },

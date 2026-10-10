@@ -100,7 +100,7 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
-| [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | 路由设置中的 q3 隐私开关、复用网关目录、发送阻断与保护范围；处理敏感文本前阅读。 |
+| [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | 普通 q3 模型选择与旧隐私配置迁移；不再限制原生执行入口。 |
 | [`product/emergency-provider.md`](product/emergency-provider.md) | 应急供应商故障转移反向代理：配置、工作原理与安全边界。 |
 | [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 单模型路由与设置表单、模型目录热更新、持久 Pin、Auto routed 卡片和 System One 回合动作。 |
 | [`product/translate-cards.md`](product/translate-cards.md) | 模型回答及进度消息的自动翻译展示、网关接口与 SSH 会话兼容。 |

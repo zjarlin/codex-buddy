@@ -2,7 +2,7 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import Archive from "lucide/dist/esm/icons/archive.mjs";
 import Check from "lucide/dist/esm/icons/check.mjs";
 import Eye from "lucide/dist/esm/icons/eye.mjs";
-import Send from "lucide/dist/esm/icons/send.mjs";
+import ArrowUp from "lucide/dist/esm/icons/arrow-up.mjs";
 import Volume2 from "lucide/dist/esm/icons/volume-2.mjs";
 import X from "lucide/dist/esm/icons/x.mjs";
 
@@ -14,6 +14,7 @@ import {
 } from "./pending-confirmations-state.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
 import { openRendererThread } from "./renderer-fork-control.js";
+import { sidebarProjectLabelForThread } from "./renderer-titlebar-project-name.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_SELECTOR,
@@ -45,7 +46,7 @@ interface PendingConfirmationDomOptions {
 
 interface PendingConfirmationSpeech {
   announce(entry: PendingConfirmationRecord): void;
-  replay(entry: PendingConfirmationRecord): void;
+  replay(entry: PendingConfirmationRecord): Promise<void>;
 }
 
 interface HostSubscription {
@@ -90,6 +91,8 @@ function messages(locale: Locale) {
         archive: "归档",
         close: "关闭",
         replay: "重播语音",
+        synthesizing: "正在合成语音…",
+        speechFailed: "语音播报失败",
         model: "续发模型",
         currentModel: "使用原模型",
         modelLoading: "正在读取收藏模型…",
@@ -112,6 +115,8 @@ function messages(locale: Locale) {
         archive: "Archive",
         close: "Close",
         replay: "Replay voice",
+        synthesizing: "Synthesizing voice…",
+        speechFailed: "Voice playback failed",
         model: "Follow-up model",
         currentModel: "Use current model",
         modelLoading: "Loading favorite models…",
@@ -222,6 +227,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const kind = document.createElement("span");
   const conversation = document.createElement("h3");
   const summary = document.createElement("div");
+  const project = document.createElement("div");
+  project.className = "codexhost-pending-project";
   const time = document.createElement("time");
   const actions = document.createElement("footer");
   const view = document.createElement("button");
@@ -240,10 +247,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   let visibleEntry: PendingConfirmationRecord | null = null;
   let dismissedEntryKey: string | null = null;
   let sending = false;
+  let replaying: PendingConfirmationRecord | null = null;
   let noticeMessage = "";
   let inputEntryKey = "";
   let modelEntryKey = "";
   let modelOptionsKey = "";
+  const projects = new Map<string, string>();
+  const projectRequests = new Set<string>();
   const modelChoices = new Map<string, { harnessId: string; models: string[] } | null>();
   const modelRequests = new Set<string>();
   const silentEntries = new Set<string>();
@@ -260,8 +270,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] header > div{min-width:0;flex:1}
 [${QUEUE}]{display:inline-flex;align-items:center;min-height:24px;margin-top:2px;padding:2px 7px;border:0;border-radius:999px;background:color-mix(in srgb, Highlight 14%, transparent);color:CanvasText;font:12px/18px inherit;cursor:pointer}
 [${QUEUE}]:focus-visible,[${MODAL}] button:focus-visible{outline:2px solid Highlight;outline-offset:1px}
-[${MODAL}] .codexhost-pending-close{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:CanvasText;cursor:pointer}
-[${MODAL}] .codexhost-pending-close:hover{background:color-mix(in srgb,CanvasText 10%,transparent)}
+[${MODAL}] .codexhost-pending-close,[${MODAL}] .codexhost-pending-replay{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:CanvasText;cursor:pointer}
+[${MODAL}] .codexhost-pending-close:hover,[${MODAL}] .codexhost-pending-replay:hover{background:color-mix(in srgb,CanvasText 10%,transparent)}
+[${MODAL}] .codexhost-pending-replay:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-body{min-height:0;overflow:auto;padding:16px}
 [${MODAL}] .codexhost-pending-kind{display:inline-flex;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,CanvasText 9%,transparent);font-size:12px}
 [${MODAL}] .codexhost-pending-body h3{margin:10px 0 6px;font-size:17px;line-height:24px;overflow-wrap:anywhere}
@@ -279,18 +290,19 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-summary a{color:Highlight;text-decoration:none}
 [${MODAL}] .codexhost-pending-summary a:hover{text-decoration:underline}
 [${MODAL}] .codexhost-pending-summary hr{border:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);margin:8px 0}
+[${MODAL}] .codexhost-pending-project{font-size:12px;color:GrayText;overflow-wrap:anywhere;margin-bottom:6px}
 [${MODAL}] .codexhost-pending-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
 [${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;margin-top:12px}
 [${MODAL}] .codexhost-pending-composer{flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-model{flex:0 1 180px;min-width:130px;max-width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit}
 [${MODAL}] .codexhost-pending-input{flex:1;min-height:36px;max-height:120px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit;resize:vertical}
 [${MODAL}] .codexhost-pending-input:focus-visible{outline:2px solid Highlight;outline-offset:1px}
-[${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:6px 11px;border:1px solid Highlight;border-radius:6px;background:Highlight;color:HighlightText;font:inherit;cursor:pointer}
+[${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--spacing-token-button-composer,28px);height:var(--spacing-token-button-composer,28px);margin-bottom:4px;padding:0;border:0;border-radius:50%;background:var(--color-background-composer-primary,var(--color-token-text-primary,light-dark(#0d0d0d,#f3f3f3)));color:var(--color-text-composer-primary,var(--color-token-main-surface-primary,light-dark(#fff,#0d0d0d)));cursor:pointer;transition:opacity .15s}
+[${MODAL}] .codexhost-pending-send:hover:not(:disabled){opacity:.85}
 [${MODAL}] .codexhost-pending-send:disabled{opacity:.55;cursor:wait}
-[${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
+[${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-start;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
 [${MODAL}] .codexhost-pending-actions button[data-primary="true"]{border-color:Highlight;background:Highlight;color:HighlightText}
-[${MODAL}] .codexhost-pending-actions button.codexhost-pending-replay{margin-right:auto}
 [${MODAL}] .codexhost-pending-actions button:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-notice{min-height:18px;margin:-6px 16px 0;color:#c2410c;font-size:12px;overflow-wrap:anywhere}
 [${MODAL}] .codexhost-pending-notice:empty{visibility:hidden}
@@ -303,7 +315,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   close.type = "button";
   close.className = "codexhost-pending-close";
   close.append(createElement(X, { width: 17, height: 17, "aria-hidden": "true" }));
-  heading.append(headingText, close);
+  heading.append(headingText, replay, close);
   body.className = "codexhost-pending-body";
   kind.className = "codexhost-pending-kind";
   conversation.className = "codexhost-pending-conversation";
@@ -315,9 +327,11 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   input.rows = 2;
   send.type = "button";
   send.className = "codexhost-pending-send";
-  send.append(createElement(Send, { width: 15, height: 15, "aria-hidden": "true" }));
+  send.append(
+    createElement(ArrowUp, { width: 20, height: 20, "stroke-width": 1.75, "aria-hidden": "true" }),
+  );
   composer.append(modelSelect, input, send);
-  body.append(kind, conversation, summary, time, composer);
+  body.append(kind, project, conversation, summary, time, composer);
   view.type = read.type = archive.type = replay.type = "button";
   view.dataset.primary = "true";
   view.append(createElement(Eye, { width: 15, height: 15, "aria-hidden": "true" }));
@@ -326,7 +340,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   replay.className = "codexhost-pending-replay";
   replay.append(createElement(Volume2, { width: 15, height: 15, "aria-hidden": "true" }));
   actions.className = "codexhost-pending-actions";
-  actions.append(replay, view, read, archive);
+  actions.append(view, read, archive);
   notice.className = "codexhost-pending-notice";
   notice.setAttribute("role", "alert");
   panel.append(heading, body, notice, actions);
@@ -346,6 +360,18 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 
   const ensureModelChoices = (entry: PendingConfirmationRecord): void => {
     const key = entry.hostId + "\u0000" + entry.threadId;
+    const projection = options.getClient(entry.hostId)?.requestThreadProjection;
+    if (!entry.project && !projects.has(key) && !projectRequests.has(key) && projection) {
+      projectRequests.add(key);
+      void projection("thread/read", { threadId: entry.threadId, includeTurns: false })
+        .then((value) => {
+          projects.set(key, text(record(record(value)?.thread)?.cwd));
+        })
+        .catch((error: unknown) => {
+          console.warn("[codexhost] Pending confirmation project unavailable", error);
+        })
+        .finally(() => render());
+    }
     if (modelChoices.has(key) || modelRequests.has(key)) return;
     const client = options.getClient(entry.hostId);
     if (!client?.inspectThread) {
@@ -459,7 +485,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       : modelRequests.has(modelKey)
         ? "loading"
         : "unavailable";
+    const projectLabel =
+      sidebarProjectLabelForThread(document, entry) ||
+      entry.project ||
+      projects.get(modelKey) ||
+      (locale.startsWith("zh") ? "项目待识别" : "Project unavailable");
     const key = [
+      projectLabel,
       locale,
       entry.hostId,
       entry.threadId,
@@ -469,6 +501,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       entries.length,
       noticeMessage,
       sending,
+      replaying ? entryKey(replaying) : "",
       modelChoiceSignature,
     ].join("\u0000");
     if (key === renderedKey && !modal.hidden) return;
@@ -478,6 +511,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     queue.textContent = entries.length > 1 ? copy.more(entries.length - 1) : "";
     kind.textContent = statusLabel(locale, entry.status);
     kind.dataset.tone = statusTone(entry.status, isRateLimited(entry));
+    project.textContent = `${entry.hostId} › ${projectLabel}`;
+    project.title = projectLabel;
     conversation.textContent = entry.title || copy.unnamed;
     summary.replaceChildren();
     appendMarkdownBlocks(document, summary, entry.summary ?? "");
@@ -485,10 +520,11 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     view.textContent = copy.view;
     read.textContent = copy.read;
     archive.textContent = copy.archive;
-    replay.textContent = copy.replay;
-    replay.title = copy.replay;
+    const speechPending = replaying !== null && sameEntry(replaying, entry);
+    replay.title = speechPending ? copy.synthesizing : copy.replay;
     replay.setAttribute("aria-label", copy.replay);
-    replay.disabled = !options.speech;
+    replay.setAttribute("aria-busy", String(speechPending));
+    replay.disabled = !options.speech || replaying !== null;
     close.title = copy.close;
     close.setAttribute("aria-label", copy.close);
     const entryIdentity = entryKey(entry);
@@ -535,9 +571,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     modelSelect.setAttribute("aria-label", copy.model);
     input.placeholder = copy.placeholder;
     input.disabled = sending;
-    send.textContent = copy.send;
     send.title = copy.send;
     send.setAttribute("aria-label", copy.send);
+    send.setAttribute("aria-busy", String(sending));
     send.disabled = sending;
     notice.textContent = noticeMessage;
     view.disabled = read.disabled = archive.disabled = false;
@@ -625,6 +661,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
           const restored = model.upsert({
             hostId,
             threadId: row.id,
+            project: text(row.cwd),
             title: text(row.name) || text(row.title) || text(row.preview) || "未命名会话",
             turnId: turn.id,
             status: turn.status,
@@ -687,6 +724,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 hostId,
                 threadId,
                 title: title || undefined,
+                project: sidebarProjectLabelForThread(document, { hostId, threadId }) || undefined,
                 turn: turn ?? {},
               });
               if (entry && !silentEntries.has(entryKey(entry))) {
@@ -832,8 +870,23 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   archive.addEventListener("click", () => {
     if (visibleEntry) void archiveEntry(visibleEntry);
   });
-  replay.addEventListener("click", () => {
-    if (visibleEntry) options.speech?.replay(visibleEntry);
+  replay.addEventListener("click", async () => {
+    const entry = visibleEntry;
+    if (!entry || !options.speech || replaying) return;
+    replaying = entry;
+    noticeMessage = "";
+    render();
+    try {
+      await options.speech.replay(entry);
+    } catch (error) {
+      if (visibleEntry && sameEntry(visibleEntry, entry)) {
+        const detail = error instanceof Error ? error.message : String(error);
+        noticeMessage = `${messages(locale).speechFailed}: ${detail}`;
+      }
+    } finally {
+      replaying = null;
+      render();
+    }
   });
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || modal.hidden) return;

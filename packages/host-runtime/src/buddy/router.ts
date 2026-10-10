@@ -11,7 +11,6 @@ import {
   type ThreadContext,
 } from "@codexhost/buddy-engine";
 import {
-  buddyPrivateModelSchema,
   buddySettingsFileSchema,
   buddySettingsSchema,
   type BuddyDecision,
@@ -673,10 +672,6 @@ export class BuddyRouter {
     }
     await this.#loadSettings();
     await this.#loadJevKey();
-    if (this.#settings.privateMode) {
-      await this.#routePrivate(request);
-      return true;
-    }
     const params = object(request.params) as JsonObject;
     if (
       !this.#settings.enabled ||
@@ -728,90 +723,6 @@ export class BuddyRouter {
     return true;
   }
 
-  async #routePrivate(request: JsonRpcRequest): Promise<void> {
-    const params = object(request.params) as JsonObject;
-    if (
-      typeof params.threadId !== "string" ||
-      !Array.isArray(params.input) ||
-      !params.input.length ||
-      params.toolOutput
-    ) {
-      throw new Error("隐私模式只允许原生对话输入发起新的纯文本回合。");
-    }
-    const threadId = params.threadId;
-    if (this.#active.has(threadId) || this.#jobs.has(threadId)) {
-      throw new Error("当前任务仍有回合在运行；请等待或取消后再发送隐私回合。");
-    }
-    const nativeModels = await this.#nativeModels(threadId);
-    const inventory = await discoverModels({
-      home: this.#home,
-      environment: this.options.environment,
-      settings: this.#settings,
-      nativeModels,
-      signal: AbortSignal.timeout(10_000),
-    });
-    this.#models = inventory.models;
-    const privateModels = inventory.models.filter(
-      (model) => model.eligible && buddyPrivateModelSchema.safeParse(model.id).success,
-    );
-    const privateModel =
-      privateModels.find((model) => model.id === this.#settings.executorModel) ??
-      privateModels.find((model) => model.id === "q3-14b") ??
-      privateModels[0];
-    if (!privateModel) {
-      throw new Error("没有可用的离线 q3 模型；隐私回合未发送，不会回退到在线模型。");
-    }
-    const originalMode = object(params.collaborationMode);
-    const originalSettings = object(originalMode.settings);
-    const rewritten: JsonRpcRequest = {
-      id: request.id,
-      method: request.method,
-      params: {
-        ...params,
-        [BUDDY_PRIVATE_TURN_MARKER]: true,
-        model: privateModel.id,
-        effort: null,
-        collaborationMode: {
-          mode: "default",
-          settings: {
-            ...originalSettings,
-            model: privateModel.id,
-            reasoning_effort: null,
-          },
-        },
-      },
-    };
-    this.#decisions.set(threadId, {
-      threadId,
-      turnId: null,
-      phase: "executing",
-      role: "executor",
-      difficulty: "simple",
-      score: 0,
-      reason: "隐私模式已开启；跳过在线路由，自动选择可用的离线 q3 模型。",
-      executorModel: privateModel.id,
-      acceptedModel: null,
-      involvedModels: [privateModel.id],
-      command: null,
-      exitCode: null,
-      updatedAt: new Date().toISOString(),
-    });
-    if (this.#decisions.size > 100) {
-      const first = this.#decisions.keys().next().value;
-      if (first) {
-        this.#decisions.delete(first);
-      }
-    }
-    this.track(rewritten);
-    this.#active.add(threadId);
-    try {
-      await this.options.forward(rewritten);
-    } catch (error) {
-      this.#active.delete(threadId);
-      throw error;
-    }
-  }
-
   /** 分类层需要的 Host 上下文：原生请求、路由设置与 System One 客户端。 */
   #classificationEnvironment(): ClassificationEnvironment {
     return {
@@ -856,36 +767,52 @@ export class BuddyRouter {
       .filter((v) => v.type === "text")
       .map((v) => String(v.text ?? ""))
       .join("\n");
-    const project = await inspectProject(cwd);
+    // 固定模型且未启用判断和旁路时，仅切换模型，不扫描项目或读取历史分类。
+    const directModel = settings.executorModel && !settings.jev && !settings.bypass;
+    const project = directModel ? null : await inspectProject(cwd);
     signal.throwIfAborted();
-    // 意图识别、工具路由、执行角色、推送旁路与 CLI 入口选择全部委托 System One；
-    // 本地规则只在该服务不可用时兜底，不再是路由的第一判断层。
-    const commands = dispatchCandidates(project, cwd);
+    const commands = project ? dispatchCandidates(project, cwd) : [];
     const classification = this.#classificationEnvironment();
-    let selected: ClassifiedRoute | null = null;
-    if (settings.jev && this.#jev) {
-      try {
-        selected = await classifyWithSystemOne(classification, {
-          input,
-          text,
-          cwd,
-          project,
-          commands,
-          params,
-          threadId,
-          signal,
-        });
-      } catch (error) {
-        this.options.diagnose(error);
+    let selected: ClassifiedRoute | null = directModel
+      ? {
+          assessment: { tier: "standard", intent: "code", reason: "使用固定执行模型。" },
+          role: settings.role === "auto" ? "executor" : settings.role,
+          conversational: false,
+          modelBypass: false,
+          gitAction: "none",
+          needsCommitMessage: false,
+          judgment: undefined,
+          commandIndex: null,
+          reason: "使用固定执行模型。",
+          source: "local-rules",
+        }
+      : null;
+    if (project) {
+      if (settings.jev && this.#jev) {
+        try {
+          selected = await classifyWithSystemOne(classification, {
+            input,
+            text,
+            cwd,
+            project,
+            commands,
+            params,
+            threadId,
+            signal,
+          });
+        } catch (error) {
+          this.options.diagnose(error);
+        }
       }
+      selected ??= await classifyWithFallback(classification, {
+        text,
+        input,
+        cwd,
+        project,
+        threadId,
+      });
     }
-    selected ??= await classifyWithFallback(classification, {
-      text,
-      input,
-      cwd,
-      project,
-      threadId,
-    });
+    if (!selected) throw new Error("未确认模型路由。");
     if (!cwd) {
       throw new Error("未确认工作目录，无法路由。");
     }

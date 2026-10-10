@@ -24,7 +24,6 @@ const messages = {
     waiting: "连接状态尚未确认，暂时无法恢复会话。",
     unavailableHint:
       "请确认当前连接已接入支持会话恢复的 Codex Buddy；SSH 会话需在远端启用后重新连接。",
-    private: "隐私模式下不能续接普通会话。",
     unreadable: "条会话历史暂时无法读取",
     failed: "失败",
     interrupted: "已中断",
@@ -46,7 +45,6 @@ const messages = {
     waiting: "Waiting for connection status before allowing conversation recovery.",
     unavailableHint:
       "Check that this connection runs Codex Buddy with conversation recovery; for SSH, enable it on the remote machine and reconnect.",
-    private: "Ordinary conversations cannot resume in private mode.",
     unreadable: "conversation histories could not be read",
     failed: "Failed",
     interrupted: "Interrupted",
@@ -81,7 +79,6 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   const root = document.createElement("div");
   root.className = "buddy-recovery-panel";
   let state = session(null);
-  let privateMode = false;
   let disposed = false;
   let epoch = 0;
   let fingerprint = "";
@@ -92,8 +89,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   window.addEventListener("storage", favoritesChanged);
 
   const current = (target: typeof state) => !disposed && state === target;
-  const canResume = (target: typeof state) =>
-    current(target) && !privateMode && !target.unavailable;
+  const canResume = (target: typeof state) => current(target) && !target.unavailable;
 
   // 中断列表只在首次绑定连接或用户手动刷新时读取，不再后台轮询。
   async function refresh(): Promise<void> {
@@ -184,7 +180,6 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     const favoriteIds = state.harnessId ? [...readModelFavorites(state.harnessId)] : [];
     const signature = JSON.stringify([
       getLocale(),
-      privateMode,
       Boolean(state.client?.buddyContinue),
       Boolean(state.client?.buddyInterrupted),
       state.threads,
@@ -217,14 +212,9 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       element.textContent = text;
       parent.append(element);
     };
-    if (
-      privateMode ||
-      state.unavailable ||
-      !state.client?.buddyInterrupted ||
-      !state.client.buddyContinue
-    ) {
-      note(privateMode ? m.private : state.client ? m.unavailable : m.waiting);
-      if (state.unavailable && !privateMode) note(m.unavailableHint);
+    if (state.unavailable || !state.client?.buddyInterrupted || !state.client.buddyContinue) {
+      note(state.client ? m.unavailable : m.waiting);
+      if (state.unavailable) note(m.unavailableHint);
       root.replaceChildren(wrapper);
       return;
     }
@@ -368,7 +358,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     root,
     update(
       client: RendererModelClient | null,
-      privacy: boolean,
+      _privacy: boolean,
       modelView?: ModelShortcutView | null,
       harnessId?: string,
     ) {
@@ -376,12 +366,6 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       if (client !== state.client) {
         state = session(client);
         epoch += 1;
-      }
-      if (privacy !== privateMode) {
-        privateMode = privacy;
-        epoch += 1;
-        // 退出隐私模式后重新读取一次，避免保留过期列表。
-        state.loaded = false;
       }
       if (modelView !== undefined) state.modelView = modelView;
       if (harnessId !== undefined) state.harnessId = harnessId;

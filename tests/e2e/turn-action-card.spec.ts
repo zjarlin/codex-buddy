@@ -85,7 +85,8 @@ test("binds judgment and buttons to the turn alongside the actual model, starts 
   page,
 }) => {
   await setup(page);
-  await expect(current(page).getByText("System One", { exact: true })).toBeVisible();
+  await expect(current(page).getByText("回合动作", { exact: true })).toBeVisible();
+  await expect(current(page)).toContainText("System One · 判断完成");
   await expect(page.locator('[data-codexhost-auto-route="turn-1"]')).toContainText("actual-model");
   await expect(current(page).getByRole("button", { name: /提交代码/ })).toContainText("92%");
   await current(page)
@@ -99,14 +100,20 @@ test("binds judgment and buttons to the turn alongside the actual model, starts 
   await expect(current(page).getByRole("button", { name: /提交代码/ })).toBeDisabled();
   await expect(page.locator("#composer")).toHaveText("保留用户草稿");
 });
-test("keeps historical buttons read-only and hides all action cards in privacy mode", async ({
+test("hides historical buttons and preserves recommendation summaries and hides all action cards in privacy mode", async ({
   page,
 }) => {
   await setup(page);
   await expect(current(page)).toBeVisible();
   await page.getByRole("button", { name: "下一轮", exact: true }).click();
   await expect(current(page)).toContainText("历史推荐");
-  await expect(current(page).getByRole("button", { name: /提交代码/ })).toBeDisabled();
+  await expect(current(page)).toContainText("提交代码 · 92%");
+  await expect(current(page).getByRole("button")).toHaveCount(0);
+  await expect(
+    page
+      .locator('[data-codexhost-turn-actions="turn-2"]')
+      .getByRole("button", { name: /提交代码/ }),
+  ).toBeEnabled();
   await page.getByRole("button", { name: "隐私", exact: true }).click();
   await expect(page.locator("[data-codexhost-turn-actions]")).toHaveCount(0);
 });

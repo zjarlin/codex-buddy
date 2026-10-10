@@ -14,7 +14,7 @@ import {
 
 const RESPONSE_CONVERSATION_ATTRIBUTE = "data-response-annotation-conversation";
 const TURN_KEY_ATTRIBUTE = "data-content-search-turn-key";
-const OPEN_THREAD_TIMEOUT_MS = 5_000;
+const OPEN_THREAD_TIMEOUT_MS = 15_000;
 const APP_SIDEBAR_SELECTOR = "#app-shell-sidebar";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 
@@ -139,9 +139,17 @@ export function openRendererThread(
         revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
         return;
       }
-      if (!sidebar || revealRounds >= THREAD_LIST_REVEAL_LIMIT) return;
+      if (revealRounds >= THREAD_LIST_REVEAL_LIMIT) return;
+      // 原生列表异步加载时暂时没有分页按钮，继续等待后再检查。
+      if (!sidebar) {
+        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+        return;
+      }
       const buttons = pagingButtons(sidebar);
-      if (buttons.length === 0) return;
+      if (buttons.length === 0) {
+        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+        return;
+      }
       revealRounds += 1;
       buttons[pagingCursor % buttons.length]?.click();
       pagingCursor += 1;

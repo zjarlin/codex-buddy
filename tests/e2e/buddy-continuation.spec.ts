@@ -192,7 +192,7 @@ for (const width of [390, 1200]) {
   });
 }
 
-test("sidebar recovery follows privacy, running state, row replacement and disposal", async ({
+test("sidebar recovery ignores legacy privacy settings and follows running state, row replacement and disposal", async ({
   page,
 }) => {
   await page.setContent("<body></body>");
@@ -218,8 +218,8 @@ test("sidebar recovery follows privacy, running state, row replacement and dispo
     Reflect.set(globalThis, "privateMode", true);
     Reflect.get(globalThis, "sidebar").refresh();
   });
-  await expect(resume).toHaveCount(0);
-  // 隐私模式只关闭续接动作，原生状态色仍保留。
+  await expect(resume).toHaveCount(1);
+  // 旧隐私字段不影响续接按钮与原生状态色。
   await expect(page.locator('[data-buddy-sidebar-state="failed"]')).toHaveCount(1);
   await page.evaluate(() => {
     Reflect.set(globalThis, "privateMode", false);

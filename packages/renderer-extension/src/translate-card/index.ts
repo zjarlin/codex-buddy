@@ -1,5 +1,6 @@
 import Languages from "lucide/dist/esm/icons/languages.mjs";
 import createElement from "lucide/dist/esm/createElement.mjs";
+import { detectBuddyTranslateSourceLanguage } from "@codexhost/shared-contracts";
 import { injectTranslateStyle } from "./style.js";
 import { translateMessages } from "./messages.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
@@ -21,20 +22,16 @@ interface TranslationState {
   abortController?: AbortController;
 }
 
-function detectLanguage(text: string): "cjk" | "latin" | "other" {
-  const cjk = text.match(/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/g)?.length ?? 0;
-  if (cjk / Math.max(text.length, 1) > 0.3) return "cjk";
-  const latin = text.match(/[a-zA-Z]/g)?.length ?? 0;
-  if (latin / Math.max(text.length, 1) > 0.5) return "latin";
-  return "other";
-}
-
-function needsTranslation(lang: "cjk" | "latin" | "other", locale: string): boolean {
+function needsTranslation(
+  lang: ReturnType<typeof detectBuddyTranslateSourceLanguage>,
+  locale: string,
+): boolean {
+  if (!lang) return false;
   const uiCjk = locale.startsWith("zh") || locale.startsWith("ja") || locale.startsWith("ko");
-  return uiCjk ? lang === "latin" : lang === "cjk";
+  return uiCjk ? lang === "en" : lang !== "en";
 }
 
-function extractText(node: HTMLElement): string {
+function extractText(node: HTMLElement): { text: string; prose: string } {
   const content = node.querySelector('[data-markdown-text-style="assistant-message"]') ?? node;
   const clone = content.cloneNode(true) as HTMLElement;
   // 原生代码块使用 div + code，必须连同语言标题和复制按钮一起排除。
@@ -43,7 +40,10 @@ function extractText(node: HTMLElement): string {
   )) {
     excluded.remove();
   }
-  return (clone.textContent?.trim() ?? "").slice(0, 8000);
+  const text = (clone.textContent?.trim() ?? "").slice(0, 8000);
+  // 行内代码保留在翻译正文中，但不参与语言判断。
+  for (const code of clone.querySelectorAll("code")) code.replaceWith(" ");
+  return { text, prose: (clone.textContent?.trim() ?? "").slice(0, 8000) };
 }
 
 function findMessages(root: HTMLElement, threadId: string): Map<string, HTMLElement> {
@@ -180,8 +180,11 @@ export function installTranslateCards(options: Options) {
       }
     }
     for (const [id, node] of messages) {
-      const text = extractText(node);
-      if (text.length < 20 || !needsTranslation(detectLanguage(text), locale)) {
+      const { text, prose } = extractText(node);
+      if (
+        text.length < 20 ||
+        !needsTranslation(detectBuddyTranslateSourceLanguage(prose), locale)
+      ) {
         const state = cards.get(id);
         state?.abortController?.abort();
         state?.node.remove();

@@ -3,6 +3,7 @@ import { homePath, readConnection } from "@codexhost/buddy-engine";
 import {
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
+  detectBuddyTranslateSourceLanguage,
   type BuddyTranslateRequest,
   type BuddyTranslateResult,
 } from "@codexhost/shared-contracts";
@@ -29,17 +30,6 @@ const LOCALE_TO_ISO: Record<string, string> = {
   ar: "ar",
   hi: "hi",
 };
-
-function detectSourceLang(text: string): string {
-  const cjk = text.match(/[\u4e00-\u9fff]/g)?.length ?? 0;
-  const jp = text.match(/[\u3040-\u30ff]/g)?.length ?? 0;
-  const kr = text.match(/[\uac00-\ud7af]/g)?.length ?? 0;
-  const latin = text.match(/[a-zA-Z]/g)?.length ?? 0;
-  if (jp > cjk && jp > latin) return "ja";
-  if (kr > latin) return "ko";
-  if (cjk > latin) return "zh-CN";
-  return "en";
-}
 
 type TranslateResponse = {
   translations?: Array<{ text?: string; detected_language?: string }>;
@@ -96,25 +86,23 @@ export class BuddyTranslator {
     if (!parsed.success) throw new Error("翻译请求无效");
     const req = parsed.data;
 
+    const target = LOCALE_TO_ISO[req.targetLocale] ?? req.targetLocale.slice(0, 2);
+    const source = detectBuddyTranslateSourceLanguage(req.text);
+    // 同语言或没有正文时，先跳过，避免读取配置、旧缓存或访问网关。
+    if (!source || source.split("-")[0] === target.split("-")[0]) {
+      return buddyTranslateResultSchema.parse({
+        translated: req.text,
+        model: "noop",
+        latencyMs: 0,
+      });
+    }
+
     const ck = this.#ck(req);
     const cached = this.#cache.get(ck);
     if (cached && Date.now() - cached.ts < this.#ttl) return cached.result;
 
     const cfg = await this.#config();
     if (!cfg) throw new Error("未配置网关");
-
-    const target = LOCALE_TO_ISO[req.targetLocale] ?? req.targetLocale.slice(0, 2);
-    const source = detectSourceLang(req.text);
-    // 同源同目标直接跳过
-    if (source === target) {
-      const r = buddyTranslateResultSchema.parse({
-        translated: req.text,
-        model: "noop",
-        latencyMs: 0,
-      });
-      this.#cache.set(ck, { result: r, ts: Date.now() });
-      return r;
-    }
 
     const t0 = Date.now();
     const signal = AbortSignal.timeout(15_000);

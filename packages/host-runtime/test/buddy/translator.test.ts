@@ -43,6 +43,57 @@ async function fixture(respond: (body: Record<string, unknown>, res: ServerRespo
 }
 
 describe("gateway translation", () => {
+  it.each(["zh", "zh-CN", "zh-TW"])(
+    "skips Chinese technical prose for %s without contacting the gateway",
+    async (targetLocale) => {
+      const f = await fixture((_body, res) => res.end("unexpected request"));
+      const text =
+        "3D 是「Qt 宿主 + Web(Three.js) 应用」。拉 RWebThree.dll / ShapeWebThree.dll 与 webview-vs、样例 web3d 资源。";
+      expect(await f.translator.translate({ text, targetLocale })).toEqual({
+        translated: text,
+        model: "noop",
+        latencyMs: 0,
+      });
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+
+  it("skips same-language prose and code without requiring gateway configuration", async () => {
+    const home = await mkdtemp(join(tmpdir(), "buddy-translator-no-config-"));
+    cleanups.push(() => rm(home, { recursive: true, force: true }));
+    const translator = new BuddyTranslator({ CODEX_HOME: home });
+    for (const [text, targetLocale] of [
+      ["请检查 RWebThree.dll 和 ShapeWebThree.dll。", "zh-TW"],
+      ["Check the component before changing the configuration.", "en"],
+      ["```typescript\nconst value = 'English and 中文';\n```", "zh-CN"],
+      ["QWebEngineView RWebThree.dll /qwebchannel.js", "zh-CN"],
+    ]) {
+      expect(await translator.translate({ text, targetLocale })).toEqual({
+        translated: text,
+        model: "noop",
+        latencyMs: 0,
+      });
+    }
+  });
+
+  it.each([
+    [
+      "Check the QWebEngineView and the label 中文 before calling runScript(QString,bool).",
+      "zh-CN",
+      "en",
+    ],
+    ["请检查 RWebThree.dll 和 ShapeWebThree.dll 的加载状态。", "en", "zh-CN"],
+  ])("preserves technical names when translating %s", async (text, targetLocale, source) => {
+    const f = await fixture((_body, res) => {
+      res.end(JSON.stringify({ translations: [{ text: "Translated" }], provider: "baidu" }));
+    });
+    await expect(f.translator.translate({ text, targetLocale })).resolves.toMatchObject({
+      translated: "Translated",
+      model: "sub2api:baidu",
+    });
+    expect(f.requests).toEqual([{ q: [text], source, target: targetLocale, format: "text" }]);
+  });
+
   it("keeps messages with a shared prefix separate in the translation cache", async () => {
     const f = await fixture((body, res) => {
       const text = (body.q as string[])[0];

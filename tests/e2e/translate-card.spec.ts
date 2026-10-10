@@ -8,6 +8,8 @@ const commands = `Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPo
 Get-NetFirewallProfile | Select Name,Enabled,DefaultInboundAction`;
 const nativeCode = `<div data-markdown-copy="code-block"><div data-markdown-copy="exclude">powershell <button>Copy code</button></div><div><code>${commands}</code></div></div>`;
 const english = "Check which services are listening before changing the firewall rules.";
+const chineseTechnical =
+  "3D 是「Qt 宿主 + Web(Three.js) 应用」。拉 RWebThree.dll / ShapeWebThree.dll 与 webview-vs、样例 web3d 资源。";
 
 const { outputFiles } = await build({
   stdin: {
@@ -24,7 +26,7 @@ document.querySelector('[data-fixture-action="code"]')?.addEventListener('click'
  document.querySelector('[data-markdown-text-style="assistant-message"]').innerHTML = ${JSON.stringify(nativeCode)};
 });
 document.querySelector('[data-fixture-action="chinese"]')?.addEventListener('click', () => {
- document.querySelector('[data-markdown-text-style="assistant-message"]').innerHTML = '<p>请先检查服务监听状态，再确认防火墙的入站规则。</p>' + ${JSON.stringify(nativeCode)};
+ document.querySelector('[data-markdown-text-style="assistant-message"]').innerHTML = '<p>' + ${JSON.stringify(chineseTechnical)} + '</p>' + ${JSON.stringify(nativeCode)};
 });
 document.querySelector('[data-fixture-action="resolve"]')?.addEventListener('click', () => {
  for (const resolve of globalThis.pending.splice(0)) resolve({ translated: '过期译文', model: 'fixture', latencyMs: 1 });
@@ -135,6 +137,45 @@ test("skips native code and translates only English prose", async ({ page }, tes
   await page.screenshot({ path: testInfo.outputPath("native-code-skipped.png"), fullPage: true });
 });
 
+test("skips Chinese explanations with inline APIs, filenames and long paths", async ({
+  page,
+}, testInfo) => {
+  await page.setContent(`<main><section data-content-search-turn-key="turn">
+<div data-response-annotation-conversation="thread" data-response-annotation-target="plain"><p>${chineseTechnical}</p></div>
+<div data-response-annotation-conversation="thread" data-response-annotation-target="inline"><p>决定性发现：<code>RWebThree</code> 是 <code>QWebEngineView</code> 子类，即 3D 组件 = Qt WebEngine 载入 HTML(Three.js) 页面，C++↔JS 走 QWebChannel：</p><ul><li><code>runScript(QString,bool) -&gt; QVariant</code>（执行 JS 取回值）、<code>exeScript(QString)</code></li><li><code>setUrl/url/reload</code>、<code>onInit/onLoaded/onStartLoad/checkHealth/handleCrash/timerEvent</code></li><li>资源：<code>/qwebchannel.js</code>、<code>/3rdparty/marked.min.js</code></li></ul><p>反编译 OnInit / runScript 看它载入哪个页面与 JS 接口名。</p></div>
+<div data-response-annotation-conversation="thread" data-response-annotation-target="path"><p>请检查 <code>/${"very-long-path/".repeat(100)}QWebEngineView.js</code> 的加载状态。</p></div>
+<div data-response-annotation-conversation="thread" data-response-annotation-target="references"><p><code>runScript(QString,bool)</code> <code>/qwebchannel.js</code> <code>/3rdparty/marked.min.js</code></p></div>
+</section></main>`);
+  await startFixture(page);
+  await page.waitForTimeout(2200);
+  expect(
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
+  ).toEqual([]);
+  await expect(page.locator("[data-codexhost-translate]")).toHaveCount(0);
+  await expect(page.locator("code").first()).toHaveText("RWebThree");
+  await page.screenshot({
+    path: testInfo.outputPath("chinese-technical-skipped.png"),
+    fullPage: true,
+  });
+});
+
+test("translates English prose with Chinese labels and preserves inline references", async ({
+  page,
+}, testInfo) => {
+  const expected =
+    "Check the setting labelled 中文 before loading QWebEngineView and calling runScript(QString,bool).";
+  await setMessage(
+    page,
+    "<p>Check the setting labelled <code>中文</code> before loading <code>QWebEngineView</code> and calling <code>runScript(QString,bool)</code>.</p>",
+  );
+  await startFixture(page);
+  await expect(page.locator('[data-state="completed"]')).toHaveCount(1);
+  expect(
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
+  ).toEqual([expected]);
+  await page.screenshot({ path: testInfo.outputPath("english-with-references.png") });
+});
+
 test("shows a specific error as text and retries only on click", async ({ page }, testInfo) => {
   const reason =
     '翻译服务返回 HTTP 503：Provider unavailable <img src=x onerror="alert(1)">（请求 ID：fixture-123）';
@@ -171,16 +212,20 @@ test("explains when the service provides no reason", async ({ page }, testInfo) 
   await page.screenshot({ path: testInfo.outputPath("unknown-error.png") });
 });
 
-for (const state of ["pending", "error"] as const) {
+for (const state of ["pending", "error", "completed"] as const) {
   test(`removes ${state} cards when prose becomes Chinese with code`, async ({
     page,
   }, testInfo) => {
     await setMessage(page, `<p>${english}</p>`);
     await startFixture(page, [
-      state === "pending" ? { pending: true } : { error: "翻译请求超时（15 秒）" },
+      state === "pending"
+        ? { pending: true }
+        : state === "error"
+          ? { error: "翻译请求超时（15 秒）" }
+          : {},
     ]);
     await expect(
-      page.locator(`[data-state="${state === "pending" ? "loading" : "error"}"]`),
+      page.locator(`[data-state="${state === "pending" ? "loading" : state}"]`),
     ).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath("before-change.png") });
     await page.getByRole("button", { name: "更新为中文说明和代码", exact: true }).click();

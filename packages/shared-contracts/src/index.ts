@@ -614,6 +614,7 @@ export type {
 } from "./buddy-private.js";
 export {
   BUDDY_TRANSLATE_METHOD,
+  detectBuddyTranslateSourceLanguage,
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
 } from "./buddy-translate.js";

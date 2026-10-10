@@ -2,7 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 import { build } from "esbuild";
 import path from "node:path";
 
-type TranslationFixtureWindow = Window & { requests: string[] };
+type TranslationFixtureWindow = Window & {
+  requests: string[];
+  batchRequests: string[][];
+};
 
 const commands = `Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in 22,5985 } | Select LocalAddress
 Get-NetFirewallProfile | Select Name,Enabled,DefaultInboundAction`;

@@ -19,6 +19,11 @@ const { outputFiles } = await build({
 import { installTranslateCards } from './packages/renderer-extension/src/translate-card/index.ts';
 globalThis.requests = [];
 globalThis.pending = [];
+globalThis.batchRequests = [];
+globalThis.batchReplies = globalThis.batchReplies ?? [];
+globalThis.pendingBatch = [];
+globalThis.usageListeners = [];
+globalThis.threadActive = globalThis.threadActive ?? false;
 document.querySelector('[data-fixture-action="progress"]')?.addEventListener('click', () => {
  document.querySelector('main p').textContent = 'The server has enough capacity. Next I will verify the serving configuration.';
 });
@@ -31,18 +36,52 @@ document.querySelector('[data-fixture-action="chinese"]')?.addEventListener('cli
 document.querySelector('[data-fixture-action="resolve"]')?.addEventListener('click', () => {
  for (const resolve of globalThis.pending.splice(0)) resolve({ translated: '过期译文', model: 'fixture', latencyMs: 1 });
 });
-installTranslateCards({ getLocale: () => 'zh-CN', getContext: () => ({
- threadId: 'thread', root: document.querySelector('main'), client: {
- translate: async ({ text }) => {
-  globalThis.requests.push(text);
-  const reply = globalThis.fixtureReplies?.shift();
-  if (reply?.pending) return new Promise(resolve => globalThis.pending.push(resolve));
-  if (reply && 'rpcError' in reply) throw { code: -32603, message: reply.rpcError };
-  if (reply && 'error' in reply) throw new Error(reply.error);
-  return { translated: '中文：' + text, model: 'fixture', latencyMs: 1 };
- }
- }
-}) });`,
+document.querySelector('[data-fixture-action="set-active"]')?.addEventListener('click', () => {
+ globalThis.threadActive = true;
+});
+document.querySelector('[data-fixture-action="set-idle"]')?.addEventListener('click', () => {
+ globalThis.threadActive = false;
+ for (const listener of globalThis.usageListeners.splice(0)) listener();
+});
+document.querySelector('[data-fixture-action="add-progress"]')?.addEventListener('click', () => {
+ const section = document.querySelector('section[data-content-search-turn-key="turn"]');
+ const div = document.createElement('div');
+ div.setAttribute('data-response-annotation-conversation', 'thread');
+ div.setAttribute('data-response-annotation-target', 'progress-' + section.querySelectorAll('[data-response-annotation-conversation]').length);
+ div.innerHTML = '<div data-markdown-text-style="assistant-message">Let me also verify the second segment before continuing.</div>';
+ section.appendChild(div);
+});
+installTranslateCards({
+ getLocale: () => 'zh-CN',
+ getContext: () => ({
+  hostId: 'host', threadId: 'thread', root: document.querySelector('main'), client: {
+  translate: async ({ text }) => {
+   globalThis.requests.push(text);
+   const reply = globalThis.fixtureReplies?.shift();
+   if (reply?.pending) return new Promise(resolve => globalThis.pending.push(resolve));
+   if (reply && 'rpcError' in reply) throw { code: -32603, message: reply.rpcError };
+   if (reply && 'error' in reply) throw new Error(reply.error);
+   return { translated: '中文：' + text, model: 'fixture', latencyMs: 1 };
+  },
+  translateBatch: async ({ items }) => {
+   const texts = items.map((item) => item.text);
+   globalThis.batchRequests.push(texts);
+   const reply = globalThis.batchReplies?.shift();
+   if (reply?.pending) return new Promise(resolve => globalThis.pendingBatch.push(resolve));
+   if (reply && 'rpcError' in reply) throw { code: -32603, message: reply.rpcError };
+   if (reply && 'error' in reply) throw new Error(reply.error);
+   return {
+    items: items.map((item) => ({ id: item.id, translated: '中文：' + item.text, model: 'fixture', latencyMs: 1 })),
+   };
+  },
+  },
+ }),
+ readActivity: async () => globalThis.threadActive === true,
+ subscribeThreadUsage: (_hostId, listener) => {
+  globalThis.usageListeners.push(listener);
+  return () => {};
+ },
+});`,
   },
   bundle: true,
   platform: "browser",
@@ -53,10 +92,23 @@ installTranslateCards({ getLocale: () => 'zh-CN', getContext: () => ({
 async function startFixture(
   page: Page,
   replies: Array<{ error?: string; rpcError?: string; pending?: boolean }> = [],
+  options: {
+    active?: boolean;
+    singleReplies?: Array<{ error?: string; rpcError?: string; pending?: boolean }>;
+  } = {},
 ) {
+  const singleReplies = options.singleReplies;
   const source = outputFiles[0]?.text;
   if (!source) throw new Error("Translation fixture bundle unavailable");
-  await page.addScriptTag({ content: `globalThis.fixtureReplies = ${JSON.stringify(replies)};` });
+  await page.addScriptTag({
+    content: `globalThis.fixtureReplies = ${JSON.stringify(singleReplies ?? [])};`,
+  });
+  await page.addScriptTag({ content: `globalThis.batchReplies = ${JSON.stringify(replies)};` });
+  if (options.active) {
+    await page.addScriptTag({
+      content: "globalThis.threadActive = true;",
+    });
+  }
   await page.addScriptTag({ content: source });
 }
 
@@ -86,19 +138,25 @@ test("translates progress messages independently and refreshes changed text", as
   await startFixture(page);
   await expect(page.locator('[data-state="completed"]')).toHaveCount(2);
   await page.waitForTimeout(1200);
+  // 闲置回合把两段合并为一次批量请求。
   expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests.length),
-  ).toBe(2);
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests),
+  ).toEqual([
+    [
+      "Let me inspect the actual server capacity before choosing a model.",
+      "Now let me check the adapter wiring and account state.",
+    ],
+  ]);
   await page.screenshot({ path: testInfo.outputPath("progress-before.png") });
   await page.getByRole("button", { name: "更新进度" }).click();
   await expect(page.locator(".codexhost-translate-content").first()).toContainText(
     "The server has enough",
   );
   expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests.length),
-  ).toBe(3);
-  const requests = await page.evaluate(
-    () => (window as unknown as TranslationFixtureWindow).requests,
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests.length),
+  ).toBe(2);
+  const requests = await page.evaluate(() =>
+    (window as unknown as TranslationFixtureWindow).batchRequests.flat(),
   );
   expect(requests.every((text) => !text.includes("中文："))).toBe(true);
   expect(
@@ -124,8 +182,8 @@ test("skips native code and translates only English prose", async ({ page }, tes
   await expect(page.locator('[data-state="completed"]')).toHaveCount(1);
   await page.waitForTimeout(1200);
   expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
-  ).toEqual([english]);
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests),
+  ).toEqual([[english]]);
   for (const target of ["code", "chinese", "pre"]) {
     await expect(
       page.locator(`[data-response-annotation-target="${target}"] [data-codexhost-translate]`),
@@ -149,7 +207,7 @@ test("skips Chinese explanations with inline APIs, filenames and long paths", as
   await startFixture(page);
   await page.waitForTimeout(2200);
   expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests),
   ).toEqual([]);
   await expect(page.locator("[data-codexhost-translate]")).toHaveCount(0);
   await expect(page.locator("code").first()).toHaveText("RWebThree");
@@ -171,8 +229,8 @@ test("translates English prose with Chinese labels and preserves inline referenc
   await startFixture(page);
   await expect(page.locator('[data-state="completed"]')).toHaveCount(1);
   expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
-  ).toEqual([expected]);
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests),
+  ).toEqual([[expected]]);
   await page.screenshot({ path: testInfo.outputPath("english-with-references.png") });
 });
 
@@ -180,21 +238,17 @@ test("shows a specific error as text and retries only on click", async ({ page }
   const reason =
     '翻译服务返回 HTTP 503：Provider unavailable <img src=x onerror="alert(1)">（请求 ID：fixture-123）';
   await setMessage(page, `<p>${english}</p>`);
-  await startFixture(page, [{ error: reason }]);
+  await startFixture(page, [{ error: reason }], { singleReplies: [] });
   await expect(page.locator('[data-state="error"]')).toBeVisible();
   await expect(page.getByRole("status")).toHaveText(reason);
   await expect(page.locator(".codexhost-translate-error-detail img")).toHaveCount(0);
-  await page.waitForTimeout(1200);
-  expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
-  ).toHaveLength(1);
   await page.screenshot({ path: testInfo.outputPath("error-detail.png") });
   await page.getByRole("button", { name: "重试", exact: true }).click();
   await expect(page.locator('[data-state="completed"]')).toBeVisible();
   await expect(page.getByRole("status")).toHaveCount(0);
   expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
-  ).toHaveLength(2);
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests),
+  ).toHaveLength(1);
   await page.screenshot({ path: testInfo.outputPath("retry-completed.png") });
 });
 
@@ -237,9 +291,6 @@ for (const state of ["pending", "error", "completed"] as const) {
       await expect(page.locator("[data-codexhost-translate]")).toHaveCount(0);
       await page.screenshot({ path: testInfo.outputPath("late-response-ignored.png") });
     }
-    expect(
-      await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
-    ).toHaveLength(1);
   });
 }
 
@@ -251,8 +302,41 @@ test("removes a completed card when prose becomes code only", async ({ page }, t
   await page.getByRole("button", { name: "更新为代码", exact: true }).click();
   await expect(page.locator("[data-codexhost-translate]")).toHaveCount(0);
   expect(await page.locator("code").textContent()).toBe(commands);
-  expect(
-    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
-  ).toHaveLength(1);
   await page.screenshot({ path: testInfo.outputPath("code-only.png") });
+});
+
+test("defers translation while the turn runs and batches once at completion", async ({
+  page,
+}, testInfo) => {
+  await page.setContent(`<main><section data-content-search-turn-key="turn">
+<div data-response-annotation-conversation="thread" data-response-annotation-target="segment-1"><div data-markdown-text-style="assistant-message"><p>Let me inspect the actual server capacity before choosing a model.</p></div></div>
+</section></main><aside><button data-fixture-action="set-active">开始回合</button><button data-fixture-action="add-progress">追加进度</button><button data-fixture-action="set-idle">结束回合</button></aside>`);
+  // 先声明回合处于运行态，再启动 fixture，模拟生成中的回合。
+  await startFixture(page, [], { active: true });
+  await page.getByRole("button", { name: "追加进度" }).click();
+  await expect(page.locator("[data-codexhost-translate]")).toHaveCount(2);
+  await expect(page.locator('[data-state="loading"]')).toHaveCount(2);
+  await page.waitForTimeout(2500);
+  // 运行期间不得产生任何翻译请求（单条或批量都不行）。
+  expect(
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests.length),
+  ).toBe(0);
+  expect(
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).batchRequests.length),
+  ).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath("running-queued.png") });
+
+  await page.getByRole("button", { name: "结束回合" }).click();
+  await expect(page.locator('[data-state="completed"]')).toHaveCount(2);
+  await expect(page.locator(".codexhost-translate-content").first()).toContainText("中文：");
+  // 回合结束后只发一次批量请求，且不再用单条通道。
+  expect(
+    await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests.length),
+  ).toBe(0);
+  const batches = await page.evaluate(
+    () => (window as unknown as TranslationFixtureWindow).batchRequests,
+  );
+  expect(batches).toHaveLength(1);
+  expect(batches[0]?.length).toBe(2);
+  await page.screenshot({ path: testInfo.outputPath("completed-batched.png") });
 });

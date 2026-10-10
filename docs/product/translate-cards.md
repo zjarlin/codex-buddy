@@ -1,6 +1,6 @@
 # 翻译卡片
 
-当模型回答的语言与 UI 语言不一致时，客户端自动翻译并展示译文，包括同一回合内的多段进度消息。译文属于展示层，原生会话历史和模型上下文保留原文。
+当模型回答的语言与 UI 语言不一致时，客户端自动翻译并展示译文，包括同一回合内的多段进度消息。译文属于展示层，原生会话历史和模型上下文保留原文。回合运行期间只排队不请求，回合结束后把该会话内所有待翻译段落合并成一次批量翻译，避免逐条请求占满 Host 请求队列。
 
 ## 触发条件
 
@@ -10,9 +10,11 @@
 
 ## 翻译流程
 
-Renderer 与 Host 使用共享的正文语言判断，排除代码、URL、路径、文件名和技术标识符的干扰；英文按单词计数，避免长英文名称压过中文说明。Renderer 只提取 assistant 正文，排除传统 `pre` 和原生 `data-markdown-copy="code-block"` 代码块（含语言标题、复制按钮）、辅助朗读标签和 Buddy 卡片。行内 `code` 不参与语言判断，但保留在需要翻译的正文里。中文说明夹杂 API、文件名或长路径，以及只有代码或技术引用的消息不触发翻译；英文说明引用少量中文标签仍可翻译。每段消息独立挂载译文，正文变化后重新翻译；消息不再满足条件时移除旧卡片并忽略未完成的旧请求。
+Renderer 与 Host 使用共享的正文语言判断，排除代码、URL、路径、文件名和技术标识符的干扰；英文按单词计数，避免长英文名称压过中文说明。Renderer 只提取 assistant 正文，排除传统 `pre` 和原生 `data-markdown-copy="code-block"` 代码块（含语言标题、复制按钮）、辅助朗读标签和 Buddy 卡片。行内 `code` 不参与语言判断，但保留在需要翻译的正文里。中文说明夹杂 API、文件名或长路径，以及只有代码或技术引用的消息不触发翻译；英文说明引用少量中文标签仍可翻译。每段消息独立挂载译文，正文变化后重新翻译；消息不再满足条件时移除旧卡片并忽略未完成的旧请求。回合仍在运行时，待翻译段落只显示占位并在 `thread/usage` 或 `thread/read` 确认回合结束后统一翻译；活动状态尚未确认时按运行中处理，避免提前请求。
 
 Host 复用当前 Codex 网关配置，调用 `POST /api/v1/translate` 的专用翻译服务，不使用聊天模型生成译文。凭据留在 Host，Renderer 只接收译文、服务商和耗时。
+
+一个回合结束时，Renderer 把该会话内所有待翻译段落按 `{id, text}` 组成一次 `codexhost/buddy/translate/batch` 请求；Host 复用同一网关接口的多条 `q` 能力，去重后单次调用，再按 `id` 返回每段译文。子2API 聚合器会校验结果数与请求数一致，因此批量请求要么整体成功，要么整体报告失败。同一段落命中缓存或同语言跳过时不再进入网关请求。旧 Host 不支持批量方法时，回退到逐条单文本翻译。
 
 Host 在读取网关配置和翻译缓存之前跳过同语言正文及纯代码请求，返回 `model: "noop"`、`latencyMs: 0`；中文正文在 `zh`、`zh-CN`、`zh-TW` 界面均跳过，不请求网关或判断模型。
 
@@ -32,7 +34,7 @@ Sub2API 的 `/api/v1/translate` 用 `{code,message,data}` 包一层，`host-runt
 
 ## 架构
 
-- `shared-contracts/buddy-translate.ts`: RPC schema + method name + 共享正文语言判断
-- `host-runtime/buddy/translator.ts`: 网关翻译接口 + 缓存
-- `renderer-extension/renderer-host-clients.ts`: SSH 翻译方法兼容与本机回退
-- `renderer-extension/translate-card/`: DOM 挂载 + UI + 自动触发
+- `shared-contracts/buddy-translate.ts`: 单条/批量 RPC schema + method name + 共享正文语言判断
+- `host-runtime/buddy/translator.ts`: 网关翻译接口 + 批量 + 缓存
+- `renderer-extension/renderer-host-clients.ts`: SSH 翻译方法（含批量）兼容与本机回退
+- `renderer-extension/translate-card/`: DOM 挂载 + UI + 回合结束批量触发

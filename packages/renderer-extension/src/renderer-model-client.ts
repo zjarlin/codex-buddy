@@ -207,11 +207,15 @@ import {
   type ThreadArchiveCompletedResult,
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_TRANSLATE_BATCH_METHOD,
   BUDDY_SPEECH_METHOD,
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
+  buddyTranslateBatchRequestSchema,
+  buddyTranslateBatchResultSchema,
+  type BuddyTranslateBatchResult,
   buddySpeechRequestSchema,
   buddySpeechResultSchema,
   type BuddySpeechResult,
@@ -526,6 +530,10 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     text: string;
     targetLocale: string;
   }): Promise<{ translated: string; model: string; latencyMs: number }>;
+  translateBatch?(input: {
+    items: { id: string; text: string }[];
+    targetLocale: string;
+  }): Promise<BuddyTranslateBatchResult>;
   /** 让 Host 用当前网关的曼波配音合成该文本，返回可直接播放的 base64 音频。
    * 只在整个回合结束时按用户开关触发，不进入原生历史或工具链。 */
   synthesizeSpeech?(input: { text: string; locale?: string }): Promise<BuddySpeechResult>;
@@ -1201,6 +1209,18 @@ export function createRendererModelClient(
       }
       return buddyTranslateResultSchema.parse(
         await manager.sendRequest(BUDDY_TRANSLATE_METHOD, params.data),
+      );
+    },
+    translateBatch: async (input: {
+      items: { id: string; text: string }[];
+      targetLocale: string;
+    }) => {
+      const params = buddyTranslateBatchRequestSchema.safeParse(input);
+      if (!params.success) {
+        throw new Error("Invalid batch translate request");
+      }
+      return buddyTranslateBatchResultSchema.parse(
+        await manager.sendRequest(BUDDY_TRANSLATE_BATCH_METHOD, params.data),
       );
     },
     synthesizeSpeech: async (input: { text: string; locale?: string }) => {

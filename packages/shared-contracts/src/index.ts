@@ -614,11 +614,24 @@ export type {
 } from "./buddy-private.js";
 export {
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_TRANSLATE_BATCH_METHOD,
+  BUDDY_TRANSLATE_BATCH_MAX_ITEMS,
   detectBuddyTranslateSourceLanguage,
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
+  buddyTranslateBatchItemSchema,
+  buddyTranslateBatchRequestSchema,
+  buddyTranslateBatchItemResultSchema,
+  buddyTranslateBatchResultSchema,
 } from "./buddy-translate.js";
-export type { BuddyTranslateRequest, BuddyTranslateResult } from "./buddy-translate.js";
+export type {
+  BuddyTranslateRequest,
+  BuddyTranslateResult,
+  BuddyTranslateBatchItem,
+  BuddyTranslateBatchRequest,
+  BuddyTranslateBatchItemResult,
+  BuddyTranslateBatchResult,
+} from "./buddy-translate.js";
 export {
   BUDDY_SPEECH_METHOD,
   BUDDY_SPEECH_AUDIO_MAX_BYTES,

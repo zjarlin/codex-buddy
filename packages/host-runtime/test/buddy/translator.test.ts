@@ -211,6 +211,143 @@ describe("gateway translation", () => {
   });
 });
 
+describe("batch translation", () => {
+  it("translates every unique English item in a single gateway request", async () => {
+    const f = await fixture((body, res) => {
+      const texts = body.q as string[];
+      res.end(
+        JSON.stringify({
+          translations: texts.map((text) => ({ text: `中文：${text}` })),
+          provider: "caiyun",
+        }),
+      );
+    });
+
+    const result = await f.translator.translateBatch({
+      targetLocale: "zh-CN",
+      items: [
+        { id: "turn:1", text: "Check which services are listening before changing the rules." },
+        { id: "turn:2", text: "Now let me verify the adapter wiring and account state." },
+      ],
+    });
+
+    expect(f.requests).toHaveLength(1);
+    expect(f.requests[0]).toEqual({
+      q: [
+        "Check which services are listening before changing the rules.",
+        "Now let me verify the adapter wiring and account state.",
+      ],
+      source: "en",
+      target: "zh-CN",
+      format: "text",
+    });
+    expect(result.items).toEqual([
+      {
+        id: "turn:1",
+        translated: "中文：Check which services are listening before changing the rules.",
+        model: "sub2api:caiyun",
+        latencyMs: expect.any(Number),
+      },
+      {
+        id: "turn:2",
+        translated: "中文：Now let me verify the adapter wiring and account state.",
+        model: "sub2api:caiyun",
+        latencyMs: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("deduplicates repeated text and preserves request order", async () => {
+    const f = await fixture((body, res) => {
+      const texts = body.q as string[];
+      res.end(
+        JSON.stringify({
+          translations: texts.map((text) => ({ text: `[${text}]` })),
+          provider: "caiyun",
+        }),
+      );
+    });
+
+    const result = await f.translator.translateBatch({
+      targetLocale: "zh-CN",
+      items: [
+        { id: "a", text: "Repeated English explanation that must be translated once." },
+        { id: "b", text: "Repeated English explanation that must be translated once." },
+      ],
+    });
+
+    // 网关只收到去重后的唯一文本。
+    expect(f.requests).toHaveLength(1);
+    expect((f.requests[0]?.q as string[]).length).toBe(1);
+    expect(result.items.map((item) => item.id)).toEqual(["a", "b"]);
+    expect(result.items[0]?.translated).toBe(result.items[1]?.translated);
+  });
+
+  it("skips Chinese and code items without contacting the gateway", async () => {
+    const f = await fixture((_body, res) => res.end("unexpected request"));
+    const result = await f.translator.translateBatch({
+      targetLocale: "zh-CN",
+      items: [
+        { id: "zh", text: "请检查服务器容量，再决定模型。" },
+        { id: "code", text: "```typescript\nconst value = 'English and 中文';\n```" },
+      ],
+    });
+    expect(f.requests).toHaveLength(0);
+    expect(result.items).toEqual([
+      { id: "zh", translated: "请检查服务器容量，再决定模型。", model: "noop", latencyMs: 0 },
+      {
+        id: "code",
+        translated: "```typescript\nconst value = 'English and 中文';\n```",
+        model: "noop",
+        latencyMs: 0,
+      },
+    ]);
+  });
+
+  it("serves cached items and only sends new text to the gateway", async () => {
+    const f = await fixture((body, res) => {
+      const texts = body.q as string[];
+      res.end(
+        JSON.stringify({
+          translations: texts.map((text) => ({ text: `[${text}]` })),
+          provider: "caiyun",
+        }),
+      );
+    });
+    const first = { id: "a", text: "A stable English sentence that is translated once." };
+    await f.translator.translateBatch({ targetLocale: "zh-CN", items: [first] });
+    expect(f.requests).toHaveLength(1);
+
+    const result = await f.translator.translateBatch({
+      targetLocale: "zh-CN",
+      items: [first, { id: "b", text: "A second English sentence that needs translation." }],
+    });
+    expect(f.requests).toHaveLength(2);
+    expect((f.requests[1]?.q as string[]).length).toBe(1);
+    expect(result.items[0]?.translated).toBe(`[${first.text}]`);
+    expect(result.items[1]?.id).toBe("b");
+  });
+
+  it("rejects malformed batches and incomplete gateway responses", async () => {
+    const f = await fixture((body, res) => {
+      const texts = body.q as string[];
+      res.end(JSON.stringify({ translations: [texts[0]].map((text) => ({ text: `[${text}]` })) }));
+    });
+    await expect(f.translator.translateBatch({ targetLocale: "zh-CN", items: [] })).rejects.toThrow(
+      "批量翻译请求无效",
+    );
+    await expect(
+      f.translator.translateBatch({
+        targetLocale: "zh-CN",
+        items: [
+          { id: "a", text: "First English sentence that needs translation." },
+          { id: "b", text: "Second English sentence that needs translation." },
+        ],
+      }),
+    ).rejects.toThrow("翻译服务未返回结果");
+  });
+});
+
 it("preserves gateway provider failure details", async () => {
   const f = await fixture((_body, res) => {
     res.writeHead(502);

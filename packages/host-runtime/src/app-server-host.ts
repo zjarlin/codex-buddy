@@ -62,6 +62,7 @@ import {
   SSH_AUTO_MODEL_ROUTES_METHOD,
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_TRANSLATE_BATCH_METHOD,
   BUDDY_SPEECH_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
@@ -1524,6 +1525,18 @@ export class AppServerHost {
           throw new Error("当前 Host 不支持翻译功能；未配置 Buddy。");
         }
         const result = await this.#translator.translate(request.params);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      } catch (error) {
+        await this.#writer.json(rpcError(request, -32092, errorMessage(error)));
+      }
+      return;
+    }
+    if (request.method === BUDDY_TRANSLATE_BATCH_METHOD) {
+      try {
+        if (!this.#translator) {
+          throw new Error("当前 Host 不支持翻译功能；未配置 Buddy。");
+        }
+        const result = await this.#translator.translateBatch(request.params);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32092, errorMessage(error)));

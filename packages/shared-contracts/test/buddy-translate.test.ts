@@ -41,3 +41,56 @@ describe("translation prose language", () => {
     expect(detectBuddyTranslateSourceLanguage("QWebEngineView 설정을 확인하세요.")).toBe("ko");
   });
 });
+
+describe("batch translation contract", () => {
+  it("accepts a well-formed batch and infers item fields", async () => {
+    const { buddyTranslateBatchRequestSchema, buddyTranslateBatchResultSchema } =
+      await import("../src/index.js");
+    const request = buddyTranslateBatchRequestSchema.parse({
+      targetLocale: "zh-CN",
+      items: [
+        { id: "thread:turn:1", text: "Check the server capacity before choosing a model." },
+        { id: "thread:turn:2", text: "Now let me verify the adapter wiring." },
+      ],
+    });
+    expect(request.items).toHaveLength(2);
+    const result = buddyTranslateBatchResultSchema.parse({
+      items: request.items.map((item) => ({
+        id: item.id,
+        translated: item.text,
+        model: "noop",
+        latencyMs: 0,
+      })),
+    });
+    expect(result.items[0]?.id).toBe("thread:turn:1");
+  });
+
+  it("rejects empty batches, blank ids and unknown fields", async () => {
+    const { buddyTranslateBatchRequestSchema, BUDDY_TRANSLATE_BATCH_MAX_ITEMS } =
+      await import("../src/index.js");
+    expect(
+      buddyTranslateBatchRequestSchema.safeParse({ targetLocale: "zh-CN", items: [] }).success,
+    ).toBe(false);
+    expect(
+      buddyTranslateBatchRequestSchema.safeParse({
+        targetLocale: "zh-CN",
+        items: [{ id: "", text: "Check the server capacity before choosing a model." }],
+      }).success,
+    ).toBe(false);
+    expect(
+      buddyTranslateBatchRequestSchema.safeParse({
+        targetLocale: "zh-CN",
+        items: [{ id: "a", text: "Check the server capacity.", extra: true }],
+      }).success,
+    ).toBe(false);
+    expect(
+      buddyTranslateBatchRequestSchema.safeParse({
+        targetLocale: "zh-CN",
+        items: Array.from({ length: BUDDY_TRANSLATE_BATCH_MAX_ITEMS + 1 }, (_value, index) => ({
+          id: `item-${index}`,
+          text: "Check the server capacity before choosing a model.",
+        })),
+      }).success,
+    ).toBe(false);
+  });
+});

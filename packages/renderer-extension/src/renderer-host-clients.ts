@@ -8,6 +8,7 @@ import {
   TURN_ACTION_EXECUTE_METHOD,
   AUTO_MODEL_ROUTES_METHOD,
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_TRANSLATE_BATCH_METHOD,
   BUDDY_SPEECH_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
@@ -111,7 +112,11 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
       };
       const gitMethods = new Set<string>(sshGitMethods);
       send = (method, params, options) => {
-        if (method === BUDDY_TRANSLATE_METHOD || method === BUDDY_SPEECH_METHOD) {
+        if (
+          method === BUDDY_TRANSLATE_METHOD ||
+          method === BUDDY_TRANSLATE_BATCH_METHOD ||
+          method === BUDDY_SPEECH_METHOD
+        ) {
           return gatewayRequest(method, params, options);
         }
         if (method === TURN_ACTIONS_INSPECT_METHOD || method === TURN_ACTION_EXECUTE_METHOD)

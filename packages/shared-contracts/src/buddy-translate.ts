@@ -41,3 +41,41 @@ export const buddyTranslateResultSchema = z.object({
 });
 
 export type BuddyTranslateResult = z.infer<typeof buddyTranslateResultSchema>;
+
+/**
+ * 批量翻译：一个回合结束后一次性翻译该会话内所有待翻译英文段落，
+ * 避免运行中逐条请求把 Host 请求队列压满。
+ * 单条上限沿用 buddyTranslateRequestSchema，最多 200 段。
+ */
+export const BUDDY_TRANSLATE_BATCH_METHOD = "codexhost/buddy/translate/batch";
+export const BUDDY_TRANSLATE_BATCH_MAX_ITEMS = 200;
+
+export const buddyTranslateBatchItemSchema = z
+  .object({
+    id: z.string().min(1).max(512),
+    text: z.string().min(1).max(64_000),
+  })
+  .strict();
+
+export const buddyTranslateBatchRequestSchema = z
+  .object({
+    items: z.array(buddyTranslateBatchItemSchema).min(1).max(BUDDY_TRANSLATE_BATCH_MAX_ITEMS),
+    targetLocale: z.string().min(2).max(10),
+  })
+  .strict();
+
+export const buddyTranslateBatchItemResultSchema = z.object({
+  id: z.string().min(1).max(512),
+  translated: z.string(),
+  model: z.string(),
+  latencyMs: z.number().int().nonnegative(),
+});
+
+export const buddyTranslateBatchResultSchema = z.object({
+  items: z.array(buddyTranslateBatchItemResultSchema),
+});
+
+export type BuddyTranslateBatchItem = z.infer<typeof buddyTranslateBatchItemSchema>;
+export type BuddyTranslateBatchRequest = z.infer<typeof buddyTranslateBatchRequestSchema>;
+export type BuddyTranslateBatchItemResult = z.infer<typeof buddyTranslateBatchItemResultSchema>;
+export type BuddyTranslateBatchResult = z.infer<typeof buddyTranslateBatchResultSchema>;

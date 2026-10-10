@@ -3,9 +3,12 @@ import { homePath, readConnection } from "@codexhost/buddy-engine";
 import {
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
+  buddyTranslateBatchRequestSchema,
+  buddyTranslateBatchResultSchema,
   detectBuddyTranslateSourceLanguage,
   type BuddyTranslateRequest,
   type BuddyTranslateResult,
+  type BuddyTranslateBatchResult,
 } from "@codexhost/shared-contracts";
 import { GatewayHttpError, gatewayJsonRequest } from "./gateway-request.js";
 
@@ -101,6 +104,88 @@ export class BuddyTranslator {
     const cached = this.#cache.get(ck);
     if (cached && Date.now() - cached.ts < this.#ttl) return cached.result;
 
+    const translated = await this.#requestGateway([req.text], source, target);
+    const result = buddyTranslateResultSchema.parse({
+      translated: translated.texts[0] ?? "",
+      model: translated.model,
+      latencyMs: translated.latencyMs,
+    });
+    if (!result.translated) throw new Error("翻译服务未返回结果");
+    this.#remember(ck, result);
+    return result;
+  }
+
+  /**
+   * 一个回合结束后一次性翻译所有待翻译段落，把逐条请求收敛为一次网关调用。
+   * 同语言/无正文/命中缓存的段落不进入网关请求，返回顺序与请求顺序一致。
+   */
+  async translateBatch(value: unknown): Promise<BuddyTranslateBatchResult> {
+    const parsed = buddyTranslateBatchRequestSchema.safeParse(value);
+    if (!parsed.success) throw new Error("批量翻译请求无效");
+    const req = parsed.data;
+    const target = LOCALE_TO_ISO[req.targetLocale] ?? req.targetLocale.slice(0, 2);
+
+    const skipped = new Map<string, BuddyTranslateBatchResult["items"][number]>();
+    const pending: { id: string; text: string; source: string }[] = [];
+    let latencyMs = 0;
+
+    // 摘要和缓存按“段落 id”记录，网关只收到去重后的唯一文本。
+    for (const item of req.items) {
+      const source = detectBuddyTranslateSourceLanguage(item.text);
+      if (!source || source.split("-")[0] === target.split("-")[0]) {
+        skipped.set(item.id, { id: item.id, translated: item.text, model: "noop", latencyMs: 0 });
+        continue;
+      }
+      const ck = this.#ck({ text: item.text, targetLocale: req.targetLocale });
+      const cached = this.#cache.get(ck);
+      if (cached && Date.now() - cached.ts < this.#ttl) {
+        skipped.set(item.id, { id: item.id, ...cached.result });
+        continue;
+      }
+      pending.push({ id: item.id, text: item.text, source });
+    }
+
+    if (pending.length > 0) {
+      const unique = [...new Set(pending.map((p) => p.text))];
+      const translated = await this.#requestGateway(unique, pending[0]?.source ?? "en", target);
+      latencyMs = translated.latencyMs;
+      const model = translated.model;
+      for (const entry of pending) {
+        const text = translated.texts[unique.indexOf(entry.text)] ?? "";
+        const result = buddyTranslateResultSchema.parse({
+          translated: text,
+          model,
+          latencyMs,
+        });
+        this.#remember(this.#ck({ text: entry.text, targetLocale: req.targetLocale }), result);
+        skipped.set(entry.id, { id: entry.id, ...result });
+      }
+    }
+
+    return buddyTranslateBatchResultSchema.parse({
+      items: req.items.map(
+        (item) =>
+          skipped.get(item.id) ?? { id: item.id, translated: item.text, model: "noop", latencyMs },
+      ),
+    });
+  }
+
+  #remember(ck: string, result: BuddyTranslateResult): void {
+    this.#cache.set(ck, { result, ts: Date.now() });
+    if (this.#cache.size > 500) {
+      for (const [k] of [...this.#cache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, 100))
+        this.#cache.delete(k);
+    }
+  }
+
+  /** 一次网关请求翻译多个段落，返回的文本顺序与传入顺序一致，并保持网关错误语义。 */
+  async #requestGateway(
+    texts: string[],
+    source: string,
+    target: string,
+  ): Promise<{ texts: string[]; model: string; latencyMs: number }> {
+    if (texts.length === 0) return { texts: [], model: "noop", latencyMs: 0 };
+
     const cfg = await this.#config();
     if (!cfg) throw new Error("未配置网关");
 
@@ -111,12 +196,7 @@ export class BuddyTranslator {
       payload = await gatewayJsonRequest(
         cfg.url,
         cfg.headers,
-        {
-          q: [req.text],
-          source,
-          target,
-          format: "text",
-        },
+        { q: texts, source, target, format: "text" },
         signal,
         1_048_576,
       );
@@ -136,22 +216,18 @@ export class BuddyTranslator {
       throw new Error(messages[reason] ?? `翻译请求失败：${reason.slice(0, 300)}`);
     }
     const resp = readTranslateResponse(payload);
-
-    const translated = resp?.translations?.[0]?.text;
-    if (!translated) throw new Error("翻译服务未返回结果");
-
-    const result = buddyTranslateResultSchema.parse({
-      translated,
-      model: `sub2api:${resp.provider ?? "unknown"}`,
-      latencyMs: Date.now() - t0,
-    });
-
-    this.#cache.set(ck, { result, ts: Date.now() });
-    if (this.#cache.size > 500) {
-      for (const [k] of [...this.#cache.entries()].sort((a, b) => a[1].ts - b[1].ts).slice(0, 100))
-        this.#cache.delete(k);
+    const results = resp?.translations ?? [];
+    if (results.length !== texts.length) throw new Error("翻译服务未返回结果");
+    const textsOut = results.map((entry) => entry?.text ?? "");
+    if (textsOut.some((text, index) => !text && (texts[index] ?? "").trim() !== "")) {
+      throw new Error("翻译服务未返回结果");
     }
-    return result;
+
+    return {
+      texts: textsOut,
+      model: `sub2api:${resp?.provider ?? "unknown"}`,
+      latencyMs: Date.now() - t0,
+    };
   }
 
   clearCache(): void {

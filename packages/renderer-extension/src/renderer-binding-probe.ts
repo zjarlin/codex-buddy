@@ -3556,12 +3556,26 @@ export function installRendererBindingProbe(
           mounted.composer.closest<HTMLElement>('[data-app-shell-main-surface="default"]') ??
           document.body;
         return {
+          hostId,
           threadId,
           root,
           client,
         };
       }
       return null;
+    },
+    readActivity: (threadId) => {
+      const mounted = connectedComposers().find(
+        (entry) =>
+          threadIdFromComposerModelTarget(findComposerModelTarget(entry.composer)) === threadId,
+      );
+      const client = mounted ? modelClientForHostFrom(modelControl, mounted.hostId) : null;
+      if (!client?.readThreadActivity) return Promise.resolve(false);
+      return client.readThreadActivity(threadId);
+    },
+    subscribeThreadUsage: (hostId, listener) => {
+      const client = modelClientForHostFrom(modelControl, hostId);
+      return client?.subscribeThreadUsage?.(() => listener()) ?? (() => {});
     },
   });
 

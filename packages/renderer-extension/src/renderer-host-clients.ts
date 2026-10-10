@@ -8,6 +8,7 @@ import {
   TURN_ACTION_EXECUTE_METHOD,
   AUTO_MODEL_ROUTES_METHOD,
   BUDDY_TRANSLATE_METHOD,
+  BUDDY_SPEECH_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
   sshGitMethods,
@@ -84,23 +85,35 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
         send: sendRequest,
         sendGit: git,
       });
-      const remoteTranslate = createRendererRequestSender(sendRequest);
-      const localTranslate = createRendererRequestSender(ssh.sendLocal);
-      // 官方 SSH 服务没有 Buddy 翻译方法时，使用本机配置的网关翻译服务。
-      const translate = async (params: unknown, options?: RendererRequestOptions) => {
+      const remoteGateway = createRendererRequestSender(sendRequest);
+      const localGateway = createRendererRequestSender(ssh.sendLocal);
+      // 官方 SSH 服务缺少翻译或播报方法时，复用本机 Codex 配置的网关服务。
+      const gatewayRequest = async (
+        method: string,
+        params: unknown,
+        options?: RendererRequestOptions,
+      ) => {
         try {
-          return await remoteTranslate(BUDDY_TRANSLATE_METHOD, params, options);
+          return await remoteGateway(method, params, options);
         } catch (error) {
-          if (!(error instanceof RendererMethodUnavailableError)) throw error;
+          if (!(error instanceof RendererMethodUnavailableError)) {
+            throw error;
+          }
         }
-        if (!isCurrent()) throw new Error("SSH 连接已变化，请重新翻译。");
-        const result = await localTranslate(BUDDY_TRANSLATE_METHOD, params, options);
-        if (!isCurrent()) throw new Error("SSH 连接已变化，请重新翻译。");
+        if (!isCurrent()) {
+          throw new Error("SSH 连接已变化，请重试。");
+        }
+        const result = await localGateway(method, params, options);
+        if (!isCurrent()) {
+          throw new Error("SSH 连接已变化，请重试。");
+        }
         return result;
       };
       const gitMethods = new Set<string>(sshGitMethods);
       send = (method, params, options) => {
-        if (method === BUDDY_TRANSLATE_METHOD) return translate(params, options);
+        if (method === BUDDY_TRANSLATE_METHOD || method === BUDDY_SPEECH_METHOD) {
+          return gatewayRequest(method, params, options);
+        }
         if (method === TURN_ACTIONS_INSPECT_METHOD || method === TURN_ACTION_EXECUTE_METHOD)
           return actions(method, params, options);
         if (method === AUTO_MODEL_ROUTES_METHOD) return auto(method, params, options);

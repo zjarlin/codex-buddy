@@ -24,6 +24,8 @@ const { outputFiles } = await build({
       import { installRendererPendingConfirmations } from "./packages/renderer-extension/src/renderer-pending-confirmations.ts";
       import { createRendererSpeechAnnouncer } from "./packages/renderer-extension/src/renderer-speech.ts";
       import { readRendererSpeechEnabled } from "./packages/renderer-extension/src/renderer-speech-preference.ts";
+      import { createRendererHostClients } from "./packages/renderer-extension/src/renderer-host-clients.ts";
+      import { BUDDY_SPEECH_METHOD } from "@codexhost/shared-contracts";
 
       const NativeAudio = Audio;
       globalThis.Audio = function(source) {
@@ -34,7 +36,7 @@ const { outputFiles } = await build({
         return audio;
       };
 
-      globalThis.setupPendingConfirmations = () => {
+      globalThis.setupPendingConfirmations = (hostId = "local") => {
         localStorage.clear();
         document.body.innerHTML = \`
           <aside id="app-shell-sidebar">
@@ -50,12 +52,14 @@ const { outputFiles } = await build({
           </aside>
         \`;
         for (const row of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
+          row.dataset.appActionSidebarThreadHostId = hostId;
+          row.dataset.appActionSidebarThreadId = hostId + ":" + row.dataset.appActionSidebarThreadId.slice("local:".length);
           const attrs = {
             "data-app-action-sidebar-thread-row": "",
             "data-app-action-sidebar-thread-host-id": row.dataset.appActionSidebarThreadHostId,
             "data-app-action-sidebar-thread-id": row.dataset.appActionSidebarThreadId,
           };
-          const threadId = row.dataset.appActionSidebarThreadId.split(":").slice(1).join(":");
+          const threadId = row.dataset.appActionSidebarThreadId.slice(hostId.length + 1);
           row.__reactFiber$fixture = { memoizedProps: { conversationId: threadId, dataAttributes: attrs } };
           row.addEventListener("click", () => {
             for (const candidate of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
@@ -93,8 +97,24 @@ const { outputFiles } = await build({
         }};
         const announced = [];
         const replayed = [];
+        const speechRequests = [];
+        const local = { hostId: "local", manager: { sendRequest(method, params) {
+          speechRequests.push(["local", method, params]);
+          if (method === BUDDY_SPEECH_METHOD) return client.synthesizeSpeech(params);
+          throw new Error("Unexpected local fixture method: " + method);
+        }} };
+        const remote = { hostId, manager: { sendRequest(method, params) {
+          speechRequests.push([hostId, method, params]);
+          throw { code: -32600, message: "Invalid request: unknown variant \`" + method + "\`" };
+        }} };
+        const clients = createRendererHostClients(() => ({
+          forHost: (id) => id === "local" ? local : id === hostId ? remote : null,
+          forComposer: () => hostId === "local" ? local : remote,
+          hostIdForComposer: () => hostId,
+          dispose() {},
+        }));
         const announcer = createRendererSpeechAnnouncer(
-          { getClient: () => client, getLocale: () => "zh-CN" },
+          { getClient: (id) => clients.forHost(id), getLocale: () => "zh-CN" },
           () => readRendererSpeechEnabled(window),
         );
         const speech = {
@@ -107,16 +127,16 @@ const { outputFiles } = await build({
             return announcer.replay(entry);
           },
         };
-        globalThis.speech = { announced, replayed, synthesized: [], audioEvents: [], failure: "" };
+        globalThis.speech = { announced, replayed, requests: speechRequests, synthesized: [], audioEvents: [], failure: "" };
         const control = installRendererPendingConfirmations({
           speech,
           getClient: () => client,
           getManager: () => manager,
-          getHostIds: () => ["local"],
+          getHostIds: () => [hostId],
           activeThread: () => {
             const active = document.querySelector('[data-app-action-sidebar-thread-active="true"]');
             if (!active) return null;
-            return { hostId: "local", threadId: active.dataset.appActionSidebarThreadId.slice("local:".length) };
+            return { hostId, threadId: active.dataset.appActionSidebarThreadId.slice(hostId.length + 1) };
           },
           getLocale: () => "zh-CN",
           openThread: async (threadId, options) => {
@@ -309,6 +329,39 @@ test("completion stays silent and the top-right speaker plays audio manually", a
     .toContain("playing");
   await expect(replay).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("manual-speaker-after.png") });
+});
+
+test("manual speaker plays an SSH summary through the local Host", async ({ page }, testInfo) => {
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "setupPendingConfirmations")("remote-ssh-discovered:okm252");
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      "远程会话已完成。",
+    );
+  });
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await expect(modal).toContainText("remote-ssh-discovered:okm252");
+  const replay = modal.getByRole("button", { name: "重播语音" });
+  await expect(replay).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("ssh-speaker-before.png") });
+
+  await replay.click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "speech").audioEvents))
+    .toContain("playing");
+  await expect(replay).toBeEnabled();
+  await expect(page.getByRole("alert")).toBeHidden();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "speech").requests)).toEqual([
+    [
+      "remote-ssh-discovered:okm252",
+      "codexhost/buddy/speech",
+      { text: "远程会话已完成。", locale: "zh-CN" },
+    ],
+    ["local", "codexhost/buddy/speech", { text: "远程会话已完成。", locale: "zh-CN" }],
+  ]);
+  await page.screenshot({ path: testInfo.outputPath("ssh-speaker-after.png") });
 });
 
 test("manual speaker displays a synthesis error and lets the user retry", async ({

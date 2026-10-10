@@ -24,7 +24,7 @@ function synthesisLanguage(locale: string | undefined): string {
 }
 
 /**
- * 播报器调用 Sub2API 网关的 `POST /v1/media/tts`（曼波 / GPT-SoVITS），
+ * 播报器调用 Sub2API 网关的 `POST /media/tts`（曼波 / GPT-SoVITS），
  * 复用 Codex 网关凭据认证。返回 base64 音频，由 Renderer 负责播放；
  * 文本在发送前已截断，音频超过上限时直接判为不可播报，不返回残缺音频。
  */
@@ -39,8 +39,8 @@ export class BuddySpeech {
     try {
       const connection = await readConnection(this.#home, this.environment);
       const url = new URL(connection.url);
-      // connection.url 指向 `<网关根>/v1/models`，媒体入口与模型入口同根。
-      url.pathname = url.pathname.replace(/\/models$/u, "/media/tts");
+      // 媒体入口位于网关根路径，不继承模型接口的 /v1 前缀。
+      url.pathname = "/media/tts";
       return { url, headers: connection.headers };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;

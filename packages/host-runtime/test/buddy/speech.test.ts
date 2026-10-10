@@ -55,7 +55,10 @@ async function fixture(
   cleanups.push(async () => {
     await rm(home, { recursive: true, force: true });
   });
-  return { speech: new BuddySpeech({ CODEX_HOME: home }), requests };
+  return {
+    speech: new BuddySpeech({ CODEX_HOME: home, OPENAI_API_KEY: "unrelated-environment-key" }),
+    requests,
+  };
 }
 
 function audio(body: Record<string, unknown>, audioBase64: string, characters = 12) {
@@ -72,7 +75,7 @@ describe("gateway speech synthesis", () => {
     const result = await f.speech.synthesize({ text: "会话已完成", locale: "zh-CN" });
 
     expect(f.requests).toHaveLength(1);
-    expect(f.requests[0]?.url).toBe("/v1/media/tts");
+    expect(f.requests[0]?.url).toBe("/media/tts");
     expect(f.requests[0]?.authorization).toBe("Bearer fixture-key");
     expect(f.requests[0]?.body).toEqual({
       text: "会话已完成",

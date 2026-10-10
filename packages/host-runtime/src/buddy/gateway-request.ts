@@ -17,9 +17,30 @@ export class GatewayHttpError extends Error {
     } catch {
       // HTML 错误页和非 JSON 响应只显示状态码，不把页面正文当作错误原因。
     }
+    let attempts = "";
+    try {
+      const payload = JSON.parse(body) as Record<string, unknown>;
+      const data = payload.data as { attempts?: unknown } | undefined;
+      if (Array.isArray(data?.attempts)) {
+        attempts = data.attempts
+          .slice(0, 16)
+          .map((attempt: unknown) => {
+            if (!attempt || typeof attempt !== "object") return "";
+            const row = attempt as Record<string, unknown>;
+            const fields = [row.provider, row.status, row.reason].filter(
+              (value): value is string => typeof value === "string",
+            );
+            return fields.map((value) => value.slice(0, 500)).join(" · ");
+          })
+          .filter(Boolean)
+          .join("\n");
+      }
+    } catch {
+      // 非 JSON 错误页不作为诊断正文展示。
+    }
     const id = requestId && /^[\w.:-]{1,128}$/u.test(requestId) ? requestId : null;
     super(
-      `HTTP ${statusCode ?? "unknown"}${reason ? `：${reason}` : ""}${id ? `（请求 ID：${id}）` : ""}`,
+      `HTTP ${statusCode ?? "unknown"}${reason ? `：${reason}` : ""}${id ? `（请求 ID：${id}）` : ""}${attempts ? `\n${attempts}` : ""}`,
     );
     this.name = "GatewayHttpError";
   }
@@ -55,7 +76,7 @@ export async function gatewayJsonRequest(
       },
       (res) => {
         const failed = res.statusCode !== 200;
-        const limit = failed ? Math.min(maxResponseBytes, 4096) : maxResponseBytes;
+        const limit = failed ? Math.min(maxResponseBytes, 32768) : maxResponseBytes;
         const requestId = res.headers["x-request-id"];
         const httpError = (body = "") =>
           new GatewayHttpError(

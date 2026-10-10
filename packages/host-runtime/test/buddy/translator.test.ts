@@ -172,7 +172,7 @@ describe("gateway translation", () => {
     [
       "oversized error",
       503,
-      JSON.stringify({ message: "x".repeat(5000) }),
+      JSON.stringify({ message: "x".repeat(33000) }),
       "翻译服务返回 HTTP 503",
     ],
     ["invalid JSON", 200, "not JSON", "翻译服务返回了无效的 JSON 响应"],
@@ -209,4 +209,24 @@ describe("gateway translation", () => {
     ).rejects.toThrow("翻译请求超时（15 秒），网关未及时返回结果");
     expect(timeout).toHaveBeenCalledWith(15_000);
   });
+});
+
+it("preserves gateway provider failure details", async () => {
+  const f = await fixture((_body, res) => {
+    res.writeHead(502);
+    res.end(
+      JSON.stringify({
+        message: "Translation providers failed",
+        data: {
+          attempts: [
+            { provider: "hymt", status: "failed", reason: "upstream timeout" },
+            { provider: "baidu", status: "cooldown" },
+          ],
+        },
+      }),
+    );
+  });
+  await expect(
+    f.translator.translate({ text: "Please translate this message.", targetLocale: "zh-CN" }),
+  ).rejects.toThrow("hymt · failed · upstream timeout\nbaidu · cooldown");
 });

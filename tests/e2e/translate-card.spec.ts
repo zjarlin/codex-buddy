@@ -178,10 +178,14 @@ test("translates English prose with Chinese labels and preserves inline referenc
 
 test("shows a specific error as text and retries only on click", async ({ page }, testInfo) => {
   const reason =
-    '翻译服务返回 HTTP 503：Provider unavailable <img src=x onerror="alert(1)">（请求 ID：fixture-123）';
+    '翻译服务返回 HTTP 503：Provider unavailable <img src=x onerror="alert(1)">（请求 ID：fixture-123）\n' +
+    "详细原因".repeat(180);
   await setMessage(page, `<p>${english}</p>`);
   await startFixture(page, [{ error: reason }]);
   await expect(page.locator('[data-state="error"]')).toBeVisible();
+  await expect(page.locator(".codexhost-translate-error-detail")).toBeHidden();
+  await page.getByText("查看失败原因", { exact: true }).click();
+  await expect(page.getByRole("status")).toBeVisible();
   await expect(page.getByRole("status")).toHaveText(reason);
   await expect(page.locator(".codexhost-translate-error-detail img")).toHaveCount(0);
   await page.waitForTimeout(1200);
@@ -189,6 +193,8 @@ test("shows a specific error as text and retries only on click", async ({ page }
     await page.evaluate(() => (window as unknown as TranslationFixtureWindow).requests),
   ).toHaveLength(1);
   await page.screenshot({ path: testInfo.outputPath("error-detail.png") });
+  await page.getByText("查看失败原因", { exact: true }).click();
+  await expect(page.locator(".codexhost-translate-error-detail")).toBeHidden();
   await page.getByRole("button", { name: "重试", exact: true }).click();
   await expect(page.locator('[data-state="completed"]')).toBeVisible();
   await expect(page.getByRole("status")).toHaveCount(0);
@@ -201,6 +207,8 @@ test("shows a specific error as text and retries only on click", async ({ page }
 test("preserves JSON-RPC error messages across the Host boundary", async ({ page }, testInfo) => {
   await setMessage(page, `<p>${english}</p>`);
   await startFixture(page, [{ rpcError: "翻译请求超时（15 秒），网关未及时返回结果" }]);
+  await page.getByText("查看失败原因", { exact: true }).click();
+  await expect(page.getByRole("status")).toBeVisible();
   await expect(page.getByRole("status")).toHaveText("翻译请求超时（15 秒），网关未及时返回结果");
   await page.screenshot({ path: testInfo.outputPath("rpc-error-detail.png") });
 });
@@ -208,6 +216,8 @@ test("preserves JSON-RPC error messages across the Host boundary", async ({ page
 test("explains when the service provides no reason", async ({ page }, testInfo) => {
   await setMessage(page, `<p>${english}</p>`);
   await startFixture(page, [{ error: "" }]);
+  await page.getByText("查看失败原因", { exact: true }).click();
+  await expect(page.getByRole("status")).toBeVisible();
   await expect(page.getByRole("status")).toHaveText("翻译服务未提供具体错误原因。");
   await page.screenshot({ path: testInfo.outputPath("unknown-error.png") });
 });

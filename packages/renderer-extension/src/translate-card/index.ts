@@ -156,13 +156,11 @@ export function installTranslateCards(options: Options) {
       const message =
         typeof error === "object" && error !== null && "message" in error ? error.message : error;
       const reason = typeof message === "string" ? message.trim() : "";
-      const detail = el(
-        "div",
-        "codexhost-translate-error-detail",
-        reason.slice(0, 500) || msgs.unknownError,
-      );
+      const detail = el("div", "codexhost-translate-error-detail", reason || msgs.unknownError);
       detail.setAttribute("role", "status");
-      card.append(detail);
+      const details = el("details", "codexhost-translate-error-details");
+      details.append(el("summary", "", msgs.failureDetails), detail);
+      card.append(details);
     }
   }
 

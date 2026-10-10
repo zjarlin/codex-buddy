@@ -730,6 +730,7 @@ describe("Renderer fixed Model request client", () => {
       "synthesizeSpeech",
       "threadOpenTarget",
       "translate",
+      "translateBatch",
       "unlinkGitRepository",
       "unstageGitPaths",
       "updateGitSubmodule",

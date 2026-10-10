@@ -120,19 +120,26 @@ export const buddyDecisionSchema = z.object({
   acceptedModel: z.string().nullable(),
   involvedModels: z.array(z.string()).default([]),
   judgment: z
-    .object({
-      // System One 决策来源：JEV 或本地 Laya，同一 wire protocol、不同上游平台。
-      source: z.enum(["system-one"]),
-      model: z.string(),
-      decisions: z.record(
-        z.string(),
-        z.object({
-          status: z.enum(["automatic", "review", "defer"]),
-          strength: z.number(),
-          basis: z.enum(["outcome-probability", "confidence-and-probability", "confidence"]),
-        }),
-      ),
-    })
+    .discriminatedUnion("source", [
+      z.object({
+        source: z.literal("system-one"),
+        model: z.string().min(1),
+        decisions: z.record(
+          z.string(),
+          z.object({
+            status: z.enum(["automatic", "review", "defer"]),
+            strength: z.number(),
+            basis: z.enum(["outcome-probability", "confidence-and-probability", "confidence"]),
+          }),
+        ),
+      }),
+      // 本地兜底不声称调用过决策模型，也不伪造逐题答案。
+      z.object({
+        source: z.literal("local-rules"),
+        model: z.null(),
+        decisions: z.object({}).strict(),
+      }),
+    ])
     .optional(),
   modelBypass: z
     .object({

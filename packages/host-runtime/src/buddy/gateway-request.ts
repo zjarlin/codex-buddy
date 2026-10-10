@@ -1,6 +1,30 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 
+export class GatewayHttpError extends Error {
+  constructor(statusCode: number | undefined, body: string, requestId?: string) {
+    let reason = "";
+    try {
+      const payload = JSON.parse(body) as Record<string, unknown>;
+      const detail = payload.error;
+      const message =
+        typeof detail === "object" && detail !== null
+          ? ((detail as Record<string, unknown>).message ?? payload.message)
+          : (payload.message ?? detail);
+      if (typeof message === "string") {
+        reason = message.replace(/\s+/gu, " ").trim().slice(0, 300);
+      }
+    } catch {
+      // HTML 错误页和非 JSON 响应只显示状态码，不把页面正文当作错误原因。
+    }
+    const id = requestId && /^[\w.:-]{1,128}$/u.test(requestId) ? requestId : null;
+    super(
+      `HTTP ${statusCode ?? "unknown"}${reason ? `：${reason}` : ""}${id ? `（请求 ID：${id}）` : ""}`,
+    );
+    this.name = "GatewayHttpError";
+  }
+}
+
 /**
  * 通过当前 Codex 网关连接发送 JSON 请求并读取 JSON 响应。
  * 供 Buddy 的翻译与语音合成共用：都不携带工具、不跟随重定向、不继承环境代理，
@@ -30,23 +54,32 @@ export async function gatewayJsonRequest(
         },
       },
       (res) => {
-        if (res.statusCode !== 200) {
-          res.resume();
-          reject(new Error(`HTTP ${res.statusCode}`));
-          return;
-        }
+        const failed = res.statusCode !== 200;
+        const limit = failed ? Math.min(maxResponseBytes, 4096) : maxResponseBytes;
+        const requestId = res.headers["x-request-id"];
+        const httpError = (body = "") =>
+          new GatewayHttpError(
+            res.statusCode,
+            body,
+            typeof requestId === "string" ? requestId : undefined,
+          );
         const chunks: Buffer[] = [];
         let len = 0;
         res.on("data", (c: Buffer) => {
           len += c.length;
-          if (len > maxResponseBytes) {
+          if (len > limit) {
             res.destroy();
-            reject(new Error("Too large"));
+            reject(failed ? httpError() : new Error("Too large"));
+            return;
           }
           chunks.push(c);
         });
-        res.on("error", () => reject(new Error("Read failed")));
+        res.on("error", () => reject(failed ? httpError() : new Error("Read failed")));
         res.on("end", () => {
+          if (failed) {
+            reject(httpError(Buffer.concat(chunks).toString()));
+            return;
+          }
           try {
             resolve(JSON.parse(Buffer.concat(chunks).toString()));
           } catch {

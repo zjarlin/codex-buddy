@@ -98,8 +98,12 @@ export function installTurnActionCards(options: { getContext(): Context | null }
     const state = document.createElement("span");
     state.className = "muted";
     const current = snapshot.sourceTurnId === snapshot.latestTurnId;
+    const judgmentState =
+      judgment?.state === "completed" && judgment.source === "none"
+        ? "无需判断"
+        : (states[judgment?.state ?? "unsupported"] ?? "");
     state.textContent = current
-      ? `${hasSystemOne ? "System One · " : ""}${states[judgment?.state ?? "unsupported"] ?? ""}`
+      ? `${hasSystemOne ? "System One · " : ""}${judgmentState}`
       : "历史推荐 · 只读";
     header.append(title, state);
     section.append(header);

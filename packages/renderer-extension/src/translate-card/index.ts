@@ -37,8 +37,9 @@ function needsTranslation(lang: "cjk" | "latin" | "other", locale: string): bool
 function extractText(node: HTMLElement): string {
   const content = node.querySelector('[data-markdown-text-style="assistant-message"]') ?? node;
   const clone = content.cloneNode(true) as HTMLElement;
+  // 原生代码块使用 div + code，必须连同语言标题和复制按钮一起排除。
   for (const excluded of clone.querySelectorAll(
-    "pre, .sr-only, [data-codexhost-translate], [data-codexhost-turn-actions]",
+    'pre, [data-markdown-copy="code-block"], .sr-only, [data-codexhost-translate], [data-codexhost-turn-actions]',
   )) {
     excluded.remove();
   }
@@ -139,7 +140,7 @@ export function installTranslateCards(options: Options) {
       });
       card.append(toggle);
       cards.set(turnId, { node: card, signature: JSON.stringify([text, locale]) });
-    } catch {
+    } catch (error) {
       if (disposed || ac.signal.aborted) return;
       card.dataset.state = "error";
       card.innerHTML = "";
@@ -152,6 +153,16 @@ export function installTranslateCards(options: Options) {
       retry.addEventListener("click", () => void doTranslate(turnId, anchor, text, locale, client));
       eh.append(retry);
       card.append(eh);
+      const message =
+        typeof error === "object" && error !== null && "message" in error ? error.message : error;
+      const reason = typeof message === "string" ? message.trim() : "";
+      const detail = el(
+        "div",
+        "codexhost-translate-error-detail",
+        reason.slice(0, 500) || msgs.unknownError,
+      );
+      detail.setAttribute("role", "status");
+      card.append(detail);
     }
   }
 
@@ -170,8 +181,13 @@ export function installTranslateCards(options: Options) {
     }
     for (const [id, node] of messages) {
       const text = extractText(node);
-      if (!text || text.length < 20) continue;
-      if (!needsTranslation(detectLanguage(text), locale)) continue;
+      if (text.length < 20 || !needsTranslation(detectLanguage(text), locale)) {
+        const state = cards.get(id);
+        state?.abortController?.abort();
+        state?.node.remove();
+        cards.delete(id);
+        continue;
+      }
       if (cards.get(id)?.signature === JSON.stringify([text, locale])) continue;
       void doTranslate(id, node, text, locale, ctx.client);
     }

@@ -121,6 +121,53 @@ for (const width of [390, 1200]) {
   }
 }
 
+for (const state of ["router-off", "judge-off", "no-key", "ready"] as const) {
+  test(`shows whether System One can actually run: ${state}`, async ({ page }) => {
+    await page.setContent("<body></body>");
+    await page.addScriptTag({ content: bundle });
+    await page.evaluate((value) => {
+      const snapshot = Reflect.get(globalThis, "fixture").snapshot;
+      snapshot.settings.enabled = value !== "router-off";
+      snapshot.settings.jev = value !== "judge-off";
+      snapshot.jevKeyConfigured = value !== "no-key";
+    }, state);
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const text = {
+      "router-off": "自动路由已关闭，发送前不会调用 System One。",
+      "judge-off": "System One 判断已关闭，使用本地规则。",
+      "no-key": "System One 密钥未配置，使用本地规则。",
+      ready: "发送前由 System One 判断意图、难度与动作。",
+    };
+    await expect(page.locator(".settings-routing-judgment")).toHaveText(text[state]);
+  });
+}
+
+test("shows the newest fallback source instead of an older successful judgment", async ({
+  page,
+}) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "fixture").snapshot.decisions = [
+      {
+        updatedAt: "2026-10-08T00:00:00Z",
+        judgment: { source: "system-one", model: "laya" },
+        reason: "旧判断成功",
+      },
+      {
+        updatedAt: "2026-10-09T00:00:00Z",
+        judgment: { source: "local-rules", model: null, decisions: {} },
+        reason: "System One 调用失败，使用本地规则",
+      },
+    ];
+  });
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.locator(".settings-routing-decision")).toContainText("最近一次判断：本地规则");
+  await expect(page.locator(".settings-routing-decision")).toContainText("System One 调用失败");
+  await expect(page.locator(".settings-routing-decision")).not.toContainText("旧判断成功");
+  await page.screenshot({ path: "test-results/buddy-routing-fallback.png" });
+});
+
 test("saves and clears secrets through the current Host without displaying the stored key", async ({
   page,
 }) => {

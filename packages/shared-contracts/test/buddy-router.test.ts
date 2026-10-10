@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buddySettingsSchema, buddySnapshotSchema } from "../src/buddy-router.js";
+import {
+  buddyDecisionSchema,
+  buddySettingsSchema,
+  buddySnapshotSchema,
+} from "../src/buddy-router.js";
 
 describe("Buddy snapshot settings compatibility", () => {
   it("reads old Host settings without forwarding retired planning fields", () => {
@@ -59,5 +63,43 @@ describe("Buddy snapshot settings compatibility", () => {
         decisions: [],
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("Buddy judgment source", () => {
+  const decision = {
+    threadId: "work",
+    turnId: "turn",
+    phase: "completed",
+    role: "executor",
+    difficulty: "standard",
+    score: 45,
+    reason: "reason",
+    executorModel: "worker",
+    acceptedModel: "worker",
+    command: null,
+    exitCode: null,
+    updatedAt: "2026-10-09T00:00:00Z",
+  };
+
+  it("reads legacy decisions and preserves the actual source for new decisions", () => {
+    expect(buddyDecisionSchema.parse(decision).judgment).toBeUndefined();
+    for (const judgment of [
+      { source: "system-one", model: "laya", decisions: {} },
+      { source: "local-rules", model: null, decisions: {} },
+    ]) {
+      expect(buddyDecisionSchema.parse({ ...decision, judgment }).judgment).toEqual(judgment);
+    }
+  });
+
+  it("rejects missing System One models and invented local model answers", () => {
+    for (const judgment of [
+      { source: "system-one", model: null, decisions: {} },
+      { source: "system-one", model: "", decisions: {} },
+      { source: "local-rules", model: "laya", decisions: {} },
+      { source: "local-rules", model: null, decisions: { route: {} } },
+    ]) {
+      expect(buddyDecisionSchema.safeParse({ ...decision, judgment }).success).toBe(false);
+    }
   });
 });

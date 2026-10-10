@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { dispatchCandidates, invocation, specialist } from "../../src/buddy/classification.js";
 
 describe("System One CLI candidates", () => {
-  it("lists discovered entries followed by built-in read-only commands", () => {
+  it("keeps built-in read-only commands before discovered entries", () => {
     const candidates = dispatchCandidates(
       {
         root: "/tmp/project",
@@ -14,7 +14,7 @@ describe("System One CLI candidates", () => {
       },
       "/tmp/project",
     );
-    expect(candidates.map((item) => item.command)).toEqual(["npm test", "pwd", "ls -la"]);
+    expect(candidates.map((item) => item.command)).toEqual(["pwd", "ls -la", "npm test"]);
   });
 
   it("deduplicates a discovered entry that repeats a built-in command", () => {
@@ -28,6 +28,7 @@ describe("System One CLI candidates", () => {
       "/tmp/project",
     );
     expect(candidates.filter((item) => item.command === "pwd")).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ command: "pwd", source: "builtin" });
   });
 
   it("omits built-ins when the working directory is unknown", () => {

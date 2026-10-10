@@ -24,9 +24,9 @@ const client = {
    const result = { threadId, latestTurnId: latest, sourceTurnId: sourceTurnId || latest,
      busy: Boolean(config.busy), private: privateMode, actions: actions.map(a => ({ ...a, enabled: a.enabled && !config.busy })), invocations: receipt ? [receipt] : [],
      recommendation: { session_id: threadId, run_id: sourceTurnId || latest, context_id: 'a'.repeat(64),
-       state: config.state || 'completed', source: 'laya', model: 'laya', updated_at: 1,
+       state: config.state || 'completed', source: config.source || 'laya', model: config.source === 'none' ? undefined : 'laya', updated_at: 1,
        features: { git_changes: 4, git_conflicts: config.conflict ? 3 : 0, git_ahead: 1, git_behind: 0 },
-       actions: [{ action_id: 'git.commit', version: '1', confidence: .92, reason: '可提交当前改动' }] } };
+       actions: config.source === 'none' ? [] : [{ action_id: 'git.commit', version: '1', confidence: .92, reason: '可提交当前改动' }] } };
    if (config.late && hostId === 'ssh:one') return new Promise(resolve => { resolveLate = () => resolve(result); });
    if (hostId !== 'ssh:one') return { ...result, private: true };
    return result;
@@ -117,6 +117,17 @@ test("hides historical buttons and preserves recommendation summaries and hides 
   await page.getByRole("button", { name: "隐私", exact: true }).click();
   await expect(page.locator("[data-codexhost-turn-actions]")).toHaveCount(0);
 });
+test("does not claim a completed System One judgment when no candidates were judged", async ({
+  page,
+}) => {
+  await setup(page, { source: "none", state: "completed" });
+  await expect(current(page).getByText("无需判断", { exact: true })).toBeVisible();
+  await expect(current(page).getByText("判断完成", { exact: true })).toHaveCount(0);
+  await expect(current(page).getByText("System One", { exact: true })).toHaveCount(0);
+  await expect(current(page).getByRole("button", { name: "提交代码", exact: true })).toBeEnabled();
+  await page.screenshot({ path: "test-results/turn-actions-no-judgment.png" });
+});
+
 for (const state of ["failed", "timed_out"]) {
   test(`keeps Auto and registered actions visible when judgment is ${state}`, async ({ page }) => {
     await setup(page, { state });

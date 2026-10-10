@@ -36,13 +36,6 @@ import { GitPushBypassScores, gitPushSkills, gitWorkflowGuidance } from "./git-p
 import { createJevClient, type SystemOneCommand } from "./judgment.js";
 import type { TypeSafeClient } from "@codexhost/jev";
 
-const roleInstructions = {
-  git: "你是 Git 智能体。先确认仓库、工作区、暂存区和冲突状态，只做用户已授权的 Git 操作。保留他人修改；推送、提交、合并以真实结果为准。遇到业务语义冲突或未定设计，停止猜测并向用户说明证据和阻塞问题。",
-  io: "你是 IO 操作智能体。负责文件查看、查找、移动，以及项目 CLI 启动、构建、测试和日志检查。严格按任务范围执行，保留原有权限和审批。启动进程不代表服务或页面已就绪；返回真实退出码和验证证据。",
-  executor:
-    "依据用户目标和约束自主分析、实施并验证。普通问答直接回答，简单任务直接处理。保留原生权限和审批，不盲目重复具有副作用的操作；缺少阻塞信息时向用户澄清。",
-};
-
 const quote = (text: string): string => `'${text.replaceAll("'", "'\"'\"'")}'`;
 // 离线兜底的执行角色推测保留在此导出，供测试与高级用法使用；
 // 正常路由由 classification.ts 中的 System One 判定负责。
@@ -788,6 +781,7 @@ export class BuddyRouter {
         }
       : null;
     if (project) {
+      let fallbackReason = settings.jev ? "System One 未配置" : "System One 已关闭";
       if (settings.jev && this.#jev) {
         try {
           selected = await classifyWithSystemOne(classification, {
@@ -801,6 +795,8 @@ export class BuddyRouter {
             signal,
           });
         } catch (error) {
+          signal.throwIfAborted();
+          fallbackReason = "System One 调用失败";
           this.options.diagnose(error);
         }
       }
@@ -810,6 +806,7 @@ export class BuddyRouter {
         cwd,
         project,
         threadId,
+        fallbackReason,
       });
     }
     if (!selected) throw new Error("未确认模型路由。");
@@ -906,7 +903,6 @@ export class BuddyRouter {
     const assessment = selected.assessment;
     const conversational = selected.conversational;
     const modelBypass = selected.modelBypass;
-    const role = selected.role;
     const nativePlanning = object(params.collaborationMode).mode === "plan";
     const inventory = await discoverModels({
       home: this.#home,
@@ -949,12 +945,9 @@ export class BuddyRouter {
     const originalSettings = object(originalMode.settings);
     const guidance = [
       originalSettings.developer_instructions,
-      `本回合请求的模型 ID 是 ${JSON.stringify(model)}。被问及模型身份时区分请求的模型 ID 与无法独立验证的网关实际后端，不根据旧对话中的模型名猜测。`,
-      answerModel
+      questionBypass
         ? "本回合是纯问答旁路。依据当前对话与已有知识直接回答，不调用工具、读取工作区、运行命令、修改文件或委派子代理。缺少事实时明确说明，不声称完成实际操作。后续执行请求由下一回合重新分类。"
         : "",
-      nativePlanning || conversational ? "" : roleInstructions.executor,
-      nativePlanning || conversational || role === "executor" ? "" : roleInstructions[role],
       modelBypass ? gitWorkflowGuidance(selected.gitAction, selected.needsCommitMessage) : "",
       bypassSkills?.warning
         ? `技能上下文状态：${bypassSkills.warning}。只使用实际可用的技能，不宣称缺失技能已加载。`

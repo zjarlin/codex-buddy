@@ -6,7 +6,7 @@ import {
   type BuddyTranslateRequest,
   type BuddyTranslateResult,
 } from "@codexhost/shared-contracts";
-import { gatewayJsonRequest } from "./gateway-request.js";
+import { GatewayHttpError, gatewayJsonRequest } from "./gateway-request.js";
 
 // locale -> ISO 639-1（与 Sub2API langmap.go 对齐）
 const LOCALE_TO_ISO: Record<string, string> = {
@@ -117,8 +117,10 @@ export class BuddyTranslator {
     }
 
     const t0 = Date.now();
-    const resp = readTranslateResponse(
-      await gatewayJsonRequest(
+    const signal = AbortSignal.timeout(15_000);
+    let payload: unknown;
+    try {
+      payload = await gatewayJsonRequest(
         cfg.url,
         cfg.headers,
         {
@@ -127,10 +129,25 @@ export class BuddyTranslator {
           target,
           format: "text",
         },
-        AbortSignal.timeout(15_000),
+        signal,
         1_048_576,
-      ),
-    );
+      );
+    } catch (error) {
+      if (signal.aborted) {
+        throw new Error("翻译请求超时（15 秒），网关未及时返回结果");
+      }
+      if (error instanceof GatewayHttpError) {
+        throw new Error(`翻译服务返回 ${error.message}`);
+      }
+      const reason = error instanceof Error ? error.message : "未知错误";
+      const messages: Record<string, string> = {
+        "Read failed": "读取翻译服务响应失败",
+        "Invalid JSON": "翻译服务返回了无效的 JSON 响应",
+        "Too large": "翻译服务响应超过大小限制",
+      };
+      throw new Error(messages[reason] ?? `翻译请求失败：${reason.slice(0, 300)}`);
+    }
+    const resp = readTranslateResponse(payload);
 
     const translated = resp?.translations?.[0]?.text;
     if (!translated) throw new Error("翻译服务未返回结果");

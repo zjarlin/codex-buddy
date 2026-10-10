@@ -46,6 +46,13 @@ export function injectTranslateStyle(): HTMLStyleElement {
   color: var(--text-error, #d32f2f);
 }
 
+.codexhost-translate-error-detail {
+  color: var(--text-error, #d32f2f);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .codexhost-translate-retry {
   margin-left: 8px;
   padding: 2px 8px;

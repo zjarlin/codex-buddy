@@ -267,6 +267,31 @@ test("formats the final message as structured markdown instead of one collapsed 
   await expect(summary).not.toContainText("结论 已完成");
 });
 
+test("sizes the completion card for long final messages", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      "## 结论\n\n" +
+        Array.from({ length: 30 }, (_, i) => `${i + 1}. 第 ${i + 1} 条结果`).join("\n"),
+    ),
+  );
+  const panel = page.locator("[data-codexhost-pending-confirmations-panel]");
+  await expect(panel).toBeVisible();
+  // 卡片比旧的 560px 上限更宽，且正文与操作区同时可见，不再把长结果挤成一小块。
+  const box = await panel.boundingBox();
+  expect(box?.width ?? 0).toBeGreaterThanOrEqual(800);
+  await expect(page.locator(".codexhost-pending-summary")).toBeVisible();
+  await expect(page.getByPlaceholder("输入续发内容…")).toBeVisible();
+  await expect(page.getByRole("button", { name: "查看结果" })).toBeVisible();
+});
+
 test("view action opens the source conversation and keeps the modal non-modal", async ({
   page,
 }) => {

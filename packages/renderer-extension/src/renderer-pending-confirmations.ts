@@ -264,7 +264,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   style.textContent = `
 [${MODAL}]{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:24px;background:color-mix(in srgb, CanvasText 14%, transparent);pointer-events:none;font:13px/1.5 system-ui,sans-serif}
 [${MODAL}][hidden]{display:none}
-[${PANEL}]{display:flex;flex-direction:column;box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-height:min(620px,calc(100vh - 48px));overflow:hidden;border:1px solid color-mix(in srgb, CanvasText 18%, transparent);border-radius:8px;background:Canvas;color:CanvasText;box-shadow:0 18px 60px rgb(0 0 0 / 24%);pointer-events:auto}
+[${PANEL}]{display:flex;flex-direction:column;box-sizing:border-box;width:min(880px,calc(100vw - 48px));max-height:min(820px,calc(100vh - 64px));overflow:hidden;border:1px solid color-mix(in srgb, CanvasText 18%, transparent);border-radius:10px;background:Canvas;color:CanvasText;box-shadow:0 18px 60px rgb(0 0 0 / 24%);pointer-events:auto}
 [${MODAL}] header{display:flex;align-items:center;gap:10px;padding:14px 16px 10px;border-bottom:1px solid color-mix(in srgb, CanvasText 12%, transparent)}
 [${MODAL}] header h2{min-width:0;margin:0;font-size:15px;line-height:22px}
 [${MODAL}] header > div{min-width:0;flex:1}
@@ -273,10 +273,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-close,[${MODAL}] .codexhost-pending-replay{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:CanvasText;cursor:pointer}
 [${MODAL}] .codexhost-pending-close:hover,[${MODAL}] .codexhost-pending-replay:hover{background:color-mix(in srgb,CanvasText 10%,transparent)}
 [${MODAL}] .codexhost-pending-replay:disabled{opacity:.55;cursor:wait}
-[${MODAL}] .codexhost-pending-body{min-height:0;overflow:auto;padding:16px}
+[${MODAL}] .codexhost-pending-body{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:18px 20px}
 [${MODAL}] .codexhost-pending-kind{display:inline-flex;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,CanvasText 9%,transparent);font-size:12px}
 [${MODAL}] .codexhost-pending-body h3{margin:10px 0 6px;font-size:17px;line-height:24px;overflow-wrap:anywhere}
-[${MODAL}] .codexhost-pending-summary{max-height:240px;margin:0;overflow:auto;overflow-wrap:anywhere;color:color-mix(in srgb,CanvasText 84%,transparent);font-size:13px;line-height:20px}
+[${MODAL}] .codexhost-pending-summary{flex:1 1 auto;min-height:0;margin:0;overflow:auto;overflow-wrap:anywhere;color:color-mix(in srgb,CanvasText 84%,transparent);font-size:13px;line-height:20px}
 [${MODAL}] .codexhost-pending-summary>:first-child{margin-top:0}
 [${MODAL}] .codexhost-pending-summary>:last-child{margin-bottom:0}
 [${MODAL}] .codexhost-pending-summary p,[${MODAL}] .codexhost-pending-summary ul,[${MODAL}] .codexhost-pending-summary ol,[${MODAL}] .codexhost-pending-summary pre,[${MODAL}] .codexhost-pending-summary blockquote,[${MODAL}] .codexhost-pending-summary table{margin:6px 0}
@@ -301,7 +301,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-summary hr{border:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);margin:8px 0}
 [${MODAL}] .codexhost-pending-project{font-size:12px;color:GrayText;overflow-wrap:anywhere;margin-bottom:6px}
 [${MODAL}] .codexhost-pending-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
-[${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;margin-top:12px}
+[${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;flex:none;margin-top:12px}
 [${MODAL}] .codexhost-pending-composer{flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-model{flex:0 1 180px;min-width:130px;max-width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit}
 [${MODAL}] .codexhost-pending-input{flex:1;min-height:36px;max-height:120px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit;resize:vertical}
@@ -315,7 +315,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-actions button:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-notice{min-height:18px;margin:-6px 16px 0;color:#c2410c;font-size:12px;overflow-wrap:anywhere}
 [${MODAL}] .codexhost-pending-notice:empty{visibility:hidden}
-@media (max-width:520px){[${MODAL}]{padding:8px}[${PANEL}]{width:calc(100vw - 16px);max-height:calc(100vh - 16px)}[${MODAL}] .codexhost-pending-actions button{flex:1 1 auto}}
+@media (max-width:520px){[${MODAL}]{padding:8px}[${PANEL}]{width:calc(100vw - 16px);max-height:calc(100vh - 16px)}[${MODAL}] .codexhost-pending-body{padding:14px}[${MODAL}] .codexhost-pending-actions button{flex:1 1 auto}}
 `;
   title.textContent = "";
   queue.type = "button";

@@ -8,7 +8,10 @@ const style = `
 [data-buddy-recovery]{font:12px/1.5 system-ui;color:inherit;margin:6px 0;max-width:100%}
 [data-buddy-recovery] .buddy-interrupted{display:flex;flex-direction:column;gap:5px;margin:5px 0}
 [data-buddy-recovery] .buddy-interrupted-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-[data-buddy-recovery] .buddy-interrupted-toolbar b{flex:1 0 auto;white-space:nowrap;font-size:11px;font-weight:500}
+[data-buddy-recovery] .buddy-interrupted-heading{display:inline-flex;align-items:center;justify-content:flex-start;gap:4px;flex:1 0 auto;min-width:0;padding:0;border:0;border-radius:0;background:transparent;font:inherit;text-align:left;white-space:nowrap;cursor:pointer}
+[data-buddy-recovery] .buddy-interrupted-heading:hover{background:transparent;opacity:.8}
+[data-buddy-recovery] .buddy-interrupted-heading b{font-size:11px;font-weight:500}
+[data-buddy-recovery] .buddy-interrupted-count{min-width:16px;padding:0 5px;border-radius:999px;font-size:10px;text-align:center;background:color-mix(in srgb,currentColor 14%,transparent)}
 [data-buddy-recovery] .buddy-interrupted-model-resume{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto;max-width:100%}
 [data-buddy-recovery] :is(select,input){min-width:0;max-width:220px;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:6px;padding:3px 6px;font:inherit;height:26px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
 [data-buddy-recovery] button{display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:6px;padding:4px 8px;cursor:pointer}

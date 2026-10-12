@@ -1,4 +1,6 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
+import ChevronDown from "lucide/dist/esm/icons/chevron-down.mjs";
+import ChevronRight from "lucide/dist/esm/icons/chevron-right.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
@@ -14,6 +16,8 @@ const messages = {
     empty: "暂无最近中断会话。",
     loading: "正在读取最近中断会话…",
     refresh: "刷新中断会话",
+    collapse: "收起最近中断会话",
+    expand: "展开最近中断会话",
     resume: "恢复",
     resuming: "正在恢复…",
     resumeAll: "全部继续",
@@ -34,6 +38,8 @@ const messages = {
     empty: "No recently interrupted conversations.",
     loading: "Loading recently interrupted conversations…",
     refresh: "Refresh interrupted conversations",
+    collapse: "Collapse recent interrupted conversations",
+    expand: "Expand recent interrupted conversations",
     resume: "Resume",
     resuming: "Resuming…",
     resumeAll: "Resume all",
@@ -82,6 +88,9 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   let disposed = false;
   let epoch = 0;
   let fingerprint = "";
+  // 标题行可折叠：默认展开，收起后隐藏模型 ID 行和列表。
+  let collapsed = false;
+  let focusToggle = false;
   let selectedModelId = "";
   let customModelId = "";
   const favoritesChanged = (): void => render();
@@ -193,17 +202,43 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       favoriteIds,
       [...state.pending],
       [...state.failures],
+      collapsed,
     ]);
     if (fingerprint === signature) return;
     fingerprint = signature;
     const wrapper = document.createElement("div");
     wrapper.className = "buddy-interrupted";
-    const heading = document.createElement("b");
-    heading.className = "buddy-interrupted-heading";
-    heading.textContent = m.heading;
     const toolbar = document.createElement("div");
     toolbar.className = "buddy-interrupted-toolbar";
-    toolbar.append(heading);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.dataset.buddyInterruptedToggle = "";
+    toggle.className = "buddy-interrupted-heading";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.title = collapsed ? m.expand : m.collapse;
+    toggle.setAttribute("aria-label", collapsed ? m.expand : m.collapse);
+    toggle.append(
+      createElement(collapsed ? ChevronRight : ChevronDown, {
+        width: 14,
+        height: 14,
+        "aria-hidden": "true",
+      }),
+    );
+    const heading = document.createElement("b");
+    heading.textContent = m.heading;
+    toggle.append(heading);
+    if (collapsed && state.threads.length > 0) {
+      const count = document.createElement("span");
+      count.className = "buddy-interrupted-count";
+      count.textContent = String(state.threads.length);
+      toggle.append(count);
+    }
+    toggle.addEventListener("click", () => {
+      collapsed = !collapsed;
+      focusToggle = true;
+      render();
+    });
+    toolbar.append(toggle);
     wrapper.append(toolbar);
     const note = (text: string, failure = false, parent: HTMLElement = wrapper) => {
       const element = document.createElement("div");
@@ -212,12 +247,24 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       element.textContent = text;
       parent.append(element);
     };
+    // 统一提交渲染结果，用户点击标题行后把焦点交回新的折叠按钮。
+    const finish = () => {
+      root.replaceChildren(wrapper);
+      if (focusToggle) {
+        focusToggle = false;
+        toggle.focus();
+      }
+    };
     if (state.unavailable || !state.client?.buddyInterrupted || !state.client.buddyContinue) {
       note(state.client ? m.unavailable : m.waiting);
       if (state.unavailable) note(m.unavailableHint);
-      root.replaceChildren(wrapper);
+      finish();
       return;
     }
+    if (state.loading) note(m.loading);
+    if (state.error) note(state.error, true);
+    if (state.unreadable > 0) note(`${state.unreadable} ${m.unreadable}`);
+    if (!collapsed && !state.loading && state.threads.length === 0 && !state.error) note(m.empty);
     const reload = document.createElement("button");
     reload.type = "button";
     reload.title = m.refresh;
@@ -237,6 +284,12 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     all.addEventListener("click", () => {
       void resumeAll();
     });
+    toolbar.append(reload, all);
+    // 收起后只保留标题行、刷新、批量入口和已知提示；模型 ID 行和列表留给展开状态。
+    if (collapsed) {
+      finish();
+      return;
+    }
     const modelResume = document.createElement("div");
     modelResume.className = "buddy-interrupted-model-resume";
     const modelSelect = document.createElement("select");
@@ -316,11 +369,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       void resumeAll(value);
     });
     modelResume.append(modelSelect, modelInput, applyModel);
-    toolbar.append(reload, all, modelResume);
-    if (state.loading) note(m.loading);
-    if (state.error) note(state.error, true);
-    if (state.unreadable > 0) note(`${state.unreadable} ${m.unreadable}`);
-    if (!state.loading && state.threads.length === 0 && !state.error) note(m.empty);
+    toolbar.append(modelResume);
     const list = document.createElement("div");
     list.className = "buddy-interrupted-list";
     for (const thread of state.threads) {
@@ -351,7 +400,7 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       list.append(item);
     }
     wrapper.append(list);
-    root.replaceChildren(wrapper);
+    finish();
   }
 
   return {

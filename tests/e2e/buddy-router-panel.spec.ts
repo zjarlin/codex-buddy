@@ -233,3 +233,28 @@ test("recovery stays independent of unavailable routing and does not poll in the
   await expect(resume).toHaveCount(0);
   await page.screenshot({ path: "test-results/buddy-recovery-independent.png" });
 });
+
+test("interrupted recovery folds from its heading and keeps the resume-all entry", async ({
+  page,
+}) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: bundle });
+  const recovery = page.locator("[data-buddy-recovery]");
+  const toggle = recovery.locator("[data-buddy-interrupted-toggle]");
+  const resumeAll = recovery.getByRole("button", { name: /全部继续/ });
+  const resume = recovery.getByRole("button", { name: "恢复", exact: true });
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(resume).toBeVisible();
+  await expect(recovery.locator(".buddy-interrupted-model-resume")).toBeVisible();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(resume).toHaveCount(0);
+  await expect(recovery.locator(".buddy-interrupted-model-resume")).toHaveCount(0);
+  await expect(resumeAll).toBeVisible();
+  await expect(recovery.locator(".buddy-interrupted-count")).toHaveText("1");
+  await page.screenshot({ path: "test-results/buddy-recovery-collapsed.png" });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(resume).toBeVisible();
+  await expect(recovery.locator(".buddy-interrupted-model-resume")).toBeVisible();
+});

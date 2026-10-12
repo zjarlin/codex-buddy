@@ -18,6 +18,11 @@ const zh = {
   duplicate: "文件夹名称不能重复",
   empty: "还没有文件夹，可先添加一个。",
   selected: "当前",
+  running: "会话正在执行",
+  unread: "有新回复，尚未阅读",
+  recoverFailed: "会话执行失败，点击打开后恢复",
+  recoverCancelled: "会话已取消，点击打开后恢复",
+  recoverInterrupted: "会话已中断，点击打开后恢复",
 };
 const en: typeof zh = {
   title: "Conversation folders",
@@ -39,6 +44,11 @@ const en: typeof zh = {
   duplicate: "Folder names must be unique",
   empty: "No folders yet. Add one to get started.",
   selected: "Current",
+  running: "Conversation is running",
+  unread: "New unread reply",
+  recoverFailed: "Conversation failed. Open it to resume",
+  recoverCancelled: "Conversation cancelled. Open it to resume",
+  recoverInterrupted: "Conversation interrupted. Open it to resume",
 };
 
 export function threadFolderMessages(locale: string): typeof zh {

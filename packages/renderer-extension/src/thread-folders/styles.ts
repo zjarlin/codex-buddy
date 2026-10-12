@@ -5,6 +5,17 @@ export const threadFoldersStyle = `
 [data-codexhost-thread-folders] button{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:3px 6px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
 [data-codexhost-thread-folders] button:hover,[data-codexhost-thread-folders] [aria-selected=true]{background:color-mix(in srgb,currentColor 10%,transparent)}
 [data-codexhost-thread-folders] button:focus-visible{outline:2px solid #508df2;outline-offset:1px}
+/* 文件夹内的会话入口沿用原生状态语义：标题左对齐，状态字形固定在最右。 */
+[data-codexhost-thread-folders] button[role=treeitem]{gap:6px}
+[data-codexhost-folder-thread-title]{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis}
+[data-codexhost-thread-folders] button[role=treeitem]>[aria-hidden]:last-child{display:inline-flex;align-items:center;justify-content:center;flex:none;width:14px;height:14px;color:var(--color-token-text-secondary,currentColor)}
+[data-codexhost-folder-thread-status=running]>[aria-hidden]:last-child{animation:codexhost-folder-spin 1s linear infinite}
+[data-codexhost-folder-thread-status=failed]>[aria-hidden]:last-child{color:#c73b31}
+[data-codexhost-folder-thread-status=cancelled]>[aria-hidden]:last-child{color:#3569bd}
+[data-codexhost-folder-thread-status=interrupted]>[aria-hidden]:last-child{color:#b66a00}
+[data-codexhost-folder-thread-status=unread]>[aria-hidden]:last-child>span{width:8px;height:8px;border-radius:50%;background:var(--color-background-info-solid,#3b82f6)}
+@keyframes codexhost-folder-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){[data-codexhost-folder-thread-status=running]>[aria-hidden]:last-child{animation:none}}
 [data-codexhost-folder-context-menu]{position:fixed;z-index:2147483647;min-width:180px;padding:4px;border:1px solid #8884;border-radius:8px;background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:var(--color-token-text-primary,light-dark(#202020,#eee));box-shadow:0 8px 30px #0004}
 [data-codexhost-folder-context-menu] button{display:block;width:100%;padding:7px 10px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;font:13px system-ui;cursor:pointer}
 [data-codexhost-folder-context-menu] button:hover,[data-codexhost-folder-context-menu] button:focus{background:color-mix(in srgb,currentColor 12%,transparent)}

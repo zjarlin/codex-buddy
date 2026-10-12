@@ -1,5 +1,7 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Folder from "lucide/dist/esm/icons/folder.mjs";
+import LoaderCircle from "lucide/dist/esm/icons/loader-circle.mjs";
+import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { ThreadFoldersConfig, ThreadFoldersState } from "@codexhost/shared-contracts";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
@@ -20,11 +22,15 @@ import {
   SIDEBAR_THREAD_ROW_SELECTOR,
   threadIdFromSidebarRowElement,
 } from "../renderer-sidebar-agent-icons.js";
+import { sidebarThreadNativeStatus } from "../renderer-sidebar-thread-status.js";
 
 const BAR_ATTRIBUTE = "data-codexhost-thread-folders";
 const MOVE_ATTRIBUTE = "data-codexhost-thread-folder-move";
 const HIDDEN_ATTRIBUTE = "data-codexhost-thread-folder-hidden";
 const CUSTOM_MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
+const STATUS_ATTRIBUTE = "data-codexhost-folder-thread-status";
+const TITLE_ATTRIBUTE = "data-codexhost-folder-thread-title";
+const RECOVERY_ATTRIBUTE = "data-buddy-sidebar-state";
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id][data-sidebar-project-kind]";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
@@ -467,11 +473,19 @@ export function installThreadFolders(options: {
       project.label,
       state.folders,
       state.assignments,
-      rows.map((row) => [
-        nativeThreadId(row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local", row),
-        row.textContent,
-        row.getAttribute("data-app-action-sidebar-thread-active"),
-      ]),
+      rows.map((row) => {
+        // 状态签名只进签名计算：running/unread 来自行 Fiber，恢复态来自 Buddy
+        // 标记；任一变化都要重建投影，且每行只读一次 Fiber。
+        const native = sidebarThreadNativeStatus(row);
+        return [
+          nativeThreadId(row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local", row),
+          row.textContent,
+          row.getAttribute("data-app-action-sidebar-thread-active"),
+          native.running,
+          native.unread,
+          row.getAttribute(RECOVERY_ATTRIBUTE),
+        ];
+      }),
       [...collapsed],
       failure ? String(failure) : null,
     ]);
@@ -526,13 +540,51 @@ export function installThreadFolders(options: {
                 candidate,
               ) === id,
           );
-        const item = button(title, () => findRow()?.click());
+        const item = button("", () => findRow()?.click());
         item.setAttribute("role", "treeitem");
         item.setAttribute("data-codexhost-folder-thread", id);
         item.setAttribute(
           "aria-selected",
           String(row.getAttribute("data-app-action-sidebar-thread-active") === "true"),
         );
+        // 文件夹内的会话入口与原生行同样需要状态：执行中转圈、失败/中断可恢复、
+        // 未读蓝点。状态只在投影时从原生行读取，不复制原生节点。
+        const native = sidebarThreadNativeStatus(row);
+        const recovery = row.getAttribute(RECOVERY_ATTRIBUTE);
+        const status = native.running
+          ? "running"
+          : recovery === "failed" || recovery === "cancelled" || recovery === "interrupted"
+            ? recovery
+            : native.unread
+              ? "unread"
+              : null;
+        if (status) item.setAttribute(STATUS_ATTRIBUTE, status);
+        const label = document.createElement("span");
+        label.setAttribute(TITLE_ATTRIBUTE, "");
+        label.textContent = title;
+        item.append(label);
+        if (status) {
+          // 状态文案复用原生语义；恢复动作本身仍在原生行上执行。
+          const statusLabel =
+            status === "running"
+              ? m.running
+              : status === "unread"
+                ? m.unread
+                : status === "failed"
+                  ? m.recoverFailed
+                  : status === "cancelled"
+                    ? m.recoverCancelled
+                    : m.recoverInterrupted;
+          item.title = `${title} · ${statusLabel}`;
+          item.setAttribute("aria-label", item.title);
+          const glyph = document.createElement("span");
+          glyph.setAttribute("aria-hidden", "true");
+          if (status === "running")
+            glyph.append(createElement(LoaderCircle, { width: 13, height: 13 }));
+          else if (status === "unread") glyph.append(document.createElement("span"));
+          else glyph.append(createElement(RefreshCw, { width: 13, height: 13 }));
+          item.append(glyph);
+        }
         item.addEventListener("contextmenu", (event) => showContextMenu(event, project, findRow()));
         children.append(item);
       }
@@ -668,6 +720,7 @@ export function installThreadFolders(options: {
       "data-app-action-sidebar-thread-active",
       "data-app-action-sidebar-thread-id",
       "data-app-action-sidebar-thread-host-id",
+      RECOVERY_ATTRIBUTE,
     ],
     test: (record) =>
       record.target instanceof Element &&

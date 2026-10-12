@@ -20,6 +20,7 @@ import type { ModelRefreshOutcome, ModelRefreshReport } from "./renderer-model-r
 import {
   decodeHarnessPluginRoute,
   harnessIdSchema,
+  hostThreadIdSchema,
   permissionModeFixedAtCreate,
   type HarnessCommandDescriptor,
   type HarnessModelCatalog,
@@ -112,6 +113,7 @@ import {
 import { installRendererSidebarAgentIcons } from "./renderer-sidebar-agent-icons.js";
 import { installRendererSidebarStatusFilter } from "./renderer-sidebar-status-filter.js";
 import { installRendererSidebarThreadAlign } from "./renderer-sidebar-thread-align.js";
+import { installRendererThreadReturn } from "./renderer-thread-return.js";
 import { installRendererTitlebarProjectName } from "./renderer-titlebar-project-name.js";
 import { installRendererThreadActions } from "./renderer-thread-actions.js";
 import {
@@ -861,6 +863,13 @@ export function installRendererBindingProbe(
     },
     () => readRendererSpeechEnabled(window),
   );
+  // 完成提醒会把用户带到已完成的会话；记住来源会话以便一键返回。
+  const threadReturn = installRendererThreadReturn({
+    getLocale: rendererLocale,
+    activeThread: viewedThread,
+    openThread: (threadId, options) =>
+      openRendererThread(hostThreadIdSchema.parse(threadId), { hostId: options.hostId }),
+  });
   const pendingConfirmationPanel = installRendererPendingConfirmations({
     getClient: (hostId) => modelClientForHost(hostId),
     getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
@@ -877,6 +886,7 @@ export function installRendererBindingProbe(
       return [...hostIds];
     },
     activeThread: viewedThread,
+    onNavigateAway: (source) => threadReturn.remember(source),
     getLocale: rendererLocale,
     model: pendingConfirmations,
     speech: {
@@ -3286,6 +3296,7 @@ export function installRendererBindingProbe(
     sidebarUnread.refresh();
     sidebarVisits.refresh();
     sidebarStatusFilter.refresh();
+    threadReturn.refresh();
     threadActions.refresh();
     threadFolders.refresh();
     queuedTransfer.refresh();
@@ -3714,6 +3725,7 @@ export function installRendererBindingProbe(
       speechAnnouncer.dispose();
       sidebarVisits.dispose();
       sidebarStatusFilter.dispose();
+      threadReturn.dispose();
       threadActions.dispose();
       threadFolders.dispose();
       queuedTransfer.dispose();

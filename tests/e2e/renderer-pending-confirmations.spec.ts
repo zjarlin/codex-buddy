@@ -22,6 +22,7 @@ const { outputFiles } = await build({
     contents: `
       import { PendingConfirmationsModel, PENDING_CONFIRMATIONS_STORAGE_KEY } from "./packages/renderer-extension/src/pending-confirmations-state.ts";
       import { installRendererPendingConfirmations } from "./packages/renderer-extension/src/renderer-pending-confirmations.ts";
+      import { installRendererThreadReturn } from "./packages/renderer-extension/src/renderer-thread-return.ts";
       import { createRendererSpeechAnnouncer } from "./packages/renderer-extension/src/renderer-speech.ts";
       import { readRendererSpeechEnabled } from "./packages/renderer-extension/src/renderer-speech-preference.ts";
       import { createRendererHostClients } from "./packages/renderer-extension/src/renderer-host-clients.ts";
@@ -128,7 +129,23 @@ const { outputFiles } = await build({
           },
         };
         globalThis.speech = { announced, replayed, requests: speechRequests, synthesized: [], audioEvents: [], failure: "" };
+        const returnTargets = [];
+        const threadReturn = installRendererThreadReturn({
+          getLocale: () => "zh-CN",
+          activeThread: () => {
+            const active = document.querySelector('[data-app-action-sidebar-thread-active="true"]');
+            if (!active) return null;
+            return { hostId, threadId: active.dataset.appActionSidebarThreadId.slice(hostId.length + 1) };
+          },
+          openThread: async (threadId, options) => {
+            returnTargets.push([threadId, options.hostId]);
+            for (const row of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
+              row.dataset.appActionSidebarThreadActive = String(row.dataset.appActionSidebarThreadId === options.hostId + ":" + threadId);
+            }
+          },
+        });
         const control = installRendererPendingConfirmations({
+          onNavigateAway: (source) => threadReturn.remember(source),
           speech,
           getClient: () => client,
           getManager: () => manager,
@@ -148,6 +165,8 @@ const { outputFiles } = await build({
         });
         globalThis.pendingConfirmations = {
           control,
+          threadReturn,
+          returnTargets,
           callbacks,
           requests,
           opened,
@@ -488,7 +507,7 @@ test("title generation ephemeral threads never raise a pending card", async ({ p
   await page.goto("https://codexhost.test/");
   await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
   const modal = page.locator("[data-codexhost-pending-confirmations]");
-  const control = (action) =>
+  const control = (action: string) =>
     page.evaluate((call) => Reflect.get(globalThis, "pendingConfirmations")[call](), action);
 
   await page.evaluate(() =>
@@ -525,7 +544,38 @@ test("title generation ephemeral threads never raise a pending card", async ({ p
     await page.evaluate(() =>
       Reflect.get(globalThis, "pendingConfirmations")
         .state()
-        .entries.map((entry) => entry.threadId),
+        .entries.map((entry: { threadId: string }) => entry.threadId),
     ),
   ).toEqual(["thread-b"]);
+});
+
+// 完成提醒会把用户带到已完成的会话；用户常常记不住原本正在看哪一个。
+// 这里覆盖：跳转前记住来源会话 → 显示返回入口 → 点击切回来源会话。
+test("completion reminder offers a way back to the previously viewed conversation", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  // 当前正在看 thread-a，thread-b 在后台完成。
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  const chip = page.locator("[data-codexhost-thread-return]");
+  await expect(chip).toBeHidden();
+
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "B 结果。"),
+  );
+  await page.getByRole("button", { name: "查看结果" }).click();
+  // 跳转后落到 thread-b，返回入口指向原来的 thread-a。
+  await expect(chip).toBeVisible();
+  await expect(chip).toContainText("回到刚才的会话");
+  await expect(chip).toContainText("Task A");
+
+  await chip.locator("[data-codexhost-thread-return-open]").click();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").returnTargets),
+  ).toEqual([["thread-a", "local"]]);
+  // 已回到来源会话，入口自动收起。
+  await expect(chip).toBeHidden();
 });

@@ -14,6 +14,14 @@ Renderer 为官方 Codex 与外部 Harness Thread 维护统一的“待确认”
 - 多个待确认项一次只展开一个，其余显示数量；侧栏“待确认”视图按 Host 与 Thread 隔离显示队列项。
 - “查看结果”通过侧栏原生行切入会话。Desktop 的侧栏按项目分页，只渲染每个项目的前若干行，其余行折叠在折叠的项目头或“展开显示”加载更多控件之后；待确认会话常常正落在这批未渲染的行里。因此打开前会先展开折叠的项目头、并节流点击 Fiber 上暴露 `hasMoreItems && onExpandedChange` 分页契约的“展开显示”控件，把目标行挂载出来再点击；否则一次行查询就会超时报“无法打开该会话”。点击按轮次限流，避免原生列表反复重渲染时把 App server 请求队列打满。
 
+## 回到刚才的会话
+
+点“查看结果”会把用户带到已完成的会话，原本正在看的会话随之丢失，而侧栏里常常记不住是哪一个。因此跳转前会记录来源会话（与卡片同一份 `activeThread` 判定），跳转后左下角出现一个轻量胶囊，标注“回到刚才的会话”和来源会话标题；点击即按同一原生侧栏行入口切回来源会话。
+
+- 入口只保存一份来源会话，按 Host 与原生会话 ID 隔离；来源与目标相同（例如会话完成时用户正看着它）时不显示入口。
+- 用户自己走回来源会话、点击返回、点击胶囊右侧关闭按钮都会收起入口；返回失败（行未渲染或导航被取消）时保留入口，用户可重试或从侧栏自行切换。
+- 入口只做导航，不写入会话历史、不改原生侧栏属性、不新增 Host 协议。
+
 ## 重启对账
 
 每次连接建立后，Renderer 读取各 Host 的未归档近期 Thread，只检查最新 Turn。只有已完成、失败或中断的最新 Turn 且不在本地记录中时，才补入待确认队列；不批量回灌全部历史完成记录。旧 Host 不支持分页读取时该项跳过，不影响其他 Host。
@@ -42,6 +50,7 @@ Codex 为 Thread 生成标题时会在后台的 ephemeral Thread 里跑一个内
 - `packages/renderer-extension/src/pending-confirmations-state.ts`：队列归一化、摘要、幂等、确认和持久化。
 - `packages/renderer-extension/src/renderer-pending-confirmations.ts`：通知订阅、弹窗、阅读计时、归档和重启对账。
 - `packages/renderer-extension/src/markdown-renderer.ts`：轻量 Markdown 分块渲染器，被待确认卡片摘要使用。
+- `packages/renderer-extension/src/renderer-thread-return.ts`：记录来源会话并在跳转后提供返回入口。
 - `packages/renderer-extension/src/renderer-sidebar-unread.ts`：待确认项的侧栏补充蓝点。
 - `packages/renderer-extension/src/renderer-sidebar-status-filter.ts`：全部、进行中、待确认三种侧栏视图。
 - `packages/renderer-extension/src/renderer-speech.ts`：完成摘要清洗、网关合成调用与单条音频播放。

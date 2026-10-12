@@ -39,6 +39,11 @@ interface PendingConfirmationDomOptions {
   getLocale(): Locale;
   model?: PendingConfirmationsModel;
   openThread?(threadId: HostThreadId, options: { hostId: string }): Promise<void>;
+  /**
+   * 从完成卡片跳走前记录来源会话，供“回到刚才的会话”入口返回。
+   * 与 activeThread 一样以原生会话 ID 传入。
+   */
+  onNavigateAway?(source: { hostId: string; threadId: string }): void;
   subscribeHosts?(listener: () => void): () => void;
   /** 会话完成语音播报：自动播报与弹窗内手动重播都走这一条链路。 */
   speech?: PendingConfirmationSpeech;
@@ -798,10 +803,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 
   const open = async (entry: PendingConfirmationRecord): Promise<void> => {
     noticeMessage = "";
+    // 跳走前记住用户原本正在看的会话，便于从完成结果返回。
+    const origin = options.activeThread() ?? activeThreadFromDom();
     try {
       await (options.openThread ?? openRendererThread)(hostThreadIdSchema.parse(entry.threadId), {
         hostId: entry.hostId,
       });
+      if (origin) options.onNavigateAway?.(origin);
       visibleEntry = null;
       expanded = false;
       clearReadTimer();

@@ -85,6 +85,13 @@ vi.mock("../src/renderer-sidebar-visits.js", () => ({
   },
 }));
 
+vi.mock("../src/renderer-thread-return.js", () => ({
+  installRendererThreadReturn: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { remember: vi.fn(), refresh: vi.fn(), dispose: vi.fn() };
+  },
+}));
+
 vi.mock("../src/renderer-queued-transfer.js", () => ({
   installRendererQueuedTransfer: (options: { getLocale(): "zh-CN" | "en" }) => {
     testState.localeReads.push(options.getLocale());
@@ -392,8 +399,8 @@ it("reads locale before settings lifecycle initialization", async () => {
 
   const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
 
-  expect(testState.localeReads).toHaveLength(11);
-  expect(testState.localeReads.slice(0, 8)).toEqual(Array.from({ length: 8 }, () => "zh-CN"));
+  expect(testState.localeReads).toHaveLength(12);
+  expect(testState.localeReads.slice(0, 9)).toEqual(Array.from({ length: 9 }, () => "zh-CN"));
   probe.dispose();
 });
 

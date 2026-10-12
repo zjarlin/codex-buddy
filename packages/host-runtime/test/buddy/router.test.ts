@@ -186,6 +186,17 @@ async function fixture(
               },
             },
           };
+        case "thread/turns/list": {
+          const turns = options.historyTurns ?? [];
+          const latest = turns[turns.length - 1];
+          return {
+            result: {
+              data: latest ? [latest] : [],
+              nextCursor: null,
+              backwardsCursor: null,
+            },
+          };
+        }
         case "thread/items/list":
           if (options.historyError) {
             return { error: options.historyError };

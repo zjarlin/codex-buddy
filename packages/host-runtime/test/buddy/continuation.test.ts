@@ -396,6 +396,120 @@ describe("interrupted conversations", () => {
     await first;
     expect(f.request.mock.calls.filter(([method]) => method === "turn/start")).toHaveLength(1);
   });
+  it("reads only metadata and the latest turn instead of the whole history", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const request = vi.fn<NativeRequest>(async (method, params) => {
+      calls.push({ method, params });
+      if (method === "thread/list") return { result: { data: [{ id: "thread" }] } };
+      if (method === "thread/read") {
+        // 分页元数据不携带 turns；只有 includeTurns 才返回历史。
+        return {
+          result: {
+            thread: {
+              name: "Big history",
+              status: { type: "idle" },
+              ...(params.includeTurns === true ? { turns: [{ id: "turn", status: "failed" }] } : {}),
+            },
+          },
+        };
+      }
+      if (method === "thread/turns/list")
+        return {
+          result: {
+            data: [{ id: "turn", status: "failed", items: [{ type: "agentMessage" }] }],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        };
+      return { result: {} };
+    });
+    const service = new InterruptedConversations(request, () => false, async () => true);
+    await expect(service.list()).resolves.toEqual({
+      threads: [
+        { threadId: "thread", turnId: "turn", title: "Big history", status: "failed", owner: "codex" },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    expect(calls).toContainEqual({
+      method: "thread/read",
+      params: { threadId: "thread", includeTurns: false },
+    });
+    expect(calls).toContainEqual({
+      method: "thread/turns/list",
+      params: { threadId: "thread", limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
+    });
+    // 扫描过程不物化整段历史，避免大会话超时拖垮整轮发现。
+    expect(calls.some((call) => call.params.includeTurns === true)).toBe(false);
+  });
+
+  it("requests full items only for the compaction verification read", async () => {
+    const calls: { method: string; params: Record<string, unknown> }[] = [];
+    const request = vi.fn<NativeRequest>(async (method, params) => {
+      calls.push({ method, params });
+      if (method === "thread/read")
+        return {
+          result: { thread: { status: { type: "idle" }, turns: undefined } },
+        };
+      if (method === "thread/turns/list")
+        return {
+          result: {
+            data: [
+              {
+                id: "compact",
+                status: "completed",
+                items: [{ type: "contextCompaction" }],
+              },
+            ],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        };
+      if (method === "thread/resume") return { result: {} };
+      if (method === "turn/start") return { result: { turn: { id: "continued" } } };
+      return { result: {} };
+    });
+    const service = new InterruptedConversations(request, () => false, async () => true);
+    await expect(
+      service.continue("thread", "compact", { afterCompaction: true }),
+    ).resolves.toBe("continued");
+    expect(calls).toContainEqual({
+      method: "thread/turns/list",
+      params: { threadId: "thread", limit: 1, sortDirection: "desc", itemsView: "full" },
+    });
+  });
+
+  it("falls back to the legacy full-history read when pagination is unsupported", async () => {
+    const request = vi.fn<NativeRequest>(async (method, params) => {
+      if (method === "thread/list") return { result: { data: [{ id: "thread" }] } };
+      if (method === "thread/read")
+        return {
+          result: {
+            thread: {
+              name: "Legacy",
+              status: { type: "idle" },
+              ...(params.includeTurns === true ? { turns: [{ id: "turn", status: "failed" }] } : {}),
+            },
+          },
+        };
+      if (method === "thread/turns/list")
+        return { error: { code: -32601, message: "thread/turns/list is not supported yet" } };
+      return { result: {} };
+    });
+    const service = new InterruptedConversations(request, () => false, async () => true);
+    await expect(service.list()).resolves.toEqual({
+      threads: [
+        { threadId: "thread", turnId: "turn", title: "Legacy", status: "failed", owner: "codex" },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    expect(request).toHaveBeenCalledWith("thread/read", {
+      threadId: "thread",
+      includeTurns: true,
+    });
+  });
+
   it("reports unreadable histories without claiming no interruptions", async () => {
     const f = fixture();
     f.request.mockImplementation(async (method) =>

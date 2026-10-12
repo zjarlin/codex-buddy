@@ -65,11 +65,38 @@ export class InterruptedConversations {
     if (!(await this.allowed())) throw new Error("隐私模式下不能续接普通会话。");
   }
 
-  async #read(threadId: string) {
-    const response = result(await this.request("thread/read", { threadId, includeTurns: true }));
-    const thread = object(response.thread);
-    const turns = Array.isArray(thread.turns) ? thread.turns : [];
-    return { thread, turn: object(turns.at(-1)) };
+  // 只读取会话元数据和最新回合：`thread/read includeTurns` 会物化整段历史，
+  // 单个大会话可能超过内部请求超时，进而让整轮扫描失败。分页接口按需返回单个
+  // 回合，只有压缩校验才需要完整 items；旧版不支持分页时回退到完整历史读取。
+  async #read(threadId: string, options: { items?: boolean } = {}) {
+    const metadata = result(
+      await this.request("thread/read", { threadId, includeTurns: false }),
+    );
+    const thread = object(metadata.thread);
+    const embedded = Array.isArray(thread.turns) ? thread.turns : [];
+    if (embedded.length > 0) return { thread, turn: object(embedded.at(-1)) };
+    const response = await this.request("thread/turns/list", {
+      threadId,
+      limit: 1,
+      sortDirection: "desc",
+      itemsView: options.items ? "full" : "notLoaded",
+    });
+    const error = object(response.error);
+    const unsupported =
+      error.code === -32601 ||
+      error.message === "thread/turns/list is not supported yet" ||
+      (error.code === -32600 &&
+        typeof error.message === "string" &&
+        error.message.includes("unknown variant `thread/turns/list`"));
+    if (unsupported) {
+      const legacy = result(await this.request("thread/read", { threadId, includeTurns: true }));
+      const legacyThread = object(legacy.thread);
+      const turns = Array.isArray(legacyThread.turns) ? legacyThread.turns : [];
+      return { thread: legacyThread, turn: object(turns.at(-1)) };
+    }
+    const history = result(response);
+    const turns = Array.isArray(history.data) ? history.data : [];
+    return { thread, turn: object(turns[0]) };
   }
 
   async #listThreads(options: { cwd?: string } = {}): Promise<ThreadMetadata[]> {
@@ -204,7 +231,9 @@ export class InterruptedConversations {
       await this.#checkAllowed();
       options?.signal?.throwIfAborted();
       const verify = async () => {
-        const { thread, turn } = await this.#read(threadId);
+        const { thread, turn } = await this.#read(threadId, {
+          items: options?.afterCompaction === true,
+        });
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
         const eligible = options?.afterCompaction

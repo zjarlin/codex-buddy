@@ -901,6 +901,27 @@ describe("Buddy completed conversations", () => {
     const fixture = createFixture();
     const native = new JsonLineCollector(fixture.official.stdin);
     await bindOfficialThread(fixture, "target");
+    // 扫描只读元数据加最新回合：thread/read 不再物化整段历史，改为按需读取
+    // 单个回合。这里为每个候选会话补上 thread/turns/list 的应答。
+    for (const [threadId, turn] of [
+      ["target", { id: "turn", status: "completed" }],
+      ["done", { id: "turn", status: "completed" }],
+      ["running", { id: "turn", status: "inProgress" }],
+    ] as const) {
+      native
+        .waitFor(
+          (message) =>
+            message.method === "thread/turns/list" && messageParams(message).threadId === threadId,
+        )
+        .then((request) => {
+          fixture.official.stdout.write(
+            `${JSON.stringify({
+              id: requiredMessageId(request),
+              result: { data: [turn], nextCursor: null, backwardsCursor: null },
+            })}\n`,
+          );
+        });
+    }
     native
       .waitFor(
         (message) =>

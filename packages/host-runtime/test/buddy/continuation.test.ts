@@ -408,7 +408,9 @@ describe("interrupted conversations", () => {
             thread: {
               name: "Big history",
               status: { type: "idle" },
-              ...(params.includeTurns === true ? { turns: [{ id: "turn", status: "failed" }] } : {}),
+              ...(params.includeTurns === true
+                ? { turns: [{ id: "turn", status: "failed" }] }
+                : {}),
             },
           },
         };
@@ -423,10 +425,20 @@ describe("interrupted conversations", () => {
         };
       return { result: {} };
     });
-    const service = new InterruptedConversations(request, () => false, async () => true);
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+    );
     await expect(service.list()).resolves.toEqual({
       threads: [
-        { threadId: "thread", turnId: "turn", title: "Big history", status: "failed", owner: "codex" },
+        {
+          threadId: "thread",
+          turnId: "turn",
+          title: "Big history",
+          status: "failed",
+          owner: "codex",
+        },
       ],
       runningThreadIds: [],
       unreadable: 0,
@@ -469,10 +481,14 @@ describe("interrupted conversations", () => {
       if (method === "turn/start") return { result: { turn: { id: "continued" } } };
       return { result: {} };
     });
-    const service = new InterruptedConversations(request, () => false, async () => true);
-    await expect(
-      service.continue("thread", "compact", { afterCompaction: true }),
-    ).resolves.toBe("continued");
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+    );
+    await expect(service.continue("thread", "compact", { afterCompaction: true })).resolves.toBe(
+      "continued",
+    );
     expect(calls).toContainEqual({
       method: "thread/turns/list",
       params: { threadId: "thread", limit: 1, sortDirection: "desc", itemsView: "full" },
@@ -488,7 +504,9 @@ describe("interrupted conversations", () => {
             thread: {
               name: "Legacy",
               status: { type: "idle" },
-              ...(params.includeTurns === true ? { turns: [{ id: "turn", status: "failed" }] } : {}),
+              ...(params.includeTurns === true
+                ? { turns: [{ id: "turn", status: "failed" }] }
+                : {}),
             },
           },
         };
@@ -496,7 +514,11 @@ describe("interrupted conversations", () => {
         return { error: { code: -32601, message: "thread/turns/list is not supported yet" } };
       return { result: {} };
     });
-    const service = new InterruptedConversations(request, () => false, async () => true);
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+    );
     await expect(service.list()).resolves.toEqual({
       threads: [
         { threadId: "thread", turnId: "turn", title: "Legacy", status: "failed", owner: "codex" },

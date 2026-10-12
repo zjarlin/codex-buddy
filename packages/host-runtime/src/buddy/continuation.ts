@@ -69,9 +69,7 @@ export class InterruptedConversations {
   // 单个大会话可能超过内部请求超时，进而让整轮扫描失败。分页接口按需返回单个
   // 回合，只有压缩校验才需要完整 items；旧版不支持分页时回退到完整历史读取。
   async #read(threadId: string, options: { items?: boolean } = {}) {
-    const metadata = result(
-      await this.request("thread/read", { threadId, includeTurns: false }),
-    );
+    const metadata = result(await this.request("thread/read", { threadId, includeTurns: false }));
     const thread = object(metadata.thread);
     const embedded = Array.isArray(thread.turns) ? thread.turns : [];
     if (embedded.length > 0) return { thread, turn: object(embedded.at(-1)) };

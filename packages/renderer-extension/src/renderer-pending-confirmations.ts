@@ -53,7 +53,14 @@ interface HostSubscription {
   manager: NotificationManager | null;
   dispose: (() => void) | null;
   reconciledManager: NotificationManager | null;
+  // Codex 用后台 ephemeral Thread 生成标题；这类 Thread 没有 rollout、不在
+  // thread/list，也没有侧栏行，它们的 turn 终态不能进入待确认队列。
+  ephemeralThreads: Set<string>;
 }
+
+// 标题生成的 ephemeral Thread 由 thread/started 声明，数量随用户回合增长；保留
+// 上限并在超限时按插入顺序淘汰最旧的一条，避免长期会话无限累积。
+const EPHEMERAL_THREAD_LIMIT = 500;
 
 const ACTIVE = "data-app-action-sidebar-thread-active";
 const MODAL = "data-codexhost-pending-confirmations";
@@ -687,7 +694,12 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const connect = (hostId: string): void => {
     let state = hosts.get(hostId);
     if (!state) {
-      state = { manager: null, dispose: null, reconciledManager: null };
+      state = {
+        manager: null,
+        dispose: null,
+        reconciledManager: null,
+        ephemeralThreads: new Set(),
+      };
       hosts.set(hostId, state);
     }
     const discovered = options.getManager(hostId);
@@ -702,16 +714,34 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
         const current = state;
         try {
           current.dispose = manager.addNotificationCallback(
-            ["turn/started", "turn/completed"],
+            ["thread/started", "turn/started", "turn/completed"],
             (notification) => {
               if (disposed || current.manager !== manager || options.getManager(hostId) !== manager)
                 return;
               const event = record(notification);
               const params = record(event?.params);
+              if (event?.method === "thread/started") {
+                const thread = record(params?.thread);
+                const declared = text(thread?.id);
+                if (!declared) return;
+                if (thread?.ephemeral === true) {
+                  if (current.ephemeralThreads.size >= EPHEMERAL_THREAD_LIMIT) {
+                    const oldest = current.ephemeralThreads.values().next().value;
+                    if (oldest) current.ephemeralThreads.delete(oldest);
+                  }
+                  current.ephemeralThreads.add(declared);
+                } else {
+                  current.ephemeralThreads.delete(declared);
+                }
+                return;
+              }
               const turn = record(params?.turn);
               const threadId = text(params?.threadId);
               const turnId = text(turn?.id);
               if (!threadId || !turnId) return;
+              // 标题生成的 ephemeral Thread 属于内部维护，既不弹卡片也不进队列；
+              // 也不能对它调用 startTurn，否则会为不可见 Thread 留下待确认状态。
+              if (current.ephemeralThreads.has(threadId)) return;
               if (event?.method === "turn/started") {
                 model.startTurn(hostId, threadId, turnId);
                 return;

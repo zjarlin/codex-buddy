@@ -160,6 +160,9 @@ const { outputFiles } = await build({
           start(threadId, turnId) {
             for (const callback of callbacks) callback({ method: "turn/started", params: { threadId, turn: { id: turnId, status: "inProgress" } } });
           },
+          declareThread(threadId, ephemeral) {
+            for (const callback of callbacks) callback({ method: "thread/started", params: { thread: { id: threadId, ephemeral } } });
+          },
           state() { return JSON.parse(localStorage.getItem(PENDING_CONFIRMATIONS_STORAGE_KEY) || "null"); },
         };
       };
@@ -473,4 +476,56 @@ test("composer input sends a follow-up into the pending conversation", async ({
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened))
     .toEqual([["thread-b", "local"]]);
   await expect(modal).toBeHidden();
+});
+
+// 回归：Codex 用后台 ephemeral Thread 生成标题。这类 Thread 没有 rollout、
+// 不在 thread/list、也没有侧栏行，它的 turn 终态一旦进入待确认队列，用户就会
+// 看到"会话已完成"卡片，却永远定位不到对应会话。
+test("title generation ephemeral threads never raise a pending card", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  const control = (action) =>
+    page.evaluate((call) => Reflect.get(globalThis, "pendingConfirmations")[call](), action);
+
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").declareThread("title-thread", true),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").start("title-thread", "title-turn"),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "title-thread",
+      "title-turn",
+      "",
+      "interrupted",
+    ),
+  );
+  await expect(modal).toBeHidden();
+  expect(await control("state")).toBeNull();
+
+  // 普通会话仍照常弹卡片，确认过滤只作用于被声明为 ephemeral 的 Thread。
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").declareThread("thread-b", false),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      "B 会话已完成。",
+    ),
+  );
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText("B 会话已完成。");
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "pendingConfirmations")
+        .state()
+        .entries.map((entry) => entry.threadId),
+    ),
+  ).toEqual(["thread-b"]);
 });

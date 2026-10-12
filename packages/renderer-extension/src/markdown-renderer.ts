@@ -1,16 +1,16 @@
 /**
  * Lightweight Markdown renderer for renderer-extension UI components.
- * Supports headings, paragraphs, lists, blockquotes, fenced code blocks,
- * thematic breaks, and inline formatting (code, bold, links).
+ * Supports headings, paragraphs, nested lists, blockquotes, fenced code blocks,
+ * GFM tables, thematic breaks, and inline formatting (code, bold, links).
  */
 
 const HEADING_PATTERN = /^(#{1,6})[ \t]+(.+?)\s*$/u;
 const BLOCKQUOTE_PATTERN = /^>[ \t]?(.*?)\s*$/u;
-const UNORDERED_ITEM_PATTERN = /^[-*][ \t]+(.+?)\s*$/u;
-const CONTINUATION_PATTERN = /^[ \t]+(.+?)\s*$/u;
-const ORDERED_ITEM_PATTERN = /^\d+[.)][ \t]+(.+?)\s*$/u;
+// 单个列表标记：允许缩进，`-`/`*`/`+` 为无序项，`1.`/`1)` 为有序项。
+const LIST_ITEM_PATTERN = /^([ \t]*)(?:([-*+])|(\d+)[.)])[ \t]+(\S.*?)\s*$/u;
 const FENCE_PATTERN = /^```([\w+-]*)\s*$/u;
 const THEMATIC_BREAK_PATTERN = /^(?:---|___|\*\*\*)[ \t]*$/u;
+const TABLE_DELIMITER_CELL_PATTERN = /^:?-+:?$/u;
 const INLINE_PATTERN = /(`+)((?:(?!\1).)+)\1|\*\*(.+?)\*\*|\[([^\]]+)\]\(([^)\s]+)\)/gu;
 
 export type MarkdownDocument = Pick<Document, "createElement">;
@@ -18,6 +18,13 @@ export type MarkdownDocument = Pick<Document, "createElement">;
 export interface MarkdownRenderOptions {
   /** CSS class name for the root container element. */
   className?: string;
+}
+
+interface ListItem {
+  /** 缩进宽度（制表符按 4 列计算），用于判断嵌套层级。 */
+  indent: number;
+  ordered: boolean;
+  text: string;
 }
 
 /**
@@ -75,12 +82,12 @@ export function appendMarkdownBlocks(
       index += 1;
       continue;
     }
-    if (UNORDERED_ITEM_PATTERN.test(line)) {
-      index = appendList(document, root, lines, index, "ul", UNORDERED_ITEM_PATTERN);
+    if (isTableStart(lines, index)) {
+      index = appendTable(document, root, lines, index);
       continue;
     }
-    if (ORDERED_ITEM_PATTERN.test(line)) {
-      index = appendList(document, root, lines, index, "ol", ORDERED_ITEM_PATTERN);
+    if (parseListItem(line)) {
+      index = appendList(document, root, lines, index);
       continue;
     }
     index = appendParagraph(document, root, lines, index);
@@ -132,34 +139,50 @@ function appendBlockquote(
   return index;
 }
 
+/**
+ * 按缩进递归渲染列表：同层同类型的标记属于当前列表，更深的缩进成为上一项的
+ * 嵌套列表，空行只要后面仍是同层列表项就继续当前列表（宽松列表）。
+ */
 function appendList(
   document: MarkdownDocument,
   root: HTMLElement,
   lines: readonly string[],
   start: number,
-  tag: "ul" | "ol",
-  pattern: RegExp,
 ): number {
-  const list = document.createElement(tag);
+  const first = parseListItem(lines[start] ?? "");
+  if (!first) return start + 1;
+  const list = document.createElement(first.ordered ? "ol" : "ul");
   let index = start;
+  let item: HTMLElement | null = null;
   while (index < lines.length) {
-    const item = pattern.exec(lines[index] ?? "");
-    if (!item?.[1]) break;
-    const entry = document.createElement("li");
-    appendInline(document, entry, item[1]);
-    index += 1;
-
-    const continuationLines: string[] = [];
-    while (index < lines.length) {
-      const continuation = CONTINUATION_PATTERN.exec(lines[index] ?? "");
-      if (!continuation?.[1]) break;
-      continuationLines.push(continuation[1]);
+    const line = lines[index] ?? "";
+    if (line.trim().length === 0) {
+      const next = nextContentLine(lines, index);
+      const marker = next < lines.length ? parseListItem(lines[next] ?? "") : null;
+      if (!marker || marker.indent < first.indent || marker.ordered !== first.ordered) break;
+      index = next;
+      continue;
+    }
+    const marker = parseListItem(line);
+    if (marker) {
+      if (marker.indent > first.indent && item) {
+        index = appendList(document, item, lines, index);
+        continue;
+      }
+      if (marker.indent < first.indent || marker.ordered !== first.ordered) break;
+      item = document.createElement("li");
+      appendInline(document, item, marker.text);
+      list.append(item);
       index += 1;
+      continue;
     }
-    if (continuationLines.length > 0) {
-      appendInline(document, entry, " " + continuationLines.join(" "));
+    // 比列表标记更深的普通行是当前项的续行。
+    if (item && /^[ \t]/u.test(line)) {
+      appendInline(document, item, ` ${line.trim()}`);
+      index += 1;
+      continue;
     }
-    list.append(entry);
+    break;
   }
   root.append(list);
   return index;
@@ -174,19 +197,8 @@ function appendParagraph(
   const paragraphLines: string[] = [];
   let index = start;
   while (index < lines.length) {
-    const current = lines[index] ?? "";
-    if (
-      current.trim().length === 0 ||
-      FENCE_PATTERN.test(current) ||
-      HEADING_PATTERN.test(current) ||
-      BLOCKQUOTE_PATTERN.test(current) ||
-      THEMATIC_BREAK_PATTERN.test(current) ||
-      UNORDERED_ITEM_PATTERN.test(current) ||
-      ORDERED_ITEM_PATTERN.test(current)
-    ) {
-      break;
-    }
-    paragraphLines.push(current.trim());
+    if (breaksParagraph(lines, index)) break;
+    paragraphLines.push((lines[index] ?? "").trim());
     index += 1;
   }
   const paragraph = document.createElement("p");
@@ -196,6 +208,111 @@ function appendParagraph(
   });
   root.append(paragraph);
   return index;
+}
+
+function breaksParagraph(lines: readonly string[], index: number): boolean {
+  const current = lines[index] ?? "";
+  return (
+    current.trim().length === 0 ||
+    FENCE_PATTERN.test(current) ||
+    HEADING_PATTERN.test(current) ||
+    BLOCKQUOTE_PATTERN.test(current) ||
+    THEMATIC_BREAK_PATTERN.test(current) ||
+    Boolean(parseListItem(current)) ||
+    isTableStart(lines, index)
+  );
+}
+
+function parseListItem(line: string): ListItem | null {
+  const match = LIST_ITEM_PATTERN.exec(line);
+  const text = match?.[4];
+  if (!match || text === undefined) return null;
+  return {
+    indent: indentWidth(match[1] ?? ""),
+    ordered: match[3] !== undefined,
+    text,
+  };
+}
+
+function indentWidth(prefix: string): number {
+  let width = 0;
+  for (const character of prefix) width += character === "\t" ? 4 : 1;
+  return width;
+}
+
+function nextContentLine(lines: readonly string[], start: number): number {
+  let index = start;
+  while (index < lines.length && (lines[index] ?? "").trim().length === 0) index += 1;
+  return index;
+}
+
+function isTableStart(lines: readonly string[], index: number): boolean {
+  const header = parseTableRow(lines[index] ?? "");
+  if (!header || header.length < 2) return false;
+  const delimiter = parseTableRow(lines[index + 1] ?? "");
+  if (!delimiter || delimiter.length !== header.length) return false;
+  return delimiter.every((cell) => TABLE_DELIMITER_CELL_PATTERN.test(cell));
+}
+
+function parseTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) return null;
+  const cells = trimmed
+    .replace(/^\|/u, "")
+    .replace(/\|$/u, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length > 0 ? cells : null;
+}
+
+function appendTable(
+  document: MarkdownDocument,
+  root: HTMLElement,
+  lines: readonly string[],
+  start: number,
+): number {
+  const header = parseTableRow(lines[start] ?? "") ?? [];
+  const delimiter = parseTableRow(lines[start + 1] ?? "") ?? [];
+  const table = document.createElement("table");
+  const head = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  header.forEach((cell, cellIndex) => {
+    const th = document.createElement("th");
+    applyTableAlignment(th, delimiter[cellIndex] ?? "");
+    appendInline(document, th, cell);
+    headRow.append(th);
+  });
+  head.append(headRow);
+  table.append(head);
+  const body = document.createElement("tbody");
+  let index = start + 2;
+  while (index < lines.length) {
+    const line = lines[index] ?? "";
+    if (line.trim().length === 0) break;
+    const row = parseTableRow(line);
+    if (!row) break;
+    const tr = document.createElement("tr");
+    row.forEach((cell, cellIndex) => {
+      const td = document.createElement("td");
+      applyTableAlignment(td, delimiter[cellIndex] ?? "");
+      appendInline(document, td, cell);
+      tr.append(td);
+    });
+    body.append(tr);
+    index += 1;
+  }
+  table.append(body);
+  root.append(table);
+  return index;
+}
+
+function applyTableAlignment(cell: HTMLElement, delimiter: string): void {
+  const trimmed = delimiter.trim();
+  const left = trimmed.startsWith(":");
+  const right = trimmed.endsWith(":");
+  if (left && right) cell.setAttribute("style", "text-align:center");
+  else if (right) cell.setAttribute("style", "text-align:right");
+  else if (left) cell.setAttribute("style", "text-align:left");
 }
 
 function appendInline(document: MarkdownDocument, parent: HTMLElement, text: string): void {

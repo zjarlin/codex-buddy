@@ -242,6 +242,31 @@ test("completed non-current conversations open a modal and support read/archive 
   ).toContainEqual(["thread/archive", { threadId: "thread-b" }]);
 });
 
+test("formats the final message as structured markdown instead of one collapsed line", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      "## 结论\n\n已完成 **三项** 修改：\n\n1. 第一项\n2. 第二项\n\n| 项 | 状态 |\n| --- | --- |\n| 渲染 | 完成 |",
+    ),
+  );
+  const summary = page.locator(".codexhost-pending-summary");
+  await expect(summary).toBeVisible();
+  // 分块渲染：标题、段落、有序列表、表格各成块，而不是塌成一段。
+  await expect(summary.locator("h2")).toHaveText("结论");
+  await expect(summary.locator("ol > li")).toHaveCount(2);
+  await expect(summary.locator("table th").nth(1)).toHaveText("状态");
+  await expect(summary.locator("table td").nth(1)).toHaveText("完成");
+  await expect(summary).not.toContainText("结论 已完成");
+});
+
 test("view action opens the source conversation and keeps the modal non-modal", async ({
   page,
 }) => {

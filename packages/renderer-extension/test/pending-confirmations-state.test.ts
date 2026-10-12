@@ -48,6 +48,32 @@ describe("pending confirmation state", () => {
     ).toBe("final result");
   });
 
+  it("preserves markdown block structure in the stored summary", () => {
+    const summary = pendingConfirmationSummary({
+      status: "completed",
+      items: [
+        {
+          type: "agentMessage",
+          text: "## 结论\n\n已完成修改：\n\n1. 第一项\n2. 第二项\n\n```ts\nconst x = 1;\n```\n",
+        },
+      ],
+    });
+    expect(summary).toBe(
+      "## 结论\n\n已完成修改：\n\n1. 第一项\n2. 第二项\n\n```ts\nconst x = 1;\n```",
+    );
+    expect(summary).not.toContain("结论 已完成修改");
+  });
+
+  it("truncates an oversized summary and closes an open code fence", () => {
+    const body = Array.from({ length: 400 }, (_, index) => `第 ${index} 行内容`).join("\n");
+    const summary = pendingConfirmationSummary({
+      status: "completed",
+      items: [{ type: "agentMessage", text: `\`\`\`ts\n${body}\n` }],
+    });
+    expect(summary.length).toBeLessThanOrEqual(2_000);
+    expect(summary.endsWith("```…")).toBe(true);
+  });
+
   it("uses the native error when a failed Turn has no agent message", () => {
     expect(
       pendingConfirmationSummary({

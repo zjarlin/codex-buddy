@@ -279,9 +279,18 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-summary{max-height:240px;margin:0;overflow:auto;overflow-wrap:anywhere;color:color-mix(in srgb,CanvasText 84%,transparent);font-size:13px;line-height:20px}
 [${MODAL}] .codexhost-pending-summary>:first-child{margin-top:0}
 [${MODAL}] .codexhost-pending-summary>:last-child{margin-bottom:0}
-[${MODAL}] .codexhost-pending-summary p,[${MODAL}] .codexhost-pending-summary ul,[${MODAL}] .codexhost-pending-summary ol,[${MODAL}] .codexhost-pending-summary pre,[${MODAL}] .codexhost-pending-summary blockquote{margin:6px 0}
+[${MODAL}] .codexhost-pending-summary p,[${MODAL}] .codexhost-pending-summary ul,[${MODAL}] .codexhost-pending-summary ol,[${MODAL}] .codexhost-pending-summary pre,[${MODAL}] .codexhost-pending-summary blockquote,[${MODAL}] .codexhost-pending-summary table{margin:6px 0}
+[${MODAL}] .codexhost-pending-summary h1,[${MODAL}] .codexhost-pending-summary h2,[${MODAL}] .codexhost-pending-summary h3,[${MODAL}] .codexhost-pending-summary h4,[${MODAL}] .codexhost-pending-summary h5,[${MODAL}] .codexhost-pending-summary h6{margin:10px 0 4px;font-weight:600;line-height:1.35}
+[${MODAL}] .codexhost-pending-summary h1{font-size:16px}
+[${MODAL}] .codexhost-pending-summary h2{font-size:15px}
+[${MODAL}] .codexhost-pending-summary h3{font-size:14px}
+[${MODAL}] .codexhost-pending-summary h4,[${MODAL}] .codexhost-pending-summary h5,[${MODAL}] .codexhost-pending-summary h6{font-size:13px}
 [${MODAL}] .codexhost-pending-summary ul,[${MODAL}] .codexhost-pending-summary ol{padding-left:20px}
+[${MODAL}] .codexhost-pending-summary ul ul,[${MODAL}] .codexhost-pending-summary ul ol,[${MODAL}] .codexhost-pending-summary ol ul,[${MODAL}] .codexhost-pending-summary ol ol{margin:4px 0}
 [${MODAL}] .codexhost-pending-summary li+li{margin-top:4px}
+[${MODAL}] .codexhost-pending-summary table{width:100%;border-collapse:collapse;font-size:12px}
+[${MODAL}] .codexhost-pending-summary th,[${MODAL}] .codexhost-pending-summary td{padding:4px 8px;border:1px solid color-mix(in srgb,CanvasText 16%,transparent);text-align:left;vertical-align:top}
+[${MODAL}] .codexhost-pending-summary th{background:color-mix(in srgb,CanvasText 7%,transparent);font-weight:600}
 [${MODAL}] .codexhost-pending-summary blockquote{padding:6px 10px;border-left:3px solid color-mix(in srgb,CanvasText 24%,transparent);background:color-mix(in srgb,CanvasText 6%,transparent)}
 [${MODAL}] .codexhost-pending-summary pre{padding:8px 10px;border-radius:4px;background:color-mix(in srgb,CanvasText 8%,transparent);overflow-x:auto}
 [${MODAL}] .codexhost-pending-summary code{font-family:ui-monospace,"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:12px}

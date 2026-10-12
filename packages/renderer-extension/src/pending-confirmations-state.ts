@@ -62,9 +62,43 @@ function timestamp(value: unknown, fallback: number): number {
   return parsed < 10_000_000_000 ? Math.trunc(parsed * 1000) : Math.trunc(parsed);
 }
 
+/** 单行文本（标题、失败原因首行）折叠所有空白，保证列表与卡片标题不被换行撑开。 */
 function compact(value: string, limit: number): string {
   const normalized = value.replace(/\s+/gu, " ").trim();
   return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+}
+
+/**
+ * 最终消息保留 Markdown 块结构：逐行去掉行尾空白、把连续空行压成一个空行，
+ * 但绝不把换行折叠成空格，否则标题、列表、表格会塌成一段。超长时按原文截断，
+ * 并补齐未闭合的代码围栏，避免截断处破坏渲染。
+ */
+function summarize(value: string, limit: number): string {
+  const lines = value
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/u, ""));
+  const kept: string[] = [];
+  let blank = true;
+  for (const line of lines) {
+    if (line.length === 0) {
+      if (blank) continue;
+      blank = true;
+    } else {
+      blank = false;
+    }
+    kept.push(line);
+  }
+  while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();
+  const text = kept.join("\n").trim();
+  if (text.length <= limit) return text;
+  const fencesIn = (value: string): number => (value.match(/^```/gmu) ?? []).length;
+  let cut = text.slice(0, limit - 1);
+  if (fencesIn(cut) % 2 === 1) {
+    cut = text.slice(0, Math.max(0, limit - 5));
+    return fencesIn(cut) % 2 === 1 ? `${cut}\n\`\`\`…` : `${cut}…`;
+  }
+  return `${cut}…`;
 }
 
 export function pendingConfirmationStatus(value: unknown): PendingConfirmationStatus | null {
@@ -82,7 +116,7 @@ export function pendingConfirmationSummary(
     (value): value is Record<string, unknown> =>
       record(value)?.type === "agentMessage" && text(record(value)?.text).trim().length > 0,
   );
-  if (agent) return compact(text(agent.text), 2_000);
+  if (agent) return summarize(text(agent.text), 2_000);
   const error = record(turn.error);
   if (error) return compact(text(error.message) || text(error.code), 2_000);
   if (pendingConfirmationStatus(turn.status) === "failed")
@@ -145,7 +179,7 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
     turnId,
     status,
     title: compact(text(entry.title) || "未命名会话", 300),
-    summary: compact(text(entry.summary), 2_000),
+    summary: summarize(text(entry.summary), 2_000),
     project: text(entry.project),
     completedAt: timestamp(entry.completedAt, 0),
     state,

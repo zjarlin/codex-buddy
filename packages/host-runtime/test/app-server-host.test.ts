@@ -901,11 +901,11 @@ describe("Buddy completed conversations", () => {
     const fixture = createFixture();
     const native = new JsonLineCollector(fixture.official.stdin);
     await bindOfficialThread(fixture, "target");
-    // 扫描只读元数据加最新回合：thread/read 不再物化整段历史，改为按需读取
-    // 单个回合。这里为每个候选会话补上 thread/turns/list 的应答。
+    // 扫描只读元数据加最新回合：thread/read 不再物化整段历史，元数据里没有内嵌
+    // 回合时才按需读取单个回合。因此只有 target 与 running（turns 为空）会请求
+    // thread/turns/list；done 直接返回内嵌回合，不能再为它等待分页应答。
     for (const [threadId, turn] of [
       ["target", { id: "turn", status: "completed" }],
-      ["done", { id: "turn", status: "completed" }],
       ["running", { id: "turn", status: "inProgress" }],
     ] as const) {
       native

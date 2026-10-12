@@ -461,7 +461,8 @@ describe("interrupted conversations", () => {
       calls.push({ method, params });
       if (method === "thread/read")
         return {
-          result: { thread: { status: { type: "idle" }, turns: undefined } },
+          // 元数据读取不返回 turns 字段；不能显式给 undefined（JsonValue 不含 undefined）。
+          result: { thread: { status: { type: "idle" } } },
         };
       if (method === "thread/turns/list")
         return {

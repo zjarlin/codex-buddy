@@ -234,6 +234,20 @@ test("recovery stays independent of unavailable routing and does not poll in the
   await page.screenshot({ path: "test-results/buddy-recovery-independent.png" });
 });
 
+test("resumes an interrupted turn with the explicitly selected model ID", async ({ page }) => {
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: bundle });
+  const recovery = page.locator("[data-buddy-recovery]");
+  const modelSelect = recovery.locator(".buddy-select");
+  await modelSelect.selectOption("gpt-6");
+  await recovery.getByRole("button", { name: "应用", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "fixture").calls.continuations))
+    .toEqual([["stalled", "interrupted-turn", "gpt-6"]]);
+  await expect(recovery.getByRole("button", { name: "恢复", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: "test-results/buddy-recovery-model-id.png" });
+});
+
 test("interrupted recovery folds from its heading and keeps the resume-all entry", async ({
   page,
 }) => {

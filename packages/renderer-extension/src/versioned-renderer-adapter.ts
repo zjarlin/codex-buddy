@@ -1078,10 +1078,11 @@ export function installCurrentRendererAdapter(): {
       }
       return client.buddyInterrupted();
     },
-    buddyContinue: (threadId: string, turnId: string) => {
+    buddyContinue: (threadId: string, turnId: string, model?: string) => {
       const client = currentModelClient();
       if (!client.buddyContinue) throw new Error("Continuation unavailable");
-      return client.buddyContinue(threadId, turnId);
+      // 显式指定的模型 ID 必须透传给 Host，否则恢复仍会用原模型再次中断。
+      return client.buddyContinue(threadId, turnId, model);
     },
     syncCodexCatalog: () => {
       const client = currentModelClient();

@@ -32,6 +32,10 @@ const testState = vi.hoisted(() => ({
   gitSync: vi.fn(),
   localeReads: [] as ("zh-CN" | "en")[],
   buddyContext: null as null | (() => BuddyControlContext | null),
+  composerControl: null as null | {
+    onModelShortcutsViewChange?: (view: unknown, harnessId: string) => void;
+  },
+  buddySetModelShortcutsView: vi.fn(),
 }));
 
 vi.mock("../src/auto-route-card/index.js", () => ({
@@ -149,6 +153,7 @@ vi.mock("../src/buddy/control.js", () => ({
     return {
       refresh: vi.fn(async () => undefined),
       refreshContext: vi.fn(),
+      setModelShortcutsView: testState.buddySetModelShortcutsView,
       dispose: vi.fn(),
     };
   },
@@ -168,7 +173,7 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
     ) => {
       testState.selectModel = args[7];
       testState.refreshModels = args[12];
-      return {
+      const control = {
         composer: testState.composer,
         composerId: "composer-1",
         root: { isConnected: true, remove: vi.fn() },
@@ -200,6 +205,8 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
         sendButton: testState.sendButton,
         sendDisabledBeforeSwitch: null,
       };
+      testState.composerControl = control as unknown as typeof testState.composerControl;
+      return control as unknown as ReturnType<typeof RendererComposerDom.mountComposerAgentControl>;
     },
     renderComposerAgentControl: (
       _control: unknown,
@@ -321,6 +328,8 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   testState.documentListeners.clear();
   testState.modelTarget = ["conversation", "thread-a"];
   testState.prewarmClears = 0;
+  testState.composerControl = null;
+  testState.buddySetModelShortcutsView = vi.fn();
   const window_ = {
     navigator: { languages },
     addEventListener: listeners.addEventListener.bind(listeners),
@@ -1253,6 +1262,36 @@ describe("Buddy model controls", () => {
       }
     },
   );
+
+  it("projects the favorite-model view into the interrupted panel through the mounted Composer", async () => {
+    installFakeBrowser();
+    const host = {
+      inspectHarness: vi.fn(async () => readyInspection()),
+      inspectThread: vi.fn(async () => ({ owner: "codex", locked: true })),
+      inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+      inspectThreadUsage: vi.fn(async () => ({ usage: null, accountCredits: null })),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      vi.fn(() => true),
+      { ...host, currentHostId: () => "local", clientForHost: () => host } as never,
+    );
+    await vi.waitFor(() => expect(testState.buddyContext?.()).not.toBeNull());
+    const control = testState.composerControl;
+    const bridge = control?.onModelShortcutsViewChange;
+    assert(bridge);
+    // 桥接必须把收藏模型/目录视图投影到 Buddy 控件，否则恢复面板看不到收藏模型。
+    const view = { models: [{ id: "gpt-6", label: "GPT-6" }], supportsCustomModel: true };
+    bridge(view, "codex");
+    expect(testState.buddySetModelShortcutsView).toHaveBeenCalledExactlyOnceWith(view, "codex");
+  });
 
   it("refreshes the current catalog without replacing the selected Model and permits retry", async () => {
     installFakeBrowser();

@@ -2973,6 +2973,11 @@ export function installRendererBindingProbe(
       commandRequestGeneration: 0,
     };
     mountedByComposer.set(composer, mounted);
+    // 收藏模型/模型目录经此桥接投影给中断恢复面板；回调随挂载的 Composer 存活。
+    control.onModelShortcutsViewChange = (view, harnessId) => {
+      if (mountedByComposer.get(composer) !== mounted) return;
+      buddyControl?.setModelShortcutsView(view, harnessId);
+    };
     if (isComposerModelWriteAllowed(modelTarget)) {
       applyDraftAgentCarrier(composer, state.agent);
     }

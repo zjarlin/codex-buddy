@@ -1,6 +1,6 @@
 # 翻译卡片
 
-当模型回答的语言与 UI 语言不一致时，客户端自动翻译并展示译文，包括同一回合内的多段进度消息。译文属于展示层，原生会话历史和模型上下文保留原文。回合运行期间只排队不请求，回合结束后把该会话内所有待翻译段落合并成一次批量翻译，避免逐条请求占满 Host 请求队列。
+当模型回答的语言与 UI 语言不一致时，客户端自动翻译并展示译文，包括同一回合内的多段进度消息。译文属于展示层，原生会话历史和模型上下文保留原文。回合运行期间只排队不请求，回合结束后把该会话内所有待翻译段落合并成小分片批量翻译，避免逐条请求占满 Host 请求队列。
 
 ## 触发条件
 
@@ -14,7 +14,7 @@ Renderer 与 Host 使用共享的正文语言判断，排除代码、URL、路�
 
 Host 复用当前 Codex 网关配置，调用 `POST /api/v1/translate` 的专用翻译服务，不使用聊天模型生成译文。凭据留在 Host，Renderer 只接收译文、服务商和耗时。
 
-一个回合结束时，Renderer 把该会话内所有待翻译段落按 `{id, text}` 组成一次 `codexhost/buddy/translate/batch` 请求；Host 复用同一网关接口的多条 `q` 能力，去重后单次调用，再按 `id` 返回每段译文。子2API 聚合器会校验结果数与请求数一致，因此批量请求要么整体成功，要么整体报告失败。同一段落命中缓存或同语言跳过时不再进入网关请求。旧 Host 不支持批量方法时，回退到逐条单文本翻译。
+一个回合结束时，Renderer 把该会话内所有待翻译段落按 `{id, text}` 组成 `codexhost/buddy/translate/batch` 请求；Host 复用同一网关接口的多条 `q` 能力，去重后调用，再按 `id` 返回每段译文。子2API 聚合器会校验结果数与请求数一致，且对每个服务商只有一次固定时间预算，并逐条调用上游，因此段落越多越容易整批超时。Renderer 因此按最多 8 段一片拆分，并以 2 路有界并发发送：长会话只需少数几个请求，而每个请求都能在网关预算内稳定完成，单个分片失败也只影响该分片。同一段落命中缓存或同语言跳过时不再进入网关请求。旧 Host 不支持批量方法时，回退到逐条单文本翻译。
 
 Host 在读取网关配置和翻译缓存之前跳过同语言正文及纯代码请求，返回 `model: "noop"`、`latencyMs: 0`；中文正文在 `zh`、`zh-CN`、`zh-TW` 界面均跳过，不请求网关或判断模型。
 
@@ -37,4 +37,4 @@ Sub2API 的 `/api/v1/translate` 用 `{code,message,data}` 包一层，`host-runt
 - `shared-contracts/buddy-translate.ts`: 单条/批量 RPC schema + method name + 共享正文语言判断
 - `host-runtime/buddy/translator.ts`: 网关翻译接口 + 批量 + 缓存
 - `renderer-extension/renderer-host-clients.ts`: SSH 翻译方法（含批量）兼容与本机回退
-- `renderer-extension/translate-card/`: DOM 挂载 + UI + 回合结束批量触发
+- `renderer-extension/translate-card/`: DOM 挂载 + UI + 回合结束分片批量触发（8 段/片，2 路并发）

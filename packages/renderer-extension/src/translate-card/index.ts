@@ -79,6 +79,8 @@ export function installTranslateCards(options: Options) {
   // 每个会话的状态：完成卡片、运行中排队条目、以及并发控制字段。
   const threads = new Map<string, ThreadState>();
 
+  type PendingEntry = [string, { text: string; anchor: HTMLElement }];
+
   interface ThreadState {
     client: RendererModelClient | null;
     active: boolean | null;
@@ -109,6 +111,11 @@ export function installTranslateCards(options: Options) {
     }
     return state;
   }
+
+  /** 单个网关请求承载的段落数；网关逐条调用上游，段数越多越接近单次超时。 */
+  const BATCH_CHUNK = 8;
+  /** 分片并发数：保持请求量很小，同时避免长会话等待过久。 */
+  const BATCH_CONCURRENCY = 2;
 
   /** 卡片签名只取决于文本与语言，渲染与轮询必须使用同一个字符串。 */
   function signatureOf(text: string, locale: string): string {
@@ -270,7 +277,6 @@ export function installTranslateCards(options: Options) {
     state.pending.clear();
     if (!entries.length || !client) return;
     const msgs = translateMessages(locale);
-    const items = entries.map(([id, entry]) => ({ id, text: entry.text }));
 
     if (!client.translateBatch) {
       // 旧 Host 不支持批量：退回逐条翻译，仍按顺序限流。
@@ -279,45 +285,80 @@ export function installTranslateCards(options: Options) {
       }
       return;
     }
+    const translateBatch = client.translateBatch.bind(client);
 
     state.batching = true;
     for (const [id] of entries) {
       const card = state.cards.get(id)?.node;
       if (card?.isConnected) card.dataset.state = "loading";
     }
-    try {
-      const result = await client.translateBatch({ items, targetLocale: locale });
-      if (disposed) return;
-      const byId = new Map(result.items.map((item) => [item.id, item]));
-      for (const [id, entry] of entries) {
-        const item = byId.get(id);
-        if (!entry.anchor.isConnected) continue;
-        if (!item) {
+
+    // 网关对每个服务商只有约 10 秒预算，且逐条调用上游，段落越多越容易整批超时。
+    // 按小分片并发发送，既保持请求量很小，又让每个请求都能稳定完成。
+    const chunks: PendingEntry[][] = [];
+    for (let index = 0; index < entries.length; index += BATCH_CHUNK) {
+      chunks.push(entries.slice(index, index + BATCH_CHUNK));
+    }
+
+    const translateChunk = async (chunk: PendingEntry[]): Promise<void> => {
+      const items = chunk.map(([id, entry]) => ({ id, text: entry.text }));
+      try {
+        const result = await translateBatch({ items, targetLocale: locale });
+        if (disposed) return;
+        const byId = new Map(result.items.map((item) => [item.id, item]));
+        for (const [id, entry] of chunk) {
+          const item = byId.get(id);
+          if (!entry.anchor.isConnected) continue;
+          if (!item) {
+            renderFailure(
+              threadId,
+              id,
+              new Error(msgs.unknownError),
+              locale,
+              () => void translateSingle(threadId, id, entry.text, entry.anchor, locale),
+            );
+            continue;
+          }
+          cache.set(`${locale}:${entry.text}`, item);
+          const signature = signatureOf(entry.text, locale);
+          renderResult(
+            threadId,
+            id,
+            item.translated,
+            item.model,
+            item.latencyMs,
+            locale,
+            signature,
+          );
+        }
+      } catch (error) {
+        if (disposed) return;
+        for (const [id, entry] of chunk) {
+          if (!entry.anchor.isConnected) continue;
           renderFailure(
             threadId,
             id,
-            new Error(msgs.unknownError),
+            error,
             locale,
             () => void translateSingle(threadId, id, entry.text, entry.anchor, locale),
           );
-          continue;
         }
-        cache.set(`${locale}:${entry.text}`, item);
-        const signature = signatureOf(entry.text, locale);
-        renderResult(threadId, id, item.translated, item.model, item.latencyMs, locale, signature);
       }
-    } catch (error) {
-      if (disposed) return;
-      for (const [id, entry] of entries) {
-        if (!entry.anchor.isConnected) continue;
-        renderFailure(
-          threadId,
-          id,
-          error,
-          locale,
-          () => void translateSingle(threadId, id, entry.text, entry.anchor, locale),
-        );
-      }
+    };
+
+    try {
+      let cursor = 0;
+      const workers = Array.from(
+        { length: Math.min(BATCH_CONCURRENCY, chunks.length) },
+        async () => {
+          while (!disposed) {
+            const chunk = chunks[cursor++];
+            if (!chunk) return;
+            await translateChunk(chunk);
+          }
+        },
+      );
+      await Promise.all(workers);
     } finally {
       state.batching = false;
     }

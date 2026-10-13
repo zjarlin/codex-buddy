@@ -353,3 +353,26 @@ test("defers translation while the turn runs and batches once at completion", as
   expect(batches[0]?.length).toBe(2);
   await page.screenshot({ path: testInfo.outputPath("completed-batched.png") });
 });
+
+test("chunks a large turn batch so each gateway request stays small", async ({
+  page,
+}, testInfo) => {
+  const segments = Array.from(
+    { length: 10 },
+    (_value, index) =>
+      `<div data-response-annotation-conversation="thread" data-response-annotation-target="seg-${index}"><div data-markdown-text-style="assistant-message"><p>Let me verify adapter segment number ${index} before continuing with the check.</p></div></div>`,
+  ).join("");
+  await page.setContent(
+    `<main><section data-content-search-turn-key="turn">${segments}</section></main>`,
+  );
+  await startFixture(page);
+  await expect(page.locator('[data-state="completed"]')).toHaveCount(10);
+  const batches = await page.evaluate(
+    () => (window as unknown as TranslationFixtureWindow).batchRequests,
+  );
+  // 10 段按 8 条一片拆成两个请求，每个请求都远小于网关的单次预算。
+  expect(batches).toHaveLength(2);
+  expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(8);
+  expect(batches.flat()).toHaveLength(10);
+  await page.screenshot({ path: testInfo.outputPath("chunked-batch.png"), fullPage: true });
+});

@@ -137,6 +137,26 @@ function sidebarRow(threadId: string, hostId: string, conversationId = threadId)
   return row;
 }
 
+// 原生“Show more / Show less”加载更多控件：以 Fiber 上的 hasMoreItems +
+// onExpandedChange 暴露分页契约，并按当前展开态决定 onClick 的行为。
+function pagingButton(
+  handlers: { onExpandedChange: (expanded: boolean) => void },
+  options: { busy?: boolean } = {},
+): HTMLButtonElement {
+  const button = {
+    disabled: options.busy ?? false,
+    getAttribute: (name: string) => (name === "aria-disabled" ? String(options.busy) : null),
+    click: vi.fn(() => handlers.onExpandedChange(true)),
+  } as unknown as HTMLButtonElement;
+  Object.defineProperty(button, "__reactFiber$test", {
+    value: {
+      memoizedProps: { expanded: true, hasMoreItems: true, onExpandedChange: vi.fn() },
+      return: null,
+    },
+  });
+  return button;
+}
+
 describe("Renderer external Thread Fork control", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -268,12 +288,19 @@ describe("Renderer external Thread Fork control", () => {
     expect(disconnect).toHaveBeenCalledOnce();
   });
 
-  it("expands a collapsed sidebar project before opening a hidden Thread", async () => {
+  it("expands a collapsed sidebar project, opens it, and folds the project back", async () => {
     const rows: HTMLElement[] = [];
     const target = sidebarRow("hidden-thread", "local");
+    let expanded = false;
     const header = {
-      getAttribute: (name: string) => (name === "aria-expanded" ? "false" : null),
+      isConnected: true,
+      getAttribute: (name: string) => (name === "aria-expanded" ? String(expanded) : null),
       click: vi.fn(() => {
+        if (expanded) {
+          expanded = false;
+          return;
+        }
+        expanded = true;
         rows.push(target);
       }),
     } as unknown as HTMLElement;
@@ -315,21 +342,23 @@ describe("Renderer external Thread Fork control", () => {
       timeoutMs: 60_000,
     });
 
-    expect(header.click).toHaveBeenCalledOnce();
+    // 展开一次、打开会话后再折叠还原，项目头被点击两次，且最终处于折叠状态。
+    expect(header.click).toHaveBeenCalledTimes(2);
+    expect(expanded).toBe(false);
     expect(target.click).toHaveBeenCalledOnce();
   });
 
-  it("clicks the native load-more control to reveal a paginated Thread", async () => {
+  it("clicks the native load-more control to reveal a Thread, then restores it", async () => {
     const rows: HTMLElement[] = [];
     const target = sidebarRow("paged-thread", "local");
-    const onExpandedChange = vi.fn(() => rows.push(target));
-    const reveal = { click: onExpandedChange } as unknown as HTMLButtonElement;
-    Object.defineProperty(reveal, "__reactFiber$test", {
-      value: {
-        memoizedProps: { expanded: true, hasMoreItems: true, onExpandedChange },
-        return: null,
-      },
+    // 原生第一次点击展开列表并挂载目标行，第二次点击（此时按钮变为“Show less”）
+    // 收起列表；两次都走同一个 onExpandedChange 契约。
+    let expanded = false;
+    const onExpandedChange = vi.fn(() => {
+      expanded = !expanded;
+      if (expanded) rows.push(target);
     });
+    const reveal = pagingButton({ onExpandedChange });
     const sidebar = {
       querySelectorAll: (selector: string) => (selector === "button" ? [reveal] : []),
     };
@@ -354,21 +383,20 @@ describe("Renderer external Thread Fork control", () => {
       timeoutMs: 60_000,
     });
 
-    expect(reveal.click).toHaveBeenCalledOnce();
+    expect(reveal.click).toHaveBeenCalledTimes(2);
+    expect(expanded).toBe(false);
     expect(target.click).toHaveBeenCalledOnce();
   });
 
   it("waits for an asynchronously mounted load-more control", async () => {
     const rows: HTMLElement[] = [];
     const target = sidebarRow("paged-thread", "local");
-    const onExpandedChange = vi.fn(() => rows.push(target));
-    const reveal = { click: onExpandedChange } as unknown as HTMLButtonElement;
-    Object.defineProperty(reveal, "__reactFiber$test", {
-      value: {
-        memoizedProps: { expanded: true, hasMoreItems: true, onExpandedChange },
-        return: null,
-      },
+    let expanded = false;
+    const onExpandedChange = vi.fn(() => {
+      expanded = !expanded;
+      if (expanded) rows.push(target);
     });
+    const reveal = pagingButton({ onExpandedChange });
     let queries = 0;
     const sidebar = {
       querySelectorAll: (selector: string) =>
@@ -395,7 +423,8 @@ describe("Renderer external Thread Fork control", () => {
       timeoutMs: 60_000,
     });
 
-    expect(reveal.click).toHaveBeenCalledOnce();
+    expect(reveal.click).toHaveBeenCalledTimes(2);
+    expect(expanded).toBe(false);
     expect(target.click).toHaveBeenCalledOnce();
   });
 
@@ -432,6 +461,69 @@ describe("Renderer external Thread Fork control", () => {
 
     await expect(opening).rejects.toThrow("Thread did not appear in the sidebar");
     expect(reveal.click).not.toHaveBeenCalled();
+  });
+
+  it("folds revealed projects and lists back when the target never appears", async () => {
+    // 目标行始终找不到时，reveal 期间打开的项目头与“Show more”列表必须在超时后
+    // 还原，避免侧栏残留展开形态。这里没有目标行，因此列表会继续分页直到超时。
+    vi.useFakeTimers();
+    // 项目头初始折叠；reveal 展开它、超时后再折叠回来。
+    let headerExpanded = false;
+    const header = {
+      isConnected: true,
+      getAttribute: (name: string) => (name === "aria-expanded" ? String(headerExpanded) : null),
+      click: vi.fn(() => {
+        headerExpanded = !headerExpanded;
+      }),
+    } as unknown as HTMLElement;
+    let expanded = false;
+    const reveal = pagingButton({
+      onExpandedChange: () => {
+        expanded = !expanded;
+      },
+    });
+    const sidebar = {
+      querySelectorAll: (selector: string) => {
+        if (selector === "[data-app-action-sidebar-project-row]") return [header];
+        if (selector === "button") return [reveal];
+        return [];
+      },
+    };
+    class FakeMutationObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector === "#app-shell-sidebar" ? sidebar : null),
+      querySelectorAll: () => [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    const opening = openRendererThread(hostThreadIdSchema.parse("absent-thread"), {
+      hostId: "local",
+      timeoutMs: 300,
+    });
+    const rejection = expect(opening).rejects.toThrow("Thread did not appear in the sidebar");
+    // 第一轮（120ms）先展开折叠的项目头。
+    await vi.advanceTimersByTimeAsync(121);
+    expect(header.click).toHaveBeenCalledTimes(1);
+    // 第二轮（240ms）再点开“Show more”列表。
+    await vi.advanceTimersByTimeAsync(121);
+    expect(reveal.click).toHaveBeenCalledTimes(1);
+    // 300ms 超时：统一还原，列表收起（Show less），项目头折叠。
+    await vi.advanceTimersByTimeAsync(70);
+    await rejection;
+
+    expect(reveal.click).toHaveBeenCalledTimes(2);
+    expect(expanded).toBe(false);
+    // 项目头展开一次、还原折叠一次，最终回到折叠态。
+    expect(header.click).toHaveBeenCalledTimes(2);
+    expect(headerExpanded).toBe(false);
   });
 
   it("resolves a Fork button only when DOM and Fiber identities agree", () => {

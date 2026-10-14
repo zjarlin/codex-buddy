@@ -64,13 +64,6 @@ function rendererUserAgentData(navigator: Navigator): RendererUserAgentData | un
   return (navigator as Navigator & { userAgentData?: RendererUserAgentData }).userAgentData;
 }
 
-export function isWindowsRenderer(window: Window | null | undefined): boolean {
-  const navigator = window?.navigator;
-  if (!navigator) return false;
-  const identity = `${rendererUserAgentData(navigator)?.platform ?? ""} ${navigator.platform ?? ""} ${navigator.userAgent}`;
-  return /windows|win32|win64/iu.test(identity);
-}
-
 function windowsInstallerDownloadUrl(window: Window | null | undefined, version: string): string {
   const navigator = window?.navigator;
   const hints = navigator ? rendererUserAgentData(navigator) : undefined;
@@ -254,7 +247,10 @@ function updatesPage(
     icon: "updates",
     mount(context: RendererSettingsPageMountContext) {
       const document = context.content.ownerDocument;
-      const windows = isWindowsRenderer(document.defaultView);
+      // Windows installer updates are automatic since the per-user Inno package
+      // replaced files only after the Launcher exits; the Host reports whether an
+      // installer for this target is actually available, so the page no longer
+      // branches on the renderer platform.
       const heading = document.createElement("div");
       heading.className = "settings-section-label";
       heading.textContent = messages.pageLabels.updates;
@@ -374,13 +370,12 @@ function updatesPage(
       const setManualFallback = (fallback: boolean): void => {
         // While automatic update works, manual download is a one-line escape hatch;
         // once it fails, the section returns at full weight.
-        controls.className =
-          !fallback && !windows ? "settings-update-controls is-quiet" : "settings-update-controls";
-        manualNpmDescription.textContent = windows
-          ? messages.updateWindowsNpmDescription
-          : fallback
-            ? messages.updateManualFallbackDescription
-            : messages.updateManualNpmDescription;
+        controls.className = !fallback
+          ? "settings-update-controls is-quiet"
+          : "settings-update-controls";
+        manualNpmDescription.textContent = fallback
+          ? messages.updateManualFallbackDescription
+          : messages.updateManualNpmDescription;
         manualNpmDescription.className = fallback
           ? "settings-update-manual-description is-fallback"
           : "settings-update-manual-description";
@@ -499,7 +494,7 @@ function updatesPage(
           });
           panel.append(createPanelActions(document, restart));
         }
-        if (status?.phase === "failed" && client && !windows) {
+        if (status?.phase === "failed" && client) {
           const retry = document.createElement("button");
           retry.type = "button";
           retry.className = "settings-command-button";
@@ -561,11 +556,14 @@ function updatesPage(
           : "";
         installationValue.textContent = installationLabel(result.installation, messages);
         manualNpm.hidden = result.installation !== "npm";
-        manualWindowsInstaller.hidden = !windows || result.installation !== "windows-installer";
-        releaseLink.hidden = windows;
-        manualTitle.hidden =
-          windows && !["npm", "windows-installer"].includes(result.installation ?? "");
-        if (windows && result.installation === "windows-installer" && result.latestVersion) {
+        // The installer fallback is the escape hatch for a failed automatic update
+        // on the platform that owns an installer, not the default Windows path.
+        manualWindowsInstaller.hidden =
+          result.installation !== "windows-installer" ||
+          result.updateAvailable === false ||
+          result.installationAvailable;
+        manualTitle.hidden = manualNpm.hidden && manualWindowsInstaller.hidden;
+        if (result.installation === "windows-installer" && result.latestVersion) {
           manualWindowsInstallerLink.href = windowsInstallerDownloadUrl(
             document.defaultView,
             result.latestVersion,
@@ -587,8 +585,7 @@ function updatesPage(
         panel.replaceChildren();
         setManualFallback(Boolean(result.error) || actionableStatus !== null);
         // Every state gets a status line; a bare button in an empty card reads as unfinished.
-        const inlineUpdate =
-          !result.error && !windows && !actionableStatus && result.updateAvailable;
+        const inlineUpdate = !result.error && !actionableStatus && result.updateAvailable;
         if (inlineUpdate) panel.dataset.inline = "";
         else delete panel.dataset.inline;
         panel.append(
@@ -600,9 +597,9 @@ function updatesPage(
               : result.error
                 ? messages.updateFailed
                 : result.updateAvailable
-                  ? windows
-                    ? messages.updateWindowsManualRequired
-                    : messages.updateAvailable
+                  ? result.installationAvailable
+                    ? messages.updateAvailable
+                    : messages.updateInstallationUnavailable
                   : messages.updateUpToDate,
           ),
         );
@@ -619,7 +616,7 @@ function updatesPage(
           panel.append(error);
         }
         const buttons: HTMLElement[] = [];
-        if (!windows && result.updateAvailable && result.installationAvailable) {
+        if (result.updateAvailable && result.installationAvailable) {
           const update = document.createElement("button");
           update.type = "button";
           update.className = "settings-command-button";

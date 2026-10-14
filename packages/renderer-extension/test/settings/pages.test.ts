@@ -222,6 +222,12 @@ function updateCheck(status: UpdateStatus | null = null): UpdateCheckResult {
   };
 }
 
+function updateCheckWithInstallation(
+  installation: "npm" | "windows-installer" | "macos-dmg",
+): UpdateCheckResult {
+  return { ...updateCheck(), installation };
+}
+
 function updateStatus(
   phase: UpdateStatus["phase"],
   installation: UpdateStatus["installation"] = "npm",
@@ -1567,15 +1573,51 @@ describe("Renderer Updates page", () => {
     scope.dispose();
   });
 
-  it.each([
-    ["npm" as const, "Windows 暂不支持自动更新。请退出 Codex Buddy，在终端运行以下命令完成更新。"],
-    [
-      "windows-installer" as const,
-      "Windows 暂不支持自动更新。请下载并运行适用于当前系统的安装包。",
-    ],
-  ])("renders manual Windows updates for %s installations", async (installation, expected) => {
+  it("offers the automatic installer update on Windows", async () => {
     const client = {
-      checkUpdate: vi.fn(async () => ({ ...updateCheck(), installation })),
+      checkUpdate: vi.fn(async () => updateCheckWithInstallation("windows-installer")),
+      startUpdate: vi.fn(),
+      readUpdateStatus: vi.fn(async () => ({ status: null })),
+    };
+    const page = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("zh-CN"),
+      () => client,
+    ).find(({ id }) => id === "updates");
+    if (!page) throw new Error("Updates page is not registered");
+
+    // The Windows renderer platform must not force the manual download path.
+    const document = new FakeDocument("Win32");
+    const content = document.createElement("main");
+    const scope = new RendererSettingsPageScope();
+    const cleanup = page.mount({
+      content: content as unknown as HTMLElement,
+      signal: scope.signal,
+      runLatest: (operation, handlers) => scope.runLatest(operation, handlers),
+    });
+
+    await vi.waitFor(() => {
+      expect(visibleText(elementWithClass(content, "settings-update-panel"))).toContain(
+        "有新版本可用",
+      );
+    });
+    expect(visibleText(content)).not.toContain("暂不支持自动更新");
+    const button = descendants(elementWithClass(content, "settings-update-panel")).find(
+      ({ tagName }) => tagName === "button",
+    );
+    expect(button).toBeDefined();
+    expect(button?.children).toContain("下载更新");
+
+    cleanup?.();
+    scope.dispose();
+  });
+
+  it("keeps the manual installer link when this target has no verified asset", async () => {
+    const client = {
+      checkUpdate: vi.fn(async () => ({
+        ...updateCheckWithInstallation("windows-installer"),
+        installationAvailable: false,
+        error: "The latest GitHub Release has no verified asset for this installation",
+      })),
       startUpdate: vi.fn(),
       readUpdateStatus: vi.fn(async () => ({ status: null })),
     };
@@ -1595,20 +1637,6 @@ describe("Renderer Updates page", () => {
     });
 
     await vi.waitFor(() => {
-      expect(visibleText(content)).toContain(expected);
-      expect(visibleText(elementWithClass(content, "settings-update-panel"))).toContain(
-        "Windows 暂不支持自动更新",
-      );
-    });
-    expect(
-      descendants(elementWithClass(content, "settings-update-panel")).find(
-        ({ tagName }) => tagName === "button",
-      ),
-    ).toBeUndefined();
-    expect(client.startUpdate).not.toHaveBeenCalled();
-    if (installation === "npm") {
-      expect(visibleText(content)).toContain("npm install -g @codexhost/cli@latest");
-    } else {
       const link = descendants(content).find(
         ({ tagName, href }) =>
           tagName === "a" &&
@@ -1616,7 +1644,8 @@ describe("Renderer Updates page", () => {
             "https://github.com/zjarlin/codex-buddy/releases/download/v1.2.3/codex-buddy-1.2.3-windows-x64.exe",
       );
       expect(link).toMatchObject({ target: "_blank", rel: "noopener noreferrer" });
-    }
+    });
+    expect(client.startUpdate).not.toHaveBeenCalled();
 
     cleanup?.();
     scope.dispose();

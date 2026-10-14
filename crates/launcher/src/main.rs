@@ -84,6 +84,8 @@ const NPM_UPDATE_RUNTIME_ENV: [&str; 4] = [
     NPM_PACKAGE_ROOT_ENV,
 ];
 const START_MENU_ARGUMENT: &str = "--start-menu";
+#[cfg(target_os = "windows")]
+const DESKTOP_UPDATE_STOP_GRACE: Duration = Duration::from_secs(10);
 const READY_LINE: &str = "ready";
 const STARTUP_TRACE_ENV: &str = "CODEXHOST_STARTUP_TRACE";
 const CONTROLLER_STOP_GRACE: Duration = Duration::from_secs(1);
@@ -651,8 +653,14 @@ fn stop_managed_desktop_for_update(
     controller: &mut SupervisedChild,
 ) -> Result<(), Box<dyn Error>> {
     let _ = stop_desktop_controller(controller);
-    let _ = desktop.kill();
-    let _ = desktop.wait();
+    // Let Codex Desktop run its normal shutdown (session flush, updater hand-off)
+    // before falling back to termination. The temporary Updater waits for this
+    // Launcher to exit, and the Inno installer replaces files only afterwards.
+    let _ = desktop.request_close();
+    if !desktop.wait_for_exit(DESKTOP_UPDATE_STOP_GRACE)? {
+        let _ = desktop.kill();
+        let _ = desktop.wait();
+    }
     Ok(())
 }
 

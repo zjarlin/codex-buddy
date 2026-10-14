@@ -228,7 +228,7 @@ export interface RendererSettingsMessages {
   readonly updateLatestVersion: string;
   readonly updateUpToDate: string;
   readonly updateAvailable: string;
-  readonly updateWindowsManualRequired: string;
+  readonly updateInstallationUnavailable: string;
   readonly updateAndRestart: string;
   readonly updateDownload: string;
   readonly updateReadyToRestart: string;
@@ -554,8 +554,8 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateLatestVersion: "Latest version",
   updateUpToDate: "You are up to date.",
   updateAvailable: "A new version is available.",
-  updateWindowsManualRequired:
-    "Automatic updates are unavailable on Windows. Update manually below.",
+  updateInstallationUnavailable:
+    "This Release has no verified installer for your system. Download it manually below.",
   updateAndRestart: "Update",
   updateDownload: "Download update",
   updateReadyToRestart: "Update ready. Restart to install.",
@@ -578,9 +578,9 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateRetry: "Retry",
   updateManualNpmDescription: "To update manually, quit Codex Buddy and run this command:",
   updateWindowsNpmDescription:
-    "Automatic updates are unavailable on Windows. Quit Codex Buddy and run this command in a terminal:",
+    "To update this npm installation on Windows, quit Codex Buddy and run this command in a terminal:",
   updateWindowsInstallerDescription:
-    "Automatic updates are unavailable on Windows. Download and run the installer for this system.",
+    "Automatic updates are unavailable for this installation. Download and run the installer for this system.",
   updateManualTitle: "Manual update",
   updateManualFallbackDescription:
     "The automatic update did not complete. Run this command in a terminal instead, then quit Codex and relaunch it with Codex Buddy.",
@@ -892,7 +892,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateLatestVersion: "最新版本",
   updateUpToDate: "当前已是最新版本。",
   updateAvailable: "有新版本可用。",
-  updateWindowsManualRequired: "Windows 暂不支持自动更新，请在下方手动更新。",
+  updateInstallationUnavailable: "该版本没有适用于当前系统的安装包，请在下方手动下载。",
   updateAndRestart: "更新",
   updateDownload: "下载更新",
   updateReadyToRestart: "更新已就绪，重启后安装。",
@@ -914,9 +914,9 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateManualNpmDescription:
     "如需手动更新，请在终端运行以下命令。更新完成后，请退出 Codex 并通过 Codex Buddy 重新启动。",
   updateWindowsNpmDescription:
-    "Windows 暂不支持自动更新。请退出 Codex Buddy，在终端运行以下命令完成更新。",
+    "如需更新这个 npm 安装，请退出 Codex Buddy，在终端运行以下命令完成更新。",
   updateWindowsInstallerDescription:
-    "Windows 暂不支持自动更新。请下载并运行适用于当前系统的安装包。",
+    "该安装方式暂无法自动更新。请下载并运行适用于当前系统的安装包。",
   updateManualTitle: "手动更新",
   updateManualFallbackDescription:
     "自动更新未能完成，请改用下列命令在终端手动更新。完成后请退出 Codex 并通过 Codex Buddy 重新启动。",

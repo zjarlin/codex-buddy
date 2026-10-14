@@ -62,6 +62,11 @@ Host SHALL serialize update starts across current Host processes. After successf
 - **WHEN** no update operation is active and the current candidate remains the latest stable Release
 - **THEN** exactly one helper SHALL start and the Launcher SHALL stop the owned Desktop process tree after that helper is waiting for exit
 
+#### Scenario: Windows stops the managed Desktop gracefully
+- **WHEN** a prepared Windows installer update is confirmed and the temporary Updater is waiting for the Launcher
+- **THEN** the Launcher SHALL ask the managed Desktop top-level windows to close and SHALL wait for the owned process to exit
+- **AND** it SHALL force-terminate the process only when the graceful close does not complete within the bounded grace period
+
 #### Scenario: User clicks update repeatedly
 - **WHEN** a prepared or active operation already exists
 - **THEN** Host SHALL return its bounded current status and SHALL NOT prepare another artifact or start another helper

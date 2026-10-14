@@ -7,7 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    HANDLE, RPC_E_CHANGED_MODE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    HANDLE, HWND, LPARAM, RPC_E_CHANGED_MODE, STILL_ACTIVE, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance,
@@ -22,7 +22,10 @@ use windows::Win32::UI::Shell::{
     ACTIVATEOPTIONS, ApplicationActivationManager, IApplicationActivationManager,
     IPackageDebugSettings, PackageDebugSettings,
 };
-use windows::core::{HSTRING, Owned};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+};
+use windows::core::{BOOL, HSTRING, Owned};
 
 use super::process::desktop_root_process_ids;
 use super::{APPX_RESUME_ARGUMENT, PlatformError};
@@ -204,6 +207,44 @@ impl WindowsDesktopProcess {
         unsafe { TerminateProcess(**process, 1) }
             .map_err(|error| io::Error::other(format!("cannot terminate Desktop: {error}")))
     }
+
+    /// Ask the top-level Desktop windows to close so the application can run its
+    /// normal shutdown (session flush, updater hand-off) instead of being killed.
+    pub fn request_close(&self) -> io::Result<()> {
+        let target = self.process_id;
+        unsafe {
+            EnumWindows(Some(close_windows_for_process), LPARAM(target as isize)).map_err(|error| {
+                io::Error::other(format!("cannot enumerate Desktop windows: {error}"))
+            })
+        }
+    }
+
+    /// Poll the owned root until it exits or the grace period elapses.
+    pub fn wait_for_exit(&mut self, grace: Duration) -> io::Result<bool> {
+        let started = Instant::now();
+        loop {
+            if self.try_wait()?.is_some() {
+                return Ok(true);
+            }
+            if started.elapsed() >= grace {
+                return Ok(false);
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+/// Window callback: post WM_CLOSE to every visible top-level window owned by the
+/// managed Desktop process. Returns TRUE to keep enumerating.
+unsafe extern "system" fn close_windows_for_process(window: HWND, parameter: LPARAM) -> BOOL {
+    let target = parameter.0 as u32;
+    let mut owner = 0_u32;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
+    if owner == target && unsafe { IsWindowVisible(window).as_bool() } {
+        // A failed post is not fatal: the process may already be closing.
+        let _ = unsafe { PostMessageW(Some(window), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    }
+    BOOL(1)
 }
 
 struct ActivatedProcessGuard {

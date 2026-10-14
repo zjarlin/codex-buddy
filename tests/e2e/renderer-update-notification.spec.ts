@@ -31,7 +31,12 @@ const bundle = fixtureFile.text;
 
 async function fixture(
   page: Page,
-  options: { failOnce?: boolean; windows?: boolean; current?: boolean } = {},
+  options: {
+    failOnce?: boolean;
+    windows?: boolean;
+    current?: boolean;
+    installationAvailable?: boolean;
+  } = {},
 ) {
   const calls = { starts: 0, restarts: 0, status: 0 };
   let phase: string | null = null;
@@ -80,7 +85,7 @@ async function fixture(
         installation: options.windows ? "windows-installer" : "macos-dmg",
         latestVersion: options.current ? "0.10.43" : "0.10.48",
         updateAvailable: !options.current,
-        installationAvailable: true,
+        installationAvailable: options.installationAvailable ?? true,
         releaseNotes: "应用内更新提示",
         releaseNotesUrl: null,
         status: status(),
@@ -203,14 +208,40 @@ test("settings and notification share the ready state and restart action", async
   expect(errors).toEqual([]);
 });
 
-test("Windows update icon uses the existing manual installer page", async ({ page }, testInfo) => {
+test("Windows installer updates run automatically from the update icon", async ({
+  page,
+}, testInfo) => {
   await page.addInitScript(() => Object.defineProperty(navigator, "platform", { value: "Win32" }));
   const { calls, errors } = await fixture(page, { windows: true });
+  const popup = page.locator("[data-codexhost-update-notification]");
   await page.locator("[data-codexhost-update-trigger] button").click();
-  await expect(page.locator(".settings-update-panel")).toContainText("Windows 暂不支持自动更新");
-  await page.screenshot({ path: testInfo.outputPath("windows-manual-update.png") });
+  await expect(popup).toContainText("正在下载更新");
+  await page.screenshot({ path: testInfo.outputPath("windows-downloading.png") });
+  await expect(popup.getByRole("button", { name: "重启更新" })).toBeVisible();
+  expect(calls.starts).toBe(1);
+  await popup.getByRole("button", { name: "重启更新" }).click();
+  await expect(popup).toContainText("正在等待应用退出");
+  expect(calls.restarts).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("Windows shows the manual installer link when no verified asset exists", async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, "platform", { value: "Win32" }));
+  const { calls, errors } = await fixture(page, {
+    windows: true,
+    installationAvailable: false,
+  });
+  await page.locator("[data-codexhost-settings-trigger] button").click();
+  await page.locator(".settings-nav").getByRole("button", { name: "更新", exact: true }).click();
+  const panel = page.locator(".settings-update-panel");
+  await expect(panel).toContainText("该版本没有适用于当前系统的安装包");
+  await expect(
+    page.locator(".settings-update-manual a[href$='codex-buddy-0.10.48-windows-x64.exe']"),
+  ).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("windows-manual-fallback.png") });
   expect(calls.starts).toBe(0);
-  expect(calls.restarts).toBe(0);
   expect(errors).toEqual([]);
 });
 

@@ -1,6 +1,6 @@
 import { createRendererSettingsIcon } from "./icons.js";
 import type { RendererSettingsMessages } from "./localization.js";
-import { formatUpdateBytes, isWindowsRenderer, statusMessage } from "./pages.js";
+import { formatUpdateBytes, statusMessage } from "./pages.js";
 import { installRendererUpdateRailTrigger } from "./trigger.js";
 import { isPollingUpdateStatus, type RendererUpdateController } from "./update-controller.js";
 import notificationStyles from "./update-notification.css";
@@ -69,8 +69,9 @@ export function installRendererUpdateNotification(options: {
     trigger.button.setAttribute("aria-expanded", "true");
     position();
   };
-  const automatic = (): boolean =>
-    !isWindowsRenderer(ownerWindow) && controller.snapshot.check?.installationAvailable === true;
+  // The Host decides whether an installer exists for this target, so the
+  // notification follows the checked capability instead of the renderer platform.
+  const automatic = (): boolean => controller.snapshot.check?.installationAvailable === true;
   const start = (): void => {
     if (!automatic()) {
       close();

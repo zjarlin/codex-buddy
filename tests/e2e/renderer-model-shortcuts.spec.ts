@@ -118,42 +118,63 @@ const openShortcuts = async (page: Page) => {
   await page.addScriptTag({ content: bundle });
 };
 
-test("missing favorites recover automatically without blocking selection or probing", async ({
-  page,
-}) => {
+test("native and custom favorites select without synchronizing the catalog", async ({ page }) => {
   await page.addInitScript(() => {
-    localStorage.setItem("codexhost.model-favorites.v1:codex", '["gamma"]');
+    localStorage.setItem("codexhost.model-favorites.v1:codex", '["gamma","gpt-a"]');
   });
   await openShortcuts(page);
   const chip = page.locator('[data-model-shortcut="gamma"]');
   await expect(chip).toBeEnabled();
   await expect(chip.locator("[data-model-missing-hint]")).toHaveCount(0);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(0);
   await chip.click();
   await expect(page.locator("#native")).toHaveText("gamma");
-  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
-  await expect(chip).toHaveAccessibleName("GPT Gamma");
+  await expect(chip).toHaveAccessibleName("gamma");
   await expect(chip).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("[data-model-shortcuts-refresh]").first()).toBeEnabled();
-  await page.evaluate(() => Reflect.get(globalThis, "setView")({}));
-  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
-  await page.screenshot({ path: "test-results/model-shortcuts-auto-recovery.png" });
+  await page.locator('[data-model-shortcut="gpt-a"]').click();
+  await expect(page.locator("#native")).toHaveText("gpt-a");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(0);
+  await page.screenshot({ path: "test-results/model-shortcuts-no-auto-refresh.png" });
 });
 
-test("permanently missing favorites do not loop and automatic failures permit manual retry", async ({
+test("new conversations, empty catalogs and remounting do not synchronize missing favorites", async ({
   page,
 }) => {
   await page.addInitScript(() => {
     localStorage.setItem("codexhost.model-favorites.v1:codex", '["Custom/Only"]');
   });
   await openShortcuts(page);
+  for (const context of ["new-thread-1", "new-thread-2", "new-thread-3"]) {
+    await page.evaluate((id) => Reflect.get(globalThis, "changeContext")(id), context);
+    await expect(page.locator('[data-model-shortcut="Custom/Only"]')).toBeEnabled();
+    expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(0);
+  }
+  await page.evaluate(() => Reflect.get(globalThis, "setModels")([]));
+  await page.locator('[data-model-shortcut="Custom/Only"]').click();
+  await expect(page.locator("#native")).toHaveText("Custom/Only");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(0);
+  await page.reload();
+  await page.addScriptTag({ content: bundle });
+  await expect(page.locator('[data-model-shortcut="Custom/Only"]')).toBeEnabled();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(0);
+});
+
+test("missing favorites remain usable after manual refresh fails and permit retry", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("codexhost.model-favorites.v1:codex", '["Custom/Only"]');
+  });
+  await openShortcuts(page);
+  const refresh = page.locator("[data-model-shortcuts-refresh]").first();
+  await refresh.click();
   await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(true));
   await expect(page.locator("[data-codexhost-model-shortcuts] [role=status]:visible")).toHaveText(
     "Refresh unavailable",
   );
   await page.evaluate(() => Reflect.get(globalThis, "setView")({}));
   expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
-  const refresh = page.locator("[data-model-shortcuts-refresh]").first();
   await refresh.click();
   await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
   await expect(refresh).toBeEnabled();
@@ -162,19 +183,21 @@ test("permanently missing favorites do not loop and automatic failures permit ma
   await expect(page.locator('[data-model-shortcut="Custom/Only"]')).toBeEnabled();
 });
 
-test("automatic recovery discards errors after switching context", async ({ page }) => {
+test("switching conversations discards old refresh errors without starting another refresh", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     localStorage.setItem("codexhost.model-favorites.v1:codex", '["gamma"]');
   });
   await openShortcuts(page);
+  await page.locator("[data-model-shortcuts-refresh]").first().click();
   await page.evaluate(() => {
     const finishOldRefresh = Reflect.get(globalThis, "finishRefresh");
     Reflect.get(globalThis, "changeContext")("next-thread");
     finishOldRefresh(true);
   });
-  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(2);
-  await page.evaluate(() => Reflect.get(globalThis, "finishRefresh")(false));
-  await expect(page.locator('[data-model-shortcut="gamma"]')).toHaveAccessibleName("GPT Gamma");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(1);
+  await expect(page.locator('[data-model-shortcut="gamma"]')).toBeEnabled();
   await expect(page.locator("[data-codexhost-model-shortcuts] [role=status]:visible")).toHaveCount(
     0,
   );
@@ -206,6 +229,7 @@ test("manual IDs preserve case and slashes, pin without selecting, and survive r
     ),
   ).toEqual(["Vendor/Model-A:Latest"]);
   expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refreshes"))).toHaveLength(0);
   await useId.focus();
   await page.keyboard.press("Enter");
   await expect(page.locator("#native")).toHaveText("Vendor/Model-A:Latest");

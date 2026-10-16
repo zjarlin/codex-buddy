@@ -182,25 +182,27 @@ test("native commit adds all 26 models then removes stale models while preservin
   expect(errors).toEqual([]);
 });
 
-test("a missing favorite automatically synchronizes and waits for the native commit", async ({
-  page,
-}) => {
+test("pinning a missing ID stays local until an explicit catalog refresh", async ({ page }) => {
   const { menu, search, refresh } = await openFixture(page);
   await search.fill("model-25");
   await menu.getByRole("button", { name: "Pin 此 ID", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "refetches").length)).toBe(1);
-  await expect(refresh).toHaveAttribute("aria-busy", "true");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "refetches"))).toHaveLength(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "syncs"))).toBe(0);
+  await expect(refresh).toHaveAttribute("aria-busy", "false");
   await expect(search).toBeEnabled();
   const chip = page.locator('[data-model-shortcut="model-25"]');
   await expect(chip).toBeEnabled();
   await expect(chip.locator("[data-model-missing-hint]")).toHaveCount(0);
+  await refresh.click();
+  await expect.poll(() => page.evaluate(() => Reflect.get(globalThis, "refetches").length)).toBe(1);
+  await expect(refresh).toHaveAttribute("aria-busy", "true");
   await page.evaluate(() => Reflect.get(globalThis, "commitRefresh")());
   await expect(refresh).toBeEnabled();
   expect(await page.evaluate(() => Reflect.get(globalThis, "outcomes"))).toEqual([
     { returned: 26, synchronized: 26 },
   ]);
   await expect(search).toHaveValue("model-25");
-  await expect(menu.getByRole("status")).not.toBeVisible();
+  await expect(menu.getByRole("status")).toContainText("远程返回 26 个，同步 26 个");
   expect(await page.evaluate(() => Reflect.get(globalThis, "selections"))).toEqual([]);
 });
 

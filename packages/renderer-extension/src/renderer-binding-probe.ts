@@ -1985,7 +1985,8 @@ export function installRendererBindingProbe(
         if (!current) throw new Error("Native model selection is unavailable");
         current.select(modelId);
       });
-      await buddyControl?.refresh();
+      // 原生选择已完成，恢复面板的状态查询不应继续占用选模控件。
+      void buddyControl?.refresh();
     } finally {
       mounted.shortcutSelectionPending = false;
       if (mounted.composer.isConnected) renderMounted(mounted);

@@ -16,7 +16,8 @@ export async function selectFixedModel(
       // 官方客户端没有 Host 路由方法，本来就直接使用原生模型选择。
       if (!(error instanceof RendererMethodUnavailableError)) throw error;
     }
-    if (snapshot) {
+    // 已经是固定模型时无需重复持久化设置，也不触发 Host 的配置刷新。
+    if (snapshot && (snapshot.settings.enabled || snapshot.settings.privateMode)) {
       if (!isCurrent()) throw new Error("The active conversation changed; select the Model again");
       if (!client.buddyConfigure) throw new Error("Automatic routing could not be disabled");
       const updated = await client.buddyConfigure({

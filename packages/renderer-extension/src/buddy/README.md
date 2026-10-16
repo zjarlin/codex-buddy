@@ -8,9 +8,9 @@
 
 System One 密钥在路由设置表单中维护，使用密码输入、保存与清除；Host 只回传是否配置。模型参与记录和旁路统计留在 Host 快照中，不占用输入区。等待自动恢复的任务可在路由设置页取消。
 
-模型收藏由 `renderer-model-shortcuts.ts` 管理，复用 `renderer-model-favorites.ts` 的 Harness 隔离存储。收藏即 Pin，目录缺失的 ID 仍显示和可移除；仅声明 `supportsCustomModel` 的原生 Codex 绑定允许手填或选择目录外 ID，外部 Harness 的缺失项禁用。手填输入保留精确 ID，“使用此 ID”选择，“Pin 此 ID”仅持久化。原生绑定读取已发布的菜单属性并调用同一选择回调，不修改目录或发送请求；未知 ID 不携带旧模型的思考强度。手填和 chip 都通过 `renderer-fixed-model-selection.ts` 先关闭 Auto Router 接管和隐私改写，成功后才切换模型；可在设置窗口的“路由”页再次开启自动路由。
+模型收藏由 `renderer-model-shortcuts.ts` 管理，复用 `renderer-model-favorites.ts` 的 Harness 隔离存储。收藏即 Pin，目录缺失的 ID 仍显示和可移除；仅声明 `supportsCustomModel` 的原生 Codex 绑定允许手填或选择目录外 ID，外部 Harness 的缺失项禁用。手填输入保留精确 ID，“使用此 ID”选择，“Pin 此 ID”仅持久化。打开会话、收藏和目录暂未就绪不触发目录同步，避免把原生分页或自定义 ID 当成刷新信号。原生绑定读取已发布的菜单属性并调用同一选择回调，不修改目录或发送请求；未知 ID 不携带旧模型的思考强度。手填和 chip 都通过 `renderer-fixed-model-selection.ts` 检查 Auto Router 接管和隐私改写，仅在策略仍开启时关闭，成功后才切换模型；已关闭时不重复写配置。选择完成后的恢复面板查询在后台运行。可在设置窗口的“路由”页再次开启自动路由。
 
-模型刷新统一经过 `renderer-native-model-refresh.ts`：供应商同步完成后 refetch 原生模型查询，等待 committed 菜单的 ID 集合与 Host 热目录一致，再显示计数。等待有两秒上限，每个异步阶段校验当前 Composer、Host、Harness 和请求版本；超时提示刷新重试，不再要求重启。Host 的 `buddy/live-model-catalog.ts` 负责将已验证同步目录投影到 `model/list`，Renderer 不改写原生 QueryClient 数据或 React 状态。
+手动模型刷新统一经过 `renderer-native-model-refresh.ts`：供应商同步完成后 refetch 原生模型查询；菜单没有活跃查询时，仅允许按完整查询键刷新该 Host 唯一且未禁用的缓存查询。等待 committed 菜单的 ID 集合与 Host 热目录一致，再显示计数。等待有两秒上限，每个异步阶段校验当前 Composer、Host、Harness 和请求版本；超时提示刷新重试，不再要求重启。Host 的 `buddy/live-model-catalog.ts` 负责将已验证同步目录投影到 `model/list`，Renderer 不改写原生 QueryClient 数据或 React 状态。
 
 路由设置允许指定一个执行模型或自动选择，不再设置规划模型。原生 Plan Mode 和原生工具权限不变；Host 不自动分派子代理。
 

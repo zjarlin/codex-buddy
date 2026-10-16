@@ -97,17 +97,38 @@ export async function refreshNativeModels(
       candidates.push(dependency.memoizedValue);
     }
   }
+  const visited = new Set<unknown>();
   for (const candidate of candidates) {
     const value = record(candidate);
     const client = record(value?.queryClient) ?? value;
+    if (visited.has(client)) continue;
+    visited.add(client);
     if (typeof client?.getQueryCache !== "function" || typeof client.refetchQueries !== "function")
       continue;
     const cache = record(client.getQueryCache());
     if (typeof cache?.findAll !== "function") continue;
-    // 9922 的原生目录键为 models/list/host/auth/limit，后缀由原生查询自行维护。
-    const filters = { queryKey: ["models", "list", hostId], type: "active" };
+    // 原生查询后缀包含认证、分页和 Provider 配置，不能用 Host 前缀重建目录数据。
+    const queryKey = ["models", "list", hostId];
+    let filters: { queryKey: unknown[]; type: "active" | "inactive"; exact?: boolean } = {
+      queryKey,
+      type: "active",
+    };
     const queries: unknown = cache.findAll(filters);
-    if (!Array.isArray(queries) || queries.length === 0) continue;
+    if (!Array.isArray(queries)) continue;
+    if (queries.length === 0) {
+      // 菜单关闭后仍可刷新唯一的已加载目录；多个认证或 Provider 快照不能猜测。
+      const inactive: unknown = cache.findAll({ queryKey, type: "inactive" });
+      if (!Array.isArray(inactive) || inactive.length !== 1) continue;
+      const query = record(inactive[0]);
+      if (
+        !Array.isArray(query?.queryKey) ||
+        typeof query.isDisabled !== "function" ||
+        query.isDisabled()
+      ) {
+        continue;
+      }
+      filters = { queryKey: query.queryKey, type: "inactive", exact: true };
+    }
     await client.refetchQueries(filters, { throwOnError: true, cancelRefetch: false });
     return undefined;
   }

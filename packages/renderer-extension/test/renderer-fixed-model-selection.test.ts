@@ -4,13 +4,14 @@ import type { RendererModelClient } from "../src/renderer-model-client.js";
 import { RendererMethodUnavailableError } from "../src/renderer-request-sender.js";
 
 describe("fixed model selection", () => {
-  function fixture() {
+  function fixture(overrides: { enabled?: boolean; privateMode?: boolean } = {}) {
     const settings = {
       enabled: true,
       privateMode: true,
       bypass: true,
       role: "auto",
       executorModel: "worker",
+      ...overrides,
     };
     const client = {
       buddyStatus: vi.fn(async () => ({ settings })),
@@ -18,6 +19,26 @@ describe("fixed model selection", () => {
     };
     return { client, select: vi.fn() };
   }
+
+  it("selects immediately after checking that automatic routing is already disabled", async () => {
+    const { client, select } = fixture({ enabled: false, privateMode: false });
+    await selectFixedModel(client as unknown as RendererModelClient, () => true, select);
+    expect(client.buddyStatus).toHaveBeenCalledOnce();
+    expect(client.buddyConfigure).not.toHaveBeenCalled();
+    expect(select).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { enabled: true, privateMode: false },
+    { enabled: false, privateMode: true },
+  ])("still disables an active policy before selecting: %j", async (settings) => {
+    const { client, select } = fixture(settings);
+    await selectFixedModel(client as unknown as RendererModelClient, () => true, select);
+    expect(client.buddyConfigure).toHaveBeenCalledOnce();
+    expect(client.buddyConfigure.mock.invocationCallOrder[0]).toBeLessThan(
+      select.mock.invocationCallOrder[0] ?? 0,
+    );
+  });
 
   it("disables automatic intervention before selecting, while retaining planning preferences", async () => {
     const { client, select } = fixture();

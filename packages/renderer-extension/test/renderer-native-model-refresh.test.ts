@@ -7,7 +7,7 @@ import {
 import { RendererMethodUnavailableError } from "../src/renderer-request-sender.js";
 
 function fixture(location: "provider" | "scope" | "context" = "provider") {
-  const findAll = vi.fn(() => [{}]);
+  const findAll = vi.fn<(filters: unknown) => unknown[]>(() => [{}]);
   const refetchQueries = vi.fn(async () => {});
   const client = { getQueryCache: () => ({ findAll }), refetchQueries };
   const fiber =
@@ -38,6 +38,35 @@ describe("native model refresh", () => {
     findAll.mockReturnValue([]);
     await expect(refreshNativeModels(trigger, "local")).rejects.toThrow("unavailable");
     await expect(refreshNativeModels(null, "local")).rejects.toThrow("unavailable");
+    expect(refetchQueries).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the exact cached query when its menu has no active observer", async () => {
+    const { trigger, findAll, refetchQueries } = fixture();
+    const queryKey = ["models", "list", "remote-host", "no-auth", 100, "provider", "catalog.json"];
+    const query = { queryKey, isDisabled: () => false };
+    findAll.mockReturnValueOnce([]).mockReturnValueOnce([query]);
+    await refreshNativeModels(trigger, "remote-host");
+    expect(findAll).toHaveBeenLastCalledWith({
+      queryKey: ["models", "list", "remote-host"],
+      type: "inactive",
+    });
+    expect(refetchQueries).toHaveBeenCalledExactlyOnceWith(
+      { queryKey, type: "inactive", exact: true },
+      { throwOnError: true, cancelRefetch: false },
+    );
+  });
+
+  it.each(["disabled", "ambiguous"])("does not refresh a %s cached catalog", async (state) => {
+    const { trigger, findAll, refetchQueries } = fixture();
+    const query = {
+      queryKey: ["models", "list", "local", "no-auth", 100, "old-provider"],
+      isDisabled: () => state === "disabled",
+    };
+    findAll
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce(state === "disabled" ? [query] : [query, { ...query }]);
+    await expect(refreshNativeModels(trigger, "local")).rejects.toThrow("unavailable");
     expect(refetchQueries).not.toHaveBeenCalled();
   });
 

@@ -16,7 +16,16 @@ export type GitRepositoryLinkParams = z.infer<typeof gitRepositoryLinkParamsSche
 export const gitRepositoriesSchema = z
   .object({
     project: z.string().min(1),
-    repositories: z.array(z.object({ path: z.string().min(1), primary: z.boolean() }).strict()),
+    repositories: z.array(
+      z
+        .object({
+          path: z.string().min(1),
+          primary: z.boolean(),
+          // 会话项目目录本身不是仓库时，由目录扫描识别到的一级子仓库带此标记。
+          discovered: z.boolean().optional(),
+        })
+        .strict(),
+    ),
   })
   .strict();
 export type GitRepositories = z.infer<typeof gitRepositoriesSchema>;

@@ -8,6 +8,7 @@ import {
   TURN_ACTION_EXECUTE_METHOD,
 } from "@codexhost/shared-contracts";
 import { SshGitWorkspaces, type GitWorkspaceServices } from "./ssh-git.js";
+import { discoverChildRepositories } from "./git-child-repositories.js";
 import { GitRepositoryLinks } from "./git-repository-links.js";
 import { listGitRepositoryDirectories } from "./git-repository-directories.js";
 import {
@@ -872,6 +873,7 @@ export class AppServerHost {
       permanentHome,
       (cwd) => this.#gitWorkspace.root(cwd),
       (cwd, submodule) => this.#gitWorkspace.submoduleRoot(cwd, submodule),
+      (project) => discoverChildRepositories(this.#gitWorkspace, project),
     );
     this.#ownsOfficialRuntimeScope = options.officialRuntimeScope === undefined;
     this.#officialRuntimeScope =
@@ -4095,7 +4097,8 @@ export class AppServerHost {
         if (request.method === GIT_REPOSITORIES_METHOD) {
           const params = gitRepositoriesParamsSchema.parse(request.params);
           const cwd = await projectWorkspace(params);
-          result = await links.list(cwd);
+          // 展示用清单额外识别项目目录内的一级子仓库；工作流仍只使用显式关联记录。
+          result = await links.list(cwd, { discover: true });
         } else if (request.method === GIT_REPOSITORY_DIRECTORIES_METHOD) {
           const params = gitRepositoryDirectoriesParamsSchema.parse(request.params);
           const cwd = await projectWorkspace(params);

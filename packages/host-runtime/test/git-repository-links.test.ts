@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { discoverChildRepositories } from "../src/git-child-repositories.js";
 import { GitRepositoryLinks } from "../src/git-repository-links.js";
 import { GitWorkspace } from "../src/git-workspace.js";
 import { readProjectGitRepositories } from "../src/project-git-repositories.js";
@@ -39,6 +40,7 @@ async function fixture() {
       home,
       (cwd) => workspace.root(cwd),
       (cwd, submodule) => workspace.submoduleRoot(cwd, submodule),
+      (project) => discoverChildRepositories(workspace, project),
     );
   return { directory, repository, create, links: create(), workspace };
 }
@@ -145,6 +147,51 @@ test("reads only the linked repositories when the project directory is not itsel
     ["linked", backend],
     ["linked", frontend],
   ]);
+});
+
+test("discovers child repositories when the project directory is not a Git repository", async () => {
+  const { directory, repository, links } = await fixture();
+  const backend = await repository("backend");
+  const frontend = await repository("frontend");
+  await mkdir(path.join(directory, "notes"));
+
+  // 工作流与授权判定使用的默认清单只包含显式关联记录。
+  expect(await links.list(directory)).toEqual({
+    project: directory,
+    repositories: [{ path: directory, primary: true }],
+  });
+  // 展示用清单额外识别目录内的一级子仓库，普通子目录不参与。
+  expect(await links.list(directory, { discover: true })).toEqual({
+    project: directory,
+    repositories: [
+      { path: directory, primary: true },
+      { path: backend, primary: false, discovered: true },
+      { path: frontend, primary: false, discovered: true },
+    ],
+  });
+  expect(await links.resolve(directory, backend)).toBe(backend);
+  // 自动识别的仓库没有本机关联记录，解除关联应回到自动识别状态。
+  await expect(links.unlink(directory, frontend)).rejects.toThrow("自动识别");
+  expect(await links.link(directory, frontend)).toEqual({
+    project: directory,
+    repositories: [
+      { path: directory, primary: true },
+      { path: backend, primary: false, discovered: true },
+      { path: frontend, primary: false },
+    ],
+  });
+  expect(await links.unlink(directory, frontend)).toMatchObject({
+    repositories: [
+      { path: directory, primary: true },
+      { path: backend, primary: false, discovered: true },
+      { path: frontend, primary: false, discovered: true },
+    ],
+  });
+  // 项目目录本身是仓库时不扫描子目录，嵌套仓库仍需显式关联。
+  expect(await links.list(backend, { discover: true })).toEqual({
+    project: backend,
+    repositories: [{ path: backend, primary: true }],
+  });
 });
 
 test("rejects invalid targets and does not authorize a linked path retargeted to another repository", async () => {

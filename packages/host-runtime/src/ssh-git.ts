@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { promisify } from "node:util";
 import { desktopSshConnection, type DesktopSshConnection } from "./desktop-ssh-connection.js";
+import { discoverChildRepositories } from "./git-child-repositories.js";
 import { GitRepositoryLinks } from "./git-repository-links.js";
 import { SshGitMessageService } from "./ssh-git-message.js";
 import {
@@ -147,6 +148,7 @@ export class SshGitWorkspaces {
       path.join(this.home, "ssh-git", key),
       (cwd) => git.root(cwd),
       (cwd, submodule) => git.submoduleRoot(cwd, submodule),
+      (project) => discoverChildRepositories(git, project),
       { paths: runtime.paths, realpath: runtime.realpath },
     );
     const services = {

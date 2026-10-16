@@ -322,6 +322,7 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-change-action:disabled { opacity:.25; }
     .codexhost-git-empty { margin:0; padding:14px 10px; font-size:11px; opacity:.58; }
     .codexhost-git-repository-groups { display:flex; min-height:0; flex:none; max-height:45%; overflow:auto; flex-direction:column; border-bottom:1px solid var(--border-default,color-mix(in srgb,currentColor 10%,transparent)); }
+    .codexhost-git-workspace[data-primary="hidden"] .codexhost-git-repository-groups { flex:1; max-height:none; border-bottom:0; }
     .codexhost-git-repository-group { display:flex; min-height:0; flex-direction:column; border-top:1px solid var(--border-default,color-mix(in srgb,currentColor 12%,transparent)); }
     .codexhost-git-repository-header { display:flex; min-height:30px; align-items:center; gap:6px; padding:4px 8px; color:inherit; background:transparent; border:0; cursor:pointer; text-align:left; font-size:11px; }
     .codexhost-git-repository-header:hover { background:color-mix(in srgb,currentColor 7%,transparent); }
@@ -845,7 +846,8 @@ export function installRendererGitSidebar(options: {
     }
   };
   const scheduleRepositoryReads = (): void => {
-    if (disposed || view !== "commits" || !current) return;
+    // 主仓库不是 Git 仓库时仍要读取已识别的子仓库状态；主条目在循环里始终跳过。
+    if (disposed || view !== "commits") return;
     for (const group of repositoryGroups) {
       if (repositoryReads.size >= 2) break;
       if (
@@ -897,7 +899,9 @@ export function installRendererGitSidebar(options: {
   const addLinkedRepositories = (): void => {
     const client = context().client;
     for (const entry of knownRepositories?.repositories ?? []) {
+      // 会话项目由主仓库区展示，不作为子仓库卡片；下拉框负责在项目与各仓库之间切换。
       if (
+        entry.primary ||
         entry.path === current?.workspace ||
         repositoryGroups.some((group) => group.path === entry.path)
       )
@@ -1211,6 +1215,9 @@ export function installRendererGitSidebar(options: {
         : "未选择项目";
     projectName.title = workspacePath;
     workspace.hidden = false;
+    // 会话项目目录不是 Git 仓库时，主仓库区没有内容可展示，改由子仓库卡片独立成组。
+    primary.hidden = current === null && repositoryGroups.some((group) => !group.primary);
+    workspace.dataset.primary = primary.hidden ? "hidden" : "visible";
     primaryBody.hidden = !primaryExpanded;
     if (!primaryExpanded) commitOptions.open = false;
     primaryHeader.setAttribute("aria-expanded", String(primaryExpanded));
@@ -1358,11 +1365,9 @@ export function installRendererGitSidebar(options: {
     onNotice: setNotice,
     onRepositories(value) {
       knownRepositories = value;
-      if (current) {
-        addLinkedRepositories();
-        render(true);
-        scheduleRepositoryReads();
-      }
+      addLinkedRepositories();
+      render(true);
+      scheduleRepositoryReads();
     },
   });
   head.after(repositorySelector.root);
@@ -1421,7 +1426,7 @@ export function installRendererGitSidebar(options: {
         ? !client?.sendThreadMessage || !context().threadId
         : !client?.continueGitMerge);
     mergeAbort.disabled = isBusy() || !client?.abortGitMerge;
-    repositorySelector.setBusy(isBusy() || !current);
+    repositorySelector.setBusy(isBusy());
     for (const button of [
       ...head.querySelectorAll<HTMLButtonElement>("button[data-git-action]"),
       ...primary.querySelectorAll<HTMLButtonElement>("button[data-git-action]"),
@@ -1712,8 +1717,11 @@ export function installRendererGitSidebar(options: {
       workspaceError = error instanceof Error ? error : new Error(String(error));
       current = null;
       repositoryGroups = [];
+      // 会话项目目录不是仓库时，仍展示目录中自动识别的子仓库。
+      addLinkedRepositories();
       setNotice(error instanceof Error ? error.message : String(error));
       render();
+      scheduleRepositoryReads();
     } finally {
       finishAction(request, true);
     }

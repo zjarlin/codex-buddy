@@ -1716,10 +1716,13 @@ describe("AppServerHost project Git workflow", () => {
         expect(response).not.toHaveProperty("error");
         return response.result as JsonObject;
       };
-      // 会话项目目录不是仓库：报“不是 Git 项目”而不是原始 git 错误，并允许关联目录内的仓库。
+      // 会话项目目录不是仓库：仍报“不是 Git 项目”，并自动列出目录内识别到的仓库。
       expect(await ok("codexhost/git/repositories")).toMatchObject({
         project: directory,
-        repositories: [{ path: directory, primary: true }],
+        repositories: [
+          { path: directory, primary: true },
+          { path: backend, primary: false, discovered: true },
+        ],
       });
       writeRequest(fixture.desktopInput, {
         id: ++id,
@@ -1737,6 +1740,14 @@ describe("AppServerHost project Git workflow", () => {
           { path: backend, primary: false },
         ],
       });
+      // 自动识别不写关联记录：显式关联后按记录展示，解除后回到自动识别。
+      expect(await ok("codexhost/git/repository/unlink", { repository: backend })).toMatchObject({
+        repositories: [
+          { path: directory, primary: true },
+          { path: backend, primary: false, discovered: true },
+        ],
+      });
+      await ok("codexhost/git/repository/link", { repository: backend });
       writeRequest(fixture.desktopInput, {
         id: ++id,
         method: "codexhost/git/workflow/status",

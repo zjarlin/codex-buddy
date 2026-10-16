@@ -146,20 +146,27 @@ export function createGitRepositorySelector(options: {
   };
 
   const render = () => {
+    const entries = data?.repositories ?? [];
     select.replaceChildren(
-      ...(data?.repositories ?? []).map((entry) => {
+      ...entries.map((entry) => {
         const option = document.createElement("option");
         option.value = entry.primary ? "" : entry.path;
         const name = entry.path.split(/[/\\]/u).filter(Boolean).at(-1) ?? entry.path;
-        option.textContent = `${name}${entry.primary ? "（会话项目）" : ""} — ${entry.path}`;
+        const suffix = entry.primary ? "（会话项目）" : entry.discovered ? "（自动识别）" : "";
+        option.textContent = `${name}${suffix} — ${entry.path}`;
         return option;
       }),
     );
     select.value = selected;
     select.title = selected || data?.project || "";
     select.disabled = busy || actionBusy || pickerBusy || !data;
+    const selectedEntry = entries.find((entry) => (entry.primary ? "" : entry.path) === selected);
+    const discovered = selectedEntry?.discovered === true;
     add.disabled = busy || actionBusy || pickerBusy;
-    remove.disabled = busy || actionBusy || pickerBusy || !selected;
+    remove.disabled = busy || actionBusy || pickerBusy || !selected || discovered;
+    remove.title = discovered
+      ? "项目目录内的仓库由目录自动识别，无需解除关联"
+      : "仅移除关联，保留仓库文件";
     submit.disabled = busy || actionBusy || pickerBusy;
     submit.setAttribute("aria-busy", String(busy));
     remove.setAttribute("aria-busy", String(busy));

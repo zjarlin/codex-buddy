@@ -704,6 +704,64 @@ test("stops loading when the active project is not inside a Git repository", asy
   await expect(root.getByRole("button", { name: "刷新", exact: true })).toBeEnabled();
 });
 
+test("lists nested repositories when the session project directory is not a Git repository", async ({
+  page,
+}) => {
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const child = (name: string) => ({
+      ...structuredClone(fixture.status),
+      workspace: `/workspace/aio/${name}`,
+      branch: `${name}-branch`,
+      submodules: [],
+      changes: [{ ...fixture.status.changes[0], path: `${name}.ts` }],
+    });
+    fixture.client.listGitRepositories = async () => ({
+      project: "/workspace/aio",
+      repositories: [
+        { path: "/workspace/aio", primary: true },
+        { path: "/workspace/aio/aio-idea", primary: false, discovered: true },
+        { path: "/workspace/aio/aio-plugin-device", primary: false, discovered: true },
+      ],
+    });
+    fixture.client.linkGitRepository = async () => {
+      throw new Error("Unused link operation");
+    };
+    fixture.client.unlinkGitRepository = async () => {
+      throw new Error("Unused unlink operation");
+    };
+    fixture.client.inspectGitStatus = async (input: { repository?: string }) => {
+      fixture.calls.push(["status", input]);
+      if (!input.repository) throw new Error("当前目录不是 Git 仓库。");
+      return child(input.repository.split("/").at(-1) ?? "");
+    };
+    fixture.setContext("thread-1", { ...fixture.client }, "local", "/workspace/aio");
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  // 会话项目目录不是仓库时，主仓库区没有内容可展示，改由子仓库卡片独立成组。
+  await expect(root.locator(".codexhost-git-primary")).toBeHidden();
+  const cards = root.locator(".codexhost-git-repository-group");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0)).toContainText("aio-idea");
+  await expect(cards.nth(0)).toContainText("aio-idea-branch");
+  await expect(cards.nth(1)).toContainText("aio-plugin-device");
+  await expect(cards.nth(1)).toContainText("aio-plugin-device-branch");
+  await expect(root.locator(".codexhost-git-empty")).toBeHidden();
+  await expect(root.getByText("当前目录不是 Git 仓库。")).toBeVisible();
+  // 自动识别的仓库在下拉中单独标记，选中后仍由主仓库区展示。
+  const selector = root.getByRole("combobox", { name: "操作仓库" });
+  await expect(selector).toContainText("（自动识别）");
+  await selector.selectOption("/workspace/aio/aio-idea");
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveText("aio-idea");
+  // 它们没有关联记录，因此不提供“解除”。
+  await expect(root.getByRole("button", { name: "解除仓库关联" })).toBeDisabled();
+});
+
 test("explains a missing remote Git service without loading models and recovers on reconnection", async ({
   page,
 }) => {

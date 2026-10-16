@@ -317,9 +317,11 @@ export function installAutoRouteCards(options: {
     const latestGroup = groups
       .sort((a, b) => (a.at(-1)?.started_at ?? 0) - (b.at(-1)?.started_at ?? 0))
       .at(-1);
+    // ask 与 auto 一样由网关选路：还没有记录时同样要显示等待/状态卡片。
+    const routedModel = context?.selectedModel === "auto" || context?.selectedModel === "ask";
     if (
       !composer?.isConnected ||
-      (context?.selectedModel !== "auto" && !latestGroup?.at(-1)?.operation) ||
+      (!routedModel && !latestGroup?.at(-1)?.operation) ||
       result?.unavailableReason === "private" ||
       (latestGroup?.[0] && cards.has(latestGroup[0].turn_id))
     ) {

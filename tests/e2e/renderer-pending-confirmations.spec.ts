@@ -500,6 +500,38 @@ test("composer input sends a follow-up into the pending conversation", async ({
   ).toHaveAttribute("data-app-action-sidebar-thread-active", "true");
 });
 
+for (const draft of ["", "尚未发送的草稿"]) {
+  test(`continue button sends a fixed follow-up without navigating (draft: ${draft || "empty"})`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+    });
+    await page.goto("https://codexhost.test/");
+    await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+    const modal = page.locator("[data-codexhost-pending-confirmations]");
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "结果。"),
+    );
+    await expect(modal).toBeVisible();
+    await modal.getByPlaceholder("输入续发内容…").fill(draft);
+    const modelSelect = modal.getByRole("combobox", { name: "续发模型" });
+    await expect(modelSelect).toBeVisible();
+    await modelSelect.selectOption("gpt-5.6");
+    await modal.getByRole("button", { name: "继续", exact: true }).click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").sent))
+      .toEqual([["thread-b", "继续", "gpt-5.6"]]);
+    await expect(modal).toBeHidden();
+    expect(
+      await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened),
+    ).toEqual([]);
+    await expect(
+      page.locator('[data-app-action-sidebar-thread-id="local:thread-a"]'),
+    ).toHaveAttribute("data-app-action-sidebar-thread-active", "true");
+  });
+}
+
 // 回归：Codex 用后台 ephemeral Thread 生成标题。这类 Thread 没有 rollout、
 // 不在 thread/list、也没有侧栏行，它的 turn 终态一旦进入待确认队列，用户就会
 // 看到"会话已完成"卡片，却永远定位不到对应会话。

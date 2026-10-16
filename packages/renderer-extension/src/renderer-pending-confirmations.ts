@@ -110,6 +110,7 @@ function messages(locale: Locale) {
         modelLoading: "正在读取收藏模型…",
         placeholder: "输入续发内容…",
         send: "发送",
+        continue: "继续",
         sendFailed: "发送失败，请重试。",
         archiveFailed: "归档失败，已保留待确认状态。",
         openFailed: "无法打开该会话，请从侧栏重试。",
@@ -134,6 +135,7 @@ function messages(locale: Locale) {
         modelLoading: "Loading favorite models…",
         placeholder: "Type a follow-up message…",
         send: "Send",
+        continue: "Continue",
         sendFailed: "Could not send. Try again.",
         archiveFailed: "Archive failed. The confirmation was kept.",
         openFailed: "Could not open the conversation. Retry from the sidebar.",
@@ -244,6 +246,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const time = document.createElement("time");
   const actions = document.createElement("footer");
   const view = document.createElement("button");
+  const continueButton = document.createElement("button");
   const read = document.createElement("button");
   const archive = document.createElement("button");
   const replay = document.createElement("button");
@@ -354,6 +357,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   composer.append(modelSelect, input, send);
   body.append(kind, project, conversation, summary, time, composer);
   view.type = read.type = archive.type = replay.type = "button";
+  continueButton.type = "button";
   view.dataset.primary = "true";
   view.append(createElement(Eye, { width: 15, height: 15, "aria-hidden": "true" }));
   read.append(createElement(Check, { width: 15, height: 15, "aria-hidden": "true" }));
@@ -361,7 +365,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   replay.className = "codexhost-pending-replay";
   replay.append(createElement(Volume2, { width: 15, height: 15, "aria-hidden": "true" }));
   actions.className = "codexhost-pending-actions";
-  actions.append(view, read, archive);
+  actions.append(continueButton, view, read, archive);
   notice.className = "codexhost-pending-notice";
   notice.setAttribute("role", "alert");
   panel.append(heading, body, notice, actions);
@@ -442,9 +446,12 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     render();
   };
 
-  const sendMessage = async (entry: PendingConfirmationRecord): Promise<void> => {
+  const sendMessage = async (
+    entry: PendingConfirmationRecord,
+    message = input.value,
+  ): Promise<void> => {
     if (sending) return;
-    const value = input.value.trim();
+    const value = message.trim();
     if (!value) return;
     const client = options.getClient(entry.hostId);
     if (!client?.sendThreadMessage) {
@@ -539,6 +546,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     appendMarkdownBlocks(document, summary, entry.summary ?? "");
     time.textContent = formatTime(entry.completedAt, locale);
     view.textContent = copy.view;
+    continueButton.textContent = copy.continue;
+    continueButton.disabled = sending;
+    continueButton.setAttribute("aria-busy", String(sending));
     read.textContent = copy.read;
     archive.textContent = copy.archive;
     const speechPending = replaying !== null && sameEntry(replaying, entry);
@@ -900,6 +910,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     render();
   });
   close.addEventListener("click", closeModal);
+  continueButton.addEventListener("click", () => {
+    if (visibleEntry) void sendMessage(visibleEntry, "继续");
+  });
   send.addEventListener("click", () => {
     if (visibleEntry) void sendMessage(visibleEntry);
   });

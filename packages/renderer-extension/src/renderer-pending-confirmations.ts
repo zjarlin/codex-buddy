@@ -464,7 +464,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       }
       sending = false;
       input.value = "";
-      await open(entry);
+      closeModal();
     } catch {
       sending = false;
       noticeMessage = messages(locale).sendFailed;

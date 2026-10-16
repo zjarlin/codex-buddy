@@ -490,11 +490,14 @@ test("composer input sends a follow-up into the pending conversation", async ({
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").sent))
     .toEqual([["thread-b", "再补充一点", "gpt-5.6"]]);
-  // Sending reuses the open path so the user lands on the continuing conversation.
+  // 续发成功只关闭卡片，保留用户当前正在查看的会话。
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened))
-    .toEqual([["thread-b", "local"]]);
+    .toEqual([]);
   await expect(modal).toBeHidden();
+  await expect(
+    page.locator('[data-app-action-sidebar-thread-id="local:thread-a"]'),
+  ).toHaveAttribute("data-app-action-sidebar-thread-active", "true");
 });
 
 // 回归：Codex 用后台 ephemeral Thread 生成标题。这类 Thread 没有 rollout、

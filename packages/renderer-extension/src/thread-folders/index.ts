@@ -670,6 +670,9 @@ export function installThreadFolders(options: {
         entry.container = container;
         header.after(entry.bar);
       }
+      // 原生项目行收起时会卸载其会话行，但投影 bar 是外部节点，必须按原生
+      // aria-expanded 一并隐藏，否则文件夹树会留在折叠的项目下方。
+      entry.bar.hidden = header.getAttribute("aria-expanded") === "false";
       renderBar(project, entry);
     }
 
@@ -717,6 +720,7 @@ export function installThreadFolders(options: {
       "data-sidebar-project-kind",
       "data-sidebar-project-container-id",
       "data-app-action-sidebar-project-row",
+      "aria-expanded",
       "data-app-action-sidebar-thread-active",
       "data-app-action-sidebar-thread-id",
       "data-app-action-sidebar-thread-host-id",

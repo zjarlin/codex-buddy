@@ -30,6 +30,7 @@ const { outputFiles } = await build({
           bind(section, fiber({ group: { projectKind: project.projectKind, projectId: project.projectId, label: project.label } }));
           const header = document.createElement("button");
           header.setAttribute("data-app-action-sidebar-project-row", "");
+          header.setAttribute("aria-expanded", "true");
           header.textContent = project.label;
           section.append(header);
           for (const [threadId, title, statusState] of project.threads) {
@@ -47,6 +48,25 @@ const { outputFiles } = await build({
           }
           document.querySelector("#app-shell-sidebar").append(section);
         }
+        // 原生收起项目时会同时改写项目头的 aria-expanded 并卸载该项目下的会话行；
+        // 这里用同一对动作模拟，便于断言外部投影的文件夹树跟随收起。
+        const toggleProject = (projectId, expanded) => {
+          const section = document.querySelector('[data-sidebar-project-container-id="project:' + projectId + '"]');
+          section.querySelector('[data-app-action-sidebar-project-row]').setAttribute("aria-expanded", String(expanded));
+          for (const row of [...section.querySelectorAll("[data-app-action-sidebar-thread-row]")]) {
+            if (expanded) section.append(row);
+            else row.remove();
+          }
+        };
+        const control = (label, action) => {
+          const element = document.createElement("button");
+          element.type = "button";
+          element.textContent = label;
+          element.addEventListener("click", action);
+          document.body.append(element);
+        };
+        control("折叠项目一", () => toggleProject("one", false));
+        control("展开项目一", () => toggleProject("one", true));
         let saved = {
           version: 1,
           projects: {
@@ -156,5 +176,35 @@ test("groups conversations independently per project and restores native rows on
   expect(
     await page.evaluate(() => Reflect.get(globalThis, "threadFolderFixture").writes.length),
   ).toBe(3);
+  expect(errors).toEqual([]);
+});
+
+test("hides the projected folder tree while the native project row is collapsed", async ({
+  page,
+}) => {
+  await page.route("https://folders.test/", (route) =>
+    route.fulfill({ body: "<html><body></body></html>", contentType: "text/html" }),
+  );
+  await page.goto("https://folders.test/");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => Reflect.get(globalThis, "setupThreadFolders")());
+
+  const projectOne = page.locator('[data-sidebar-project-container-id="project:one"]');
+  const projectTwo = page.locator('[data-sidebar-project-container-id="project:two"]');
+  const tree = projectOne.locator("[data-codexhost-thread-folders]");
+  await expect(tree).toBeVisible();
+  await expect(tree).toContainText("计划");
+
+  await page.getByRole("button", { name: "折叠项目一", exact: true }).click();
+  await expect(tree).toBeHidden();
+  await expect(projectOne.getByRole("button", { name: "计划", exact: true })).toBeHidden();
+  // 折叠一个项目不影响其他项目的投影。
+  await expect(projectTwo.locator("[data-codexhost-thread-folders]")).toBeVisible();
+
+  await page.getByRole("button", { name: "展开项目一", exact: true }).click();
+  await expect(tree).toBeVisible();
+  await expect(projectOne.getByRole("button", { name: "计划", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });

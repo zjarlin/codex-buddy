@@ -1,5 +1,6 @@
 export const threadFoldersStyle = `
 [data-codexhost-thread-folders]{padding:2px 8px 2px 24px;color:var(--color-token-text-secondary,inherit);font:13px/20px system-ui,sans-serif}
+[data-codexhost-thread-folders][hidden]{display:none!important}
 [data-codexhost-thread-folders] [role=group]{padding-left:20px}
 [data-codexhost-thread-folders] [hidden]{display:none!important}
 [data-codexhost-thread-folders] button{display:flex;align-items:center;gap:6px;width:100%;min-height:28px;padding:3px 6px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}

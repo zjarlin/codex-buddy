@@ -74,6 +74,8 @@ const QUEUE = "data-codexhost-pending-confirmations-queue";
 const READ_DWELL_MS = 3_000;
 const RECONCILE_LIMIT = 80;
 const RECONCILE_CONCURRENCY = 8;
+// 固定续发文本：继续当前任务，并允许执行方自行处理后续决策。
+const CONTINUE_MESSAGE = "继续,遇到决策你自己决定";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -365,7 +367,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   replay.className = "codexhost-pending-replay";
   replay.append(createElement(Volume2, { width: 15, height: 15, "aria-hidden": "true" }));
   actions.className = "codexhost-pending-actions";
-  actions.append(continueButton, view, read, archive);
+  actions.append(view, continueButton, read, archive);
   notice.className = "codexhost-pending-notice";
   notice.setAttribute("role", "alert");
   panel.append(heading, body, notice, actions);
@@ -911,7 +913,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   });
   close.addEventListener("click", closeModal);
   continueButton.addEventListener("click", () => {
-    if (visibleEntry) void sendMessage(visibleEntry, "继续");
+    if (visibleEntry) void sendMessage(visibleEntry, CONTINUE_MESSAGE);
   });
   send.addEventListener("click", () => {
     if (visibleEntry) void sendMessage(visibleEntry);

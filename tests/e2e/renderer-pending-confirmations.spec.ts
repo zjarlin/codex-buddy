@@ -521,7 +521,7 @@ for (const draft of ["", "尚未发送的草稿"]) {
     await modal.getByRole("button", { name: "继续", exact: true }).click();
     await expect
       .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").sent))
-      .toEqual([["thread-b", "继续", "gpt-5.6"]]);
+      .toEqual([["thread-b", "继续,遇到决策你自己决定", "gpt-5.6"]]);
     await expect(modal).toBeHidden();
     expect(
       await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened),

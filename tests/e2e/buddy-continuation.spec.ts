@@ -30,14 +30,14 @@ const bundle = await build({
     };
     globalThis.calls = [];
     globalThis.opened = 0;
-    globalThis.fail = true;
-    globalThis.discoveryFail = false;
-    globalThis.running = false;
-    globalThis.privateMode = false;
-    globalThis.enabled = true;
-    globalThis.owner = "codex";
-    globalThis.threadStatus = "failed";
-    globalThis.activeHost = 'local';
+    globalThis.fail ??= true;
+    globalThis.discoveryFail ??= false;
+    globalThis.running ??= false;
+    globalThis.privateMode ??= false;
+    globalThis.enabled ??= true;
+    globalThis.owner ??= "codex";
+    globalThis.threadStatus ??= "failed";
+    globalThis.activeHost ??= 'local';
     globalThis.statusCalls = 0;
     globalThis.interruptedCalls = 0;
     globalThis.mountSidebar = () => {
@@ -79,7 +79,12 @@ const bundle = await build({
         if (globalThis.continueMode === 'unsupported') throw new RendererMethodUnavailableError('codexhost/buddy/continue', null);
         await new Promise(resolve=>globalThis.finishResume=resolve);
         if(globalThis.fail) { globalThis.fail=false; throw new Error('网络不可用'); }
-      }
+      },
+      readThreadTurnState: async () => ({
+        running: globalThis.running,
+        status: globalThis.running ? null : globalThis.threadStatus,
+        turnId: 'failed'
+      })
     };
     if (globalThis.recoveryMode === 'missing') delete client.buddyInterrupted;
     globalThis.sidebarClient = client;
@@ -348,7 +353,7 @@ test("sidebar recovery disables an existing resume action after a router status 
 });
 
 for (const recoveryMode of ["unsupported", "missing"]) {
-  test(`sidebar keeps native status when recovery is ${recoveryMode}`, async ({ page }) => {
+  test(`sidebar styles unfinished turns when recovery is ${recoveryMode}`, async ({ page }) => {
     await page.setContent("<body></body>");
     await page.evaluate((mode) => {
       Reflect.set(globalThis, "statusMode", "unsupported");
@@ -362,10 +367,42 @@ for (const recoveryMode of ["unsupported", "missing"]) {
     }
     await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
     await expect(page.locator("[data-native-status]")).toBeVisible();
-    await expect(page.locator("[data-buddy-sidebar-state]")).toHaveCount(0);
+    await expect(page.locator("[data-buddy-sidebar-state]")).toHaveAttribute(
+      "data-buddy-sidebar-state",
+      "failed",
+    );
+    await expect(
+      page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
+    ).toHaveCount(1);
     expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
   });
 }
+
+test("sidebar fallback clears the style while the native turn is running", async ({ page }) => {
+  await page.setContent("<body></body>");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "recoveryMode", "missing");
+    Reflect.set(globalThis, "threadStatus", "interrupted");
+  });
+  await page.addScriptTag({ content: browserBundle });
+  const row = page.locator("[data-app-action-sidebar-thread-row]");
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "interrupted");
+  await expect(row).toHaveAttribute("data-buddy-sidebar-recoverable", "");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "running", true);
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "running");
+  await expect(row).not.toHaveAttribute("data-buddy-sidebar-recoverable", "");
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "running", false);
+    Reflect.set(globalThis, "threadStatus", "cancelled");
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "cancelled");
+  await expect(row).toHaveAttribute("data-buddy-sidebar-recoverable", "");
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
+});
 
 test("sidebar remembers unavailable continuation until the connection is replaced", async ({
   page,

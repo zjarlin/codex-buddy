@@ -390,7 +390,15 @@ const THREAD_USAGE_REFRESH_METHODS = [
 ] as const;
 
 const NATIVE_THREAD_READ_METHOD = "thread/read";
+const NATIVE_THREAD_TURNS_LIST_METHOD = "thread/turns/list";
 const NATIVE_TURN_START_METHOD = "turn/start";
+
+export type RendererThreadTurnStatus = "failed" | "interrupted" | "cancelled";
+export interface RendererThreadTurnState {
+  running: boolean;
+  status: RendererThreadTurnStatus | null;
+  turnId: string | null;
+}
 
 type NativeGitWorkflowState = {
   turnId: string;
@@ -415,6 +423,43 @@ function nativeLatestTurnId(value: unknown): string | null {
   if (!isRecord(value) || !Array.isArray(value.turns)) return null;
   const latest = value.turns.at(-1);
   return isRecord(latest) && typeof latest.id === "string" ? latest.id : null;
+}
+
+function nativeThreadStatusType(value: unknown): string | null {
+  const thread = isRecord(value) ? value : null;
+  const status = isRecord(thread?.status) ? thread.status.type : null;
+  return typeof status === "string" ? status : null;
+}
+
+function nativeThreadTurnStatus(
+  thread: Record<string, unknown> | null,
+  turn: Record<string, unknown> | null,
+): RendererThreadTurnStatus | null {
+  switch (turn?.status) {
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    case "cancelled":
+      return "cancelled";
+    case "inProgress": {
+      // 进程退出等情况可能只留下未结束回合；须由原生会话状态确认已经停下。
+      const state = nativeThreadStatusType(thread);
+      return state === "idle" || state === "notLoaded" ? "interrupted" : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function unsupportedTurnsList(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const message = typeof error.message === "string" ? error.message : "";
+  return (
+    error.code === -32601 ||
+    message === "thread/turns/list is not supported yet" ||
+    (error.code === -32600 && message.includes("unknown variant `thread/turns/list`"))
+  );
 }
 export const UPDATE_CHECK_METHOD = "codexhost/update/check";
 export const UPDATE_START_METHOD = "codexhost/update/start";
@@ -522,6 +567,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   setThreadFolders?(config: ThreadFoldersConfig): Promise<ThreadFoldersState>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
   readThreadActivity?(threadId: string): Promise<boolean>;
+  readThreadTurnState?(threadId: string): Promise<RendererThreadTurnState>;
   readAutoModelRoutes?(threadId: string, runId?: string): Promise<AutoModelRoutesResult>;
   buddyContinue?(threadId: string, turnId: string, model?: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
@@ -748,6 +794,48 @@ export function createRendererModelClient(
         message: "远程 Git 工作流正在运行…",
       }
     );
+  };
+
+  const readNativeThreadTurn = async (
+    threadId: string,
+  ): Promise<{
+    thread: Record<string, unknown> | null;
+    turn: Record<string, unknown> | null;
+  }> => {
+    const response = await manager.sendRequest(NATIVE_THREAD_READ_METHOD, {
+      threadId,
+      includeTurns: false,
+    });
+    const thread = isRecord(response) && isRecord(response.thread) ? response.thread : null;
+    if (!thread) throw new Error("Thread turn state is unavailable");
+    if (nativeThreadStatusType(thread) === "active") return { thread, turn: null };
+    const embedded = Array.isArray(thread.turns) ? thread.turns : [];
+    if (embedded.length > 0) {
+      const latest = embedded.at(-1);
+      return { thread, turn: isRecord(latest) ? latest : null };
+    }
+    try {
+      const history = await manager.sendRequest(NATIVE_THREAD_TURNS_LIST_METHOD, {
+        threadId,
+        limit: 1,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      });
+      const turns =
+        isRecord(history) && Array.isArray(history.data) ? history.data : ([] as unknown[]);
+      const latest = turns[0];
+      return { thread, turn: isRecord(latest) ? latest : null };
+    } catch (error) {
+      if (!unsupportedTurnsList(error)) throw error;
+      const legacy = await manager.sendRequest(NATIVE_THREAD_READ_METHOD, {
+        threadId,
+        includeTurns: true,
+      });
+      const legacyThread = isRecord(legacy) && isRecord(legacy.thread) ? legacy.thread : null;
+      const turns = legacyThread && Array.isArray(legacyThread.turns) ? legacyThread.turns : [];
+      const latest = turns.at(-1);
+      return { thread: legacyThread, turn: isRecord(latest) ? latest : null };
+    }
   };
 
   const inspectHarness = async (
@@ -1260,6 +1348,17 @@ export function createRendererModelClient(
         throw new Error("Thread activity is unavailable");
       }
       return status.type === "active";
+    },
+    readThreadTurnState: async (threadId: string) => {
+      const { thread, turn } = await readNativeThreadTurn(threadId);
+      if (nativeThreadStatusType(thread) === "active") {
+        return { running: true, status: null, turnId: null };
+      }
+      return {
+        running: false,
+        status: nativeThreadTurnStatus(thread, turn),
+        turnId: typeof turn?.id === "string" ? turn.id : null,
+      };
     },
     buddyContinue: async (threadId: string, turnId: string, model?: string) => {
       await manager.sendRequest(BUDDY_CONTINUE_METHOD, {

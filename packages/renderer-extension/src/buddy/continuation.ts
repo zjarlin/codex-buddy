@@ -13,9 +13,22 @@ import {
 } from "../renderer-sidebar-agent-icons.js";
 
 type InterruptedThread = BuddyInterrupted["threads"][number];
+type RecoveryStatus = InterruptedThread["status"];
 const marker = "data-buddy-sidebar-recovery";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
 const stateMarker = "data-buddy-sidebar-state";
+const FALLBACK_REFRESH_MS = 15_000;
+const MAX_CONCURRENT_FALLBACK_READS = 4;
+
+interface FallbackState {
+  hostId: string;
+  threadId: string;
+  client: RendererModelClient;
+  running: boolean;
+  status: RecoveryStatus | null;
+  checkedAt: number;
+  pending: boolean;
+}
 
 // 覆盖原生状态槽的视觉内容，卸载时保留 React 管理的原始节点。
 const style = `
@@ -61,10 +74,12 @@ export function installSidebarContinuation(options: {
     HTMLElement,
     { slot: HTMLElement; button: HTMLButtonElement; key: string }
   >();
+  const fallbackStates = new Map<HTMLElement, FallbackState>();
   const pending = new Set<string>();
   const continued = new Set<string>();
   let disposed = false;
   let scheduled = false;
+  let fallbackInFlight = 0;
   const chinese = () => options.getLocale() === "zh-CN";
   const keyFor = (hostId: string, thread: InterruptedThread) =>
     JSON.stringify([hostId, thread.threadId, thread.turnId]);
@@ -86,9 +101,9 @@ export function installSidebarContinuation(options: {
     row.removeAttribute(recoverableMarker);
     row.removeAttribute(stateMarker);
   };
-  const decorate = (row: HTMLElement, running: boolean, thread: InterruptedThread | undefined) => {
-    row.toggleAttribute(recoverableMarker, !running && thread !== undefined);
-    const state = running ? "running" : thread?.status;
+  const decorate = (row: HTMLElement, running: boolean, status: RecoveryStatus | undefined) => {
+    row.toggleAttribute(recoverableMarker, !running && status !== undefined);
+    const state = running ? "running" : status;
     if (state && row.getAttribute(stateMarker) !== state) row.setAttribute(stateMarker, state);
     else if (!state) row.removeAttribute(stateMarker);
   };
@@ -96,6 +111,53 @@ export function installSidebarContinuation(options: {
     if (disposed || scheduled) return;
     scheduled = true;
     queueMicrotask(scan);
+  };
+  const fallbackFor = (
+    row: HTMLElement,
+    hostId: string,
+    threadId: string,
+    client: RendererModelClient,
+  ): FallbackState => {
+    const current = fallbackStates.get(row);
+    if (current?.hostId === hostId && current.threadId === threadId && current.client === client) {
+      return current;
+    }
+    const next: FallbackState = {
+      hostId,
+      threadId,
+      client,
+      running: false,
+      status: null,
+      checkedAt: 0,
+      pending: false,
+    };
+    fallbackStates.set(row, next);
+    return next;
+  };
+  const readFallback = (row: HTMLElement, entry: FallbackState): void => {
+    const read = entry.client.readThreadTurnState?.bind(entry.client);
+    if (!read) return;
+    entry.pending = true;
+    entry.checkedAt = Date.now();
+    fallbackInFlight += 1;
+    void read(entry.threadId)
+      .then(
+        (value) => {
+          if (fallbackStates.get(row) !== entry || disposed) return;
+          entry.running = value.running;
+          entry.status = value.status;
+        },
+        () => {
+          if (fallbackStates.get(row) !== entry || disposed) return;
+          entry.running = false;
+          entry.status = null;
+        },
+      )
+      .finally(() => {
+        entry.pending = false;
+        fallbackInFlight = Math.max(0, fallbackInFlight - 1);
+        schedule();
+      });
   };
   const load = async (hostId: string, state: NonNullable<ReturnType<typeof hosts.get>>) => {
     if (
@@ -122,11 +184,7 @@ export function installSidebarContinuation(options: {
       const result = await state.client.buddyInterrupted();
       if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
         return;
-      state.threads = new Map(
-        result.threads
-          .filter((thread) => thread.owner === "codex")
-          .map((thread) => [thread.threadId, thread]),
-      );
+      state.threads = new Map(result.threads.map((thread) => [thread.threadId, thread]));
       state.runningThreadIds = new Set(result.runningThreadIds);
     } catch (failure) {
       if (disposed || hosts.get(hostId) !== state) return;
@@ -184,11 +242,15 @@ export function installSidebarContinuation(options: {
     for (const row of mounted.keys()) {
       if (!rows.has(row)) clearRow(row);
     }
+    for (const row of fallbackStates.keys()) {
+      if (!rows.has(row)) fallbackStates.delete(row);
+    }
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const threadId = hostId ? nativeThreadId(hostId, row) : null;
       const client = hostId ? options.getClient(hostId) : null;
-      if (!hostId || !threadId || !client?.buddyInterrupted || !client.buddyContinue) {
+      if (!hostId || !threadId || !client) {
+        fallbackStates.delete(row);
         clearRow(row);
         continue;
       }
@@ -205,18 +267,42 @@ export function installSidebarContinuation(options: {
         };
         hosts.set(hostId, state);
       }
+      // 恢复接口缺失只影响“能否续接”，不影响未完成状态的着色。此时按当前可见行
+      // 读取原生最新回合，避免把状态展示绑死在 Host 的恢复能力上。
+      const primary = Boolean(client.buddyInterrupted) && !unavailableRecoveryClients.has(client);
+      if (!primary) {
+        clear(row);
+        if (!client.readThreadTurnState) {
+          fallbackStates.delete(row);
+          clearRow(row);
+          continue;
+        }
+        const entry = fallbackFor(row, hostId, threadId, client);
+        if (
+          !entry.pending &&
+          Date.now() - entry.checkedAt >= FALLBACK_REFRESH_MS &&
+          fallbackInFlight < MAX_CONCURRENT_FALLBACK_READS
+        ) {
+          readFallback(row, entry);
+        }
+        decorate(row, entry.running, entry.status ?? undefined);
+        continue;
+      }
+      fallbackStates.delete(row);
       // 只在从未读取或显式 refresh() 后读取一次；DOM 变化仅重绑行，不再定时轮询。
       if (!state.pending && state.updatedAt === 0) void load(hostId, state);
       const thread = state.threads.get(threadId);
       const running = state.runningThreadIds.has(threadId);
-      decorate(row, running, thread);
+      decorate(row, running, thread?.status);
       const title = row.querySelector("[data-thread-title-trigger]");
       const slot = title?.previousElementSibling;
       // 仅接管已验证的标题前状态槽，结构变化时不猜测其他按钮的位置。
       if (
         !thread ||
+        thread.owner !== "codex" ||
         running ||
         !state.resumeEnabled ||
+        !client.buddyContinue ||
         !(slot instanceof HTMLElement) ||
         !slot.matches("div.w-4.shrink-0") ||
         continued.has(keyFor(hostId, thread))
@@ -281,6 +367,7 @@ export function installSidebarContinuation(options: {
   }
   const refresh = () => {
     for (const state of hosts.values()) state.updatedAt = 0;
+    for (const state of fallbackStates.values()) state.checkedAt = 0;
     schedule();
   };
   const stopObserving = getDomMutationHub(document).subscribe({
@@ -303,6 +390,7 @@ export function installSidebarContinuation(options: {
         clearRow(row);
       }
       hosts.clear();
+      fallbackStates.clear();
       pending.clear();
       continued.clear();
       error.remove();

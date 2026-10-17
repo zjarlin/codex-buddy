@@ -700,6 +700,7 @@ describe("Renderer fixed Model request client", () => {
       "pushProjectSyncGit",
       "readAutoModelRoutes",
       "readThreadActivity",
+      "readThreadTurnState",
       "readUpdateStatus",
       "readWorkspaceFile",
       "refreshCodexAccounts",
@@ -1142,6 +1143,84 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest).toHaveBeenCalledWith("thread/read", {
       threadId: "thread-1",
       includeTurns: false,
+    });
+  });
+
+  it("reads native turn state without requiring Buddy recovery", async () => {
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        thread: {
+          status: { type: "idle" },
+          turns: [{ id: "turn-1", status: "interrupted" }],
+        },
+      })
+      .mockResolvedValueOnce({ thread: { status: { type: "idle" } } })
+      .mockResolvedValueOnce({ data: [{ id: "turn-2", status: "inProgress" }] })
+      .mockResolvedValueOnce({ thread: { status: { type: "active" } } })
+      .mockResolvedValueOnce({
+        thread: {
+          status: { type: "idle" },
+          turns: [{ id: "turn-3", status: "completed" }],
+        },
+      });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client?.readThreadTurnState) throw new Error("Thread turn reader was not created");
+
+    await expect(client.readThreadTurnState("thread-1")).resolves.toEqual({
+      running: false,
+      status: "interrupted",
+      turnId: "turn-1",
+    });
+    await expect(client.readThreadTurnState("thread-2")).resolves.toEqual({
+      running: false,
+      status: "interrupted",
+      turnId: "turn-2",
+    });
+    await expect(client.readThreadTurnState("thread-3")).resolves.toEqual({
+      running: true,
+      status: null,
+      turnId: null,
+    });
+    await expect(client.readThreadTurnState("thread-4")).resolves.toEqual({
+      running: false,
+      status: null,
+      turnId: "turn-3",
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(2, "thread/read", {
+      threadId: "thread-2",
+      includeTurns: false,
+    });
+    expect(sendRequest).toHaveBeenNthCalledWith(3, "thread/turns/list", {
+      threadId: "thread-2",
+      limit: 1,
+      sortDirection: "desc",
+      itemsView: "notLoaded",
+    });
+  });
+
+  it("falls back to full history when native turn listing is unsupported", async () => {
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ thread: { status: { type: "idle" } } })
+      .mockRejectedValueOnce({ code: -32601, message: "Method not found" })
+      .mockResolvedValueOnce({
+        thread: {
+          status: { type: "idle" },
+          turns: [{ id: "turn-legacy", status: "cancelled" }],
+        },
+      });
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client?.readThreadTurnState) throw new Error("Thread turn reader was not created");
+
+    await expect(client.readThreadTurnState("thread-legacy")).resolves.toEqual({
+      running: false,
+      status: "cancelled",
+      turnId: "turn-legacy",
+    });
+    expect(sendRequest).toHaveBeenLastCalledWith("thread/read", {
+      threadId: "thread-legacy",
+      includeTurns: true,
     });
   });
 

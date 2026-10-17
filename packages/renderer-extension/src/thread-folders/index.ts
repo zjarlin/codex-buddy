@@ -1,6 +1,7 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Folder from "lucide/dist/esm/icons/folder.mjs";
 import LoaderCircle from "lucide/dist/esm/icons/loader-circle.mjs";
+import Plus from "lucide/dist/esm/icons/plus.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { ThreadFoldersConfig, ThreadFoldersState } from "@codexhost/shared-contracts";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
@@ -20,9 +21,12 @@ import { threadFoldersStyle } from "./styles.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_SELECTOR,
+  draftIdFromSidebarRowElement,
   threadIdFromSidebarRowElement,
 } from "../renderer-sidebar-agent-icons.js";
 import { sidebarThreadNativeStatus } from "../renderer-sidebar-thread-status.js";
+import { nativeProjectStart } from "../renderer-native-project-start.js";
+import { createPendingFolderThreads, type PendingThreadRow } from "./pending-threads.js";
 
 const BAR_ATTRIBUTE = "data-codexhost-thread-folders";
 const MOVE_ATTRIBUTE = "data-codexhost-thread-folder-move";
@@ -31,6 +35,9 @@ const CUSTOM_MENU_ATTRIBUTE = "data-codexhost-thread-actions-menu";
 const STATUS_ATTRIBUTE = "data-codexhost-folder-thread-status";
 const TITLE_ATTRIBUTE = "data-codexhost-folder-thread-title";
 const RECOVERY_ATTRIBUTE = "data-buddy-sidebar-state";
+const FOLDER_ATTRIBUTE = "data-codexhost-thread-folder";
+const THREAD_ATTRIBUTE = "data-codexhost-folder-thread";
+const NEW_THREAD_ATTRIBUTE = "data-codexhost-thread-folder-new-thread";
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id][data-sidebar-project-kind]";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
@@ -93,6 +100,24 @@ function nativeThreadId(hostId: string, row: HTMLElement): string | null {
   return raw.startsWith(prefix) ? raw.slice(prefix.length) : raw;
 }
 
+interface SidebarRowIdentity {
+  key: string;
+  draft: boolean;
+}
+
+/**
+ * 行的归类身份：已物化会话用原生 Thread ID，未提交的新会话草稿用草稿身份。
+ * 草稿身份不写入文件夹配置，只由“在文件夹中新建会话”的待定意图持有。
+ */
+function rowIdentity(hostId: string, row: HTMLElement): SidebarRowIdentity | null {
+  // 草稿必须优先判定：草稿行的原生 Thread ID 读取只会返回 `client-new-thread:`
+  // 草稿身份，不能当成已物化会话。
+  const draftKey = draftIdFromSidebarRowElement(row);
+  if (draftKey) return { key: draftKey, draft: true };
+  const threadId = nativeThreadId(hostId, row);
+  return threadId ? { key: threadId, draft: false } : null;
+}
+
 function projectForRow(row: HTMLElement): SidebarProject | null {
   const container = row.closest<HTMLElement>(PROJECT_CONTAINER_SELECTOR);
   return container ? rowProject(container) : null;
@@ -120,6 +145,7 @@ export function installThreadFolders(options: {
   let dialog: HTMLDialogElement | null = null;
   const bars = new Map<string, ProjectBarEntry>();
   const hiddenRows = new Set<HTMLElement>();
+  const pendingThreads = createPendingFolderThreads();
   const storage = (): Storage | null => {
     try {
       return window.localStorage;
@@ -357,6 +383,47 @@ export function installThreadFolders(options: {
     moveDialog.showModal();
   };
 
+  /** 行身份快照：判定“在文件夹中新建会话”时用于比对点击前后的侧栏。 */
+  const rowIdentities = (container: HTMLElement): PendingThreadRow[] => {
+    const identities: PendingThreadRow[] = [];
+    for (const row of container.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
+      const identity = rowIdentity(
+        row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local",
+        row,
+      );
+      if (identity) identities.push(identity);
+    }
+    return identities;
+  };
+
+  /**
+   * 在指定文件夹里新建会话：先记录待定归类，再用项目自身的原生新建入口打开
+   * 新会话，随后出现的会话由 refresh 归入该文件夹。原生入口缺失时保持原状，
+   * 不自行拼装 thread/start。
+   */
+  const startNewThread = (
+    project: SidebarProject,
+    key: string,
+    folderId: string,
+    container: HTMLElement,
+  ): void => {
+    const start = nativeProjectStart(container, project.projectId);
+    if (!start) {
+      pendingThreads.cancel(key);
+      return;
+    }
+    pendingThreads.begin(key, folderId, rowIdentities(container));
+    // 新建的会话会投影在该文件夹里，先展开它，避免用户看不到刚打开的新会话。
+    collapsed.delete(JSON.stringify([key, folderId]));
+    try {
+      start();
+    } catch (error) {
+      pendingThreads.cancel(key);
+      throw error;
+    }
+    refresh();
+  };
+
   const threadMenu: ThreadFolderThreadMenu = {
     decorate(menu, row, hostId, threadId, close) {
       const project = projectForRow(row);
@@ -421,6 +488,15 @@ export function installThreadFolders(options: {
     const hostId = row?.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
     const threadId = row && hostId ? nativeThreadId(hostId, row) : null;
     if (threadId) addAction(m.move, () => chooseFolder(project, key, threadId));
+    const folder =
+      event.target instanceof Element
+        ? event.target.closest<HTMLElement>(`[${FOLDER_ATTRIBUTE}]`)
+        : null;
+    const folderId = folder?.getAttribute(FOLDER_ATTRIBUTE);
+    if (folderId) {
+      const target = bars.get(key)?.container;
+      if (target) addAction(m.newThread, () => startNewThread(project, key, folderId, target));
+    }
     addAction(m.add, () => configure(project, key, true));
     addAction(m.manage, () => configure(project, key));
     const nativeTarget =
@@ -456,7 +532,7 @@ export function installThreadFolders(options: {
     if (!project) return;
     const row = target.closest<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR);
     // 树内会话入口自行处理右键，并保留对应原生会话行。
-    if (target.closest("[data-codexhost-folder-thread]")) return;
+    if (target.closest(`[${THREAD_ATTRIBUTE}]`)) return;
     showContextMenu(event, project, row ?? undefined);
   };
   document.addEventListener("contextmenu", onSidebarContextMenu, true);
@@ -473,12 +549,14 @@ export function installThreadFolders(options: {
       project.label,
       state.folders,
       state.assignments,
+      pendingThreads.state(key),
       rows.map((row) => {
         // 状态签名只进签名计算：running/unread 来自行 Fiber，恢复态来自 Buddy
         // 标记；任一变化都要重建投影，且每行只读一次 Fiber。
         const native = sidebarThreadNativeStatus(row);
         return [
           nativeThreadId(row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local", row),
+          draftIdFromSidebarRowElement(row),
           row.textContent,
           row.getAttribute("data-app-action-sidebar-thread-active"),
           native.running,
@@ -498,6 +576,7 @@ export function installThreadFolders(options: {
       const node = document.createElement("div");
       node.setAttribute("role", "treeitem");
       node.setAttribute("aria-label", folder.name);
+      node.setAttribute(FOLDER_ATTRIBUTE, folder.id);
       const collapseKey = JSON.stringify([key, folder.id]);
       const expanded = !collapsed.has(collapseKey);
       node.setAttribute("aria-expanded", String(expanded));
@@ -523,26 +602,48 @@ export function installThreadFolders(options: {
         createElement(Folder, { width: 15, height: 15, "aria-hidden": "true" }),
         folder.name,
       );
+      // 文件夹行右侧的“在文件夹中新建会话”入口。常显而不是悬停才显示：
+      // 隐藏式入口在树里既难发现，也会让指针落点落到行上而点不中。
+      const create = button("", () => startNewThread(project, key, folder.id, entry.container));
+      create.setAttribute(NEW_THREAD_ATTRIBUTE, folder.id);
+      create.title = m.newThread;
+      create.setAttribute("aria-label", `${m.newThread} · ${folder.name}`);
+      const createIcon = document.createElement("span");
+      createIcon.setAttribute("aria-hidden", "true");
+      createIcon.append(createElement(Plus, { width: 14, height: 14 }));
+      create.append(createIcon);
+      const header = document.createElement("div");
+      header.className = "thread-folder-row";
+      header.append(toggle, create);
+      // 归属该文件夹的行：已归类会话按原生 Thread ID，尚未提交的新会话按其
+      // 草稿身份（“在文件夹中新建会话”的待定意图持有）。
+      const members: Array<{ id: string; row: HTMLElement; draft: boolean }> = [];
       for (const row of rows) {
-        const id = nativeThreadId(
-          row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local",
-          row,
-        );
-        if (!id || state.assignments[id] !== folder.id) continue;
+        const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local";
+        const identity = rowIdentity(hostId, row);
+        if (!identity) continue;
+        const filed = identity.draft
+          ? pendingThreads.folderFor(key, identity.key)
+          : state.assignments[identity.key];
+        if (filed === folder.id) members.push({ id: identity.key, row, draft: identity.draft });
+      }
+      for (const { id, row, draft } of members) {
         const title =
           row.querySelector("[data-thread-title]")?.textContent ?? row.textContent ?? id;
         // 不搬动 React 管理的节点；点击时重新查找当前行，兼容原生列表重绘。
         const findRow = (): HTMLElement | undefined =>
           [...entry.container.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].find(
-            (candidate) =>
-              nativeThreadId(
+            (candidate) => {
+              const identity = rowIdentity(
                 candidate.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ?? "local",
                 candidate,
-              ) === id,
+              );
+              return identity?.key === id && identity.draft === draft;
+            },
           );
         const item = button("", () => findRow()?.click());
         item.setAttribute("role", "treeitem");
-        item.setAttribute("data-codexhost-folder-thread", id);
+        item.setAttribute(THREAD_ATTRIBUTE, id);
         item.setAttribute(
           "aria-selected",
           String(row.getAttribute("data-app-action-sidebar-thread-active") === "true"),
@@ -588,7 +689,7 @@ export function installThreadFolders(options: {
         item.addEventListener("contextmenu", (event) => showContextMenu(event, project, findRow()));
         children.append(item);
       }
-      node.append(toggle, children);
+      node.append(header, children);
       tree.append(node);
     }
     const error = document.createElement("span");
@@ -644,6 +745,23 @@ export function installThreadFolders(options: {
       const project = rowProject(container);
       if (project) projects.push({ container, project });
     }
+    // 推进“在文件夹中新建会话”的待定归类：唯一确定时写入归类并结束意图，
+    // 出现歧义时放弃。归类持久化成功后由下一次 refresh 投影到文件夹中。
+    for (const { container, project } of projects) {
+      const key = projectKey(project);
+      if (!pendingThreads.state(key)) continue;
+      const outcome = pendingThreads.observe(key, rowIdentities(container));
+      if (outcome.assigned) {
+        void persist(
+          withThreadFolderAssignment(
+            config,
+            key,
+            outcome.assigned.threadId,
+            outcome.assigned.folderId,
+          ),
+        ).catch(() => undefined);
+      }
+    }
     const activeKeys = new Set(projects.map(({ project }) => projectKey(project)));
     for (const [key, entry] of bars) {
       if (!activeKeys.has(key) || !entry.container.isConnected || !entry.bar.isConnected) {
@@ -690,10 +808,17 @@ export function installThreadFolders(options: {
         hiddenRows.delete(row);
         continue;
       }
-      const state = threadFolderProject(config, projectKey(project));
-      const threadId = nativeThreadId(hostId, row);
-      const assigned = threadId ? state.assignments[threadId] : undefined;
-      const hidden = !failure && state.folders.some((folder) => folder.id === assigned);
+      const key = projectKey(project);
+      const state = threadFolderProject(config, key);
+      const identity = rowIdentity(hostId, row);
+      // 草稿行不是已物化会话，只能凭“在文件夹中新建会话”的待定意图判断它是否
+      // 已被投影进文件夹。
+      const projected = identity
+        ? identity.draft
+          ? pendingThreads.folderFor(key, identity.key)
+          : state.assignments[identity.key]
+        : undefined;
+      const hidden = !failure && state.folders.some((folder) => folder.id === projected);
       row.toggleAttribute(HIDDEN_ATTRIBUTE, hidden);
       if (hidden) hiddenRows.add(row);
       else hiddenRows.delete(row);
@@ -751,6 +876,7 @@ export function installThreadFolders(options: {
       bars.clear();
       for (const row of hiddenRows) row.removeAttribute(HIDDEN_ATTRIBUTE);
       hiddenRows.clear();
+      pendingThreads.clear();
       styles.remove();
     },
   };

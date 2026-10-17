@@ -1,6 +1,7 @@
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
 import { PROJECT_ROW_SELECTOR, rowProject } from "./project-tabs/native-binding.js";
 import { findNativeComposerController } from "./renderer-native-composer-controller.js";
+import { nativeProjectStart } from "./renderer-native-project-start.js";
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -11,25 +12,6 @@ export interface SessionProject {
   cwd: string;
   title: string;
   open(): void;
-}
-
-function nativeProjectStart(row: HTMLElement, projectId: string): (() => void) | null {
-  for (const element of row.querySelectorAll<HTMLElement>("button")) {
-    const key = Object.keys(element).find((name) => name.startsWith("__reactFiber$"));
-    const ancestors = key ? committedReactAncestors(Reflect.get(element, key)) : [];
-    const props = ancestors
-      .map((fiber) => record(fiber.memoizedProps))
-      .find(
-        (props) =>
-          record(props?.group)?.projectId === projectId &&
-          props?.canStartNewThread === true &&
-          typeof props.onStartNewThread === "function",
-      );
-    if (typeof props?.onStartNewThread === "function") {
-      return props.onStartNewThread as () => void;
-    }
-  }
-  return null;
 }
 
 /** 使用项目行的原生新建入口，让 Desktop 决定项目、Host 和草稿配置。 */

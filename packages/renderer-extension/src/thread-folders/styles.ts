@@ -8,6 +8,10 @@ export const threadFoldersStyle = `
 [data-codexhost-thread-folders] button:focus-visible{outline:2px solid #508df2;outline-offset:1px}
 /* 文件夹内的会话入口沿用原生状态语义：标题左对齐，状态字形固定在最右。 */
 [data-codexhost-thread-folders] button[role=treeitem]{gap:6px}
+[data-codexhost-thread-folders] .thread-folder-row{display:flex;align-items:center;gap:2px}
+[data-codexhost-thread-folders] .thread-folder-row>[aria-label]:first-child{min-width:0;flex:1 1 auto}
+[data-codexhost-thread-folders] [data-codexhost-thread-folder-new-thread]{width:22px;min-width:22px;padding:0;justify-content:center;color:var(--color-token-text-secondary,inherit)}
+[data-codexhost-thread-folders] [data-codexhost-thread-folder-new-thread]:hover{color:inherit}
 [data-codexhost-folder-thread-title]{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis}
 [data-codexhost-thread-folders] button[role=treeitem]>[aria-hidden]:last-child{display:inline-flex;align-items:center;justify-content:center;flex:none;width:14px;height:14px;color:var(--color-token-text-secondary,currentColor)}
 [data-codexhost-folder-thread-status=running]>[aria-hidden]:last-child{animation:codexhost-folder-spin 1s linear infinite}

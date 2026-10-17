@@ -20,8 +20,19 @@ const { outputFiles } = await build({
           { projectKind: "local", projectId: "one", label: "项目一", folder: { id: "plan", name: "计划" }, threads: [["thread-a", "任务 A", { type: "loading", unread: false, unreadCount: 0 }], ["thread-b", "任务 B", { type: "idle", unread: true, unreadCount: 0 }]] },
           { projectKind: "local", projectId: "two", label: "项目二", folder: { id: "done", name: "归档" }, threads: [["thread-c", "任务 C"]] },
         ];
-        const bind = (element, value) => Object.defineProperty(element, "__reactFiber$fixture", { enumerable: true, value });
+        // 原生行会被 React 复用并改写 Fiber 指针（草稿提交后换身份），因此绑定
+        // 必须可重复执行：先删除再定义。
+        const bind = (element, value) => {
+          if (Object.hasOwn(element, "__reactFiber$fixture")) delete element.__reactFiber$fixture;
+          Object.defineProperty(element, "__reactFiber$fixture", { enumerable: true, configurable: true, value });
+        };
         const fiber = (props, parent = null) => ({ memoizedProps: props, return: parent, key: null });
+        let draftSerial = 0;
+        const rowAttributes = (threadId) => ({
+          "data-app-action-sidebar-thread-row": "",
+          "data-app-action-sidebar-thread-host-id": "local",
+          "data-app-action-sidebar-thread-id": "local:" + threadId,
+        });
         for (const project of projects) {
           const section = document.createElement("section");
           section.setAttribute("role", "listitem");
@@ -33,13 +44,28 @@ const { outputFiles } = await build({
           header.setAttribute("aria-expanded", "true");
           header.textContent = project.label;
           section.append(header);
+          // 项目自身的“新会话”入口：扩展通过 Fiber 上的 group/canStartNewThread/
+          // onStartNewThread 调用它，而不是自行拼装 thread/start。
+          const startNewThread = () => {
+            const draftId = "client-new-thread:draft-" + (++draftSerial);
+            const row = document.createElement("button");
+            const dataAttributes = rowAttributes(draftId);
+            for (const [name, value] of Object.entries(dataAttributes)) row.setAttribute(name, value);
+            bind(row, fiber({ conversationId: null, dataAttributes, statusState: { type: "idle", unread: false } }));
+            row.innerHTML = '<span data-thread-title-trigger><span data-thread-title>新会话草稿</span></span>';
+            section.append(row);
+            globalThis.lastDraftId = draftId;
+            globalThis.lastDraftRow = row;
+          };
+          const create = document.createElement("button");
+          create.setAttribute("data-app-action-sidebar-project-create", "");
+          create.textContent = "新会话";
+          bind(create, fiber({ group: { projectKind: project.projectKind, projectId: project.projectId, label: project.label }, canStartNewThread: true, onStartNewThread: startNewThread }));
+          create.addEventListener("click", startNewThread);
+          section.append(create);
           for (const [threadId, title, statusState] of project.threads) {
             const row = document.createElement("button");
-            const dataAttributes = {
-              "data-app-action-sidebar-thread-row": "",
-              "data-app-action-sidebar-thread-host-id": "local",
-              "data-app-action-sidebar-thread-id": "local:" + threadId,
-            };
+            const dataAttributes = rowAttributes(threadId);
             for (const [name, value] of Object.entries(dataAttributes)) row.setAttribute(name, value);
             bind(row, fiber({ conversationId: threadId, dataAttributes, statusState }));
             row.innerHTML = '<span data-thread-title-trigger><span data-thread-title>' + title + '</span></span>';
@@ -48,6 +74,18 @@ const { outputFiles } = await build({
           }
           document.querySelector("#app-shell-sidebar").append(section);
         }
+        // 提交新会话：草稿行变成已物化会话行（换身份、换标题），模拟原生提交。
+        const submitDraft = () => {
+          const row = globalThis.lastDraftRow;
+          if (!row) return;
+          const threadId = "thread-new-" + (++draftSerial);
+          const dataAttributes = rowAttributes(threadId);
+          for (const [name, value] of Object.entries(dataAttributes)) row.setAttribute(name, value);
+          bind(row, fiber({ conversationId: threadId, dataAttributes, statusState: { type: "idle", unread: false } }));
+          row.innerHTML = '<span data-thread-title-trigger><span data-thread-title>新会话</span></span>';
+          row.addEventListener("click", () => { globalThis.openedFolderThread = threadId; });
+          globalThis.lastThreadId = threadId;
+        };
         // 原生收起项目时会同时改写项目头的 aria-expanded 并卸载该项目下的会话行；
         // 这里用同一对动作模拟，便于断言外部投影的文件夹树跟随收起。
         const toggleProject = (projectId, expanded) => {
@@ -67,6 +105,7 @@ const { outputFiles } = await build({
         };
         control("折叠项目一", () => toggleProject("one", false));
         control("展开项目一", () => toggleProject("one", true));
+        control("提交新会话", submitDraft);
         let saved = {
           version: 1,
           projects: {
@@ -176,6 +215,67 @@ test("groups conversations independently per project and restores native rows on
   expect(
     await page.evaluate(() => Reflect.get(globalThis, "threadFolderFixture").writes.length),
   ).toBe(3);
+  expect(errors).toEqual([]);
+});
+
+test("creates a new conversation inside a folder through the native project entry", async ({
+  page,
+}) => {
+  await page.route("https://folders.test/", (route) =>
+    route.fulfill({ body: "<html><body></body></html>", contentType: "text/html" }),
+  );
+  await page.goto("https://folders.test/");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => Reflect.get(globalThis, "setupThreadFolders")());
+
+  const projectOne = page.locator('[data-sidebar-project-container-id="project:one"]');
+  const tree = projectOne.locator("[data-codexhost-thread-folders]");
+
+  // 新建入口挂在文件夹行右侧，未展开的项目不会出现该入口。
+  const create = tree.locator("[data-codexhost-thread-folder-new-thread]").first();
+  await expect(create).toHaveAttribute("aria-label", "在此文件夹中新建会话 · 计划");
+  await create.click();
+
+  // 原生项目入口被调用后出现的新会话草稿立即投影到该文件夹下，并从原生列表隐藏。
+  const draftId = await page.evaluate(() => Reflect.get(globalThis, "lastDraftId"));
+  await expect(tree.locator(`[data-codexhost-folder-thread="${draftId}"]`)).toBeVisible();
+  await expect(
+    projectOne.locator(`[data-app-action-sidebar-thread-id="local:${draftId}"]`),
+  ).toBeHidden();
+
+  // 提交后草稿换取原生 Thread ID，归类落到已物化会话上。
+  await page.getByRole("button", { name: "提交新会话", exact: true }).click();
+  const threadId = await page.evaluate(() => Reflect.get(globalThis, "lastThreadId"));
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          Reflect.get(globalThis, "threadFolderFixture").config().projects[
+            '["local","local","one"]'
+          ].assignments[Reflect.get(globalThis, "lastThreadId")],
+      ),
+    )
+    .toBe("plan");
+  const filed = tree.locator(`[data-codexhost-folder-thread="${threadId}"]`);
+  await expect(filed).toBeVisible();
+  await expect(
+    projectOne.locator(`[data-app-action-sidebar-thread-id="local:${threadId}"]`),
+  ).toBeHidden();
+
+  // 右键文件夹同样提供同一入口，而不是只能点行尾的加号。
+  await tree.getByRole("button", { name: "计划", exact: true }).click({ button: "right" });
+  await expect(
+    page.getByRole("menuitem", { name: "在此文件夹中新建会话", exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // 待定意图只存在于内存；归类在会话物化后一次性写回 Host。
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "threadFolderFixture").writes.length),
+  ).toBe(1);
+  await page.evaluate(() => Reflect.get(globalThis, "threadFolderFixture").dispose());
   expect(errors).toEqual([]);
 });
 

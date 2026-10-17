@@ -52,6 +52,26 @@ function domFingerprint(row: HTMLElement): string {
   ]);
 }
 
+/**
+ * 行是否真的暴露了原生 statusState。老版本或不完整的绑定读不到时返回 false，
+ * 调用方不能把“读不到”当成“已读”。
+ */
+export function sidebarThreadStatusObserved(row: HTMLElement): boolean {
+  for (const ancestor of committedReactAncestors(fiberOf(row)).slice(0, 12)) {
+    const props = record(ancestor.memoizedProps);
+    const attributes = record(props?.dataAttributes);
+    if (
+      attributes?.[SIDEBAR_THREAD_ID_ATTRIBUTE] !== row.getAttribute(SIDEBAR_THREAD_ID_ATTRIBUTE) ||
+      attributes?.[SIDEBAR_THREAD_HOST_ID_ATTRIBUTE] !==
+        row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) ||
+      props?.hideStatusIndicator === true
+    )
+      continue;
+    if (record(props?.statusState)) return true;
+  }
+  return false;
+}
+
 export function sidebarThreadNativeStatus(row: HTMLElement): SidebarThreadNativeStatus {
   const fiber = fiberOf(row);
   const fingerprint = domFingerprint(row);

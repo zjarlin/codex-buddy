@@ -187,6 +187,23 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
   };
 }
 
+function sameEntries(
+  left: readonly PendingConfirmationRecord[],
+  right: readonly PendingConfirmationRecord[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      key(entry) === key(other) &&
+      entry.state === other.state &&
+      entry.confirmedAt === other.confirmedAt &&
+      entry.completedAt === other.completedAt
+    );
+  });
+}
+
 function key(entry: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">): string {
   return `${entry.hostId}\u0000${entry.threadId}\u0000${entry.turnId}`;
 }
@@ -381,6 +398,19 @@ export class PendingConfirmationsModel {
     };
     this.#entries = prunePendingConfirmations(this.#entries);
     this.#write();
+    this.#publish();
+    return true;
+  }
+
+  /**
+   * 其他窗口确认后重新读取存储，避免本窗口用内存里的旧快照把已读覆盖回待确认。
+   * 只在 storage 事件里调用；读取失败时保持当前内存状态。
+   */
+  reload(): boolean {
+    if (!this.storage) return false;
+    const next = this.#read();
+    if (sameEntries(this.#entries, next)) return false;
+    this.#entries = next;
     this.#publish();
     return true;
   }

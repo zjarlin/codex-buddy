@@ -9,13 +9,10 @@ const { outputFiles } = await build({
     contents: `
       import { installRendererSidebarVisits } from './packages/renderer-extension/src/renderer-sidebar-visits.ts';
       import { installRendererSidebarUnread } from './packages/renderer-extension/src/renderer-sidebar-unread.ts';
+      import { PendingConfirmationsModel } from './packages/renderer-extension/src/pending-confirmations-state.ts';
       const hostA = 'remote-ssh-discovered:a';
       const hostB = 'remote-ssh-discovered:b';
       let activeHost = sessionStorage.getItem('selectedHost') ?? 'local';
-      const callbacks = new Map();
-      const managers = new Map([hostA, hostB].map(host => [host, {
-        addNotificationCallback(_, callback) {callbacks.set(host, callback); return () => callbacks.delete(host);}
-      }]));
       const select = host => {
         activeHost = host;
         sessionStorage.setItem('selectedHost', host);
@@ -45,7 +42,8 @@ const { outputFiles } = await build({
       mount(hostB, '核对远程构建结果');
       mount('local', '整理本地工作区');
       const visits = installRendererSidebarVisits({getLocale:()=> 'zh-CN'});
-      const unread = installRendererSidebarUnread({getManager:host=>managers.get(host) ?? null, getLocale:()=> 'zh-CN'});
+      const pending = new PendingConfirmationsModel(null);
+      const unread = installRendererSidebarUnread({getLocale:()=> 'zh-CN', pendingConfirmations: pending});
       const action = (label, handler) => {
         const button=document.createElement('button'); button.textContent=label; button.onclick=handler;
         document.querySelector('nav').append(button);
@@ -56,7 +54,7 @@ const { outputFiles } = await build({
       action('重绘 A', ()=>{rowA.remove();rowA=mount(hostA, '修复 SSH 会话状态提示');});
       action('置顶 A', ()=>mount(hostA, '置顶的 SSH 会话'));
       action('创建草稿', ()=>mount(hostA, '新会话草稿', 'client-new-thread:pending'));
-      action('完成 A', ()=>callbacks.get(hostA)?.({method:'turn/completed',params:{threadId:'same-id',turn:{id:'first',status:'completed'}}}));
+      action('完成 A', ()=>pending.upsert({hostId:hostA,threadId:'same-id',title:'修复 SSH 会话状态提示',turnId:'first',status:'completed',items:[{type:'agentMessage',text:'done'}]}));
       action('刷新控件', ()=>{visits.refresh();unread.refresh();});
       action('卸载', ()=>{visits.dispose();unread.dispose();});
     `,

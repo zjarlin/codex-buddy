@@ -845,7 +845,6 @@ export function installRendererBindingProbe(
   });
   const pendingConfirmations = new PendingConfirmationsModel(window.localStorage);
   const sidebarUnread = installRendererSidebarUnread({
-    getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
     getLocale: rendererLocale,
     pendingConfirmations,
   });

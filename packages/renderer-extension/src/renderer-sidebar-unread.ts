@@ -1,28 +1,13 @@
-import {
-  committedReactAncestors,
-  type RendererHostRoute,
-} from "@codexhost/desktop-control/renderer-bindings";
+import type { PendingConfirmationsModel } from "./pending-confirmations-state.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
-import type { PendingConfirmationsModel } from "./pending-confirmations-state.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ID_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_SELECTOR,
   threadIdFromSidebarRowElement,
 } from "./renderer-sidebar-agent-icons.js";
-
-type Manager = Pick<RendererHostRoute["manager"], "addNotificationCallback">;
-interface TurnState {
-  turnId: string;
-  finished: boolean;
-  unread: boolean;
-}
-interface HostState {
-  manager: Manager | null;
-  unsubscribe: (() => void) | null;
-  turns: Map<string, TurnState>;
-}
+import { sidebarThreadNativeStatus } from "./renderer-sidebar-thread-status.js";
 
 const DOT = "data-codexhost-sidebar-unread";
 const SLOT = "data-codexhost-sidebar-unread-slot";
@@ -36,45 +21,20 @@ const style = `
 [${DOT}]::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--color-background-info-solid,#3b82f6)}
 `;
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function nativeUnread(row: HTMLElement): boolean {
-  const key = Object.getOwnPropertyNames(row).find((name) => name.startsWith("__reactFiber$"));
-  if (!key) return false;
-  for (const fiber of committedReactAncestors(Reflect.get(row, key)).slice(0, 12)) {
-    const props = record(fiber.memoizedProps);
-    const attributes = record(props?.dataAttributes);
-    const status = record(props?.statusState);
-    if (
-      attributes?.[SIDEBAR_THREAD_ID_ATTRIBUTE] === row.getAttribute(SIDEBAR_THREAD_ID_ATTRIBUTE) &&
-      attributes?.[SIDEBAR_THREAD_HOST_ID_ATTRIBUTE] ===
-        row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) &&
-      status?.unread === true &&
-      status.type !== "loading" &&
-      props?.hideStatusIndicator !== true
-    )
-      return true;
-  }
-  return false;
-}
-
+// 补充蓝点不是独立状态，而是待确认队列的投影：队列里有一条，行上就有一个点。
+// 这样“侧栏蓝点个数”恒等于“能弹出的完成卡片个数”，也保证重启后两边一起消失。
 export function installRendererSidebarUnread(options: {
-  getManager(hostId: string): Manager | null;
   getLocale(): "zh-CN" | "en";
-  pendingConfirmations?: PendingConfirmationsModel;
+  pendingConfirmations: PendingConfirmationsModel;
 }): { refresh(): void; dispose(): void } {
   const styles = document.createElement("style");
   styles.textContent = style;
   document.head.append(styles);
-  const hosts = new Map<string, HostState>();
   const mounted = new Map<HTMLElement, { dot: HTMLElement; slot: HTMLElement | null }>();
   let disposed = false;
   let scheduled = false;
-  let reading: { turn: TurnState; since: number } | null = null;
+  let reading: { hostId: string; threadId: string; turnId: string; since: number } | null = null;
   let readTimer: ReturnType<typeof setTimeout> | null = null;
-  let unsubscribePending: () => void = () => undefined;
 
   const clear = (row: HTMLElement): void => {
     const entry = mounted.get(row);
@@ -87,52 +47,7 @@ export function installRendererSidebarUnread(options: {
     scheduled = true;
     queueMicrotask(scan);
   };
-  unsubscribePending = options.pendingConfirmations?.subscribe(schedule) ?? (() => undefined);
-  const connect = (hostId: string): HostState => {
-    let state = hosts.get(hostId);
-    if (!state) {
-      state = { manager: null, unsubscribe: null, turns: new Map() };
-      hosts.set(hostId, state);
-    }
-    const manager = options.getManager(hostId);
-    if (state.manager === manager) return state;
-    state.unsubscribe?.();
-    state.unsubscribe = null;
-    state.manager = manager;
-    if (!manager?.addNotificationCallback) return state;
-    const current = state;
-    try {
-      current.unsubscribe = manager.addNotificationCallback(
-        ["turn/started", "turn/completed"],
-        (notification) => {
-          if (disposed || current.manager !== manager || options.getManager(hostId) !== manager)
-            return;
-          const event = record(notification);
-          const params = record(event?.params);
-          const turn = record(params?.turn);
-          const threadId = params?.threadId;
-          if (typeof threadId !== "string" || !threadId || typeof turn?.id !== "string" || !turn.id)
-            return;
-          if (event?.method !== "turn/started" && event?.method !== "turn/completed") return;
-          const finished = event.method === "turn/completed";
-          const previous = current.turns.get(threadId);
-          // 重复完成通知不能重新点亮已读会话；新回合开始后忽略旧回合迟到的完成通知。
-          if (previous?.turnId === turn.id && previous.finished) return;
-          if (finished && previous && !previous.finished && previous.turnId !== turn.id) return;
-          current.turns.set(threadId, {
-            turnId: turn.id,
-            finished,
-            unread: finished && turn.status === "completed",
-          });
-          schedule();
-        },
-      );
-    } catch (error) {
-      current.manager = null;
-      console.warn("[codexhost] Sidebar unread notifications unavailable", error);
-    }
-    return current;
-  };
+  const unsubscribe = options.pendingConfirmations.subscribe(schedule);
 
   function scan(): void {
     scheduled = false;
@@ -141,35 +56,30 @@ export function installRendererSidebarUnread(options: {
     for (const row of mounted.keys()) {
       if (!rows.has(row)) clear(row);
     }
-    // 折叠项目后仍接收已连接 Host 的完成通知，展开时再补到新挂载的行。
-    const hostIds = new Set(hosts.keys());
-    for (const row of rows) {
-      const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
-      if (hostId && hostId !== "local" && hostId !== "durable") hostIds.add(hostId);
-    }
-    for (const hostId of hostIds) connect(hostId);
     const visible = !document.hidden && document.hasFocus();
     const now = performance.now();
-    let readingTurn: TurnState | null = null;
+    let nextReading: { hostId: string; threadId: string; turnId: string } | null = null;
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const id = threadIdFromSidebarRowElement(row);
       const threadId = hostId && id?.startsWith(`${hostId}:`) ? id.slice(hostId.length + 1) : id;
-      const pending = !!(
-        hostId &&
-        threadId &&
-        options.pendingConfirmations?.hasPending(hostId, threadId)
-      );
-      const turn = hostId && threadId ? hosts.get(hostId)?.turns.get(threadId) : undefined;
-      if (!pending && turn?.unread && visible && row.getAttribute(ACTIVE) === "true") {
-        if (reading?.turn === turn && now - reading.since >= READ_DWELL_MS) {
-          turn.unread = false;
-        } else {
-          readingTurn = turn;
-        }
+      if (!hostId || !threadId) {
+        clear(row);
+        continue;
       }
-      // 官方蓝点显示时避免重复，但保留补充状态，防止短暂查看被官方立即标为已读。
-      if ((!turn?.unread && !pending) || nativeUnread(row)) {
+      const entry = options.pendingConfirmations
+        .pending()
+        .find((candidate) => candidate.hostId === hostId && candidate.threadId === threadId);
+      if (!entry) {
+        // 没有待确认项就没有蓝点；原生未读由官方自己绘制，不重复添加。
+        clear(row);
+        continue;
+      }
+      if (visible && row.getAttribute(ACTIVE) === "true") {
+        nextReading = { hostId, threadId, turnId: entry.turnId };
+      }
+      // 官方蓝点已经表示同一条未读结果，避免叠成两个点。
+      if (sidebarThreadNativeStatus(row).unread) {
         clear(row);
         continue;
       }
@@ -181,17 +91,17 @@ export function installRendererSidebarUnread(options: {
       const leading = title.previousElementSibling;
       const slot =
         leading instanceof HTMLElement && leading.matches("div.w-4.shrink-0") ? leading : null;
-      let entry = mounted.get(row);
+      let current = mounted.get(row);
       if (
-        entry &&
-        (entry.slot !== slot ||
-          entry.dot.parentElement !== (slot ?? title.parentElement) ||
-          (!slot && entry.dot.nextElementSibling !== title))
+        current &&
+        (current.slot !== slot ||
+          current.dot.parentElement !== (slot ?? title.parentElement) ||
+          (!slot && current.dot.nextElementSibling !== title))
       ) {
         clear(row);
-        entry = undefined;
+        current = undefined;
       }
-      if (!entry) {
+      if (!current) {
         const dot = document.createElement("span");
         dot.setAttribute(DOT, "");
         dot.setAttribute("role", "img");
@@ -201,29 +111,45 @@ export function installRendererSidebarUnread(options: {
         } else {
           title.before(dot);
         }
-        entry = { dot, slot };
-        mounted.set(row, entry);
+        current = { dot, slot };
+        mounted.set(row, current);
       }
       const label =
-        options.getLocale() === "zh-CN"
-          ? pending
-            ? "有新结果待确认"
-            : "新回复，尚未阅读"
-          : pending
-            ? "New result awaiting confirmation"
-            : "New unread reply";
-      if (entry.dot.title !== label) {
-        entry.dot.title = label;
-        entry.dot.setAttribute("aria-label", label);
+        options.getLocale() === "zh-CN" ? "有新结果待确认" : "New result awaiting confirmation";
+      if (current.dot.title !== label) {
+        current.dot.title = label;
+        current.dot.setAttribute("aria-label", label);
       }
     }
-    // 仅连续前台阅读计时；切换会话、失焦或新回合都会重新开始。
-    if (reading?.turn !== readingTurn) {
+    // 只在前台连续停留该会话时计时；切换、失焦或新回合都会重新开始。
+    if (
+      !reading ||
+      !nextReading ||
+      reading.hostId !== nextReading.hostId ||
+      reading.threadId !== nextReading.threadId ||
+      reading.turnId !== nextReading.turnId
+    ) {
       if (readTimer !== null) {
         clearTimeout(readTimer);
         readTimer = null;
       }
-      reading = readingTurn ? { turn: readingTurn, since: now } : null;
+      reading = nextReading ? { ...nextReading, since: now } : null;
+    }
+    if (reading && nextReading && now - reading.since >= READ_DWELL_MS) {
+      const target = options.pendingConfirmations
+        .pending()
+        .find(
+          (candidate) =>
+            candidate.hostId === nextReading?.hostId &&
+            candidate.threadId === nextReading.threadId &&
+            candidate.turnId === nextReading.turnId,
+        );
+      reading = null;
+      if (target) {
+        // 与卡片共用同一份队列：确认后蓝点和卡片在同一次状态变更里一起消失。
+        options.pendingConfirmations.confirm(target);
+        return;
+      }
     }
     if (reading && readTimer === null) {
       readTimer = setTimeout(
@@ -238,7 +164,13 @@ export function installRendererSidebarUnread(options: {
 
   const stopObserving = getDomMutationHub(document).subscribe({
     kinds: ["childList", "attributes"],
-    attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE, ACTIVE],
+    attributeFilter: [
+      SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
+      SIDEBAR_THREAD_ID_ATTRIBUTE,
+      // 官方未读描述变化时要重扫，避免官方蓝点与补充蓝点同时出现。
+      "aria-describedby",
+      ACTIVE,
+    ],
     test: (mutation) => mutationAffectsElements(mutation, SIDEBAR_THREAD_ROW_SELECTOR),
     onMutate: () => schedule(),
   });
@@ -258,10 +190,8 @@ export function installRendererSidebarUnread(options: {
         clearTimeout(readTimer);
       }
       reading = null;
-      unsubscribePending();
-      for (const state of hosts.values()) state.unsubscribe?.();
+      unsubscribe();
       for (const row of mounted.keys()) clear(row);
-      hosts.clear();
       styles.remove();
     },
   };

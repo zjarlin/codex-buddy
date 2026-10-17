@@ -7,37 +7,41 @@ const { outputFiles } = await build({
     resolveDir: path.resolve(import.meta.dirname, "../.."),
     loader: "ts",
     contents: `
+      import { PendingConfirmationsModel, PENDING_CONFIRMATIONS_STORAGE_KEY } from './packages/renderer-extension/src/pending-confirmations-state.ts';
       import { installRendererSidebarUnread } from './packages/renderer-extension/src/renderer-sidebar-unread.ts';
       const remote = 'remote-ssh-discovered:a';
-      const callbacks = new Map();
-      const retired = [];
+      const remoteB = 'remote-ssh-discovered:b';
       let focusOverride = null;
       let hiddenOverride = false;
       const hasFocus = document.hasFocus.bind(document);
       Object.defineProperty(document, 'hasFocus', {value: () => focusOverride ?? hasFocus()});
       Object.defineProperty(document, 'hidden', {get: () => hiddenOverride});
-      globalThis.subscriptions = [];
-      const manager = host => ({addNotificationCallback(methods, callback) {
-        globalThis.subscriptions.push(host);
-        callbacks.set(host, callback);
-        return () => {retired.push(callback); callbacks.delete(host);};
-      }});
-      const managers = new Map([remote, 'remote-ssh-discovered:b', 'local'].map(host => [host, manager(host)]));
-      const notify = (method, id = 'first', status = 'completed') => {
-        for (const callback of callbacks.values()) callback({method, params:{threadId:'same-id', turn:{id,status}}});
+
+      // 待确认队列是蓝点的唯一来源；测试直接驱动队列，等价于渲染进程收到 turn/completed。
+      let model;
+      const stores = new Map();
+      const storage = {
+        getItem(key) { return stores.has(key) ? stores.get(key) : null; },
+        setItem(key, value) { stores.set(key, value); },
       };
-      const mount = (host, label) => {
+      const upsert = (hostId, threadId, turnId, status = 'completed') => model.upsert({
+        hostId, threadId, title: threadId, turnId, status,
+        items: [{ type: 'agentMessage', text: status === 'completed' ? 'done' : '' }],
+        error: status === 'failed' ? { message: 'boom' } : undefined,
+      });
+
+      const mount = (host, label, threadId = 'same-id') => {
         const row = document.createElement('div');
         const attrs = {
           'data-app-action-sidebar-thread-row':'',
           'data-app-action-sidebar-thread-host-id':host,
-          'data-app-action-sidebar-thread-id':host + ':same-id',
+          'data-app-action-sidebar-thread-id':host + ':' + threadId,
         };
         for (const [key, value] of Object.entries(attrs)) row.setAttribute(key, value);
         row.setAttribute('data-app-action-sidebar-thread-active', 'false');
         row.setAttribute('role','button'); row.setAttribute('aria-label',label); row.tabIndex=0;
         row.innerHTML='<div class="w-4 shrink-0"><span data-original-status></span></div><div data-thread-title-trigger><span data-thread-title>'+label+'</span></div>';
-        row.__reactFiber$fixture = {memoizedProps:{conversationId:host === remote ? 'same-id' : host + ':same-id', dataAttributes:attrs, statusState:{type:'idle',unread:false}}};
+        row.__reactFiber$fixture = {memoizedProps:{conversationId:host === remote ? threadId : host + ':' + threadId, dataAttributes:attrs, statusState:{type:'idle',unread:false}}};
         row.onclick = () => {
           for (const other of document.querySelectorAll('[data-app-action-sidebar-thread-row]')) {
             other.setAttribute('data-app-action-sidebar-thread-active', String(other === row));
@@ -47,53 +51,58 @@ const { outputFiles } = await build({
         return row;
       };
       let row = mount(remote, 'SSH A');
-      mount('remote-ssh-discovered:b', 'SSH B');
+      mount(remoteB, 'SSH B');
       mount('local', 'Local');
-      const control = installRendererSidebarUnread({getManager:host => managers.get(host) ?? null, getLocale:()=> 'zh-CN'});
+      model = new PendingConfirmationsModel(storage);
+      const control = installRendererSidebarUnread({getLocale:()=> 'zh-CN', pendingConfirmations: model});
       const action = (label, handler) => {
         const button = document.createElement('button'); button.textContent=label;
         button.onclick=handler; document.querySelector('nav').append(button);
       };
-      action('Complete first', () => callbacks.get(remote)?.({method:'turn/completed',params:{threadId:'same-id',turn:{id:'first',status:'completed'}}}));
-      action('Complete all', () => notify('turn/completed'));
-      action('Start next', () => notify('turn/started', 'next', 'inProgress'));
-      action('Complete next', () => notify('turn/completed', 'next'));
-      action('Fail next', () => notify('turn/completed', 'next', 'failed'));
-      action('Interrupt next', () => notify('turn/completed', 'next', 'interrupted'));
+      action('Complete A', () => upsert(remote, 'same-id', 'first'));
+      action('Complete all', () => { upsert(remote, 'same-id', 'first'); upsert(remoteB, 'same-id', 'first'); });
+      action('Complete next', () => upsert(remote, 'same-id', 'next'));
+      action('Fail next', () => upsert(remote, 'same-id', 'next', 'failed'));
+      action('Start next', () => model.startTurn(remote, 'same-id', 'next'));
       action('Collapse A', () => row.remove());
       action('Expand A', () => { row=mount(remote, 'SSH A'); });
       action('Replace A', () => { row.remove(); row=mount(remote, 'SSH A'); });
       action('Remove slot', () => row.querySelector('.w-4').remove());
       action('Native unread', () => {
         row.__reactFiber$fixture.memoizedProps.statusState={type:'idle',unread:true};
-        row.querySelector('[data-original-status]').innerHTML='<span class="native-unread" aria-label="Native unread"></span>';
-      });
-      action('Native loading', () => {
-        row.__reactFiber$fixture.memoizedProps.statusState={type:'loading',unread:true};
-        row.querySelector('[data-original-status]').innerHTML='<span role="status">Working</span>';
+        row.setAttribute('aria-describedby', 'unread-a');
+        const described = document.createElement('span');
+        described.id = 'unread-a'; described.hidden = true; described.textContent = 'unread';
+        row.append(described);
       });
       action('Native read', () => {
-        row.__reactFiber$fixture.memoizedProps.statusState.unread=false;
-        row.querySelector('[data-original-status]').replaceChildren();
+        row.__reactFiber$fixture.memoizedProps.statusState={type:'idle',unread:false};
+        row.removeAttribute('aria-describedby');
+        row.querySelector('#unread-a')?.remove();
       });
-      action('Reconnect', () => {managers.set(remote, manager(remote)); control.refresh();});
-      action('Old notification', () => retired.forEach(callback => callback({method:'turn/completed',params:{threadId:'same-id',turn:{id:'stale',status:'completed'}}})));
-      action('Simulate blur', () => {focusOverride=false; window.dispatchEvent(new Event('blur'));});
-      action('Simulate focus', () => {focusOverride=true; window.dispatchEvent(new Event('focus'));});
+      action('Simulate blur', () => { focusOverride=false; window.dispatchEvent(new Event('blur')); });
+      action('Simulate focus', () => { focusOverride=true; window.dispatchEvent(new Event('focus')); });
       action('Simulate hidden', () => {hiddenOverride=true; document.dispatchEvent(new Event('visibilitychange'));});
       action('Simulate visible', () => {hiddenOverride=false; document.dispatchEvent(new Event('visibilitychange'));});
+      action('Confirm A', () => {
+        for (const entry of model.pending()) {
+          if (entry.hostId === remote && entry.threadId === 'same-id') model.confirm(entry);
+        }
+      });
       action('Dispose', () => control.dispose());
+      globalThis.sidebarUnread = { model, control, upsert, pending: () => model.pending().map((entry) => [entry.hostId, entry.threadId]), state: () => [...stores.entries()] };
     `,
   },
   bundle: true,
-  platform: "browser",
   format: "iife",
+  platform: "browser",
   loader: { ".png": "dataurl", ".svg": "dataurl" },
   write: false,
 });
 const bundle = outputFiles[0]?.text;
 if (!bundle) throw new Error("Sidebar unread fixture missing");
 const remoteSelector = '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:a"]';
+const remoteBSelector = '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:b"]';
 const dotSelector = "[data-codexhost-sidebar-unread]";
 
 test.beforeEach(async ({ page }) => {
@@ -107,7 +116,6 @@ test.beforeEach(async ({ page }) => {
     aside>[role=button]{display:flex;align-items:center;gap:8px;padding:8px;cursor:pointer}
     aside>[data-app-action-sidebar-thread-active=true]{background:#8882;border-radius:6px}
     .w-4{display:flex;align-items:center;justify-content:center;width:16px;height:16px;flex:none}
-    .native-unread{display:block;width:8px;height:8px;border-radius:50%;background:#3b82f6}
     nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:28px;max-width:660px}
     button{padding:5px 9px;color:inherit;background:#8881;border:1px solid #8886;border-radius:5px}
   </style><aside></aside><nav></nav>`);
@@ -116,15 +124,17 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const theme of ["light", "dark"] as const) {
-  test(`first SSH completion shows a blue dot until read (${theme})`, async ({ page }) => {
+  test(`one blue dot per pending confirmation, cleared only when read (${theme})`, async ({
+    page,
+  }) => {
     await page.emulateMedia({ colorScheme: theme });
     await page.addStyleTag({ content: `:root{color-scheme:${theme}}` });
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     const row = page.locator(remoteSelector);
     await expect(page.locator(dotSelector)).toHaveCount(0);
-    await page.getByRole("button", { name: "Complete first", exact: true }).click();
-    await expect(row.getByRole("img", { name: "新回复，尚未阅读" })).toBeVisible();
+    await page.getByRole("button", { name: "Complete A", exact: true }).click();
+    await expect(row.getByRole("img", { name: "有新结果待确认" })).toBeVisible();
     await expect(page.locator(dotSelector)).toHaveCount(1);
     expect(
       await row
@@ -137,56 +147,65 @@ for (const theme of ["light", "dark"] as const) {
     await expect(page.locator(dotSelector)).toHaveCount(1);
     await page.clock.runFor(1);
     await expect(page.locator(dotSelector)).toHaveCount(0);
-    await page.getByRole("button", { name: "Local", exact: true }).click();
-    await page.getByRole("button", { name: "Complete first", exact: true }).click();
-    await expect(page.locator(dotSelector)).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "sidebarUnread").pending())).toEqual(
+      [],
+    );
     expect(errors).toEqual([]);
   });
 }
 
-test("reading starts after completion; failed turns do not acquire a blue dot", async ({
-  page,
-}) => {
-  await page.getByRole("button", { name: "SSH A", exact: true }).click();
-  await page.clock.runFor(10_000);
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
-  await expect(page.locator(dotSelector)).toBeVisible();
-  await page.clock.runFor(2_999);
-  await expect(page.locator(dotSelector)).toBeVisible();
-  await page.clock.runFor(1);
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-  await page.getByRole("button", { name: "Local", exact: true }).click();
-  await page.getByRole("button", { name: "Start next", exact: true }).click();
-  await page.getByRole("button", { name: "Fail next", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-});
-
-test("Hosts stay isolated and restarting a turn clears its prior blue dot", async ({ page }) => {
+test("dot count always equals the pending queue size", async ({ page }) => {
   await page.getByRole("button", { name: "Complete all", exact: true }).click();
   await expect(page.locator(dotSelector)).toHaveCount(2);
-  await page.getByRole("button", { name: "SSH A", exact: true }).click();
-  await page.clock.runFor(3_000);
-  await expect(page.locator(remoteSelector).locator(dotSelector)).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "SSH B", exact: true }).locator(dotSelector),
-  ).toBeVisible();
-  expect(await page.evaluate(() => Reflect.get(globalThis, "subscriptions"))).not.toContain(
-    "local",
-  );
-  await page.getByRole("button", { name: "Start next", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-  await page.getByRole("button", { name: "Local", exact: true }).click();
-  await page.getByRole("button", { name: "Complete next", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(2);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "sidebarUnread").pending())).toEqual([
+    ["remote-ssh-discovered:a", "same-id"],
+    ["remote-ssh-discovered:b", "same-id"],
+  ]);
+  await page.getByRole("button", { name: "Confirm A", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(1);
+  await expect(page.locator(remoteBSelector).locator(dotSelector)).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "sidebarUnread").pending())).toEqual([
+    ["remote-ssh-discovered:b", "same-id"],
+  ]);
 });
 
-test("first completion survives a collapsed project, row replacement and a missing native slot", async ({
+test("a new turn on the same thread clears the previous dot", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete A", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(1);
+  await page.getByRole("button", { name: "Start next", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(0);
+  await page.getByRole("button", { name: "Complete next", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(1);
+});
+
+test("failed turns also get a dot because they also raise a completion card", async ({ page }) => {
+  await page.getByRole("button", { name: "Start next", exact: true }).click();
+  await page.getByRole("button", { name: "Fail next", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(1);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "sidebarUnread").pending())).toEqual([
+    ["remote-ssh-discovered:a", "same-id"],
+  ]);
+});
+
+test("official unread dot avoids duplicates while the supplement stays pending", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Complete A", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(1);
+  await page.getByRole("button", { name: "Native unread", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "sidebarUnread").pending())).toEqual([
+    ["remote-ssh-discovered:a", "same-id"],
+  ]);
+  await page.getByRole("button", { name: "Native read", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(1);
+});
+
+test("collapsed project, row replacement and a missing native slot keep the dot", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Collapse A", exact: true }).click();
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  await page.getByRole("button", { name: "Complete A", exact: true }).click();
   await page.getByRole("button", { name: "Expand A", exact: true }).click();
   await expect(page.locator(remoteSelector).locator(dotSelector)).toBeVisible();
   await page.getByRole("button", { name: "Replace A", exact: true }).click();
@@ -196,56 +215,9 @@ test("first completion survives a collapsed project, row replacement and a missi
   await expect(page.locator(dotSelector)).toHaveCount(1);
 });
 
-test("native unread state avoids duplicate dots but early native read preserves the reminder", async ({
-  page,
-}) => {
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(1);
-  await page.getByRole("button", { name: "Native loading", exact: true }).click();
-  await expect(page.locator(dotSelector)).toBeVisible();
-  await page.getByRole("button", { name: "Native unread", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-  await expect(page.getByLabel("Native unread", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "SSH A", exact: true }).click();
-  await page.clock.runFor(1_000);
-  await page.getByRole("button", { name: "Native read", exact: true }).click();
-  await expect(page.locator(dotSelector)).toBeVisible();
-  await page.getByRole("button", { name: "Local", exact: true }).click();
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
-  await page.clock.runFor(5_000);
-  await expect(page.locator(dotSelector)).toBeVisible();
-  await page.getByRole("button", { name: "SSH A", exact: true }).click();
-  await page.clock.runFor(3_000);
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-});
-
-test("reconnecting keeps unread replies and ignores retired notifications; disposal restores the slot", async ({
-  page,
-}) => {
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
-  await page.getByRole("button", { name: "Reconnect", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(1);
-  await page.getByRole("button", { name: "SSH A", exact: true }).click();
-  await page.clock.runFor(3_000);
-  await page.getByRole("button", { name: "Local", exact: true }).click();
-  await page.getByRole("button", { name: "Old notification", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-  await page.getByRole("button", { name: "Start next", exact: true }).click();
-  await page.getByRole("button", { name: "Complete next", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(2);
-  await page.getByRole("button", { name: "SSH A", exact: true }).click();
-  await page.clock.runFor(1_000);
-  await page.getByRole("button", { name: "Dispose", exact: true }).click();
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-  await expect(page.locator("[data-codexhost-sidebar-unread-slot]")).toHaveCount(0);
-  await page.getByRole("button", { name: "Old notification", exact: true }).click();
-  await page.clock.runFor(5_000);
-  await expect(page.locator(dotSelector)).toHaveCount(0);
-});
-
 test("brief visits retain the reminder and never accumulate reading time", async ({ page }) => {
   const row = page.getByRole("button", { name: "SSH A", exact: true });
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  await page.getByRole("button", { name: "Complete A", exact: true }).click();
   for (let visit = 0; visit < 2; visit++) {
     await row.click();
     await page.clock.runFor(2_000);
@@ -267,7 +239,7 @@ for (const [leave, returnToWindow] of [
   ["Simulate hidden", "Simulate visible"],
 ] as const) {
   test(`${leave} resets the continuous foreground reading time`, async ({ page }) => {
-    await page.getByRole("button", { name: "Complete first", exact: true }).click();
+    await page.getByRole("button", { name: "Complete A", exact: true }).click();
     await page.getByRole("button", { name: "SSH A", exact: true }).click();
     await page.clock.runFor(2_000);
     await page.getByRole("button", { name: leave, exact: true }).click();
@@ -282,7 +254,7 @@ for (const [leave, returnToWindow] of [
 }
 
 test("a new completion receives a full reading interval", async ({ page }) => {
-  await page.getByRole("button", { name: "Complete first", exact: true }).click();
+  await page.getByRole("button", { name: "Complete A", exact: true }).click();
   await page.getByRole("button", { name: "SSH A", exact: true }).click();
   await page.clock.runFor(2_000);
   await page.getByRole("button", { name: "Start next", exact: true }).click();
@@ -293,4 +265,15 @@ test("a new completion receives a full reading interval", async ({ page }) => {
   await expect(dot).toBeVisible();
   await page.clock.runFor(1);
   await expect(dot).toHaveCount(0);
+});
+
+test("disposal removes dots and restores the native slot", async ({ page }) => {
+  await page.getByRole("button", { name: "Complete A", exact: true }).click();
+  await page.getByRole("button", { name: "Complete all", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(2);
+  await page.getByRole("button", { name: "SSH A", exact: true }).click();
+  await page.clock.runFor(1_000);
+  await page.getByRole("button", { name: "Dispose", exact: true }).click();
+  await expect(page.locator(dotSelector)).toHaveCount(0);
+  await expect(page.locator("[data-codexhost-sidebar-unread-slot]")).toHaveCount(0);
 });

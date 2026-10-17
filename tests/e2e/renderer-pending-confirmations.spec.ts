@@ -37,8 +37,8 @@ const { outputFiles } = await build({
         return audio;
       };
 
-      globalThis.setupPendingConfirmations = (hostId = "local") => {
-        localStorage.clear();
+      globalThis.setupPendingConfirmations = (hostId = "local", clear = true) => {
+        if (clear) localStorage.clear();
         document.body.innerHTML = \`
           <aside id="app-shell-sidebar">
             <section data-sidebar-project-container-id="project:one">
@@ -61,7 +61,13 @@ const { outputFiles } = await build({
             "data-app-action-sidebar-thread-id": row.dataset.appActionSidebarThreadId,
           };
           const threadId = row.dataset.appActionSidebarThreadId.slice(hostId.length + 1);
-          row.__reactFiber$fixture = { memoizedProps: { conversationId: threadId, dataAttributes: attrs } };
+          row.__reactFiber$fixture = {
+            memoizedProps: {
+              conversationId: threadId,
+              dataAttributes: attrs,
+              statusState: { type: "idle", unread: false },
+            },
+          };
           row.addEventListener("click", () => {
             for (const candidate of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
               candidate.dataset.appActionSidebarThreadActive = String(candidate === row);
@@ -183,6 +189,22 @@ const { outputFiles } = await build({
             for (const callback of callbacks) callback({ method: "thread/started", params: { thread: { id: threadId, ephemeral } } });
           },
           state() { return JSON.parse(localStorage.getItem(PENDING_CONFIRMATIONS_STORAGE_KEY) || "null"); },
+          nativeUnread(threadId, unread) {
+            for (const row of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
+              if (row.dataset.appActionSidebarThreadId !== hostId + ":" + threadId) continue;
+              row.__reactFiber$fixture.memoizedProps.statusState = { type: "idle", unread };
+              row.toggleAttribute("data-fixture-touch", unread);
+              let described = row.querySelector("#fixture-unread-" + threadId);
+              if (unread && !described) {
+                described = document.createElement("span");
+                described.id = "fixture-unread-" + threadId;
+                described.textContent = "unread";
+                row.append(described);
+              }
+              if (!unread) described?.remove();
+              row.setAttribute("aria-describedby", unread ? "fixture-unread-" + threadId : "");
+            }
+          },
         };
       };
     `,
@@ -262,6 +284,72 @@ test("completed non-current conversations open a modal and support read/archive 
   expect(
     await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").requests),
   ).toContainEqual(["thread/archive", { threadId: "thread-b" }]);
+});
+
+test("closing the card marks it read and it stays gone after a restart", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "关闭即已读。"),
+  );
+  await expect(modal).toBeVisible();
+  await page.getByRole("button", { name: "关闭" }).click();
+  await expect(modal).toBeHidden();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries[0]),
+  ).toMatchObject({ turnId: "turn-b", state: "confirmed" });
+
+  // 重启：保留存储重新安装，已读记录不能再次变成弹窗。
+  await page.reload();
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")("local", false));
+  await expect(page.locator("[data-codexhost-pending-confirmations]")).toBeHidden();
+});
+
+test("a restored pending entry the official sidebar already read is confirmed, not re-shown", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem(
+      "codexhost.pending-confirmations.v1",
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            hostId: "local",
+            threadId: "thread-b",
+            turnId: "turn-old",
+            status: "completed",
+            title: "Task B",
+            summary: "上一条已经读过的结果。",
+            project: "/workspace",
+            completedAt: Date.now() - 60_000,
+            state: "pending",
+            confirmedAt: null,
+          },
+        ],
+      }),
+    );
+  });
+  // 侧栏行是 idle/unread=false：官方认为已读，队列必须跟着一起确认。
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")("local", false));
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await expect(modal).toBeHidden();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => Reflect.get(globalThis, "pendingConfirmations").state()?.entries?.[0]?.state,
+      ),
+    )
+    .toBe("confirmed");
 });
 
 test("formats the final message as structured markdown instead of one collapsed line", async ({

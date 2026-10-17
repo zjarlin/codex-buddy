@@ -165,6 +165,43 @@ describe("pending confirmation state", () => {
     expect(restored.hasPending("remote", "thread-r")).toBe(false);
   });
 
+  it("adopts another window's confirmation on reload instead of overwriting it", () => {
+    const storage = memoryStorage();
+    const first = new PendingConfirmationsModel(storage, () => 1_700_000_000_000);
+    const entry = first.upsert({
+      hostId: "local",
+      threadId: "thread-a",
+      title: "Task A",
+      turnId: "turn-a",
+      status: "completed",
+    });
+    if (!entry) throw new Error("expected a pending confirmation");
+    // 第二个窗口读到同一份快照，随后第一个窗口在别处确认。
+    const second = new PendingConfirmationsModel(storage, () => 1_700_000_000_500);
+    expect(first.confirm(entry)).toBe(true);
+    expect(second.hasPending("local", "thread-a")).toBe(true);
+    expect(second.reload()).toBe(true);
+    expect(second.hasPending("local", "thread-a")).toBe(false);
+    expect(second.entries()[0]).toMatchObject({
+      state: "confirmed",
+      confirmedAt: 1_700_000_000_000,
+    });
+  });
+
+  it("keeps in-memory state when storage has nothing new", () => {
+    const storage = memoryStorage();
+    const model = new PendingConfirmationsModel(storage, () => 1_700_000_000_000);
+    model.upsert({
+      hostId: "local",
+      threadId: "thread-a",
+      title: "Task A",
+      turnId: "turn-a",
+      status: "completed",
+    });
+    expect(model.reload()).toBe(false);
+    expect(model.pending()).toHaveLength(1);
+  });
+
   it("does not revive a confirmed Turn after a duplicate completion notification", () => {
     const model = new PendingConfirmationsModel(memoryStorage(), () => 100);
     const entry = model.upsert({

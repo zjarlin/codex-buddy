@@ -20,6 +20,10 @@ import {
   SIDEBAR_THREAD_ROW_SELECTOR,
   threadIdFromSidebarRowElement,
 } from "./renderer-sidebar-agent-icons.js";
+import {
+  sidebarThreadNativeStatus,
+  sidebarThreadStatusObserved,
+} from "./renderer-sidebar-thread-status.js";
 import { appendMarkdownBlocks } from "./markdown-renderer.js";
 import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "./renderer-model-favorites.js";
 
@@ -72,7 +76,6 @@ const MODAL = "data-codexhost-pending-confirmations";
 const PANEL = "data-codexhost-pending-confirmations-panel";
 const QUEUE = "data-codexhost-pending-confirmations-queue";
 const READ_DWELL_MS = 3_000;
-const RECONCILE_LIMIT = 80;
 const RECONCILE_CONCURRENCY = 8;
 // 固定续发文本：继续当前任务，并允许执行方自行处理后续决策。
 const CONTINUE_MESSAGE = "继续,遇到决策你自己决定";
@@ -262,7 +265,6 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   let renderedKey = "";
   let expanded = true;
   let visibleEntry: PendingConfirmationRecord | null = null;
-  let dismissedEntryKey: string | null = null;
   let sending = false;
   let replaying: PendingConfirmationRecord | null = null;
   let noticeMessage = "";
@@ -271,9 +273,11 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   let modelOptionsKey = "";
   const projects = new Map<string, string>();
   const projectRequests = new Set<string>();
+  // 本次启动从存储恢复的待确认项：只有它们允许被官方已读状态直接确认掉，
+  // 避免刚完成的回合在官方未读落盘前被误判成已读。
+  const restoredEntries = new Set(model.pending().map((entry) => entryKey(entry)));
   const modelChoices = new Map<string, { harnessId: string; models: string[] } | null>();
   const modelRequests = new Set<string>();
-  const silentEntries = new Set<string>();
   let reading: { hostId: string; threadId: string; turnId: string; since: number } | null = null;
   let readTimer: number | null = null;
   let locale: Locale = options.getLocale();
@@ -425,7 +429,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const confirm = (entry: PendingConfirmationRecord): boolean => {
     clearReadTimer();
     const changed = model.confirm(entry);
-    silentEntries.delete(entryKey(entry));
+    restoredEntries.delete(entryKey(entry));
     if (
       changed &&
       visibleEntry?.turnId === entry.turnId &&
@@ -433,19 +437,22 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     ) {
       visibleEntry = null;
       expanded = false;
-      dismissedEntryKey = null;
     }
     render();
     return changed;
   };
 
+  /**
+   * 关闭卡片即视为读过：确认状态与侧栏蓝点一起持久化。
+   * 否则关闭只记在当前窗口内存里，重启后同一条完成提醒会再次弹出。
+   */
   const closeModal = (): void => {
-    const latest = model.latestPending();
-    dismissedEntryKey = visibleEntry ? entryKey(visibleEntry) : latest ? entryKey(latest) : null;
+    const target = visibleEntry ?? model.latestPending();
     expanded = false;
     visibleEntry = null;
     clearReadTimer();
-    render();
+    if (target) confirm(target);
+    else render();
   };
 
   const sendMessage = async (
@@ -497,8 +504,6 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       !latest ||
       !document.hasFocus() ||
       document.hidden ||
-      silentEntries.has(entryKey(latest)) ||
-      dismissedEntryKey === entryKey(latest) ||
       (active?.hostId === latest.hostId && active.threadId === latest.threadId)
     ) {
       renderedKey = "";
@@ -613,67 +618,57 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     modal.hidden = false;
   };
 
-  const reconcileHost = async (hostId: string, client: RendererModelClient): Promise<void> => {
+  /**
+   * 重启对账只补官方侧栏已经标成未读、但队列里没有的会话。
+   * 不再扫描全部近期历史终态——那会把用户早就读过的会话重新做成待确认项，
+   * 于是出现“明明读过，重启又弹一次”。补入项与蓝点一一对应：有蓝点才有卡片。
+   * 同一条 Turn 若已经确认过就跳过，避免把已读记录复活；同一 Thread 上更新的
+   * Turn 仍会补入。
+   */
+  const reconcileHost = async (hostId: string, client: RendererModelClient): Promise<boolean> => {
     const requestThreadProjection = client.requestThreadProjection;
-    if (!requestThreadProjection) return;
-    let turnsPaginationSupported = true;
-    let list: unknown;
-    try {
-      list = await requestThreadProjection("thread/list", {
-        limit: RECONCILE_LIMIT,
-        archived: false,
-        sortKey: "updated_at",
-        sortDirection: "desc",
+    if (!requestThreadProjection) return true;
+    const unread: { threadId: string; title: string; project: string }[] = [];
+    let renderedRows = 0;
+    for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
+      if (row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) !== hostId) continue;
+      renderedRows += 1;
+      const id = threadIdFromSidebarRowElement(row);
+      const threadId = id ? nativeThreadId(hostId, id) : "";
+      if (!threadId) continue;
+      if (!sidebarThreadNativeStatus(row).unread) continue;
+      if (
+        unread.some((candidate) => candidate.threadId === threadId) ||
+        model.pending().some((entry) => entry.hostId === hostId && entry.threadId === threadId)
+      ) {
+        continue;
+      }
+      unread.push({
+        threadId,
+        title: threadTitle(row) || "未命名会话",
+        project: sidebarProjectLabelForThread(document, { hostId, threadId }) || "",
       });
-    } catch {
-      return;
     }
-    const listRecord = record(list);
-    const rows = Array.isArray(listRecord?.data) ? (listRecord.data as unknown[]) : [];
     let offset = 0;
-    while (offset < rows.length) {
-      const batch = rows.slice(offset, offset + RECONCILE_CONCURRENCY);
+    while (offset < unread.length) {
+      const batch = unread.slice(offset, offset + RECONCILE_CONCURRENCY);
       offset += RECONCILE_CONCURRENCY;
       await Promise.all(
-        batch.map(async (value) => {
-          const row = record(value);
-          if (!row || typeof row.id !== "string" || !row.id || !row.cwd) return;
-          if (record(row.status)?.type === "active") return;
+        batch.map(async ({ threadId, title, project }) => {
           let result: unknown;
           try {
-            if (turnsPaginationSupported) {
-              try {
-                result = await requestThreadProjection("thread/turns/list", {
-                  threadId: row.id,
-                  limit: 1,
-                  sortDirection: "desc",
-                  itemsView: "full",
-                });
-              } catch {
-                turnsPaginationSupported = false;
-                result = await requestThreadProjection("thread/read", {
-                  threadId: row.id,
-                  includeTurns: true,
-                });
-              }
-            } else {
-              result = await requestThreadProjection("thread/read", {
-                threadId: row.id,
-                includeTurns: true,
-              });
-            }
+            result = await requestThreadProjection("thread/turns/list", {
+              threadId,
+              limit: 1,
+              sortDirection: "desc",
+              itemsView: "full",
+            });
           } catch {
             return;
           }
           const page = record(result);
-          const thread = record(page?.thread);
-          const turns = Array.isArray(page?.data)
-            ? (page.data as unknown[])
-            : Array.isArray(thread?.turns)
-              ? (thread.turns as unknown[])
-              : [];
-          const latest = thread ? turns.at(-1) : turns[0];
-          const turn = record(latest);
+          const turns = Array.isArray(page?.data) ? (page.data as unknown[]) : [];
+          const turn = record(turns[0]);
           if (!turn || typeof turn.id !== "string" || !turn.id) return;
           const terminal =
             turn.status === "completed" ||
@@ -682,30 +677,35 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
             turn.status === "interrupted" ||
             turn.status === "cancelled";
           if (!terminal) return;
+          // 同一条 Turn 无论确认与否都已经记录过，不能因为官方还亮着蓝点就复活。
           if (
             model
               .entries()
               .some(
                 (entry) =>
-                  entry.hostId === hostId && entry.threadId === row.id && entry.turnId === turn.id,
+                  entry.hostId === hostId &&
+                  entry.threadId === threadId &&
+                  entry.turnId === turn.id,
               )
-          )
+          ) {
             return;
-          const restored = model.upsert({
+          }
+          model.upsert({
             hostId,
-            threadId: row.id,
-            project: text(row.cwd),
-            title: text(row.name) || text(row.title) || text(row.preview) || "未命名会话",
+            threadId,
+            project,
+            title,
             turnId: turn.id,
             status: turn.status,
             items: turn.items,
             completedAt: turn.completedAt,
             error: turn.error,
           });
-          if (restored) silentEntries.add(entryKey(restored));
         }),
       );
     }
+    // 该 Host 的侧栏行还没渲染出来时无法判断未读，等下一次 refresh 重试。
+    return renderedRows > 0;
   };
 
   const connect = (hostId: string): void => {
@@ -764,10 +764,6 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 return;
               }
               if (event?.method !== "turn/completed") return;
-              const active = options.activeThread() ?? activeThreadFromDom();
-              if (active?.hostId === hostId && active.threadId === threadId) {
-                silentEntries.add(`${hostId}\u0000${threadId}\u0000${turnId}`);
-              }
               const row =
                 [...document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].find(
                   (candidate) =>
@@ -783,10 +779,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 project: sidebarProjectLabelForThread(document, { hostId, threadId }) || undefined,
                 turn: turn ?? {},
               });
-              if (entry && !silentEntries.has(entryKey(entry))) {
+              if (entry) {
+                // 当前可见会话完成时卡片由 render 的 active 判定自动隐藏，无需额外静默集合。
                 expanded = true;
                 visibleEntry = entry;
-                dismissedEntryKey = null;
                 // 语音播报与弹窗同一触发点：真正属于用户的回合完成通知。
                 options.speech?.announce(entry);
               }
@@ -800,15 +796,26 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       }
     }
     if (manager && state.reconciledManager !== manager) {
-      state.reconciledManager = manager;
       const client = options.getClient(hostId);
-      if (client) void reconcileHost(hostId, client).then(render, () => undefined);
+      if (client) {
+        state.reconciledManager = manager;
+        void reconcileHost(hostId, client)
+          .then((settled) => {
+            // 侧栏行尚未渲染时本次没有可对账的对象，下次刷新再试，避免漏掉重启后的未读。
+            if (!settled) state.reconciledManager = null;
+            render();
+          })
+          .catch(() => {
+            state.reconciledManager = null;
+          });
+      }
     }
   };
 
   const refresh = (): void => {
     if (disposed) return;
     for (const hostId of options.getHostIds()) connect(hostId);
+    syncNativeRead();
     syncReading();
     render();
   };
@@ -825,7 +832,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       visibleEntry = null;
       expanded = false;
       clearReadTimer();
-      render();
+      // 点“查看结果”就是去读这条结果，立即确认，避免重启后又弹回。
+      confirm(entry);
     } catch {
       noticeMessage = messages(locale).openFailed;
       render();
@@ -848,6 +856,66 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       noticeMessage = messages(locale).archiveFailed;
       view.disabled = read.disabled = archive.disabled = false;
       render();
+    }
+  };
+
+  // 卡片侧的已读计时与侧栏蓝点共用同一判据：可见且聚焦、停留在该会话。
+  // 官方未读从有到无，说明用户已在官方侧读过该会话；队列必须同步确认，
+  // 否则会留下“蓝点没了、卡片还在（重启还弹）”的不一致。
+  const nativeUnreadSeen = new Set<string>();
+  const lastReconcileAt = new Map<string, number>();
+  const RECONCILE_RETRY_MS = 2_000;
+  const syncNativeRead = (): void => {
+    if (disposed) return;
+    const pending = model.pending();
+    const stillUnread = new Set<string>();
+    const pendingByThread = new Map(
+      pending.map((entry) => [`${entry.hostId}\u0000${entry.threadId}`, entry]),
+    );
+    for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
+      const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
+      const id = threadIdFromSidebarRowElement(row);
+      const threadId = hostId && id ? nativeThreadId(hostId, id) : "";
+      if (!hostId || !threadId) continue;
+      const key = `${hostId}\u0000${threadId}`;
+      const unread = sidebarThreadNativeStatus(row).unread;
+      const entry = pendingByThread.get(key);
+      if (!entry) {
+        nativeUnreadSeen.delete(key);
+        // 官方已标未读但队列还没有：补进来，保证蓝点与卡片个数一致。
+        if (unread) {
+          const last = lastReconcileAt.get(hostId) ?? 0;
+          const now = performance.now();
+          if (now - last >= RECONCILE_RETRY_MS) {
+            lastReconcileAt.set(hostId, now);
+            const client = options.getClient(hostId);
+            if (client)
+              void reconcileHost(hostId, client).then((settled) => {
+                if (!settled) lastReconcileAt.delete(hostId);
+                render();
+              });
+          }
+        }
+        continue;
+      }
+      if (unread) {
+        nativeUnreadSeen.add(key);
+        stillUnread.add(key);
+      } else if (nativeUnreadSeen.has(key)) {
+        // 官方未读从有到无：用户已在官方侧读过，队列与蓝点一起确认。
+        nativeUnreadSeen.delete(key);
+        confirm(entry);
+      } else if (
+        restoredEntries.has(entryKey(entry)) &&
+        sidebarThreadStatusObserved(row) &&
+        !sidebarThreadNativeStatus(row).running
+      ) {
+        // 上次启动遗留下来、官方早已读过的记录：重启后不能再弹一次。
+        confirm(entry);
+      }
+    }
+    for (const key of [...nativeUnreadSeen]) {
+      if (!stillUnread.has(key)) nativeUnreadSeen.delete(key);
     }
   };
 
@@ -907,7 +975,6 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
         )
       : -1;
     visibleEntry = entries[(currentIndex + 1) % entries.length] ?? entries[0] ?? null;
-    dismissedEntryKey = null;
     renderedKey = "";
     render();
   });
@@ -964,6 +1031,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     render();
   };
   const onStorage = (): void => {
+    // 另一个窗口确认/归档后必须重新读取，否则本窗口会用旧快照覆盖已读状态。
+    model.reload();
     renderedKey = "";
     render();
   };
@@ -986,6 +1055,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   });
   const unsubscribeHosts = options.subscribeHosts?.(refresh) ?? (() => undefined);
   const observer = new MutationObserver(() => {
+    syncNativeRead();
     if (!modal.hidden) render();
     syncReading();
   });

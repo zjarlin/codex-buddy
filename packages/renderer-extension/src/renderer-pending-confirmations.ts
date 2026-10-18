@@ -333,6 +333,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-start;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
 [${MODAL}] .codexhost-pending-actions button[data-primary="true"]{border-color:Highlight;background:Highlight;color:HighlightText}
+[${MODAL}] .codexhost-pending-actions button[hidden]{display:none}
 [${MODAL}] .codexhost-pending-actions button:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-notice{min-height:18px;margin:-6px 16px 0;color:#c2410c;font-size:12px;overflow-wrap:anywhere}
 [${MODAL}] .codexhost-pending-notice:empty{visibility:hidden}
@@ -553,7 +554,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     appendMarkdownBlocks(document, summary, entry.summary ?? "");
     time.textContent = formatTime(entry.completedAt, locale);
     view.textContent = copy.view;
+    // “继续”只服务于未正常结束的回合：成功完成不需要续跑，反复出现的
+    // 主操作按钮反而容易误触；失败与中断仍然需要一键续发。
     continueButton.textContent = copy.continue;
+    continueButton.hidden = entry.status === "completed";
     continueButton.disabled = sending;
     continueButton.setAttribute("aria-busy", String(sending));
     read.textContent = copy.read;
@@ -980,7 +984,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   });
   close.addEventListener("click", closeModal);
   continueButton.addEventListener("click", () => {
-    if (visibleEntry) void sendMessage(visibleEntry, CONTINUE_MESSAGE);
+    if (visibleEntry && visibleEntry.status !== "completed") {
+      void sendMessage(visibleEntry, CONTINUE_MESSAGE);
+    }
   });
   send.addEventListener("click", () => {
     if (visibleEntry) void sendMessage(visibleEntry);

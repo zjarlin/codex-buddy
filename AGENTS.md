@@ -86,9 +86,8 @@ Existing Harness integration and Desktop update audit skills remain applicable t
 
 - Choose build and validation commands from `package.json`, not a copied command catalog. For focused tests, use the repository configuration in `tests/vitest.config.js` or `tests/e2e/playwright.config.js`, and the owning `Cargo.toml` for Rust test features.
 - To build and launch from source, run `npm start` at the repository root; `npm start -- --no-build` reuses existing artifacts. On macOS/Windows this stops running Codex Desktop processes before launch. Use it when launching is intended, not as a routine validation command; implementation is in `tools/dev-desktop/run.mjs`.
-- 安装包的构建、发布与 MacBook 投递统一交给 `.github/workflows/release-packages.yml`。完成仓库改动后执行相应验证，默认不再手动打包、通过 SSH 安装或重启应用；安装与重启按用户明确要求执行。
-- 正式版发布成功后，流水线的 `deliver-macbook` job 通过 `ssh macbook` 将最新 Apple Silicon 安装包放入 `/Users/zjarlin/Downloads`，校验成功后清理旧版 Codex Buddy DMG，只保留最新一份，保留其他下载文件。流水线只投递安装包，不自动安装或重启应用。
-- 交付状态以流水线实际执行结果为准；Runner 离线、SSH、目录权限或校验失败时明确报告阻塞，不把本地构建成功或 Release 发布成功当作 MacBook 投递完成。内网 Runner 和 MacBook 目录授权要求见 [仓库维护文档](docs/operations/repository-maintenance.md#发布后投递到-macbook)。
+- 安装包的构建与发布统一交给 `.github/workflows/release-packages.yml`。完成仓库改动后执行相应验证，默认不再手动打包或通过 SSH 安装；安装与重启按用户明确要求执行。
+- 安装包交付以正式 GitHub Release 为准；客户端通过应用内自动更新获取新版，流水线不推送安装包到任何机器。发布状态以流水线实际执行结果为准，不把本地构建成功当作发布完成。
 - Small, low-risk changes do not require tests. For high-risk or cross-package changes, or when explicitly requested, add focused tests for changed behavior and boundary conditions; do not run full test suites by default.
 - Do not claim a check passed unless it was executed. Report skipped or blocked checks and the reason.
 - A change is complete only when implementation, contracts, tests, and affected documentation agree.

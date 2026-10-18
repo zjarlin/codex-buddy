@@ -2,7 +2,6 @@
 // file directly so they never need npm install, lifecycle scripts or a build.
 export { runMaintenance, maintainItem } from "./src/maintenance.mjs";
 export { createInstallerUpdateManifest } from "./src/update-manifest.mjs";
-export { deliverLatestMacbookInstaller } from "./src/macbook-delivery.mjs";
 export {
   resolveRelease,
   verifyRelease,

@@ -18,7 +18,7 @@ Renderer 通过当前 Host 的 `codexhost/auto/routes` 读取，Host 先核对�
 
 官方 SSH app-server 明确不支持 `codexhost/auto/routes` 时，Renderer 先通过该连接的 `thread/read` 取得原生会话 ID、Provider 和 rollout 路径，再调用本机 Host 的专用 `codexhost/ssh/auto/routes`。Host 只使用 Desktop 保存的 SSH 连接，将内置的只读查询程序通过标准输入交给远端 Node.js 执行；远端 PATH 中需要 Node.js 18 或更高版本。程序从原生 rollout 路径确定远端 Codex 配置目录，核对持久化会话及 Provider，读取该目录的隐私设置和凭据，再查询上游。远端不需安装 Buddy 服务，也不会写入程序文件或重启会话。仅路由元数据回到 Renderer，凭据不经过浏览器；不会使用本机 Provider 配置替代远程配置。Provider 所需的环境凭据必须可由远端 SSH 环境读取，缺失时报告读取失败。网络或业务错误不触发这条回退路径。
 
-需要支持观察接口的 Sub2API 网关及更新后的 Codex Buddy Host/Renderer；原生 SSH 连接可通过上述只读通道获取记录。原版 Codex CLI/Desktop 不具备此卡片；不支持回合元数据的旧内核不会产生可关联记录，未使用 `auto` 的请求也没有 Auto 记录。交付遵循仓库发布流水线；源码构建通过不等于正在运行的 MacBook 应用已升级。
+需要支持观察接口的 Sub2API 网关及更新后的 Codex Buddy Host/Renderer；原生 SSH 连接可通过上述只读通道获取记录。原版 Codex CLI/Desktop 不具备此卡片；不支持回合元数据的旧内核不会产生可关联记录，未使用 `auto` 的请求也没有 Auto 记录。交付遵循仓库发布流水线；源码构建通过不等于正在运行的客户端应用已升级。
 
 ## System One 判断与回合动作
 

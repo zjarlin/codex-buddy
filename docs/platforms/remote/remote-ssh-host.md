@@ -64,3 +64,5 @@ For native Codex conversations, **Open in Terminal** launches the chosen termina
 Terminal preferences, Desktop updates, and desktop application launchers belong to the local machine. External Harnesses retain their native capabilities and cannot be resumed with the Codex CLI. Remote Windows remains unsupported.
 
 `npx -y codex-buddy sync` updates model configuration but does not replace a running native server. If the catalog already contains `auto` while the menu or extension methods remain unavailable, start the remote Buddy Host after active tasks finish, then reconnect. Let running tasks finish before switching services.
+
+If you only need local projects to survive a Desktop restart, you do not need to move the workspace to an SSH host. Use the [persistent local Host](../../product/persistent-local-host.md) instead.

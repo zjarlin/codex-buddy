@@ -35,6 +35,20 @@ const LAUNCHER_PID_ENV: &str = "CODEXHOST_LAUNCHER_PID";
 const NPM_NODE_PATH_ENV: &str = "CODEXHOST_NPM_NODE_PATH";
 const NPM_PACKAGE_ROOT_ENV: &str = "CODEXHOST_NPM_PACKAGE_ROOT";
 const REMOTE_LISTENER_CHILD_ENV: &str = "CODEXHOST_REMOTE_LISTENER_CHILD";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_LISTENER_ENV: &str = "CODEXHOST_LOCAL_LISTENER";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_LISTENER_CHILD_ENV: &str = "CODEXHOST_LOCAL_LISTENER_CHILD";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_HOST_DIRECTORY: &str = "local-host-runtime-v1";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_HOST_SOCKET_FILE: &str = "app-server.sock";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_HOST_ENABLED_FILE: &str = "enabled";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_HOST_PID_FILE: &str = "listener.pid";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_HOST_RUNTIME_FILE: &str = "runtime-path";
 const INTERNAL_ORIGINATOR_OVERRIDE_ENV: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const DESKTOP_ORIGINATOR: &str = "Codex Desktop";
 
@@ -697,19 +711,152 @@ fn is_managed_remote_listener(arguments: &[OsString]) -> bool {
     }
 }
 
-#[must_use]
-fn host_runtime_paths_are_configured() -> bool {
-    let launcher_managed = env::var_os(LAUNCHER_PID_ENV).is_some();
-    matches!(
-        select_host_paths(
-            env::var_os(HOST_NODE_PATH_ENV),
-            env::var_os(HOST_RUNTIME_PATH_ENV),
-            launcher_managed,
-            env::var_os(NPM_NODE_PATH_ENV),
-            env::var_os(NPM_PACKAGE_ROOT_ENV),
-        ),
-        (Some(_), Some(_))
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChildMode {
+    EphemeralHost,
+    LocalListener,
+    LocalProxy,
+    Stock,
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn local_host_directory(data_directory: &Path) -> PathBuf {
+    data_directory.join(LOCAL_HOST_DIRECTORY)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn local_host_socket(data_directory: &Path) -> PathBuf {
+    local_host_directory(data_directory).join(LOCAL_HOST_SOCKET_FILE)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn local_persistence_enabled(data_directory: &Path) -> bool {
+    local_host_directory(data_directory)
+        .join(LOCAL_HOST_ENABLED_FILE)
+        .is_file()
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn is_local_listener_environment() -> bool {
+    env::var_os(LOCAL_LISTENER_ENV).as_deref() == Some(std::ffi::OsStr::new("1"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn is_local_listener_environment() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn local_listener_arguments(
+    arguments: &[OsString],
+    socket_path: &Path,
+) -> ShimResult<Vec<OsString>> {
+    let app_server_index = app_server_subcommand_index(arguments)
+        .ok_or("local Host listener requires an app-server invocation")?;
+    let mut result = arguments[..=app_server_index].to_vec();
+    let mut index = app_server_index + 1;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        let text = argument.to_string_lossy();
+        if text == "--listen" {
+            index += 2;
+            continue;
+        }
+        if text.starts_with("--listen=") || text == "--stdio" {
+            index += 1;
+            continue;
+        }
+        result.push(argument.clone());
+        index += 1;
+    }
+    let mut listen = OsString::from("unix://");
+    listen.push(socket_path.as_os_str());
+    result.push(OsString::from("--listen"));
+    result.push(listen);
+    Ok(result)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn stop_local_listener(socket_path: &Path, directory: &Path) -> ShimResult<()> {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    use std::os::unix::net::UnixStream;
+
+    let pid_path = directory.join(LOCAL_HOST_PID_FILE);
+    if let Ok(text) = std::fs::read_to_string(&pid_path)
+        && let Ok(process_id) = text.trim().parse::<i32>()
+    {
+        let _ = kill(Pid::from_raw(process_id), Signal::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while UnixStream::connect(socket_path).is_ok() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    if let Ok(text) = std::fs::read_to_string(&pid_path)
+        && let Ok(process_id) = text.trim().parse::<i32>()
+    {
+        let _ = kill(Pid::from_raw(process_id), Signal::SIGKILL);
+    }
+    let _ = std::fs::remove_file(&pid_path);
+    let _ = std::fs::remove_file(directory.join(LOCAL_HOST_RUNTIME_FILE));
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn launch_detached_local_listener(
+    arguments: &[OsString],
+    socket_path: &Path,
+    expected_runtime_path: &Path,
+) -> ShimResult<()> {
+    use std::os::unix::net::UnixStream;
+
+    const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+    let directory = socket_path
+        .parent()
+        .ok_or("local Host socket has no parent directory")?;
+    let expected_runtime = expected_runtime_path
+        .canonicalize()
+        .unwrap_or_else(|_| expected_runtime_path.to_path_buf());
+    let recorded_runtime = std::fs::read_to_string(directory.join(LOCAL_HOST_RUNTIME_FILE))
+        .ok()
+        .map(|text| PathBuf::from(text.trim()));
+    if UnixStream::connect(socket_path).is_ok() {
+        if recorded_runtime.is_none_or(|path| path == expected_runtime) {
+            return Ok(());
+        }
+        stop_local_listener(socket_path, directory)?;
+    }
+    let current_executable = env::current_exe()?;
+    let listener_arguments = local_listener_arguments(arguments, socket_path)?;
+    let mut command = Command::new(&current_executable);
+    command
+        .args(&listener_arguments)
+        .env(LOCAL_LISTENER_ENV, "1")
+        .env(LOCAL_LISTENER_CHILD_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_background_command(&mut command);
+    let mut child = command.spawn()?;
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        if UnixStream::connect(socket_path).is_ok() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            return Err(format!("local Host listener exited before readiness: {status}").into());
+        }
+        if Instant::now() >= deadline {
+            stop_detached_listener(&mut child);
+            return Err(format!(
+                "local Host listener did not become ready at {} within {} seconds",
+                socket_path.display(),
+                STARTUP_TIMEOUT.as_secs()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 fn child_command(
@@ -717,7 +864,7 @@ fn child_command(
     current_executable: &Path,
     stock_codex_path: &Path,
     desktop_helper: bool,
-) -> ShimResult<Command> {
+) -> ShimResult<(Command, ChildMode)> {
     let launcher_managed = env::var_os(LAUNCHER_PID_ENV).is_some();
     let inherited_remote_profile = launcher_managed
         && env::var_os(REMOTE_SSH_MANAGED_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
@@ -747,9 +894,46 @@ fn child_command(
                 let node_path =
                     validate_proxy_target(current_executable, &PathBuf::from(node_path))?;
                 let runtime_path = canonical_existing_file(&PathBuf::from(runtime_path))?;
+                let node_entrypoint = node_entrypoint_path(&runtime_path);
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                if is_local_listener_environment() {
+                    let mut command = Command::new(&node_path);
+                    command
+                        .arg(&node_entrypoint)
+                        .args(arguments)
+                        .env(STOCK_CODEX_PATH_ENV, stock_codex_path)
+                        .env(HOST_NODE_PATH_ENV, &node_path)
+                        .env(HOST_RUNTIME_PATH_ENV, &runtime_path)
+                        .env_remove(CODEX_CLI_PATH_ENV)
+                        .env_remove(REMOTE_SSH_MANAGED_ENV)
+                        .env_remove(REMOTE_LISTENER_CHILD_ENV);
+                    command.envs(remote_proxy_environment);
+                    configure_background_command(&mut command);
+                    return Ok((command, ChildMode::LocalListener));
+                }
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                if env::var_os(REMOTE_SSH_MANAGED_ENV).as_deref() != Some(std::ffi::OsStr::new("1"))
+                    && let Some(data_directory) = env::var_os(DATA_DIRECTORY_ENV).map(PathBuf::from)
+                    && local_persistence_enabled(&data_directory)
+                {
+                    let socket_path = local_host_socket(&data_directory);
+                    launch_detached_local_listener(arguments, &socket_path, &runtime_path)?;
+                    let mut command = Command::new(&node_path);
+                    command
+                        .arg(&node_entrypoint)
+                        .arg("--codexhost-local-proxy")
+                        .arg(&socket_path)
+                        .env_remove(CODEX_CLI_PATH_ENV)
+                        .env_remove(REMOTE_SSH_MANAGED_ENV)
+                        .env_remove(REMOTE_LISTENER_CHILD_ENV)
+                        .env_remove(LOCAL_LISTENER_ENV)
+                        .env_remove(LOCAL_LISTENER_CHILD_ENV);
+                    configure_background_command(&mut command);
+                    return Ok((command, ChildMode::LocalProxy));
+                }
                 let mut command = Command::new(&node_path);
                 command
-                    .arg(node_entrypoint_path(&runtime_path))
+                    .arg(&node_entrypoint)
                     .args(arguments)
                     .env(STOCK_CODEX_PATH_ENV, stock_codex_path)
                     .env(HOST_NODE_PATH_ENV, &node_path)
@@ -762,7 +946,7 @@ fn child_command(
                 }
                 command.envs(remote_proxy_environment);
                 configure_background_command(&mut command);
-                return Ok(command);
+                return Ok((command, ChildMode::EphemeralHost));
             }
             (None, None) => {}
             _ => {
@@ -794,7 +978,7 @@ fn child_command(
         .env_remove(REMOTE_LISTENER_CHILD_ENV);
     command.envs(remote_proxy_environment);
     configure_background_command(&mut command);
-    Ok(command)
+    Ok((command, ChildMode::Stock))
 }
 
 /// Resolve the official CLI for both the launcher-managed process tree and
@@ -860,10 +1044,15 @@ pub fn run_proxy_with_observer(
     let started = Instant::now();
     let shutdown_signals = ShutdownSignals::install()?;
     let desktop_helper = desktop_invocation::is_desktop_helper(&stock_codex_path);
-    let local_host_runtime = !desktop_helper
-        && should_start_host_runtime(arguments)
-        && host_runtime_paths_are_configured()
+    let (mut command, child_mode) = child_command(
+        arguments,
+        &current_executable,
+        &stock_codex_path,
+        desktop_helper,
+    )?;
+    let local_host_runtime = child_mode == ChildMode::EphemeralHost
         && !is_managed_remote_listener(arguments)
+        && !is_local_listener_environment()
         && env::var_os(DATA_DIRECTORY_ENV).is_some();
     let mut local_runtime_lease = if local_host_runtime {
         Some(LocalRuntimeLease::acquire(&PathBuf::from(
@@ -872,12 +1061,6 @@ pub fn run_proxy_with_observer(
     } else {
         None
     };
-    let mut command = child_command(
-        arguments,
-        &current_executable,
-        &stock_codex_path,
-        desktop_helper,
-    )?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -961,6 +1144,12 @@ pub fn run_from_environment() -> ShimResult<i32> {
         return remote_lifecycle::run_terminate(&lifecycle_arguments);
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if is_local_listener_environment()
+        && env::var_os(LOCAL_LISTENER_CHILD_ENV).as_deref() == Some(std::ffi::OsStr::new("1"))
+    {
+        detach_remote_listener_session()?;
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if env::var_os(REMOTE_SSH_MANAGED_ENV).as_deref() == Some(std::ffi::OsStr::new("1"))
         && is_default_remote_unix_listener(&arguments)
     {
@@ -976,10 +1165,17 @@ pub fn run_from_environment() -> ShimResult<i32> {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use std::path::Path;
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use std::time::{Duration, Instant};
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    use super::{
+        LOCAL_HOST_DIRECTORY, LOCAL_HOST_ENABLED_FILE, local_listener_arguments,
+        local_persistence_enabled,
+    };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{PROCESS_TREE_REFRESH_INTERVAL, ShutdownSignals, process_tree_refresh_due};
     use super::{
@@ -1212,6 +1408,58 @@ mod tests {
             std::thread::yield_now();
         };
         assert_eq!(observed, Some(SIGTERM));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn rewrites_local_listener_arguments_with_an_explicit_socket() {
+        let arguments = arguments(&[
+            "-c",
+            "features.code_mode_host=true",
+            "app-server",
+            "--listen",
+            "unix://",
+            "--analytics-default-enabled",
+            "--stdio",
+        ]);
+        let rewritten = local_listener_arguments(&arguments, Path::new("/tmp/codexhost.sock"))
+            .expect("rewrite local listener arguments");
+        let values = rewritten
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            [
+                "-c",
+                "features.code_mode_host=true",
+                "app-server",
+                "--analytics-default-enabled",
+                "--listen",
+                "unix:///tmp/codexhost.sock",
+            ]
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn reads_the_persistent_local_host_marker() {
+        let directory = std::env::temp_dir().join(format!(
+            "codexhost-shim-local-host-marker-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(!local_persistence_enabled(&directory));
+        std::fs::create_dir_all(directory.join(LOCAL_HOST_DIRECTORY)).expect("create marker dir");
+        std::fs::write(
+            directory
+                .join(LOCAL_HOST_DIRECTORY)
+                .join(LOCAL_HOST_ENABLED_FILE),
+            b"{}\n",
+        )
+        .expect("write marker");
+        assert!(local_persistence_enabled(&directory));
+        std::fs::remove_dir_all(&directory).expect("remove marker dir");
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

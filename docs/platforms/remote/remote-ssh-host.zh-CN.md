@@ -66,3 +66,5 @@ Git 侧栏的「共享项目」按当前 SSH Host 读取远端 Codex 原生项�
 终端偏好、Desktop 更新和桌面应用入口属于本机。外部 Harness 保留自身原生能力，不能用 Codex CLI 恢复。远程 Windows 仍不受支持。
 
 `npx -y codex-buddy sync` 只同步模型配置，不会替换持续运行的原生服务。如果配置目录已有 `auto`，但菜单缺失或扩展接口不可用，需要在现有任务结束后启动远程 Buddy Host 并重新连接。运行中的任务应先完成，避免服务切换中断执行。
+
+如果只是希望本地项目在 Desktop 重启后不中断，不需要把工作区移到 SSH 主机，可使用[本地常驻 Host](../../product/persistent-local-host.md)。

@@ -1,5 +1,6 @@
 import { ProjectGitWorkflowGroup } from "./project-git-workflow.js";
 import { randomBytes } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -36,6 +37,11 @@ import {
 } from "./remote-app-server.js";
 import { remoteOfficialAppServerSocketPath } from "./remote-official-app-server.js";
 import { createHostUpdateCoordinator, type HostUpdateCoordinator } from "./update-coordinator.js";
+import {
+  clearLocalHostListenerState,
+  localHostPaths,
+  writeLocalHostListenerState,
+} from "./local-host-state.js";
 
 const STOCK_CODEX_PATH_ENV = "CODEXHOST_STOCK_CODEX_PATH";
 const DEFAULT_AGENT_ENV = "CODEXHOST_DEFAULT_AGENT";
@@ -236,6 +242,8 @@ export async function runHostRuntime(input: {
   }
   const listenUrl = remoteUnixListenerUrl(input.arguments);
   if (!listenUrl) throw new Error("Remote app-server listener URL is unavailable");
+  const localListener = input.environment.CODEXHOST_LOCAL_LISTENER === "1";
+  const localListenerPaths = localListener ? localHostPaths(input.environment) : null;
   return prepareDelegationRuntime({
     environment: input.environment,
     createHost: async (delegationEnvironment, _onDelegationApi, registry) => {
@@ -302,6 +310,13 @@ export async function runHostRuntime(input: {
           officialRuntimeScope.gate.unavailable();
         });
         await listener.listen();
+        if (localListenerPaths) {
+          const runtimePath = path.resolve(process.argv[1] ?? "host-runtime.mjs");
+          await writeLocalHostListenerState(
+            localListenerPaths,
+            await realpath(runtimePath).catch(() => runtimePath),
+          );
+        }
         void officialRuntimeScope.failure().then((result) => {
           if (!stopping) officialState.unexpectedExit = result;
           // Keep remote external Harness sessions alive when only native Codex fails.
@@ -315,6 +330,8 @@ export async function runHostRuntime(input: {
         stopping = true;
         process.removeListener("SIGINT", stop);
         process.removeListener("SIGTERM", stop);
+        if (localListenerPaths)
+          await clearLocalHostListenerState(localListenerPaths).catch(() => {});
         try {
           await listener.close();
         } finally {

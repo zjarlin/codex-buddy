@@ -497,6 +497,7 @@ if (updateEnvironment.CODEXHOST_REMOTE_SSH_MANAGED === "1") {
 }
 
 let launchArguments;
+let localHostArguments = null;
 let remoteArguments = null;
 let brokerArguments = null;
 let delegationArguments = null;
@@ -506,6 +507,9 @@ if (userArguments.length === 0) {
   launchArguments = userArguments;
 } else if (userArguments[0] === "inspect") {
   launchArguments = userArguments;
+} else if (userArguments[0] === "local-host") {
+  launchArguments = null;
+  localHostArguments = userArguments.slice(1);
 } else if (userArguments[0] === "remote") {
   launchArguments = null;
   remoteArguments = userArguments.slice(1);
@@ -527,6 +531,7 @@ if (userArguments.length === 0) {
       "  codexhost --version",
       "  codexhost inspect",
       "  codexhost launch [launcher options]",
+      "  codexhost local-host enable|disable|status|stop",
       "  codexhost remote install|start|stop|status|uninstall",
       "  codexhost broker install|status|stop|uninstall",
       "  codexhost delegate --help",
@@ -580,6 +585,24 @@ if (delegationArguments !== null) {
         ...updateEnvironment,
         CODEXHOST_CLI_PATH: fileURLToPath(import.meta.url),
       },
+      stdio: "inherit",
+      windowsHide: true,
+    },
+  );
+  child.on("error", (error) => fail(error.message));
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+} else if (localHostArguments !== null) {
+  const child = spawn(
+    process.execPath,
+    [hostRuntime, "--codexhost-local-host", ...localHostArguments],
+    {
+      env: updateEnvironment,
       stdio: "inherit",
       windowsHide: true,
     },

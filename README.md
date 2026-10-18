@@ -43,6 +43,15 @@ npm start
 
 `npm start` 会构建并重新启动 Codex Desktop。再次启动可运行 `npm start -- --no-build`。先结束或保存当前正在执行的任务。
 
+本地项目默认随 Desktop 退出而结束后台 Host。需要让本地工作区在 Desktop 重启后继续运行时，可启用常驻 Host：
+
+```bash
+npm install -g @codexhost/cli
+codexhost local-host enable
+```
+
+完全退出并重新启动 Desktop 后生效。工作区、Git 仓库和 Harness 仍在本机，不需要 SSH 工作区、反向 SSH 或 EasyTier；`codexhost local-host status|stop|disable` 用于查看和停止。详见 [本地常驻 Host](docs/product/persistent-local-host.md)。
+
 进入 **Codex** 执行链，在 **Codex Buddy 设置 → 路由** 管理自动路由、隐私、旁路、System One 判断、JEV 连接、执行角色和执行模型。输入区不再显示 Auto Router 设置面板；收藏模型和独立会话恢复入口保留。关闭“自动路由”后恢复手动选模。
 
 这些 UI 和运行时能力由本 fork 的 launcher、Host 与 renderer 扩展提供。只运行 `npx -y codex-buddy` 不会为已打开的官方客户端添加这些功能。原 CLI 的模型同步用法继续独立存在；也可从收藏模型菜单手动刷新目录。

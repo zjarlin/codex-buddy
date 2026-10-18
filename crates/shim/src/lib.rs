@@ -714,7 +714,9 @@ fn is_managed_remote_listener(arguments: &[OsString]) -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChildMode {
     EphemeralHost,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     LocalListener,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     LocalProxy,
     Stock,
 }

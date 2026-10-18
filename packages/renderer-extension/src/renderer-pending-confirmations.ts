@@ -42,7 +42,7 @@ interface PendingConfirmationDomOptions {
   activeThread(): { hostId: string; threadId: string } | null;
   getLocale(): Locale;
   model?: PendingConfirmationsModel;
-  openThread?(threadId: HostThreadId, options: { hostId: string }): Promise<void>;
+  openThread?(threadId: HostThreadId, options: { hostId: string; project?: string }): Promise<void>;
   /**
    * 从完成卡片跳走前记录来源会话，供“回到刚才的会话”入口返回。
    * 与 activeThread 一样以原生会话 ID 传入。
@@ -828,10 +828,12 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     noticeMessage = "";
     // 跳走前记住用户原本正在看的会话，便于从完成结果返回。
     const origin = options.activeThread() ?? activeThreadFromDom();
+    const project = sidebarProjectLabelForThread(document, entry) ?? entry.project;
     try {
-      await (options.openThread ?? openRendererThread)(hostThreadIdSchema.parse(entry.threadId), {
-        hostId: entry.hostId,
-      });
+      await (options.openThread ?? openRendererThread)(
+        hostThreadIdSchema.parse(entry.threadId),
+        project ? { hostId: entry.hostId, project } : { hostId: entry.hostId },
+      );
       if (origin) options.onNavigateAway?.(origin);
       visibleEntry = null;
       expanded = false;

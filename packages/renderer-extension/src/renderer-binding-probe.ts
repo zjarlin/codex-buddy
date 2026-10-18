@@ -30,6 +30,7 @@ import {
   type HarnessPermissionModeId,
   type HarnessPermissionModeScope,
   type HarnessThinkingOptionId,
+  type HostThreadId,
   type AccountCreditsSnapshot,
   type ThreadInspection,
   type ThreadUsageInspection,
@@ -809,6 +810,16 @@ export function installRendererBindingProbe(
     }
     return null;
   };
+  type OpenSidebarThreadOptions = NonNullable<Parameters<typeof openRendererThread>[1]>;
+  let revealThreadInProjectTab:
+    | ((input: { hostId: string; threadId: HostThreadId; project?: string }) => string | null)
+    | null = null;
+  const openSidebarThread = (threadId: HostThreadId, options: OpenSidebarThreadOptions) => {
+    const project = options.hostId
+      ? revealThreadInProjectTab?.({ ...options, hostId: options.hostId, threadId })
+      : null;
+    return openRendererThread(threadId, project ? { ...options, project } : options);
+  };
   let usageNotificationDispose: (() => void) | null = null;
   const localAgentForSidebarThread = (input: {
     hostId: string;
@@ -867,7 +878,7 @@ export function installRendererBindingProbe(
     getLocale: rendererLocale,
     activeThread: viewedThread,
     openThread: (threadId, options) =>
-      openRendererThread(hostThreadIdSchema.parse(threadId), { hostId: options.hostId }),
+      openSidebarThread(hostThreadIdSchema.parse(threadId), { hostId: options.hostId }),
   });
   const pendingConfirmationPanel = installRendererPendingConfirmations({
     getClient: (hostId) => modelClientForHost(hostId),
@@ -888,6 +899,7 @@ export function installRendererBindingProbe(
     onNavigateAway: (source) => threadReturn.remember(source),
     getLocale: rendererLocale,
     model: pendingConfirmations,
+    openThread: openSidebarThread,
     speech: {
       announce: (entry) => speechAnnouncer.announce(entry),
       replay: (entry) => speechAnnouncer.replay(entry),
@@ -1058,7 +1070,7 @@ export function installRendererBindingProbe(
     },
     openImportedThread: (threadId, signal, hostId) => {
       if (!hostId) throw new Error("无法确认导入会话所属 Host");
-      return openRendererThread(threadId, { hostId, signal });
+      return openSidebarThread(threadId, { hostId, signal });
     },
     onLocaleChange() {
       rendererLocaleValue = settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en";
@@ -1071,6 +1083,7 @@ export function installRendererBindingProbe(
     getLocale: rendererLocale,
     getClient: () => modelClientForHost("local"),
   });
+  revealThreadInProjectTab = projectTabs.revealThread;
   const threadFolders = installThreadFolders({
     getLocale: () => settingsLifecycle.locale,
     getClient: () => modelClientForHost("local"),

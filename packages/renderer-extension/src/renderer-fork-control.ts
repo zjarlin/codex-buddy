@@ -16,7 +16,9 @@ const RESPONSE_CONVERSATION_ATTRIBUTE = "data-response-annotation-conversation";
 const TURN_KEY_ATTRIBUTE = "data-content-search-turn-key";
 const OPEN_THREAD_TIMEOUT_MS = 15_000;
 const APP_SIDEBAR_SELECTOR = "#app-shell-sidebar";
+const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id]";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
+const PROJECT_LABEL_ATTRIBUTE = "data-app-action-sidebar-project-label";
 
 function abortError(): Error {
   return Object.assign(new Error("Thread opening was aborted"), { name: "AbortError" });
@@ -68,25 +70,37 @@ function sidebarRoot(): HTMLElement | null {
   return document.querySelector?.(APP_SIDEBAR_SELECTOR) ?? null;
 }
 
-// 展开仍处于折叠状态的原生项目头。已展开在 `expanded` 中记录，便于稍后还原。
-function expandCollapsedProjects(sidebar: HTMLElement, expanded: Set<HTMLElement>): boolean {
-  let clicked = false;
-  for (const header of sidebar.querySelectorAll<HTMLElement>(PROJECT_HEADER_SELECTOR)) {
-    if (header.getAttribute("aria-expanded") === "false") {
-      header.click();
-      expanded.add(header);
-      clicked = true;
-    }
+function projectContainerByLabel(root: HTMLElement, label: string | undefined): HTMLElement | null {
+  const expected = label?.trim();
+  if (!expected) return null;
+  for (const container of root.querySelectorAll<HTMLElement>(PROJECT_CONTAINER_SELECTOR)) {
+    const header = container.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
+    const actual = (
+      header?.getAttribute(PROJECT_LABEL_ATTRIBUTE) ?? header?.getAttribute("aria-label")
+    )?.trim();
+    if (actual === expected) return container;
   }
-  return clicked;
+  return null;
+}
+
+// 每次只展开一个折叠项目。定位目标明确时 root 是目标项目容器；项目元数据缺失时
+// 才退回侧栏逐个项目探测，避免旧实现一次把整个侧栏所有项目全部展开。
+function expandNextCollapsedProject(root: ParentNode, expanded: Set<HTMLElement>): boolean {
+  for (const header of root.querySelectorAll<HTMLElement>(PROJECT_HEADER_SELECTOR)) {
+    if (header.getAttribute("aria-expanded") !== "false" || expanded.has(header)) continue;
+    header.click();
+    expanded.add(header);
+    return true;
+  }
+  return false;
 }
 
 // 只识别原生列表的“加载更多”控件：它在 Fiber 上以 hasMoreItems + onExpandedChange
 // 暴露分页契约，加载到没有更多时自行置 hasMoreItems=false，因此点击到列表完整
 // 就会自然收敛，不会把已经完整的列表再来回折叠。
-function pagingButtons(sidebar: HTMLElement): HTMLButtonElement[] {
+function pagingButtons(root: ParentNode): HTMLButtonElement[] {
   const buttons: HTMLButtonElement[] = [];
-  for (const button of sidebar.querySelectorAll<HTMLButtonElement>("button")) {
+  for (const button of root.querySelectorAll<HTMLButtonElement>("button")) {
     const paging = reactAncestors(button).some((fiber) => {
       const props = record(fiber.memoizedProps);
       return props?.hasMoreItems === true && typeof props.onExpandedChange === "function";
@@ -99,22 +113,28 @@ function pagingButtons(sidebar: HTMLElement): HTMLButtonElement[] {
 // 还原 reveal 期间被打开的原生状态：重新点击我们展开过的“Show more”控件（此时已
 // 变为“Show less”，其 onClick 调用 onExpandedChange(false)），再重新点击被展开的
 // 项目头。只处理本次实际改动过的元素，用户原本就展开的列表与项目不受影响。
-function restoreRevealedSidebar(expanded: Set<HTMLElement>, paged: Set<HTMLElement>): void {
+function restoreRevealedSidebar(
+  expanded: Set<HTMLElement>,
+  paged: Set<HTMLElement>,
+  keepProject: HTMLElement | null,
+): void {
   const sidebar = sidebarRoot();
   if (!sidebar) return;
   for (const button of pagingButtons(sidebar)) {
     if (!paged.has(button)) continue;
+    if (keepProject?.contains(button)) continue;
     if (button.getAttribute("aria-disabled") === "true" || button.disabled) continue;
     button.click();
   }
   for (const header of expanded) {
+    if (keepProject?.contains(header)) continue;
     if (header.isConnected && header.getAttribute("aria-expanded") === "true") header.click();
   }
 }
 
 export function openRendererThread(
   threadId: HostThreadId,
-  options: { hostId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { hostId?: string; project?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
   if (options.signal?.aborted) return Promise.reject(abortError());
   const current = findSidebarRow(threadId, options);
@@ -142,10 +162,11 @@ export function openRendererThread(
       if (settled) return;
       settled = true;
       cleanup();
-      // 先切入目标会话，再还原展开态：还原可能重渲染列表并卸载目标行，
-      // 放在点击之后可保证原生行仍可用。
+      // 保留目标项目展开，使当前会话行继续可见并参与滚动聚焦；只还原本次为探测
+      // 其他项目而临时打开的状态。先点击原生行，再还原，避免重渲染卸载目标行。
+      const keepProject = row.closest<HTMLElement>(PROJECT_CONTAINER_SELECTOR);
       row.click();
-      restoreRevealedSidebar(expandedProjects, pagedButtons);
+      restoreRevealedSidebar(expandedProjects, pagedButtons, keepProject);
       resolve();
     };
     // 每轮只请求一次原生分页，并按轮次限流：MutationObserver 会在原生列表每次
@@ -159,17 +180,19 @@ export function openRendererThread(
         return;
       }
       const sidebar = sidebarRoot();
-      if (sidebar && expandCollapsedProjects(sidebar, expandedProjects)) {
+      if (!sidebar) {
+        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+        return;
+      }
+      const project = projectContainerByLabel(sidebar, options.project);
+      const revealRoot = project ?? sidebar;
+      if (expandNextCollapsedProject(revealRoot, expandedProjects)) {
         revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
         return;
       }
       if (revealRounds >= THREAD_LIST_REVEAL_LIMIT) return;
       // 原生列表异步加载时暂时没有分页按钮，继续等待后再检查。
-      if (!sidebar) {
-        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
-        return;
-      }
-      const buttons = pagingButtons(sidebar);
+      const buttons = pagingButtons(revealRoot);
       if (buttons.length === 0) {
         revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
         return;
@@ -190,14 +213,14 @@ export function openRendererThread(
       if (settled) return;
       settled = true;
       cleanup();
-      restoreRevealedSidebar(expandedProjects, pagedButtons);
+      restoreRevealedSidebar(expandedProjects, pagedButtons, null);
       reject(new Error("Thread did not appear in the sidebar"));
     }, options.timeoutMs ?? OPEN_THREAD_TIMEOUT_MS);
     const onAbort = (): void => {
       if (settled) return;
       settled = true;
       cleanup();
-      restoreRevealedSidebar(expandedProjects, pagedButtons);
+      restoreRevealedSidebar(expandedProjects, pagedButtons, null);
       reject(abortError());
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });

@@ -42,7 +42,7 @@ const { outputFiles } = await build({
         document.body.innerHTML = \`
           <aside id="app-shell-sidebar">
             <section data-sidebar-project-container-id="project:one">
-              <button data-app-action-sidebar-project-row>Project</button>
+              <button data-app-action-sidebar-project-row data-app-action-sidebar-project-label="Project">Project</button>
               <button data-app-action-sidebar-thread-row data-app-action-sidebar-thread-host-id="local" data-app-action-sidebar-thread-id="local:thread-a" data-app-action-sidebar-thread-active="true">
                 <span data-thread-title-trigger><span data-thread-title>Task A</span></span>
               </button>
@@ -163,7 +163,7 @@ const { outputFiles } = await build({
           },
           getLocale: () => "zh-CN",
           openThread: async (threadId, options) => {
-            opened.push([threadId, options.hostId]);
+            opened.push([threadId, options.hostId, options.project]);
             for (const row of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
               row.dataset.appActionSidebarThreadActive = String(row.dataset.appActionSidebarThreadId === options.hostId + ":" + threadId);
             }
@@ -418,7 +418,7 @@ test("view action opens the source conversation and keeps the modal non-modal", 
   );
   await page.getByRole("button", { name: "查看结果" }).click();
   expect(await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").opened)).toEqual(
-    [["thread-b", "local"]],
+    [["thread-b", "local", "Project"]],
   );
   await expect(page.locator("[data-codexhost-pending-confirmations]")).toBeHidden();
 });

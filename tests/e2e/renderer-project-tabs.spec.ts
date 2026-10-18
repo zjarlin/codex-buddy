@@ -11,7 +11,7 @@ const { outputFiles } = await build({
     contents: `
       import { installProjectTabs } from "./packages/renderer-extension/src/project-tabs/index.ts";
       import { installRendererProjectActions } from "./packages/renderer-extension/src/renderer-project-actions.ts";
-      globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null } = {}) => {
+      globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null, threads = false } = {}) => {
         document.documentElement.lang = "zh-CN";
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
         document.body.innerHTML = '<style>body{margin:0;font:14px/1.5 system-ui;background:light-dark(#fff,#202020);color:light-dark(#222,#eee)}aside{width:310px;padding:12px;background:light-dark(#fafafa,#252525);min-height:100vh;box-sizing:border-box}h2{font-size:14px;color:#888;margin:8px}button{color:inherit;cursor:pointer}section>div[role=listitem]{padding:10px 8px}.row{display:flex;gap:8px}.row>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row button{border:0;background:transparent}.thread{margin:8px 0 4px 22px;color:#888}nav{display:flex;gap:5px;padding:8px}nav button{border:1px solid #8885;border-radius:5px;padding:4px 8px;background:transparent}[role=menu]{position:fixed;top:170px;left:100px;z-index:10;background:light-dark(#fff,#292929);padding:6px;border:1px solid #8884;border-radius:8px;min-width:180px;box-shadow:0 4px 18px #0002}[role=menuitem]{padding:5px 8px;border-radius:4px}[role=menuitem]:focus{background:#8883;outline:none}footer{padding:12px;display:flex;gap:4px;flex-wrap:wrap}</style><aside id="app-shell-sidebar"><h2>项目</h2><nav><button id="all">全部</button><button id="active">进行中</button></nav><section id="projects"></section><footer><button id="create" data-app-action-sidebar-project-create>创建项目</button><button id="rename">重命名公司项目</button><button id="rerender">重新渲染项目</button><button id="dispose">卸载扩展</button><button id="restart">重新安装扩展</button></footer></aside>';
@@ -68,7 +68,19 @@ const { outputFiles } = await build({
               document.body.append(menu); menu.firstElementChild.focus();
             };
             header.append(label, trigger);
-            const thread = document.createElement("div"); thread.className = "thread"; thread.textContent = index === 1 ? "正在处理项目任务" : "暂无聊天";
+            const thread = document.createElement(threads ? "button" : "div"); thread.className = "thread"; thread.textContent = index === 1 ? "正在处理项目任务" : "暂无聊天";
+            if (threads) {
+              const threadHostId = project.hostId || "local";
+              const threadId = "thread-" + index + "-" + project.projectId;
+              const threadAttributes = {
+                "data-app-action-sidebar-thread-row": "",
+                "data-app-action-sidebar-thread-host-id": threadHostId,
+                "data-app-action-sidebar-thread-id": threadHostId + ":" + threadId,
+              };
+              for (const [name, value] of Object.entries(threadAttributes)) thread.setAttribute(name, value);
+              bind(thread, fiber({ conversationId: threadId, dataAttributes: threadAttributes }));
+              thread.onclick = () => thread.setAttribute("data-app-action-sidebar-thread-active", "true");
+            }
             container.append(header, thread); projectsRoot.append(container);
           }
         };
@@ -138,6 +150,7 @@ const { outputFiles } = await build({
           ...(persistentHost ? { getClient: () => hostClient } : {}),
         });
         let control = installProjectTabs(projectTabsOptions());
+        globalThis.revealProjectThread = (input) => control.revealThread(input);
         globalThis.projectTabsHostState = () => structuredClone(hostConfig);
         let createdProjects = 0;
         document.querySelector("#create").onclick = () => {
@@ -154,6 +167,7 @@ const { outputFiles } = await build({
           control.dispose();
           if (clearLocal) localStorage.removeItem("codexhost.project-tabs.v1");
           control = installProjectTabs(projectTabsOptions());
+          globalThis.revealProjectThread = (input) => control.revealThread(input);
         };
         document.querySelector("#all").onclick = () => render(false);
         document.querySelector("#active").onclick = () => render(true);
@@ -189,6 +203,7 @@ async function setup(
     initialConfig?: unknown;
     width?: number;
     recent?: "expanded" | "collapsed" | "late";
+    threads?: boolean;
   } = {},
 ) {
   await page.setViewportSize({ width: options.width ?? 960, height: 760 });
@@ -246,6 +261,52 @@ for (const recent of ["expanded", "collapsed"] as const) {
     );
   });
 }
+
+test("reveals a completed conversation by switching to its project tab", async ({ page }) => {
+  await setup(page, { threads: true });
+  const company = category(page, "公司的项目");
+  await category(page, "个人的项目").click();
+
+  const project = page.locator(
+    '[data-sidebar-project-container-id="project:one"][aria-label="remote_company_okmy-scada"]',
+  );
+  const thread = page.locator('[data-app-action-sidebar-thread-id="office:thread-0-one"]');
+  await expect(project).toBeHidden();
+
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(
+        globalThis,
+        "revealProjectThread",
+      )({
+        hostId: "office",
+        threadId: "thread-0-one",
+        project: "remote_company_okmy-scada",
+      }),
+    ),
+  ).toBe("remote_company_okmy-scada");
+  await expect(company).toHaveAttribute("aria-pressed", "true");
+  await expect(project).toBeVisible();
+  await expect(thread).toBeVisible();
+
+  // Thread 行尚未挂载时，提醒记录里的项目显示名仍足以切到正确 Tab。
+  await category(page, "个人的项目").click();
+  await thread.evaluate((element) => element.remove());
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(
+        globalThis,
+        "revealProjectThread",
+      )({
+        hostId: "office",
+        threadId: "thread-0-one",
+        project: "remote_company_okmy-scada",
+      }),
+    ),
+  ).toBe("remote_company_okmy-scada");
+  await expect(company).toHaveAttribute("aria-pressed", "true");
+  await expect(project).toBeVisible();
+});
 
 test("Recents arriving after startup or remounting is collapsed; disposal stops the policy", async ({
   page,

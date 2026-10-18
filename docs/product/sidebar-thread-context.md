@@ -1,8 +1,8 @@
 # 侧栏会话定位与标题栏项目名
 
-官方侧栏把所有项目放在同一个滚动容器里，项目多时当前会话常常滚出可视区，用户只能凭会话名猜它属于哪个项目。codexhost 在此之上补充两个只读的界面增强：标题栏显示当前会话所属项目名，左侧树自动对齐到当前会话及其所属项目。
+官方侧栏把所有项目放在同一个滚动容器里，项目多时当前会话常常滚出可视区，用户只能凭会话名猜它属于哪个项目。codexhost 在此之上补充标题栏项目名、左侧树自动对齐，以及从完成提醒回到目标会话时的项目 Tab/项目展开导航。
 
-两者都不改变原生状态：不切换项目分类 Tab、不展开折叠的项目、不写入会话行或会话历史，只读取原生已提交的 DOM 与 React Fiber 身份。
+标题栏与自动滚动本身只读取原生已提交的 DOM 与 React Fiber 身份，不写入会话行或会话历史。用户主动打开完成结果或点击“回到刚才的会话”时，导航层可以切换到目标项目所属 Tab，并保留目标项目展开；这样目标行不会仍被 Tab 隐藏，也不会在滚过去后立刻折叠。
 
 ## 标题栏项目名
 
@@ -22,10 +22,14 @@ Renderer 在「右侧正在查看的会话发生变化」时，把该会话所�
 
 同一会话内不重复滚动，只有切换会话才重新对齐。目标行未被渲染（项目折叠、超出原生分页）时保持当前滚动位置，等它出现后再对齐；窗口不可见时不滚动。整个功能只读写滚动容器的 `scrollTop`，不触碰任何原生属性。
 
+从完成提醒定位会话时，`openRendererThread` 会优先接收提醒记录中的项目显示名，只展开该项目并只处理该项目内的“展开显示”分页。成功切入后目标项目保持展开，目标行继续参与滚动聚焦；其他被临时探测的项目会恢复原状态。项目 Tab 负责按 Host/Thread 身份或项目显示名切换分类，避免 `display:none` 的项目容器得到零高度而无法滚动。
+
 几何计算在 `sidebarProjectFocusDelta`：`header` 取不到（项目容器或项目头缺失）时按「已聚焦」处理，只保证会话行可见。
 
 ## 实现位置
 
 - `packages/renderer-extension/src/renderer-titlebar-project-name.ts`：标题栏项目名的读取、属性对齐与样式。
 - `packages/renderer-extension/src/renderer-sidebar-thread-align.ts`：侧栏滚动聚焦的几何计算与观察者。
+- `packages/renderer-extension/src/renderer-fork-control.ts`：按目标项目展开/分页并打开原生会话行。
+- `packages/renderer-extension/src/project-tabs/index.ts`：按 Host/Thread 或项目名切换项目 Tab。
 - `packages/renderer-extension/src/renderer-binding-probe.ts`：共用「当前查看的会话」判定并安装两个模块。

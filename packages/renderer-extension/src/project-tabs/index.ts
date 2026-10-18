@@ -11,6 +11,7 @@ import {
   projectAssignment,
   projectKey,
   projectTab,
+  type SidebarProject,
   withProjectTabs,
 } from "./model.js";
 import {
@@ -29,6 +30,11 @@ const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const HIDDEN = "data-codexhost-project-tab-hidden";
 const MOVE = "data-codexhost-project-tab-move";
 const MENU_ITEMS = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]';
+const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
+const PROJECT_LABEL_ATTRIBUTE = "data-app-action-sidebar-project-label";
+const SIDEBAR_THREAD_ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
+const SIDEBAR_THREAD_ID_ATTRIBUTE = "data-app-action-sidebar-thread-id";
+const SIDEBAR_THREAD_HOST_ID_ATTRIBUTE = "data-app-action-sidebar-thread-host-id";
 const CREATE_INTENT_TTL_MS = 2 * 60 * 1000;
 
 interface ProjectTabsPersistenceClient {
@@ -36,13 +42,16 @@ interface ProjectTabsPersistenceClient {
   setProjectTabs?(config: ProjectTabsConfig): Promise<ProjectTabsState>;
 }
 
+export interface RendererProjectTabsControl {
+  refresh(): void;
+  revealThread(input: { hostId: string; threadId: string; project?: string }): string | null;
+  dispose(): void;
+}
+
 export function installProjectTabs(options: {
   getLocale(): string;
   getClient?(): ProjectTabsPersistenceClient | null;
-}): {
-  refresh(): void;
-  dispose(): void;
-} {
+}): RendererProjectTabsControl {
   const styles = document.createElement("style");
   styles.textContent = projectTabsStyle;
   document.head.append(styles);
@@ -169,6 +178,59 @@ export function installProjectTabs(options: {
       return;
     }
     void persist({ ...config, selected }, true).catch(() => undefined);
+  };
+  const projectForThread = (input: {
+    hostId: string;
+    threadId: string;
+    project?: string;
+  }): SidebarProject | null => {
+    const hostMatches = (project: SidebarProject): boolean =>
+      project.projectKind === "local" ? input.hostId === "local" : project.hostId === input.hostId;
+    const projects = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)];
+    for (const row of projects) {
+      const thread = [...row.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].find(
+        (candidate) => {
+          if (candidate.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) !== input.hostId) {
+            return false;
+          }
+          // 项目分类只需要稳定定位隐藏行；DOM 上的 host-qualified Thread id 已由
+          // 原生侧栏维护，避免把侧栏图标模块及其资源依赖拖进项目 Tab。
+          const value = candidate.getAttribute(SIDEBAR_THREAD_ID_ATTRIBUTE);
+          return value === input.threadId || value === `${input.hostId}:${input.threadId}`;
+        },
+      );
+      if (!thread) continue;
+      const project = rowProject(row);
+      if (project && hostMatches(project)) return project;
+    }
+
+    // 目标 Thread 尚未挂载时，提醒记录中的项目显示名仍能把定位范围收窄到
+    // 正确项目；这既用于选择 Tab，也让后续展开只作用于这个项目。
+    const label = input.project?.trim();
+    if (!label) return null;
+    for (const row of projects) {
+      const header = row.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
+      const actual = (
+        header?.getAttribute(PROJECT_LABEL_ATTRIBUTE) ??
+        header?.getAttribute("aria-label") ??
+        row.getAttribute("aria-label")
+      )?.trim();
+      if (actual !== label) continue;
+      const project = rowProject(row);
+      if (project && hostMatches(project)) return project;
+    }
+    return null;
+  };
+  const revealThread = (input: {
+    hostId: string;
+    threadId: string;
+    project?: string;
+  }): string | null => {
+    const project = projectForThread(input);
+    // 找不到项目身份时切到“全部”，而不是保留一个可能继续隐藏目标会话的分类。
+    const selected = project ? projectTab(config, project) : null;
+    if (selected !== config.selected) select(selected);
+    return project?.label ?? null;
   };
   const search = createProjectTabSearch({
     getCurrent: () => config.selected,
@@ -518,6 +580,7 @@ export function installProjectTabs(options: {
   refresh();
   return {
     refresh,
+    revealThread,
     dispose() {
       disposed = true;
       stopObserving();

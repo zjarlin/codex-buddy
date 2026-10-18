@@ -115,7 +115,12 @@ function forkButton(
   return button;
 }
 
-function sidebarRow(threadId: string, hostId: string, conversationId = threadId) {
+function sidebarRow(
+  threadId: string,
+  hostId: string,
+  conversationId = threadId,
+  projectContainer: HTMLElement | null = null,
+) {
   const attributes = {
     "data-app-action-sidebar-thread-row": "row-marker",
     "data-app-action-sidebar-thread-id": `${hostId}:${threadId}`,
@@ -123,6 +128,8 @@ function sidebarRow(threadId: string, hostId: string, conversationId = threadId)
   } as const;
   const row = {
     click: vi.fn(),
+    closest: (selector: string) =>
+      selector === "[data-sidebar-project-container-id]" ? projectContainer : null,
     getAttribute: (name: string) => attributes[name as keyof typeof attributes] ?? null,
   } as unknown as HTMLElement;
   Object.defineProperty(row, "__reactFiber$test", {
@@ -345,6 +352,89 @@ describe("Renderer external Thread Fork control", () => {
     // 展开一次、打开会话后再折叠还原，项目头被点击两次，且最终处于折叠状态。
     expect(header.click).toHaveBeenCalledTimes(2);
     expect(expanded).toBe(false);
+    expect(target.click).toHaveBeenCalledOnce();
+  });
+
+  it("expands only the requested project and keeps it open for scroll focus", async () => {
+    const rows: HTMLElement[] = [];
+    let targetExpanded = false;
+    const target = sidebarRow("project-thread", "local", "project-thread", null);
+    const targetHeader = {
+      isConnected: true,
+      getAttribute: (name: string) =>
+        name === "aria-expanded"
+          ? String(targetExpanded)
+          : name === "data-app-action-sidebar-project-label"
+            ? "Target Project"
+            : null,
+      click: vi.fn(() => {
+        targetExpanded = true;
+        rows.push(target);
+      }),
+    } as unknown as HTMLElement;
+    const container = {
+      contains: (element: Node) => element === targetHeader,
+      querySelector: (selector: string) =>
+        selector === "[data-app-action-sidebar-project-row]" ? targetHeader : null,
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-project-row]" ? [targetHeader] : [],
+    } as unknown as HTMLElement;
+    Object.defineProperty(target, "closest", {
+      value: (selector: string) =>
+        selector === "[data-sidebar-project-container-id]" ? container : null,
+    });
+
+    const otherHeader = {
+      isConnected: true,
+      getAttribute: (name: string) =>
+        name === "aria-expanded"
+          ? "false"
+          : name === "data-app-action-sidebar-project-label"
+            ? "Other Project"
+            : null,
+      click: vi.fn(),
+    } as unknown as HTMLElement;
+    const otherContainer = {
+      contains: () => false,
+      querySelector: (selector: string) =>
+        selector === "[data-app-action-sidebar-project-row]" ? otherHeader : null,
+      querySelectorAll: () => [],
+    } as unknown as HTMLElement;
+    const sidebar = {
+      querySelectorAll: (selector: string) => {
+        if (selector === "[data-sidebar-project-container-id]") return [container, otherContainer];
+        if (selector === "[data-app-action-sidebar-project-row]")
+          return [targetHeader, otherHeader];
+        if (selector === "button") return [];
+        return [];
+      },
+    };
+    class FakeMutationObserver {
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("MutationObserver", FakeMutationObserver);
+    vi.stubGlobal("document", {
+      querySelector: (selector: string) => (selector === "#app-shell-sidebar" ? sidebar : null),
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-thread-row]" ? rows : [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+
+    const opening = openRendererThread(hostThreadIdSchema.parse("project-thread"), {
+      hostId: "local",
+      project: "Target Project",
+      timeoutMs: 60_000,
+    });
+    await opening;
+
+    expect(targetHeader.click).toHaveBeenCalledOnce();
+    expect(otherHeader.click).not.toHaveBeenCalled();
+    expect(targetExpanded).toBe(true);
     expect(target.click).toHaveBeenCalledOnce();
   });
 

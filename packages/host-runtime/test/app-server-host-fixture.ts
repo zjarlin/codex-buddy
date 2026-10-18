@@ -95,6 +95,12 @@ export class JsonLineCollector {
     });
   }
 
+  // 5 seconds is the Linux budget. Hosted Windows runners are much slower on
+  // Git subprocess and filesystem paths (real-time scanning, fsync), and the
+  // linked-repository flows exceed it. The cross-platform vitest lane already
+  // allows 45s per test; widen only the initial wait.
+  static readonly DEFAULT_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
+
   waitFor(predicate: (message: JsonObject) => boolean): Promise<JsonObject> {
     const existing = this.messages.find(predicate);
     if (existing) return Promise.resolve(existing);
@@ -106,7 +112,7 @@ export class JsonLineCollector {
           const index = this.#waiters.indexOf(waiter);
           if (index >= 0) this.#waiters.splice(index, 1);
           reject(new Error("Timed out waiting for Host output"));
-        }, 5_000),
+        }, JsonLineCollector.DEFAULT_TIMEOUT_MS),
       };
       this.#waiters.push(waiter);
     });

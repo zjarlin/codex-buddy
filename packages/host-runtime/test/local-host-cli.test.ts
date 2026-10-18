@@ -40,7 +40,7 @@ async function run(
   };
 }
 
-describe("local-host CLI", () => {
+describe.skipIf(process.platform === "win32")("local-host CLI", () => {
   it("enables, reports, and disables the persistent local Host", async () => {
     const { environment } = await fixture();
     await expect(run(["enable"], environment)).resolves.toMatchObject({

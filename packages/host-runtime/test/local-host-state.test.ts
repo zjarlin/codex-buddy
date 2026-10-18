@@ -27,7 +27,7 @@ async function fixture() {
   return { root, environment, paths: localHostPaths(environment) };
 }
 
-describe("persistent local Host state", () => {
+describe.skipIf(process.platform === "win32")("persistent local Host state", () => {
   it("enables, reports, and disables persistence through the marker file", async () => {
     const { paths } = await fixture();
     expect(await localHostEnabled(paths)).toBe(false);

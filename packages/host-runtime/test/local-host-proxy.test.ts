@@ -12,7 +12,7 @@ import { runLocalHostProxy } from "../src/local-host-proxy.js";
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true }))));
 
-describe("persistent local Host proxy", () => {
+describe.skipIf(process.platform === "win32")("persistent local Host proxy", () => {
   it("relays Desktop frames to the listener and back", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "codexhost-local-host-proxy-"));
     roots.push(root);

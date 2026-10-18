@@ -1,4 +1,5 @@
-import { rm, stat } from "node:fs/promises";
+import { rm } from "node:fs/promises";
+import net from "node:net";
 import type { Writable } from "node:stream";
 
 import {
@@ -17,17 +18,25 @@ function outputJson(output: Writable, value: unknown): void {
   output.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function socketExists(paths: LocalHostPaths): Promise<boolean> {
-  return (await stat(paths.socketPath).catch(() => null))?.isSocket() === true;
+function listenerAlive(paths: LocalHostPaths): Promise<boolean> {
+  return new Promise((resolve) => {
+    const connection = net.createConnection(paths.socketPath);
+    const finish = (alive: boolean): void => {
+      connection.destroy();
+      resolve(alive);
+    };
+    connection.once("connect", () => finish(true));
+    connection.once("error", () => finish(false));
+  });
 }
 
 async function waitForStop(paths: LocalHostPaths): Promise<boolean> {
   const deadline = Date.now() + STOP_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    if (!(await socketExists(paths))) return true;
+    if (!(await listenerAlive(paths))) return true;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return !(await socketExists(paths));
+  return !(await listenerAlive(paths));
 }
 
 function processAlive(pid: number): boolean {
@@ -51,7 +60,7 @@ async function waitForProcessExit(pid: number): Promise<boolean> {
 async function stopListener(paths: LocalHostPaths): Promise<"stopped" | "not-running"> {
   const state = await readLocalHostListenerState(paths);
   if (!state.pid) {
-    if (!(await socketExists(paths))) return "not-running";
+    if (!(await listenerAlive(paths))) return "not-running";
     throw new Error(`Local Host socket exists without a listener PID: ${paths.socketPath}`);
   }
   try {

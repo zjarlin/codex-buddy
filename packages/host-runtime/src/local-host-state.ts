@@ -179,8 +179,5 @@ function probeSocket(socketPath: string): Promise<LocalHostProbe> {
 }
 
 export async function probeLocalHost(paths: LocalHostPaths): Promise<LocalHostProbe> {
-  if (!(await stat(paths.socketPath).catch(() => null))?.isSocket()) {
-    return { state: "stopped", socketPath: paths.socketPath };
-  }
   return probeSocket(paths.socketPath);
 }

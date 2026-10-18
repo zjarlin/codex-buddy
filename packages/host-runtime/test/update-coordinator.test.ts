@@ -9,6 +9,7 @@ import type * as UpdateManager from "@codexhost/update-manager";
 
 import {
   createBackgroundUpdateManager,
+  type BackgroundUpdateManager,
   type CodexhostLatestRelease,
 } from "@codexhost/update-manager";
 
@@ -258,6 +259,67 @@ describe("Host update coordinator", () => {
     await expect(coordinator.restart()).resolves.toMatchObject({ status: { phase: "prepared" } });
     await coordinator.restart();
     expect(spawnUpdater).not.toHaveBeenCalled();
+  });
+
+  it("installs the release that is current when the download starts", async () => {
+    const fixture = await npmFixture();
+    const releases = [release("1.2.3"), release("1.2.4")];
+    const preparedVersions: string[] = [];
+    const manager: BackgroundUpdateManager = {
+      async prepareNpm(options) {
+        preparedVersions.push(options.version);
+        const prepared = {
+          version: options.version,
+          installation: "npm" as const,
+          requestPath: path.join(fixture.root, "request.json"),
+          statusPath: path.join(fixture.root, "status.json"),
+          helperPath: path.join(fixture.root, "helper"),
+        };
+        await options.onPrepared?.({
+          version: prepared.version,
+          installation: prepared.installation,
+          statusPath: prepared.statusPath,
+        });
+        return prepared;
+      },
+      async prepareWindowsInstaller() {
+        throw new Error("unexpected installer update");
+      },
+      async prepareMacOsDmg() {
+        throw new Error("unexpected dmg update");
+      },
+      start() {
+        throw new Error("unexpected updater start");
+      },
+      async confirmRestart() {
+        throw new Error("unexpected restart confirmation");
+      },
+      async readStatus() {
+        return {
+          schemaVersion: 1,
+          version: preparedVersions.at(-1) ?? "0.0.0",
+          installation: "npm",
+          phase: "downloading",
+          updatedAt: 1,
+        };
+      },
+    };
+    const coordinator = createHostUpdateCoordinator({
+      ...fixture,
+      platform: "darwin",
+      architecture: "arm64",
+      manager,
+      fetchLatest: async () => releases.shift() ?? release("1.2.4"),
+    });
+
+    await expect(coordinator.check()).resolves.toMatchObject({
+      latestVersion: "1.2.3",
+      updateAvailable: true,
+    });
+    await expect(coordinator.start()).resolves.toMatchObject({
+      status: { version: "1.2.4", phase: "downloading" },
+    });
+    expect(preparedVersions).toEqual(["1.2.4"]);
   });
 
   it("returns before a macOS artifact download completes", async () => {

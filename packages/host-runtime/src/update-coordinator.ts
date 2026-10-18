@@ -90,7 +90,6 @@ export function createHostUpdateCoordinator(
       });
       return authenticated ?? fetchLatestGitHubRelease({ signal: requestSignal });
     });
-  let candidate: CodexhostLatestRelease | null = null;
   let preparation: Promise<PreparedBackgroundUpdate> | null = null;
   let restartRequest: Promise<UpdateStartResult> | null = null;
 
@@ -145,7 +144,6 @@ export function createHostUpdateCoordinator(
       const status = await latestStatus(context);
       try {
         const release = await fetchLatest(signal);
-        candidate = release;
         const updateAvailable =
           compareSemanticVersions(context.metadata.version, release.version) < 0;
         let installationAvailable = false;
@@ -209,11 +207,8 @@ export function createHostUpdateCoordinator(
 
       try {
         const release = await fetchLatest();
-        if (
-          compareSemanticVersions(context.metadata.version, release.version) >= 0 ||
-          (candidate && candidate.version !== release.version)
-        ) {
-          throw new Error("The selected update is no longer the current GitHub Release");
+        if (compareSemanticVersions(context.metadata.version, release.version) >= 0) {
+          throw new Error("Codex Buddy is already up to date");
         }
         const onPrepared = async (info: {
           version: string;

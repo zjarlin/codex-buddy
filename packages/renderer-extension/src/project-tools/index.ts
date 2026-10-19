@@ -7,16 +7,12 @@ import Network from "lucide/dist/esm/icons/network.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
 import RotateCw from "lucide/dist/esm/icons/rotate-cw.mjs";
 import Square from "lucide/dist/esm/icons/square.mjs";
-import type {
-  ProjectScriptAction,
-  ProjectToolBinding,
-  ProjectToolsConfig,
-} from "@codexhost/shared-contracts";
+import type { ProjectScriptAction, ProjectToolsConfig } from "@codexhost/shared-contracts";
 
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
-import { PROJECT_ROW_SELECTOR, projectMenu, rowProject } from "../project-tabs/native-binding.js";
+import { PROJECT_ROW_SELECTOR, rowProject } from "../project-tabs/native-binding.js";
 import type { SidebarProject } from "../project-tabs/model.js";
 import { configureProjectTools } from "./dialog.js";
 import {
@@ -37,7 +33,6 @@ const LABEL_SELECTOR = "[data-app-action-sidebar-project-label]";
 const PROJECT_ID_ATTRIBUTE = "data-app-action-sidebar-project-id";
 
 interface HeaderEntry {
-  header: HTMLElement;
   wrapper: HTMLElement;
   signature: string;
 }
@@ -90,11 +85,12 @@ export function installProjectTools(options: {
 
   const persistenceClient = (): Required<ProjectToolsPersistenceClient> | null => {
     const client = options.getClient?.();
-    return client?.getProjectTools && client.setProjectTools && client.runProjectScript
+    const { getProjectTools, setProjectTools, runProjectScript } = client ?? {};
+    return getProjectTools && setProjectTools && runProjectScript
       ? {
-          getProjectTools: () => client.getProjectTools!(),
-          setProjectTools: (config) => client.setProjectTools!(config),
-          runProjectScript: (params) => client.runProjectScript!(params),
+          getProjectTools: () => getProjectTools.call(client),
+          setProjectTools: (config) => setProjectTools.call(client, config),
+          runProjectScript: (params) => runProjectScript.call(client, params),
         }
       : null;
   };
@@ -383,7 +379,7 @@ export function installProjectTools(options: {
     } else {
       header.append(wrapper);
     }
-    headers.set(header, { header, wrapper, signature });
+    headers.set(header, { wrapper, signature });
   };
 
   const refresh = (): void => {

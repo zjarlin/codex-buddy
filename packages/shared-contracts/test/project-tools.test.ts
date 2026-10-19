@@ -27,6 +27,7 @@ describe("Project tool contracts", () => {
           label: "Remote project",
           publicUrl: "https://example.com/project",
           scripts: { restart: "/repo/restart.py" },
+          prompt: "Inspect the project and verify the result.",
         },
       ],
     };
@@ -55,6 +56,12 @@ describe("Project tool contracts", () => {
       ).toThrow();
     }
     expect(() => projectToolsConfigSchema.parse({ version: 1, bindings: [base] })).toThrow();
+    expect(
+      projectToolsConfigSchema.parse({
+        version: 1,
+        bindings: [{ ...base, prompt: "  Check project health.  " }],
+      }).bindings[0]?.prompt,
+    ).toBe("Check project health.");
     expect(() =>
       projectToolsConfigSchema.parse({
         version: 1,

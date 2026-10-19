@@ -22,6 +22,7 @@ describe("Project tool Host persistence", () => {
           target: { projectKind: "local", projectId: "project-one" },
           label: "Project One",
           intranetUrl: "http://192.168.31.252:48201/",
+          prompt: "Inspect project health.",
         },
       ],
     };

@@ -86,6 +86,23 @@ export function configureProjectTools(options: {
   hint.textContent = labels.scriptHint;
   scriptGroup.append(scriptLegend, start.label, restart.label, stop.label, hint);
 
+  const promptGroup = document.createElement("fieldset");
+  const promptLegend = document.createElement("legend");
+  promptLegend.textContent = labels.promptSection;
+  const promptLabel = document.createElement("label");
+  const promptText = document.createElement("span");
+  promptText.textContent = labels.promptField;
+  const prompt = document.createElement("textarea");
+  prompt.value = options.binding?.prompt ?? "";
+  prompt.rows = 4;
+  prompt.spellcheck = false;
+  prompt.placeholder = "检查项目状态，定位运行问题，完成修复并验证端到端结果。";
+  promptLabel.append(promptText, prompt);
+  const promptHint = document.createElement("p");
+  promptHint.className = "codexhost-project-tool-hint";
+  promptHint.textContent = labels.promptHint;
+  promptGroup.append(promptLegend, promptLabel, promptHint);
+
   const error = document.createElement("p");
   error.setAttribute("role", "alert");
   error.hidden = true;
@@ -109,7 +126,7 @@ export function configureProjectTools(options: {
   save.type = "submit";
   save.textContent = labels.save;
   actions.append(remove, cancel, save);
-  form.append(urlGroup, scriptGroup, error, actions);
+  form.append(urlGroup, scriptGroup, promptGroup, error, actions);
   dialog.append(heading, description, form);
   dialog.addEventListener("close", () => {
     dialog.remove();
@@ -128,6 +145,7 @@ export function configureProjectTools(options: {
           restart: restart.input.value,
           stop: stop.input.value,
         },
+        prompt: prompt.value,
       })
       .then(
         () => dialog.close(),
@@ -141,7 +159,7 @@ export function configureProjectTools(options: {
   const previousFocus = document.activeElement;
   document.body.append(dialog);
   dialog.showModal();
-  intranet.input.focus();
+  prompt.focus();
   dialog.addEventListener(
     "close",
     () => {

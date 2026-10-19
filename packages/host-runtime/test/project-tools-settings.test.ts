@@ -27,6 +27,7 @@ const config = {
         restart: "/repo/scripts/restart.sh",
         stop: "/repo/scripts/stop.py",
       },
+      prompt: "Inspect project health and verify the service.",
     },
   ],
 };
@@ -46,6 +47,9 @@ describe("Project tool settings", () => {
     await expect(new ProjectToolsSettingsStore(environment).load()).resolves.toEqual({ config });
     await expect(readFile(path.join(directory, "project-tools.json"), "utf8")).resolves.toContain(
       '"intranetUrl": "http://192.168.31.252:48201/"',
+    );
+    await expect(readFile(path.join(directory, "project-tools.json"), "utf8")).resolves.toContain(
+      '"prompt": "Inspect project health and verify the service."',
     );
   });
 

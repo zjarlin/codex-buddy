@@ -50,3 +50,24 @@ export function composerDraftWorkspace(composer: Element, hostId: string): strin
   }
   return paths.size === 1 ? paths.values().next().value : undefined;
 }
+
+function directDraftWorkspace(props: Record<string, unknown>, hostId: string): string | undefined {
+  const target = record(props.executionTarget);
+  return target?.hostId === hostId && typeof target.cwd === "string" && target.cwd
+    ? target.cwd
+    : undefined;
+}
+
+/** Prompt 快捷动作只接受项目入口刚打开的新草稿，当前会话草稿不会被误填。 */
+export function composerDraftTarget(composer: Element, hostId: string): string | undefined {
+  const paths = new Set<string>();
+  for (const element of composer.querySelectorAll("button")) {
+    const key = Object.keys(element).find((name) => name.startsWith("__reactFiber$"));
+    for (const fiber of key ? committedReactAncestors(Reflect.get(element, key)) : []) {
+      const path = directDraftWorkspace(record(fiber.memoizedProps) ?? {}, hostId);
+      if (path) paths.add(path);
+      if (fiber.stateNode === composer) break;
+    }
+  }
+  return paths.size === 1 ? paths.values().next().value : undefined;
+}

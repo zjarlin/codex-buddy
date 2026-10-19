@@ -35,6 +35,8 @@ const httpUrlSchema = z
     }
   });
 
+const projectPromptSchema = z.string().trim().min(1).max(20_000);
+
 export const projectToolTargetSchema = z.discriminatedUnion("projectKind", [
   z
     .object({
@@ -88,14 +90,15 @@ export const projectToolBindingSchema = z
     intranetUrl: httpUrlSchema.optional(),
     publicUrl: httpUrlSchema.optional(),
     scripts: projectScriptsSchema.optional(),
+    prompt: projectPromptSchema.optional(),
   })
   .strict()
   .superRefine((binding, context) => {
-    if (!binding.intranetUrl && !binding.publicUrl && !binding.scripts) {
+    if (!binding.intranetUrl && !binding.publicUrl && !binding.scripts && !binding.prompt) {
       context.addIssue({
         code: "custom",
-        path: ["intranetUrl"],
-        message: "At least one project URL or script is required",
+        path: ["prompt"],
+        message: "At least one project URL, script, or prompt is required",
       });
     }
   });

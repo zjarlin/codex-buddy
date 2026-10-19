@@ -42,6 +42,7 @@ describe("Project tool bindings", () => {
         restart: " /repo/restart.py ",
         stop: " ",
       },
+      prompt: "  Inspect the project and verify it.  ",
     });
     expect(bindingForProject(configured, local)).toEqual({
       target: { projectKind: "local", projectId: "project-one" },
@@ -49,6 +50,7 @@ describe("Project tool bindings", () => {
       intranetUrl: "http://192.168.31.252:48201/",
       publicUrl: "https://project.example.com/",
       scripts: { start: "/repo/start.sh", restart: "/repo/restart.py" },
+      prompt: "Inspect the project and verify it.",
     });
 
     const removed = withProjectToolBinding(configured, local, {});
@@ -59,6 +61,7 @@ describe("Project tool bindings", () => {
     const config = withProjectToolBinding(emptyProjectTools(), local, {
       intranetUrl: "http://192.168.31.252:48201/",
       scripts: { stop: "/repo/stop.sh" },
+      prompt: "Inspect the project.",
     });
     expect(parseProjectTools(JSON.stringify(config))).toEqual(config);
     expect(() =>

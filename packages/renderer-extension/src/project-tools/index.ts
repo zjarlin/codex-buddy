@@ -1,5 +1,7 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import ExternalLink from "lucide/dist/esm/icons/external-link.mjs";
+import MessageSquarePlus from "lucide/dist/esm/icons/message-square-plus.mjs";
+import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
 import Globe from "lucide/dist/esm/icons/globe.mjs";
 import LoaderCircle from "lucide/dist/esm/icons/loader-circle.mjs";
@@ -12,8 +14,13 @@ import type { ProjectScriptAction, ProjectToolsConfig } from "@codexhost/shared-
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
+import { composerDraftTarget, composerDraftWorkspace } from "../renderer-composer-workspace.js";
 import { PROJECT_ROW_SELECTOR, rowProject } from "../project-tabs/native-binding.js";
 import type { SidebarProject } from "../project-tabs/model.js";
+import { EDITOR_SELECTOR, sendButtonWithin } from "../renderer-composer-dom.js";
+import { insertNativeTextAtSelection } from "../renderer-native-composer-controller.js";
+import { nativeProjectStart } from "../renderer-native-project-start.js";
+import { sessionDraftText } from "../renderer-session-targets.js";
 import { configureProjectTools } from "./dialog.js";
 import {
   bindingForProject,
@@ -35,6 +42,15 @@ const PROJECT_ID_ATTRIBUTE = "data-app-action-sidebar-project-id";
 interface HeaderEntry {
   wrapper: HTMLElement;
   signature: string;
+}
+
+interface ToolDefinition {
+  label: string;
+  detail: string;
+  icon: typeof ExternalLink;
+  attribute: string;
+  action: ProjectScriptAction | null;
+  onClick: (anchor: HTMLButtonElement) => void;
 }
 
 interface Picker {
@@ -125,6 +141,124 @@ export function installProjectTools(options: {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
+  const activeComposer = (): HTMLElement | null => {
+    const editors = [
+      ...document.querySelectorAll<HTMLElement>(`[data-codex-composer-root] ${EDITOR_SELECTOR}`),
+    ].filter((editor) => editor.isConnected && editor.getClientRects().length > 0);
+    const focused = editors.find(
+      (editor) =>
+        editor === document.activeElement ||
+        (document.activeElement instanceof Node && editor.contains(document.activeElement)),
+    );
+    if (focused) return focused;
+    const composers = editors
+      .map((editor) => editor.closest("[data-codex-composer-root]"))
+      .filter(
+        (composer): composer is Element => composer !== null && sendButtonWithin(composer) !== null,
+      );
+    if (composers.length !== 1) return null;
+    const editable = composers[0]?.querySelectorAll<HTMLElement>(EDITOR_SELECTOR) ?? [];
+    return editable.length === 1 ? (editable[0] ?? null) : null;
+  };
+
+  const waitForPromptEditor = (
+    started: number,
+    project: SidebarProject & { path?: string },
+  ): Promise<HTMLElement> =>
+    new Promise((resolve, reject) => {
+      const poll = (): void => {
+        if (disposed) {
+          reject(new Error("项目快捷操作已卸载。"));
+          return;
+        }
+        const editor = activeComposer();
+        if (editor) {
+          const composer = editor.closest("[data-codex-composer-root]");
+          const hostId = project.hostId ?? "local";
+          if (
+            composer &&
+            (composerDraftWorkspace(composer, hostId) === project.path ||
+              composerDraftTarget(composer, hostId) === project.path)
+          ) {
+            resolve(editor);
+            return;
+          }
+        }
+        if (Date.now() - started >= 8_000) {
+          reject(new Error("新的项目会话输入框尚未就绪，请重新点击 Prompt。"));
+          return;
+        }
+        window.setTimeout(poll, 50);
+      };
+      poll();
+    });
+
+  const openPrompt = async (project: SidebarProject): Promise<void> => {
+    const binding = bindingForProject(config, project);
+    if (!binding?.prompt || disposed) return;
+    const labels = projectToolLabels(options.getLocale());
+    const started = Date.now();
+    const row = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)].find(
+      (candidate) => projectToolKey(rowProject(candidate) ?? project) === projectToolKey(project),
+    );
+    if (!row) throw new Error(labels.promptUnavailable);
+    const nativeProject = rowProject(row) as (SidebarProject & { path?: string }) | null;
+    if (typeof nativeProject?.path !== "string" || !nativeProject.path) {
+      throw new Error(labels.promptUnavailable);
+    }
+    const start = nativeProjectStart(row, project.projectId);
+    if (!start) throw new Error(labels.promptUnavailable);
+    start();
+    const editor = await waitForPromptEditor(started, nativeProject);
+    if (disposed) return;
+    const existing = sessionDraftText(editor).trim();
+    if (existing && existing !== binding.prompt) {
+      throw new Error("目标新会话中已有其他草稿，未覆盖 Prompt。");
+    }
+    if (existing !== binding.prompt) {
+      const promptText = binding.prompt;
+      let inserted = insertNativeTextAtSelection(editor, () => promptText);
+      if (!inserted && editor.getAttribute("contenteditable") === "true") {
+        const selection = editor.ownerDocument.getSelection();
+        const range = editor.ownerDocument.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(true);
+        editor.focus({ preventScroll: true });
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        inserted =
+          typeof editor.ownerDocument.execCommand === "function" &&
+          editor.ownerDocument.execCommand("insertText", false, promptText);
+      }
+      if (!inserted && editor instanceof HTMLTextAreaElement) {
+        const textarea = editor;
+        const view = textarea.ownerDocument.defaultView;
+        const setter = view
+          ? Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, "value")?.set
+          : undefined;
+        if (setter && !textarea.value) {
+          setter.call(textarea, promptText);
+          if (view) {
+            textarea.dispatchEvent(
+              new view.InputEvent("input", {
+                bubbles: true,
+                composed: true,
+                data: promptText,
+                inputType: "insertText",
+              }),
+            );
+          }
+          inserted = true;
+        }
+      }
+      if (!inserted || sessionDraftText(editor).trim() !== binding.prompt) {
+        throw new Error("无法填入项目 Prompt，草稿未覆盖任何内容。");
+      }
+    }
+    editor.focus({ preventScroll: true });
+    showToast(labels.promptFilled);
+  };
+
   const openPicker = (button: HTMLButtonElement, project: SidebarProject): void => {
     const binding = bindingForProject(config, project);
     if (!binding) return;
@@ -165,22 +299,6 @@ export function installProjectTools(options: {
       link.addEventListener("click", closePicker);
       element.append(link);
     }
-    const configure = document.createElement("button");
-    configure.type = "button";
-    configure.setAttribute("role", "menuitem");
-    const configureText = document.createElement("span");
-    const configureTitle = document.createElement("strong");
-    configureTitle.textContent = labels.configure;
-    configureText.append(configureTitle);
-    configure.append(
-      createElement(Settings2, { width: 16, height: 16, "aria-hidden": "true" }),
-      configureText,
-    );
-    configure.addEventListener("click", () => {
-      closePicker();
-      openDialog(project);
-    });
-    element.append(configure);
     document.body.append(element);
     const rect = button.getBoundingClientRect();
     const pickerRect = element.getBoundingClientRect();
@@ -220,6 +338,101 @@ export function installProjectTools(options: {
     window.addEventListener("resize", onViewportChange);
     window.addEventListener("scroll", onViewportChange, true);
     picker = { button, element, dispose };
+    element.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  };
+
+  const openTools = (anchor: HTMLButtonElement, project: SidebarProject): void => {
+    const binding = bindingForProject(config, project);
+    if (!binding || disposed) return;
+    closePicker();
+    const labels = projectToolLabels(options.getLocale());
+    const element = document.createElement("div");
+    element.setAttribute("data-codexhost-project-tool-picker", "");
+    element.setAttribute("role", "menu");
+    element.setAttribute("aria-label", `${project.label} · ${labels.title}`);
+    const addEntry = (
+      icon: typeof ExternalLink,
+      title: string,
+      detail: string,
+      run: () => void,
+      action: ProjectScriptAction | null = null,
+    ): void => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      if (action) item.setAttribute("data-action", action);
+      const text = document.createElement("span");
+      const label = document.createElement("strong");
+      label.textContent = action ? `${title} · ${action}` : title;
+      const description = document.createElement("small");
+      description.textContent = detail;
+      text.append(label, description);
+      item.append(createElement(icon, { width: 16, height: 16, "aria-hidden": "true" }), text);
+      item.addEventListener("click", () => {
+        closePicker();
+        run();
+      });
+      element.append(item);
+    };
+    const intranetUrl = binding.intranetUrl;
+    if (intranetUrl) {
+      addEntry(Network, labels.intranet, intranetUrl, () => openUrl(intranetUrl));
+    }
+    const publicUrl = binding.publicUrl;
+    if (publicUrl) {
+      addEntry(Globe, labels.public, publicUrl, () => openUrl(publicUrl));
+    }
+    for (const [action, label, icon] of [
+      ["start", labels.start, Play],
+      ["restart", labels.restart, RotateCw],
+      ["stop", labels.stop, Square],
+    ] as const) {
+      const script = binding.scripts?.[action];
+      if (script) {
+        addEntry(icon, label, script, () => void runAction(project, action), action);
+      }
+    }
+    document.body.append(element);
+    const rect = anchor.getBoundingClientRect();
+    const width = element.getBoundingClientRect().width;
+    const height = element.getBoundingClientRect().height;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    const top =
+      rect.bottom + height + 8 <= window.innerHeight
+        ? rect.bottom + 6
+        : Math.max(8, rect.top - height - 6);
+    element.style.left = `${left}px`;
+    element.style.top = `${top}px`;
+    anchor.setAttribute("aria-expanded", "true");
+    let cleaned = false;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target;
+      if (target instanceof Node && (element.contains(target) || anchor.contains(target))) return;
+      dispose();
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      dispose();
+      anchor.focus();
+    };
+    const onViewportChange = (): void => dispose();
+    const dispose = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+      anchor.setAttribute("aria-expanded", "false");
+      element.remove();
+      if (picker?.element === element) picker = null;
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    picker = { button: anchor, element, dispose };
     element.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   };
 
@@ -292,22 +505,35 @@ export function installProjectTools(options: {
     }
   };
 
-  const iconButton = (
-    project: SidebarProject,
+  const definition = (
     label: string,
+    detail: string,
     icon: typeof ExternalLink,
     attribute: string,
+    action: ProjectScriptAction | null,
     onClick: (button: HTMLButtonElement) => void,
+  ): ToolDefinition => ({
+    label,
+    detail,
+    icon,
+    attribute,
+    action,
+    onClick,
+  });
+
+  const iconButton = (
+    project: SidebarProject,
+    tool: ToolDefinition,
     disabled = false,
   ): HTMLButtonElement => {
     const button = document.createElement("button");
     button.type = "button";
     button.disabled = disabled;
-    button.title = `${label} · ${project.label}`;
-    button.setAttribute("aria-label", `${label}: ${project.label}`);
-    button.setAttribute(attribute, "");
+    button.title = `${tool.label} · ${project.label}\n${tool.detail}`;
+    button.setAttribute("aria-label", `${tool.label}: ${project.label}`);
+    button.setAttribute(tool.attribute, "");
     button.append(
-      createElement(disabled ? LoaderCircle : icon, {
+      createElement(disabled ? LoaderCircle : tool.icon, {
         width: 14,
         height: 14,
         "aria-hidden": "true",
@@ -318,37 +544,75 @@ export function installProjectTools(options: {
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      onClick(button);
+      tool.onClick(button);
     });
     return button;
   };
 
   const renderHeader = (header: HTMLElement, project: SidebarProject): void => {
     const binding = bindingForProject(config, project);
-    if (!binding) {
-      headers.get(header)?.wrapper.remove();
-      headers.delete(header);
-      return;
-    }
+    const mounted = headers.get(header);
     const labels = projectToolLabels(options.getLocale());
     const key = projectToolKey(project);
     const active = busy.get(key) ?? null;
-    const signature = JSON.stringify([binding, labels, active]);
-    const mounted = headers.get(header);
+    const scriptAction = active;
+
+    const signature = JSON.stringify([binding, labels, scriptAction]);
     if (mounted?.wrapper.isConnected && mounted.signature === signature) return;
     mounted?.wrapper.remove();
     const wrapper = document.createElement("span");
     wrapper.setAttribute("data-codexhost-project-tools", "");
-    if (binding.intranetUrl || binding.publicUrl) {
+    const configure = document.createElement("button");
+    configure.type = "button";
+    configure.setAttribute("data-codexhost-project-tool-configure", "");
+    configure.setAttribute("aria-haspopup", "dialog");
+    configure.setAttribute("aria-label", `${labels.configure}: ${project.label}`);
+    configure.title = `${labels.configure} · ${project.label}\n${labels.description}`;
+    configure.append(createElement(Settings2, { width: 14, height: 14, "aria-hidden": "true" }));
+    configure.addEventListener("pointerdown", (event) => event.stopPropagation());
+    configure.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openDialog(project);
+    });
+    wrapper.append(configure);
+    if (binding?.prompt) {
+      const promptPreview =
+        binding.prompt.length > 240 ? `${binding.prompt.slice(0, 240)}…` : binding.prompt;
       wrapper.append(
         iconButton(
           project,
+          definition(
+            labels.prompt,
+            `${labels.promptHint}
+${promptPreview}`,
+            MessageSquarePlus,
+            "data-codexhost-project-tool-prompt",
+            null,
+            () => {
+              void openPrompt(project).catch((error) => {
+                showToast(error instanceof Error ? error.message : String(error), "failed");
+              });
+            },
+          ),
+        ),
+      );
+    }
+    const tools: ToolDefinition[] = [];
+    if (binding?.intranetUrl || binding?.publicUrl) {
+      tools.push(
+        definition(
           labels.title,
+          [
+            binding.intranetUrl ? `${labels.intranet}: ${binding.intranetUrl}` : "",
+            binding.publicUrl ? `${labels.public}: ${binding.publicUrl}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
           ExternalLink,
           "data-codexhost-project-tool-url",
-          (button) => {
-            openPicker(button, project);
-          },
+          null,
+          (anchor) => openPicker(anchor, project),
         ),
       );
     }
@@ -358,27 +622,48 @@ export function installProjectTools(options: {
       ["stop", labels.stop, Square],
     ];
     for (const [action, label, icon] of actions) {
-      if (!binding.scripts?.[action]) continue;
-      const button = iconButton(
-        project,
-        label,
-        icon,
-        "data-codexhost-project-tool-action",
-        () => void runAction(project, action),
-        active === action,
+      const script = binding?.scripts?.[action];
+      if (!script) continue;
+      tools.push(
+        definition(
+          label,
+          script,
+          icon,
+          "data-codexhost-project-tool-action",
+          action,
+          () => void runAction(project, action),
+        ),
       );
-      button.setAttribute("data-action", action);
-      if (active === action) button.setAttribute("aria-busy", "true");
+    }
+    const primaryAction =
+      active ??
+      (["start", "restart", "stop"] as const).find((action) => binding?.scripts?.[action]);
+    const primaryTool = primaryAction ? tools.find((tool) => tool.action === primaryAction) : null;
+    if (primaryTool) {
+      const index = tools.indexOf(primaryTool);
+      tools.splice(index, 1);
+      const button = iconButton(project, primaryTool, active === primaryAction);
+      if (active === primaryAction) button.setAttribute("aria-busy", "true");
       wrapper.append(button);
+    }
+    if (tools.length > 0) {
+      const more = definition(
+        labels.more,
+        tools
+          .map((tool) => (tool.action ? `${tool.label} (${tool.action})` : tool.label))
+          .join("、"),
+        Ellipsis,
+        "data-codexhost-project-tool-more",
+        null,
+        (anchor) => openTools(anchor, project),
+      );
+      wrapper.append(iconButton(project, more));
     }
     const label =
       header.querySelector<HTMLElement>(LABEL_SELECTOR) ??
       header.querySelector<HTMLElement>(`[${PROJECT_ID_ATTRIBUTE}]`);
-    if (label?.parentElement) {
-      label.after(wrapper);
-    } else {
-      header.append(wrapper);
-    }
+    if (label?.parentElement) label.after(wrapper);
+    else header.append(wrapper);
     headers.set(header, { wrapper, signature });
   };
 
@@ -387,13 +672,13 @@ export function installProjectTools(options: {
     const client = persistenceClient();
     if (client && client !== loadedClient && !loading) {
       loading = true;
+      loadedClient = client;
       void client
         .getProjectTools()
         .then(
           (state) => {
             if (disposed) return;
             if (state.config) mirror(state.config);
-            loadedClient = client;
             failure = null;
           },
           (error) => {

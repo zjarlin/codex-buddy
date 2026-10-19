@@ -21,6 +21,7 @@ import { EDITOR_SELECTOR, sendButtonWithin } from "../renderer-composer-dom.js";
 import { insertNativeTextAtSelection } from "../renderer-native-composer-controller.js";
 import { nativeProjectStart } from "../renderer-native-project-start.js";
 import { sessionDraftText } from "../renderer-session-targets.js";
+import { findComposerModelTarget } from "../versioned-renderer-adapter.js";
 import { configureProjectTools } from "./dialog.js";
 import {
   bindingForProject,
@@ -175,8 +176,12 @@ export function installProjectTools(options: {
         if (editor) {
           const composer = editor.closest("[data-codex-composer-root]");
           const hostId = project.hostId ?? "local";
+          const isNewDraft = composer
+            ? findComposerModelTarget(composer)?.[0] === "default"
+            : false;
           if (
             composer &&
+            isNewDraft &&
             (composerDraftWorkspace(composer, hostId) === project.path ||
               composerDraftTarget(composer, hostId) === project.path)
           ) {

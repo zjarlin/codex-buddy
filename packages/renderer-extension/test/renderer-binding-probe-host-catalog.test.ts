@@ -106,6 +106,17 @@ vi.mock("../src/project-tabs/index.js", () => ({
   },
 }));
 
+vi.mock("../src/project-tools/index.js", () => ({
+  installProjectTools: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return {
+      refresh: vi.fn(),
+      openConfigure: vi.fn(),
+      dispose: vi.fn(),
+    };
+  },
+}));
+
 vi.mock("../src/thread-folders/index.js", () => ({
   installThreadFolders: (options: { getLocale(): "zh-CN" | "en" }) => {
     testState.localeReads.push(options.getLocale());
@@ -399,7 +410,7 @@ it("reads locale before settings lifecycle initialization", async () => {
 
   const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
 
-  expect(testState.localeReads).toHaveLength(12);
+  expect(testState.localeReads).toHaveLength(13);
   expect(testState.localeReads.slice(0, 9)).toEqual(Array.from({ length: 9 }, () => "zh-CN"));
   probe.dispose();
 });

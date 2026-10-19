@@ -1,5 +1,15 @@
 # 项目菜单
 
+## 项目快捷操作
+
+每个已渲染项目在名称旁提供一个配置按钮，省略号菜单中的“配置项目快捷操作”也打开同一表单。配置表单可绑定内网 URL、公网 URL，以及 `start`、`restart`、`stop` 三个本机脚本路径。URL 仅允许 `http` 或 `https` 绝对地址，不能携带用户名或密码；脚本必须是绝对路径的 `.sh` 或 `.py` 文件。至少存在一个 URL 或脚本才保存绑定，删除绑定会清除该项目的全部快捷操作。
+
+存在访问地址时显示外部链接图标；同时存在内网与公网地址时通过菜单选择目标，只绑定一个地址时直接打开。窗口打开使用 `noopener,noreferrer`。仅为已绑定动作显示启动、重启和停止图标；点击图标由本地 Host 直接执行对应脚本，不创建 Thread、不提交模型请求，因此不消耗 token。执行状态在图标上显示，结果、错误与输出摘要通过状态提示反馈。
+
+脚本以自身所在目录作为工作目录，由 Host 使用 `bash` 执行 `.sh` 或可配置的 Python（`CODEXHOST_PYTHON`，本机默认 `python3`）执行 `.py`，并把标准输出和错误写入 `${CODEXHOST_DATA_DIR}/project-script-logs/`（默认 `~/.codexhost/project-script-logs/`）。脚本继承 Host 环境，并收到 `CODEXHOST_PROJECT_ACTION`、`CODEXHOST_PROJECT_ID` 和 `CODEXHOST_PROJECT_LABEL`。停止脚本可以在启动/重启脚本形成独立进程组后结束对应服务；Host 不会把脚本输出解释为服务健康状态。
+
+绑定按项目种类、Host ID 和项目 ID 保存到 `${CODEXHOST_DATA_DIR}/project-tools.json`（默认 `~/.codexhost/project-tools.json`），项目重命名后仍保留，不同 Host 互不串用。Renderer 的 `localStorage` 键 `codexhost.project-tools.v1` 仅作为同源窗口镜像和迁移来源；Host 文件是持久事实源。脚本执行请求只携带目标项目身份和动作，路径始终取自 Host 已保存的绑定，Renderers 不能临时传入任意脚本路径。
+
 本机项目省略号按钮的下拉菜单在“在 Finder 中显示”（或系统文件管理器入口）之后提供“复制绝对路径”“在终端中打开”和“用 VS Code 打开”。保留现有置顶、编辑、归档和移除操作；远程项目不显示这些本机入口。系统原生右键菜单保持现有行为。
 
 复制使用 Desktop Renderer 的剪贴板写入系统剪贴板，并保留完整绝对路径。终端与 VS Code 通过本机 Host 请求启动：终端复用用户已选择的终端类型，在项目目录启动交互式 shell，不续接 Codex 会话；VS Code 使用 `code --reuse-window <path>`，在 Windows 上同时识别 PATH 中的 `code` 与常见安装目录。启动失败在界面中显示，可重新点击尝试。

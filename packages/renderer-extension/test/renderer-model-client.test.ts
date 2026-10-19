@@ -5,6 +5,9 @@ import {
   HARNESS_LAUNCH_SETTINGS_SET_METHOD,
   PROJECT_TABS_GET_METHOD,
   PROJECT_TABS_SET_METHOD,
+  PROJECT_TOOLS_GET_METHOD,
+  PROJECT_TOOLS_RUN_SCRIPT_METHOD,
+  PROJECT_TOOLS_SET_METHOD,
   THREAD_FOLDERS_GET_METHOD,
   THREAD_FOLDERS_SET_METHOD,
   harnessIdSchema,
@@ -179,6 +182,50 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest.mock.calls).toEqual([
       [PROJECT_TABS_GET_METHOD, {}],
       [PROJECT_TABS_SET_METHOD, config],
+    ]);
+  });
+
+  it("manages project tools and runs only a bound script action", async () => {
+    const config = {
+      version: 1 as const,
+      bindings: [
+        {
+          target: { projectKind: "local" as const, projectId: "project-one" },
+          label: "Project One",
+          intranetUrl: "http://192.168.31.252:48201/",
+          scripts: { start: "/repo/start.sh" },
+        },
+      ],
+    };
+    const runResult = {
+      action: "start" as const,
+      state: "running" as const,
+      exitCode: null,
+      output: "starting",
+      logPath: "/tmp/project-start.log",
+    };
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ config: null })
+      .mockResolvedValueOnce({ config })
+      .mockResolvedValueOnce(runResult);
+    const client = createRendererModelClient([{ sendRequest }]);
+
+    await expect(client?.getProjectTools?.()).resolves.toEqual({ config: null });
+    await expect(client?.setProjectTools?.(config)).resolves.toEqual({ config });
+    await expect(
+      client?.runProjectScript?.({
+        target: { projectKind: "local", projectId: "project-one" },
+        action: "start",
+      }),
+    ).resolves.toEqual(runResult);
+    expect(sendRequest.mock.calls).toEqual([
+      [PROJECT_TOOLS_GET_METHOD, {}],
+      [PROJECT_TOOLS_SET_METHOD, config],
+      [
+        PROJECT_TOOLS_RUN_SCRIPT_METHOD,
+        { target: { projectKind: "local", projectId: "project-one" }, action: "start" },
+      ],
     ]);
   });
 
@@ -650,6 +697,7 @@ describe("Renderer fixed Model request client", () => {
       "generateGitMessage",
       "getHarnessLaunchSettings",
       "getProjectTabs",
+      "getProjectTools",
       "getThreadFolders",
       "getThreadTerminalSettings",
       "importHarnessSession",
@@ -710,6 +758,7 @@ describe("Renderer fixed Model request client", () => {
       "restartUpdate",
       "routeSession",
       "runGitWorkflow",
+      "runProjectScript",
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
@@ -717,6 +766,7 @@ describe("Renderer fixed Model request client", () => {
       "setHarnessLaunchSettings",
       "setIdleReleaseSettings",
       "setProjectTabs",
+      "setProjectTools",
       "setThreadAutoArchiveSettings",
       "setThreadFolders",
       "setThreadTerminalSettings",

@@ -134,6 +134,14 @@ import {
   projectTabsConfigSchema,
   projectTabsGetParamsSchema,
   type ProjectTabsState,
+  PROJECT_TOOLS_GET_METHOD,
+  PROJECT_TOOLS_SET_METHOD,
+  PROJECT_TOOLS_RUN_SCRIPT_METHOD,
+  projectToolsConfigSchema,
+  projectToolsGetParamsSchema,
+  projectScriptRunParamsSchema,
+  projectToolTargetKey,
+  type ProjectToolsState,
   THREAD_FOLDERS_GET_METHOD,
   THREAD_FOLDERS_SET_METHOD,
   threadFoldersConfigSchema,
@@ -172,6 +180,8 @@ import { openProjectWorkspace, openThreadWorkspace } from "./thread-workspace.js
 import { createLauncherDoubaoOpener } from "./launcher-url-opener.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
 import { ProjectTabsSettingsStore } from "./project-tabs-settings.js";
+import { ProjectToolsSettingsStore } from "./project-tools-settings.js";
+import { ProjectScriptRunner } from "./project-script-runner.js";
 import { ThreadFoldersSettingsStore } from "./thread-folders-settings.js";
 import { NativeAccountObserver } from "./native-account-observer.js";
 import { HarnessAccountInspectionCache, listHarnessAccountSources } from "./harness-accounts.js";
@@ -780,6 +790,8 @@ export class AppServerHost {
   #emergencyEnabled = false;
   readonly #threadTerminalSettings: ThreadTerminalSettingsStore;
   readonly #projectTabsSettings: ProjectTabsSettingsStore;
+  readonly #projectToolsSettings: ProjectToolsSettingsStore;
+  readonly #projectScriptRunner: ProjectScriptRunner;
   readonly #threadFoldersSettings: ThreadFoldersSettingsStore;
   #liveCodexModels: LiveModelCatalog | undefined;
   #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
@@ -820,6 +832,8 @@ export class AppServerHost {
     });
     this.#threadTerminalSettings = new ThreadTerminalSettingsStore(environment);
     this.#projectTabsSettings = new ProjectTabsSettingsStore(environment);
+    this.#projectToolsSettings = new ProjectToolsSettingsStore(environment);
+    this.#projectScriptRunner = new ProjectScriptRunner(environment);
     this.#threadFoldersSettings = new ThreadFoldersSettingsStore(environment);
     this.#projectSync = new ProjectSyncPeer(environment);
     this.#launchSettings = new HarnessLaunchSettingsStore(
@@ -1869,6 +1883,17 @@ export class AppServerHost {
     }
     if (request.method === PROJECT_TABS_GET_METHOD || request.method === PROJECT_TABS_SET_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleProjectTabsSettingsRequest(request));
+      return;
+    }
+    if (
+      request.method === PROJECT_TOOLS_GET_METHOD ||
+      request.method === PROJECT_TOOLS_SET_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleProjectToolsSettingsRequest(request));
+      return;
+    }
+    if (request.method === PROJECT_TOOLS_RUN_SCRIPT_METHOD) {
+      this.#dispatchDesktopRequest(() => this.#handleProjectToolsRunScriptRequest(request));
       return;
     }
     if (
@@ -3818,6 +3843,39 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32100, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleProjectToolsSettingsRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      let result: ProjectToolsState;
+      if (request.method === PROJECT_TOOLS_GET_METHOD) {
+        projectToolsGetParamsSchema.parse(request.params);
+        result = await this.#projectToolsSettings.load();
+      } else {
+        result = await this.#projectToolsSettings.set(
+          projectToolsConfigSchema.parse(request.params),
+        );
+      }
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32102, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleProjectToolsRunScriptRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      const params = projectScriptRunParamsSchema.parse(request.params);
+      const config = (await this.#projectToolsSettings.load()).config;
+      const targetKey = projectToolTargetKey(params.target);
+      const binding = config?.bindings.find(
+        (candidate) => projectToolTargetKey(candidate.target) === targetKey,
+      );
+      if (!binding) throw new Error("项目快捷操作尚未绑定。");
+      const result = await this.#projectScriptRunner.run(binding, params.action);
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32103, errorMessage(error).slice(0, 20_000)));
     }
   }
 

@@ -190,6 +190,18 @@ import {
   projectTabsStateSchema,
   type ProjectTabsConfig,
   type ProjectTabsState,
+  PROJECT_TOOLS_GET_METHOD,
+  PROJECT_TOOLS_RUN_SCRIPT_METHOD,
+  PROJECT_TOOLS_SET_METHOD,
+  projectScriptRunParamsSchema,
+  projectScriptRunResultSchema,
+  projectToolsConfigSchema,
+  projectToolsGetParamsSchema,
+  projectToolsStateSchema,
+  type ProjectScriptRunParams,
+  type ProjectScriptRunResult,
+  type ProjectToolsConfig,
+  type ProjectToolsState,
   THREAD_FOLDERS_GET_METHOD,
   THREAD_FOLDERS_SET_METHOD,
   threadFoldersConfigSchema,
@@ -563,6 +575,9 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   setThreadTerminalSettings?(settings: ThreadTerminalSettings): Promise<ThreadTerminalSettings>;
   getProjectTabs?(): Promise<ProjectTabsState>;
   setProjectTabs?(config: ProjectTabsConfig): Promise<ProjectTabsState>;
+  getProjectTools?(): Promise<ProjectToolsState>;
+  setProjectTools?(config: ProjectToolsConfig): Promise<ProjectToolsState>;
+  runProjectScript?(params: ProjectScriptRunParams): Promise<ProjectScriptRunResult>;
   getThreadFolders?(): Promise<ThreadFoldersState>;
   setThreadFolders?(config: ThreadFoldersConfig): Promise<ThreadFoldersState>;
   buddyInterrupted?(): Promise<BuddyInterrupted>;
@@ -1263,6 +1278,24 @@ export function createRendererModelClient(
     async setProjectTabs(config: ProjectTabsConfig): Promise<ProjectTabsState> {
       return projectTabsStateSchema.parse(
         await manager.sendRequest(PROJECT_TABS_SET_METHOD, projectTabsConfigSchema.parse(config)),
+      );
+    },
+    async getProjectTools(): Promise<ProjectToolsState> {
+      return projectToolsStateSchema.parse(
+        await manager.sendRequest(PROJECT_TOOLS_GET_METHOD, projectToolsGetParamsSchema.parse({})),
+      );
+    },
+    async setProjectTools(config: ProjectToolsConfig): Promise<ProjectToolsState> {
+      return projectToolsStateSchema.parse(
+        await manager.sendRequest(PROJECT_TOOLS_SET_METHOD, projectToolsConfigSchema.parse(config)),
+      );
+    },
+    async runProjectScript(params: ProjectScriptRunParams): Promise<ProjectScriptRunResult> {
+      return projectScriptRunResultSchema.parse(
+        await manager.sendRequest(
+          PROJECT_TOOLS_RUN_SCRIPT_METHOD,
+          projectScriptRunParamsSchema.parse(params),
+        ),
       );
     },
     async getThreadFolders(): Promise<ThreadFoldersState> {

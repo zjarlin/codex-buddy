@@ -107,7 +107,7 @@
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
 | [`product/persistent-local-host.md`](product/persistent-local-host.md) | 本地工作区常驻 Host：Desktop 重启不结束后台 Host，不需要 SSH 或反向组网；启用、停止、升级和文件边界。 |
 | [`product/remote-shared-projects.md`](product/remote-shared-projects.md) | SSH 主机共享项目发现、身份隔离与原生项目／会话恢复。 |
-| [`product/project-actions.md`](product/project-actions.md) | 项目分类 Tab、前缀规则、会话文件夹与在文件夹中新建会话，以及 Doubao 桌面客户端入口。 |
+| [`product/project-actions.md`](product/project-actions.md) | 项目快捷 URL 与启停脚本、项目分类 Tab、前缀规则、会话文件夹与在文件夹中新建会话，以及 Doubao 桌面客户端入口。 |
 | [`product/codex-accounts.md`](product/codex-accounts.md) | 设置页中的原生账号与额度、外部 Harness 不受 Codex 额度门限制、手动导入 Pi 及导入记录管理；修改账号 UI、发送额度门、查询或凭证导入链路时阅读。 |
 | [`product/codex-native-account-switching-design.md`](product/codex-native-account-switching-design.md) | 移除 Codex 多账号切换后的只读边界；修改 Codex 认证或账号路由时阅读。 |
 | [`architecture/renderer-settings-styling.md`](architecture/renderer-settings-styling.md) | 设置页 Tailwind CSS 使用边界、构建方式与编写规则；新增或改版设置页界面时阅读。 |

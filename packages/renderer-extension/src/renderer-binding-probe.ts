@@ -121,8 +121,9 @@ import {
   installRendererQueuedTransfer,
   isQueuedTransferManager,
 } from "./renderer-queued-transfer.js";
-import { installRendererProjectActions } from "./renderer-project-actions.js";
 import { installProjectTabs } from "./project-tabs/index.js";
+import { installProjectTools } from "./project-tools/index.js";
+import { installRendererProjectActions } from "./renderer-project-actions.js";
 import { installThreadFolders } from "./thread-folders/index.js";
 import { installRendererGitSidebar } from "./renderer-git-sidebar.js";
 import { installRendererGitBranchControl } from "./renderer-git-branch-control.js";
@@ -1029,6 +1030,7 @@ export function installRendererBindingProbe(
     };
   });
   let connectionDiagnostics: RendererConnectionDiagnostics | null = null;
+  let projectTools: ReturnType<typeof installProjectTools> | null = null;
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
     // 更新页读取本机安装版本；Composer 指向远端 SSH Host 时不能把本机版本请求路由过去。
@@ -1076,6 +1078,7 @@ export function installRendererBindingProbe(
       rendererLocaleValue = settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en";
       for (const mounted of mountedByComposer.values()) renderMounted(mounted);
       gitSidebar.refresh();
+      projectTools?.refresh();
     },
   });
   rendererLocaleValue = settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en";
@@ -1084,6 +1087,10 @@ export function installRendererBindingProbe(
     getClient: () => modelClientForHost("local"),
   });
   revealThreadInProjectTab = projectTabs.revealThread;
+  projectTools = installProjectTools({
+    getLocale: rendererLocale,
+    getClient: () => modelClientForHost("local"),
+  });
   const threadFolders = installThreadFolders({
     getLocale: () => settingsLifecycle.locale,
     getClient: () => modelClientForHost("local"),
@@ -3744,6 +3751,8 @@ export function installRendererBindingProbe(
       queuedTransfer.dispose();
       projectActions.dispose();
       projectTabs.dispose();
+      projectTools?.dispose();
+      projectTools = null;
       titlebarProjectName.dispose();
       sidebarThreadAlign.dispose();
       delegationMention?.dispose();

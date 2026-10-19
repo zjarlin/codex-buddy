@@ -167,12 +167,9 @@ export function mountModelShortcuts(
     selecting || refreshing || view.refreshing === true || view.disabled === true;
   const canSelect = (id: string): boolean => {
     const model = view.models.find((entry) => entry.id === id);
-    return (
-      !!id &&
-      !isDisabled() &&
-      !view.unavailableModelIds?.includes(id) &&
-      (model ? !model.disabled : view.supportsCustomModel === true)
-    );
+    // 收藏不因当前目录未载入而变灰：目录可能只返回部分分页，是否真正可用
+    // 仍由这次选择提交给 Harness 后的结果决定。
+    return !!id && !isDisabled() && !view.unavailableModelIds?.includes(id) && !model?.disabled;
   };
   const missingHint = (): HTMLElement => {
     const hint = document.createElement("small");
@@ -277,7 +274,7 @@ export function mountModelShortcuts(
     const id = search.value.trim();
     useId.textContent = chinese ? "使用此 ID" : "Use this ID";
     pinId.textContent = chinese ? "Pin 此 ID" : "Pin this ID";
-    useId.disabled = !canSelect(id);
+    useId.disabled = view.supportsCustomModel !== true || !canSelect(id);
     pinId.disabled = disabled || !id || favorites.has(id);
     if (!menu.matches(":popover-open")) {
       return;

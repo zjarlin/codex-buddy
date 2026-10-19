@@ -2019,7 +2019,11 @@ export function installRendererBindingProbe(
     const agent = current.agent;
     const catalog = mounted.modelView.catalog;
     const selected = catalog?.models.find((model) => model.ref.id === modelId)?.ref;
-    if (!catalog || !selected || !modelControl) return;
+    if (!catalog || !modelControl) return;
+    if (!selected) {
+      // 收藏 ID 可能来自尚未载入的目录分页；不要静默吞掉点击。
+      throw new Error("Model is not listed in the current Harness catalog");
+    }
     const previousModel = controller.modelForAgent(mounted.composer, agent);
     const previousThinking = controller.thinkingOptionForAgent(mounted.composer, agent);
     const previousPermissionModeId = controller.permissionModeForAgent(mounted.composer, agent);

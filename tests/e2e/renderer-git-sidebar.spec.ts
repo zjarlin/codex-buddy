@@ -1508,6 +1508,58 @@ async function enableLinkedRepositories(page: Page): Promise<void> {
   });
 }
 
+test("ends the repository-list spinner when the Host rejects the read and retries on demand", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    let attempt = 0;
+    fixture.repositoriesAttempts = () => attempt;
+    const client = {
+      ...fixture.client,
+      listGitRepositories: () => {
+        attempt += 1;
+        fixture.calls.push(["repositories"]);
+        return new Promise((resolve, reject) => {
+          if (attempt === 1) fixture.rejectRepositories = () => reject(new Error("git 命令超时"));
+          else fixture.resolveRepositories = () => resolve({ project: "/repo", repositories: [] });
+        });
+      },
+      linkGitRepository: async () => {
+        throw new Error("Unused link operation");
+      },
+      unlinkGitRepository: async () => {
+        throw new Error("Unused unlink operation");
+      },
+    };
+    fixture.setContext("thread-1", client);
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const selectorRoot = root.locator(".codexhost-git-repositories");
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "true");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").rejectRepositories());
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "false");
+  await expect(selectorRoot.locator(".load-failed")).toContainText("仓库列表读取失败");
+  await expect(selectorRoot.getByRole("button", { name: "重试", exact: true })).toBeEnabled();
+  await selectorRoot.getByRole("button", { name: "重试", exact: true }).click();
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "true");
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveRepositories());
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "false");
+  await expect(selectorRoot.locator(".load-failed")).toBeHidden();
+  await expect(root.getByRole("combobox", { name: "操作仓库" })).toBeEnabled();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").repositoriesAttempts()),
+  ).toBe(2);
+  expect(errors).toEqual([]);
+});
+
 test("links a frontend repository and scopes native review, staging, commit and push to it", async ({
   page,
 }) => {

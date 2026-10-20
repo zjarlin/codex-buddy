@@ -39,6 +39,12 @@ export function createGitRepositorySelector(options: {
     .codexhost-git-repositories { padding:6px 9px 8px; border-bottom:1px solid color-mix(in srgb,currentColor 12%,transparent); font-size:11px; }
     .codexhost-git-repositories[hidden], .codexhost-git-repositories form[hidden], .codexhost-git-repositories .picker[hidden] { display:none; }
     .codexhost-git-repositories .repository-row, .codexhost-git-repositories form, .codexhost-git-repositories .picker-head, .codexhost-git-repositories .picker-path, .codexhost-git-repositories .picker-list { display:flex; gap:5px; align-items:center; }
+    .codexhost-git-repositories[aria-busy="true"] { cursor:progress; }
+    .codexhost-git-repositories[aria-busy="true"]::before { content:""; flex:none; align-self:center; width:9px; height:9px; border:1.5px solid var(--text-link,#339cff); border-right-color:transparent; border-radius:50%; animation:codexhost-git-spin .7s linear infinite; }
+    @keyframes codexhost-git-spin { to { transform:rotate(360deg); } }
+    @media (prefers-reduced-motion:reduce) { .codexhost-git-repositories[aria-busy="true"]::before { animation-duration:1.8s; } }
+    .codexhost-git-repositories .load-failed { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px; color:var(--text-secondary,inherit); }
+    .codexhost-git-repositories .load-failed[hidden] { display:none; }
     .codexhost-git-repositories form { margin-top:6px; }
     .codexhost-git-repositories .picker { display:grid; gap:6px; margin-top:7px; padding-top:7px; border-top:1px solid color-mix(in srgb,currentColor 10%,transparent); }
     .codexhost-git-repositories .picker-path { min-width:0; }
@@ -117,8 +123,19 @@ export function createGitRepositorySelector(options: {
   pickerList.setAttribute("aria-label", "目录列表");
   picker.append(pickerHead, pickerPath, pickerList);
 
-  root.append(row, form, picker);
+  const failed = document.createElement("div");
+  failed.className = "load-failed";
+  failed.hidden = true;
+  const failedText = document.createElement("span");
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.textContent = "重试";
+  failed.append(failedText, retry);
+
+  root.append(row, failed, form, picker);
   root.hidden = true;
+  let loadError = "";
+  let loadRequest: (() => void) | null = null;
   let context: Context = { threadId: null, client: null };
   let data: GitRepositories | null = null;
   let directories: GitRepositoryDirectories | null = null;
@@ -171,6 +188,10 @@ export function createGitRepositorySelector(options: {
     submit.setAttribute("aria-busy", String(busy));
     remove.setAttribute("aria-busy", String(busy));
     submit.textContent = busy ? "处理中…" : "关联";
+    root.setAttribute("aria-busy", String(busy || actionBusy || pickerBusy));
+    failed.hidden = !loadError;
+    failedText.textContent = loadError;
+    retry.disabled = busy || actionBusy || pickerBusy || !loadRequest;
     pathInput.disabled = busy || pickerBusy || actionBusy;
     pickerList.replaceChildren();
     pickerList.hidden = false;
@@ -227,6 +248,8 @@ export function createGitRepositorySelector(options: {
     selected = "";
     data = null;
     busy = false;
+    loadError = "";
+    loadRequest = null;
     form.hidden = true;
     input.value = "";
     resetPicker();
@@ -237,20 +260,31 @@ export function createGitRepositorySelector(options: {
     if (root.hidden || !hasGitTarget(next) || !list) {
       return;
     }
+    loadRepositories(version);
+  };
+
+  // 读取失败必须结束加载态并给出重试入口，不能留下永久旋转的按钮。
+  const loadRepositories = (version = generation): void => {
+    const request = context;
+    const list = request.client?.listGitRepositories;
+    if (!hasGitTarget(request) || !list) return;
+    const retryLater = () => {
+      if (generation === version) loadRepositories(version);
+    };
     busy = true;
+    loadError = "";
+    loadRequest = retryLater;
     render();
     void Promise.resolve()
-      .then(() => list.call(client, gitTargetParams(next)))
+      .then(() => list.call(request.client, gitTargetParams(request)))
       .then((value) => {
-        if (generation === version) {
-          data = value;
-          options.onRepositories?.(value);
-        }
+        if (generation !== version) return;
+        data = value;
+        options.onRepositories?.(value);
       })
       .catch((error) => {
-        if (generation === version) {
-          options.onNotice(error instanceof Error ? error.message : String(error));
-        }
+        if (generation !== version) return;
+        loadError = `仓库列表读取失败：${error instanceof Error ? error.message : String(error)}`;
       })
       .finally(() => {
         if (generation !== version) return;
@@ -380,6 +414,7 @@ export function createGitRepositorySelector(options: {
     void mutate(input.value.trim());
   });
   remove.addEventListener("click", () => void unlink());
+  retry.addEventListener("click", () => loadRequest?.());
   up.addEventListener("click", () => {
     if (directories?.parent) void loadDirectories(directories.parent);
   });

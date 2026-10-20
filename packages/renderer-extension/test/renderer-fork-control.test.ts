@@ -616,6 +616,40 @@ describe("Renderer external Thread Fork control", () => {
     expect(headerExpanded).toBe(false);
   });
 
+  it("does not expand unrelated projects while the requested project is missing", async () => {
+    vi.useFakeTimers();
+    const click = vi.fn();
+    const header = { getAttribute: () => "false", click };
+    vi.stubGlobal("document", {
+      querySelector: () => ({
+        querySelectorAll: (selector: string) =>
+          selector === "[data-app-action-sidebar-project-row]" ? [header] : [],
+      }),
+      querySelectorAll: () => [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const opening = openRendererThread(hostThreadIdSchema.parse("missing"), {
+      hostId: "remote",
+      project: "not-mounted",
+      timeoutMs: 1000,
+    });
+    const rejected = expect(opening).rejects.toThrow("Thread did not appear");
+    await vi.advanceTimersByTimeAsync(1000);
+    await rejected;
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("resolves a Fork button only when DOM and Fiber identities agree", () => {
     expect(rendererForkTargetFromButton(forkButton())).toMatchObject({
       isProjectlessConversation: false,

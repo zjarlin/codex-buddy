@@ -5,6 +5,7 @@ import {
   type HostTurnId,
 } from "@codexhost/shared-contracts";
 
+import { rowProject } from "./project-tabs/native-binding.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
@@ -70,10 +71,21 @@ function sidebarRoot(): HTMLElement | null {
   return document.querySelector?.(APP_SIDEBAR_SELECTOR) ?? null;
 }
 
-function projectContainerByLabel(root: HTMLElement, label: string | undefined): HTMLElement | null {
+function projectContainerByLabel(
+  root: HTMLElement,
+  label: string | undefined,
+  hostId?: string,
+): HTMLElement | null {
   const expected = label?.trim();
   if (!expected) return null;
   for (const container of root.querySelectorAll<HTMLElement>(PROJECT_CONTAINER_SELECTOR)) {
+    const project = rowProject(container);
+    if (
+      project &&
+      hostId &&
+      (project.projectKind === "local" ? hostId !== "local" : project.hostId !== hostId)
+    )
+      continue;
     const header = container.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
     const actual = (
       header?.getAttribute(PROJECT_LABEL_ATTRIBUTE) ?? header?.getAttribute("aria-label")
@@ -134,7 +146,13 @@ function restoreRevealedSidebar(
 
 export function openRendererThread(
   threadId: HostThreadId,
-  options: { hostId?: string; project?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+  options: {
+    hostId?: string;
+    project?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    revealProjects?: boolean;
+  } = {},
 ): Promise<void> {
   if (options.signal?.aborted) return Promise.reject(abortError());
   const current = findSidebarRow(threadId, options);
@@ -184,7 +202,16 @@ export function openRendererThread(
         revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
         return;
       }
-      const project = projectContainerByLabel(sidebar, options.project);
+      if (options.revealProjects === false) {
+        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+        return;
+      }
+      const project = projectContainerByLabel(sidebar, options.project, options.hostId);
+      // 明确的项目尚未挂载时等待它，不能退回展开整个侧栏。
+      if (options.project && !project) {
+        revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+        return;
+      }
       const revealRoot = project ?? sidebar;
       if (expandNextCollapsedProject(revealRoot, expandedProjects)) {
         revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);

@@ -813,13 +813,31 @@ export function installRendererBindingProbe(
   };
   type OpenSidebarThreadOptions = NonNullable<Parameters<typeof openRendererThread>[1]>;
   let revealThreadInProjectTab:
-    | ((input: { hostId: string; threadId: HostThreadId; project?: string }) => string | null)
+    | ((input: {
+        hostId: string;
+        threadId: HostThreadId;
+        project?: string;
+        cwd?: string;
+      }) => string | null)
     | null = null;
-  const openSidebarThread = (threadId: HostThreadId, options: OpenSidebarThreadOptions) => {
-    const project = options.hostId
-      ? revealThreadInProjectTab?.({ ...options, hostId: options.hostId, threadId })
-      : null;
-    return openRendererThread(threadId, project ? { ...options, project } : options);
+  const openSidebarThread = async (threadId: HostThreadId, options: OpenSidebarThreadOptions) => {
+    if (!options.hostId) return openRendererThread(threadId, options);
+    const target = { ...options, hostId: options.hostId, threadId };
+    let project = revealThreadInProjectTab?.(target);
+    if (!project) {
+      const projection = modelClientForHost(options.hostId)?.requestThreadProjection;
+      if (projection) {
+        const result = await projection("thread/read", { threadId, includeTurns: false });
+        const thread =
+          typeof result === "object" && result !== null ? Reflect.get(result, "thread") : null;
+        const cwd: unknown =
+          typeof thread === "object" && thread !== null ? Reflect.get(thread, "cwd") : null;
+        if (typeof cwd === "string") project = revealThreadInProjectTab?.({ ...target, cwd });
+      }
+    }
+    // 无项目会话仍可打开已挂载的原生行；未知归属时禁止展开项目探测。
+    if (!project) return openRendererThread(threadId, { ...options, revealProjects: false });
+    return openRendererThread(threadId, { ...options, project });
   };
   let usageNotificationDispose: (() => void) | null = null;
   const localAgentForSidebarThread = (input: {

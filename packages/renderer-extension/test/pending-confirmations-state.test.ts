@@ -7,6 +7,7 @@ import {
   isMetadataTitleTurn,
   pendingConfirmationStatus,
   pendingConfirmationSummary,
+  pendingConfirmationTitle,
   type PendingConfirmationStore,
 } from "../src/pending-confirmations-state.js";
 
@@ -303,6 +304,47 @@ describe("pending confirmation state", () => {
         items: [{ type: "agentMessage", text: '{"title":"","description":"d"}' }],
       }),
     ).toBe(false);
+  });
+
+  it("never raises a card from a naming Turn, so its JSON cannot become the summary", () => {
+    const model = new PendingConfirmationsModel(memoryStorage(), () => 100);
+    expect(
+      model.link({
+        hostId: "local",
+        thread: { id: "thread", name: "修复问号被遮挡" },
+        turn: {
+          id: "turn",
+          status: "completed",
+          items: [
+            { type: "userMessage", content: [{ type: "text", text: "修复问号" }] },
+            { type: "agentMessage", text: '{"title":"T","description":"d"}' },
+          ],
+        },
+      }),
+    ).toBeNull();
+    expect(model.pending()).toEqual([]);
+  });
+  it("never pins the naming placeholder as a card title", () => {
+    const model = new PendingConfirmationsModel(memoryStorage(), () => 100);
+    expect(pendingConfirmationTitle("...")).toBe("");
+    model.link({ hostId: "local", threadId: "t", title: "...", turnId: "u", status: "completed" });
+    expect(model.pending()[0]?.title).toBe("未命名会话");
+  });
+
+  it("replaces a placeholder title when the native thread name arrives", () => {
+    const model = new PendingConfirmationsModel(memoryStorage(), () => 100);
+    const entry = model.link({
+      hostId: "local",
+      threadId: "thread",
+      turnId: "turn",
+      status: "completed",
+      items: [{ type: "userMessage", content: [{ type: "text", text: "hi" }] }],
+    });
+    if (!entry) throw new Error("Expected a pending entry");
+    expect(entry.title).toBe("未命名会话");
+    expect(model.retitle(entry, "修复问号被遮挡")).toBe(true);
+    expect(model.pending()[0]?.title).toBe("修复问号被遮挡");
+    expect(model.retitle(entry, "...")).toBe(false);
   });
 
   it("keeps title generation Turns out of the pending queue", () => {

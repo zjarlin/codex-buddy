@@ -270,6 +270,56 @@ describe("Renderer external Thread Fork control", () => {
     expect(disconnect).toHaveBeenCalledOnce();
   });
 
+  it("keeps at most one unknown-project probe open at a time", async () => {
+    vi.useFakeTimers();
+    const rows: HTMLElement[] = [];
+    const target = sidebarRow("deep-thread", "local");
+    const expanded = new Set<string>();
+    const header = (name: string) => ({
+      isConnected: true,
+      getAttribute: (attribute: string) =>
+        attribute === "aria-expanded" ? String(expanded.has(name)) : null,
+      closest: () => null,
+      click: vi.fn(() => {
+        if (expanded.has(name)) expanded.delete(name);
+        else expanded.add(name);
+        if (name === "second" && expanded.has("second")) rows.push(target);
+      }),
+    });
+    const first = header("first");
+    const second = header("second");
+    vi.stubGlobal("document", {
+      querySelector: () => ({
+        querySelectorAll: (selector: string) =>
+          selector === "[data-app-action-sidebar-project-row]" ? [first, second] : [],
+      }),
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-thread-row]" ? rows : [],
+      documentElement: {},
+    });
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    });
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const opening = openRendererThread(hostThreadIdSchema.parse("deep-thread"), {
+      hostId: "local",
+      timeoutMs: 60_000,
+    });
+    await vi.advanceTimersByTimeAsync(600);
+    await opening;
+    expect(second.click).toHaveBeenCalled();
+    expect(target.click).toHaveBeenCalledOnce();
+    // 探测第二个项目前已收起第一个，避免整片侧栏同时展开。
+    expect(first.click.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("times out a missing sidebar row and releases its observer", async () => {
     vi.useFakeTimers();
     const disconnect = vi.fn();
@@ -648,6 +698,40 @@ describe("Renderer external Thread Fork control", () => {
     await vi.advanceTimersByTimeAsync(1000);
     await rejected;
     expect(click).not.toHaveBeenCalled();
+  });
+
+  it("resolves only after the target becomes the current conversation", async () => {
+    const row = sidebarRow("active-thread", "local");
+    let active: { hostId: string; threadId: string } | null = null;
+    vi.stubGlobal("document", {
+      querySelector: () => ({ querySelectorAll: () => [] }),
+      querySelectorAll: (selector: string) =>
+        selector === "[data-app-action-sidebar-thread-row]" ? [row] : [],
+      documentElement: {},
+    });
+    vi.stubGlobal(
+      "MutationObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+      setInterval: globalThis.setInterval,
+      clearInterval: globalThis.clearInterval,
+    });
+    let settled = false;
+    const opening = openRendererThread(hostThreadIdSchema.parse("active-thread"), {
+      hostId: "local",
+      activeThread: () => active,
+    }).then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(settled).toBe(false);
+    active = { hostId: "local", threadId: "active-thread" };
+    await opening;
+    expect(settled).toBe(true);
   });
 
   it("resolves a Fork button only when DOM and Fiber identities agree", () => {

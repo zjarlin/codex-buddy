@@ -681,6 +681,30 @@ test("title generation ephemeral threads never raise a pending card", async ({ p
   ).toEqual(["thread-b"]);
 });
 
+// 命名完成前侧栏标题是打字机点阵，标题生成的 JSON 也不是用户结果。
+test("naming turns do not replace the conversation title or summary", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  await page.evaluate(() => {
+    const row = document.querySelector('[data-app-action-sidebar-thread-id="local:thread-b"]');
+    const title = row?.querySelector("[data-thread-title]");
+    if (title) title.textContent = "...";
+  });
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      '{"title":"T","description":"d"}',
+    ),
+  );
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await expect(modal).toBeVisible();
+  await expect(modal).not.toContainText('"description"');
+});
+
 // 完成提醒会把用户带到已完成的会话；用户常常记不住原本正在看哪一个。
 // 这里覆盖：跳转前记住来源会话 → 显示返回入口 → 点击切回来源会话。
 test("completion reminder offers a way back to the previously viewed conversation", async ({

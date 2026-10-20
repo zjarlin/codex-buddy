@@ -16,6 +16,9 @@ import {
 const RESPONSE_CONVERSATION_ATTRIBUTE = "data-response-annotation-conversation";
 const TURN_KEY_ATTRIBUTE = "data-content-search-turn-key";
 const OPEN_THREAD_TIMEOUT_MS = 15_000;
+// 侧栏行已挂载并不等于右侧已切换到目标会话；后者由 Composer 的会话目标确认。
+const OPEN_THREAD_ACTIVE_TIMEOUT_MS = 10_000;
+const OPEN_THREAD_ACTIVE_INTERVAL_MS = 100;
 const APP_SIDEBAR_SELECTOR = "#app-shell-sidebar";
 const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id]";
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
@@ -97,14 +100,17 @@ function projectContainerByLabel(
 
 // 每次只展开一个折叠项目。定位目标明确时 root 是目标项目容器；项目元数据缺失时
 // 才退回侧栏逐个项目探测，避免旧实现一次把整个侧栏所有项目全部展开。
-function expandNextCollapsedProject(root: ParentNode, expanded: Set<HTMLElement>): boolean {
+function expandNextCollapsedProject(
+  root: ParentNode,
+  expanded: Set<HTMLElement>,
+): HTMLElement | null {
   for (const header of root.querySelectorAll<HTMLElement>(PROJECT_HEADER_SELECTOR)) {
     if (header.getAttribute("aria-expanded") !== "false" || expanded.has(header)) continue;
     header.click();
     expanded.add(header);
-    return true;
+    return header;
   }
-  return false;
+  return null;
 }
 
 // 只识别原生列表的“加载更多”控件：它在 Fiber 上以 hasMoreItems + onExpandedChange
@@ -138,12 +144,37 @@ function restoreRevealedSidebar(
     if (button.getAttribute("aria-disabled") === "true" || button.disabled) continue;
     button.click();
   }
+  // React 重渲染会替换项目头节点，旧元素身份可能已断开；按容器属性重新取当前
+  // 项目头，保证探测期间展开的项目在导航结束后确实收起来。
   for (const header of expanded) {
     if (keepProject?.contains(header)) continue;
-    if (header.isConnected && header.getAttribute("aria-expanded") === "true") header.click();
+    const current =
+      (header.isConnected ? header : null) ??
+      header
+        .closest<HTMLElement>(PROJECT_CONTAINER_SELECTOR)
+        ?.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR) ??
+      null;
+    if (current?.getAttribute("aria-expanded") !== "true") continue;
+    if (current !== header) expanded.add(current);
+    current.click();
   }
 }
 
+function isViewing(
+  options: { hostId?: string | undefined; threadId?: HostThreadId | undefined },
+  active: { hostId: string; threadId: string } | null,
+): boolean {
+  return Boolean(
+    active &&
+    options.hostId !== undefined &&
+    active.hostId === options.hostId &&
+    active.threadId === options.threadId,
+  );
+}
+
+// 点击原生行后，右侧可能还在读取线程；若立刻确认完成提醒，用户会看到卡片消失而
+// 会话仍在转圈。只在调用方提供当前会话判定时，把「成为当前查看的会话」当作打开
+// 成功；未提供时保持旧语义，避免其他导航入口多出等待。
 export function openRendererThread(
   threadId: HostThreadId,
   options: {
@@ -152,25 +183,39 @@ export function openRendererThread(
     signal?: AbortSignal;
     timeoutMs?: number;
     revealProjects?: boolean;
+    activeThread?(): { hostId: string; threadId: string } | null;
   } = {},
 ): Promise<void> {
   if (options.signal?.aborted) return Promise.reject(abortError());
   const current = findSidebarRow(threadId, options);
   if (current) {
     current.click();
-    return Promise.resolve();
+    if (!options.activeThread) return Promise.resolve();
+    return waitForActiveThread(threadId, options);
   }
   return new Promise((resolve, reject) => {
     let settled = false;
     let revealTimer: number | null = null;
+    let timeout: number | null = null;
     let revealRounds = 0;
     let pagingCursor = 0;
     // 记录为定位目标行动过的原生状态，打开、超时或取消后统一还原，避免侧栏一直
     // 保持“被点过 Show more”的展开形态。
     const expandedProjects = new Set<HTMLElement>();
     const pagedButtons = new Set<HTMLElement>();
+    // 归属未知时逐个项目探测；同一时间只保留一个探测项目展开，找到或换项目时
+    // 立即收起上一个，避免侧栏长时间保持整片展开。
+    let probing: HTMLElement | null = null;
+    const collapseProbe = (): void => {
+      if (!probing) return;
+      if (probing.isConnected && probing.getAttribute("aria-expanded") === "true") {
+        probing.click();
+      }
+      probing = null;
+    };
     const cleanup = (): void => {
-      window.clearTimeout(timeout);
+      if (timeout !== null) window.clearTimeout(timeout);
+      timeout = null;
       if (revealTimer !== null) window.clearTimeout(revealTimer);
       revealTimer = null;
       observer.disconnect();
@@ -185,7 +230,13 @@ export function openRendererThread(
       const keepProject = row.closest<HTMLElement>(PROJECT_CONTAINER_SELECTOR);
       row.click();
       restoreRevealedSidebar(expandedProjects, pagedButtons, keepProject);
-      resolve();
+      // 只有确认右侧已切换到目标会话才算打开成功，卡片保留到这一刻。
+      if (options.activeThread) {
+        waitForActiveThread(threadId, { ...options, activeThread: options.activeThread }).then(
+          resolve,
+          reject,
+        );
+      } else resolve();
     };
     // 每轮只请求一次原生分页，并按轮次限流：MutationObserver 会在原生列表每次
     // 重渲染时触发，若直接在其中点击加载更多，会把 App server 请求队列打满。
@@ -213,7 +264,12 @@ export function openRendererThread(
         return;
       }
       const revealRoot = project ?? sidebar;
-      if (expandNextCollapsedProject(revealRoot, expandedProjects)) {
+      const expanded = expandNextCollapsedProject(revealRoot, expandedProjects);
+      if (expanded) {
+        if (!project) {
+          collapseProbe();
+          probing = expanded;
+        }
         revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
         return;
       }
@@ -236,7 +292,7 @@ export function openRendererThread(
       const row = findSidebarRow(threadId, options);
       if (row) finish(row);
     });
-    const timeout = window.setTimeout(() => {
+    timeout = window.setTimeout(() => {
       if (settled) return;
       settled = true;
       cleanup();
@@ -257,6 +313,50 @@ export function openRendererThread(
       return;
     }
     revealTimer = window.setTimeout(step, THREAD_LIST_REVEAL_INTERVAL_MS);
+  });
+}
+
+function waitForActiveThread(
+  threadId: HostThreadId,
+  options: {
+    hostId?: string | undefined;
+    activeThread?(): { hostId: string; threadId: string } | null;
+  },
+): Promise<void> {
+  const activeThread = options.activeThread ?? (() => null);
+  const viewing = (): boolean => isViewing({ hostId: options.hostId, threadId }, activeThread());
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let poll: number | null = null;
+    let timeout: number | null = null;
+    // 观察器与定时器相互补充：原生状态变化可能不触发属性重渲染，纯观察会漏掉；
+    // 两者都必须在成功或失败时释放，避免留下持续的观察者。
+    const observer = new MutationObserver(() => check());
+    const stop = (): void => {
+      if (poll !== null) window.clearInterval(poll);
+      if (timeout !== null) window.clearTimeout(timeout);
+      poll = null;
+      timeout = null;
+      observer.disconnect();
+    };
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
+      stop();
+      if (error) reject(error);
+      else resolve();
+    };
+    function check(): void {
+      if (!viewing()) return;
+      finish();
+    }
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    poll = window.setInterval(check, OPEN_THREAD_ACTIVE_INTERVAL_MS);
+    timeout = window.setTimeout(
+      () => finish(new Error("Thread did not become the current conversation")),
+      OPEN_THREAD_ACTIVE_TIMEOUT_MS,
+    );
+    check();
   });
 }
 

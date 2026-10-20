@@ -10,6 +10,7 @@ import { hostThreadIdSchema, type HostThreadId } from "@codexhost/shared-contrac
 
 import {
   PendingConfirmationsModel,
+  pendingConfirmationTitle,
   type PendingConfirmationRecord,
 } from "./pending-confirmations-state.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
@@ -204,9 +205,17 @@ function sameEntry(
   );
 }
 
-function threadTitle(row: HTMLElement): string | null {
+function threadTitle(row: HTMLElement, locale: Locale = "zh-CN"): string {
+  return pendingConfirmationTitle(threadTitleText(row)) || fallbackTitle(locale);
+}
+
+function threadTitleText(row: HTMLElement): string {
   const title = row.querySelector<HTMLElement>("[data-thread-title]");
-  return title?.textContent?.trim() || null;
+  return title?.textContent ?? "";
+}
+
+function fallbackTitle(locale: Locale): string {
+  return locale === "zh-CN" ? "未命名会话" : "Untitled conversation";
 }
 
 function activeThreadFromDom(): { hostId: string; threadId: string } | null {
@@ -649,7 +658,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       }
       unread.push({
         threadId,
-        title: threadTitle(row) || "未命名会话",
+        title: threadTitle(row, options.getLocale()),
         project: sidebarProjectLabelForThread(document, { hostId, threadId }) || "",
       });
     }
@@ -775,11 +784,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                     nativeThreadId(hostId, threadIdFromSidebarRowElement(candidate) ?? "") ===
                       threadId,
                 ) ?? null;
-              const title = row ? threadTitle(row) : null;
+              // 通知流是同步有序的：先把回合入队再异步补标题，不能把异步结果插到后续
+              // turn/started 之后处理。
+              const title = row ? threadTitle(row, options.getLocale()) : null;
               const entry = model.link({
                 hostId,
                 threadId,
-                title: title || undefined,
+                title,
                 project: sidebarProjectLabelForThread(document, { hostId, threadId }) || undefined,
                 turn: turn ?? {},
               });
@@ -789,6 +800,21 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 visibleEntry = entry;
                 // 语音播报与弹窗同一触发点：真正属于用户的回合完成通知。
                 options.speech?.announce(entry);
+                // 标题生成刚结束时侧栏按钮仍是打字机点阵，卡片先用“未命名会话”；
+                // 原生线程名一旦可读就就地更新标题。
+                const projection = options.getClient(hostId)?.requestThreadProjection;
+                if (projection)
+                  void projection("thread/read", { threadId, includeTurns: false })
+                    .then((result) => {
+                      if (disposed || current.manager !== manager) return;
+                      const thread = record(record(result)?.thread);
+                      const named = pendingConfirmationTitle(
+                        text(thread?.name) || text(thread?.title),
+                      );
+                      if (named) model.retitle(entry, named);
+                      render();
+                    })
+                    .catch(() => undefined);
               }
               render();
             },
@@ -1102,6 +1128,6 @@ export function pendingConfirmationRowKey(row: HTMLElement): string | null {
   const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
   const value = threadIdFromSidebarRowElement(row);
   if (!hostId || !value) return null;
-  const title = threadTitle(row) || "未命名会话";
+  const title = pendingConfirmationTitle(threadTitleText(row)) || "未命名会话";
   return itemSummary(nativeThreadId(hostId, value), title, hostId);
 }

@@ -116,7 +116,9 @@ export function pendingConfirmationSummary(
     (value): value is Record<string, unknown> =>
       record(value)?.type === "agentMessage" && text(record(value)?.text).trim().length > 0,
   );
-  if (agent) return summarize(text(agent.text), 2_000);
+  // 标题生成的 JSON 是内部元数据，不能作为“结果”展示给用户。
+  if (agent && !isTitleGenerationPayload(text(agent.text)))
+    return summarize(text(agent.text), 2_000);
   const error = record(turn.error);
   if (error) return compact(text(error.message) || text(error.code), 2_000);
   if (pendingConfirmationStatus(turn.status) === "failed")
@@ -144,7 +146,17 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
-function isTitleGenerationPayload(value: string): boolean {
+// 正在生成标题的 Thread 在命名完成前没有标题，侧栏按钮的 textContent 只有打字机
+// 状态的点阵；它不是会话名，不能钉进待确认卡片，否则会盖住真实会话标题。
+const PLACEHOLDER_TITLE = /^[\s.…·•]+$/u;
+
+export function pendingConfirmationTitle(value: string): string {
+  // 命名完成前侧栏按钮只有 1–3 个点阵字符；空白与这类占位都不是真实会话名。
+  if (!value.trim() || (value.length <= 3 && PLACEHOLDER_TITLE.test(value))) return "";
+  return value;
+}
+
+export function isTitleGenerationPayload(value: string): boolean {
   const object = parseJsonObject(value);
   if (!object) return false;
   const keys = Object.keys(object);
@@ -178,7 +190,7 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
     threadId,
     turnId,
     status,
-    title: compact(text(entry.title) || "未命名会话", 300),
+    title: compact(pendingConfirmationTitle(text(entry.title)) || "未命名会话", 300),
     summary: summarize(text(entry.summary), 2_000),
     project: text(entry.project),
     completedAt: timestamp(entry.completedAt, 0),
@@ -347,7 +359,7 @@ export class PendingConfirmationsModel {
       threadId,
       turnId,
       status,
-      title: compact(input.title || "未命名会话", 300),
+      title: compact(pendingConfirmationTitle(input.title) || "未命名会话", 300),
       summary: pendingConfirmationSummary({ ...input, status }),
       project: input.project ?? "",
       completedAt: timestamp(input.completedAt, this.now()),
@@ -368,6 +380,21 @@ export class PendingConfirmationsModel {
     this.#write();
     this.#publish();
     return next;
+  }
+
+  /** 标题生成完成后把占位标题换成真实名称，不改变已读状态与顺序。 */
+  retitle(
+    entry: Pick<PendingConfirmationRecord, "hostId" | "threadId" | "turnId">,
+    title: string,
+  ): boolean {
+    const next = compact(pendingConfirmationTitle(title), 300);
+    if (!next) return false;
+    const current = this.#entries.find((candidate) => key(candidate) === key(entry));
+    if (!current || current.title === next) return false;
+    current.title = next;
+    this.#write();
+    this.#publish();
+    return true;
   }
 
   startTurn(hostId: string, threadId: string, turnId: string): boolean {

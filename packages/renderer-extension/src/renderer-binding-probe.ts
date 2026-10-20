@@ -822,7 +822,7 @@ export function installRendererBindingProbe(
     | null = null;
   const openSidebarThread = async (threadId: HostThreadId, options: OpenSidebarThreadOptions) => {
     if (!options.hostId) return openRendererThread(threadId, options);
-    const target = { ...options, hostId: options.hostId, threadId };
+    const target = { ...options, hostId: options.hostId, threadId, activeThread: viewedThread };
     let project = revealThreadInProjectTab?.(target);
     if (!project) {
       const projection = modelClientForHost(options.hostId)?.requestThreadProjection;
@@ -836,8 +836,13 @@ export function installRendererBindingProbe(
       }
     }
     // 无项目会话仍可打开已挂载的原生行；未知归属时禁止展开项目探测。
-    if (!project) return openRendererThread(threadId, { ...options, revealProjects: false });
-    return openRendererThread(threadId, { ...options, project });
+    if (!project)
+      return openRendererThread(threadId, {
+        ...options,
+        revealProjects: false,
+        activeThread: viewedThread,
+      });
+    return openRendererThread(threadId, { ...options, project, activeThread: viewedThread });
   };
   let usageNotificationDispose: (() => void) | null = null;
   const localAgentForSidebarThread = (input: {

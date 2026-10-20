@@ -2,15 +2,15 @@
 
 ## 项目快捷操作
 
-每个已渲染项目在名称旁提供一个配置按钮。配置表单可绑定内网 URL、公网 URL、一个默认 Prompt，以及 `start`、`restart`、`stop` 三个本机脚本路径。URL 仅允许 `http` 或 `https` 绝对地址，不能携带用户名或密码；脚本必须是绝对路径的 `.sh` 或 `.py` 文件；Prompt 去除首尾空白后保存，最多 20,000 个字符。至少存在一个 URL、脚本或 Prompt 才保存绑定，删除绑定会清除该项目的全部快捷操作。
+每个已渲染项目在名称旁提供一个配置按钮。配置表单可绑定内网 URL、公网 URL、一个脚本制作 Prompt，以及 `start`、`restart`、`stop` 三个本机脚本路径。URL 仅允许 `http` 或 `https` 绝对地址，不能携带用户名或密码；脚本必须是绝对路径的 `.sh` 或 `.py` 文件；Prompt 去除首尾空白后保存，最多 20,000 个字符。至少存在一个 URL、脚本或 Prompt 才保存绑定，删除绑定会清除该项目的全部快捷操作。配置页只读展示本机 Host 实际读取的 `project-tools.json` 绝对路径，便于把同一路径交给 AI 回写。
 
 项目标题显示配置按钮、已绑定时可见的 Prompt 按钮、一个主要脚本动作和“更多操作”按钮；主要脚本动作按启动、重启、停止顺序取第一个已绑定脚本。其余 URL 与其他脚本动作放在“更多操作”中。所有图标带有包含项目名、动作和完整 URL/脚本路径的原生悬浮元数据；“更多操作”菜单同时展示每项说明。访问地址窗口使用 `noopener,noreferrer`。脚本动作由本地 Host 直接执行对应脚本，不创建 Thread、不提交模型请求，因此不消耗 token；执行状态在图标上显示，结果、错误与输出摘要通过状态提示反馈。
 
-Prompt 按钮调用项目自身的“新建会话”入口，等待目标项目的新草稿出现并确认运行目录后，把保存的 Prompt 填入 Composer。它不会自动发送，也不会覆盖已有其他草稿；填入后光标留在输入框，由用户确认后使用 Desktop 原生发送路径。新会话入口或目标输入框无法确认时不猜测目标，并显示错误。
+Prompt 按钮调用项目自身的“新建会话”入口，等待目标项目的新草稿出现并确认运行目录后，把保存的 Prompt 填入 Composer 并使用 Desktop 原生发送按钮提交。保存的 Prompt 为空时，按当前项目绝对路径、精确 target 和 Host 元数据路径动态生成脚本制作任务，要求 AI 创建并验证启动、重启、停止脚本，再以原子方式合并写回元数据。不会覆盖已有其他草稿；发送按钮不可用、草稿在发送前变化或发送后未清空时保留草稿并显示错误。新会话入口、目标输入框或元数据路径无法确认时不猜测目标。
 
 脚本以自身所在目录作为工作目录，由 Host 使用 `bash` 执行 `.sh` 或可配置的 Python（`CODEXHOST_PYTHON`，本机默认 `python3`）执行 `.py`，并把标准输出和错误写入 `${CODEXHOST_DATA_DIR}/project-script-logs/`（默认 `~/.codexhost/project-script-logs/`）。脚本继承 Host 环境，并收到 `CODEXHOST_PROJECT_ACTION`、`CODEXHOST_PROJECT_ID` 和 `CODEXHOST_PROJECT_LABEL`。停止脚本可以在启动/重启脚本形成独立进程组后结束对应服务；Host 不会把脚本输出解释为服务健康状态。
 
-绑定按项目种类、Host ID 和项目 ID 保存到 `${CODEXHOST_DATA_DIR}/project-tools.json`（默认 `~/.codexhost/project-tools.json`），项目重命名后仍保留，不同 Host 互不串用。Renderer 的 `localStorage` 键 `codexhost.project-tools.v1` 仅作为同源窗口镜像和迁移来源；Host 文件是持久事实源。脚本执行请求只携带目标项目身份和动作，路径始终取自 Host 已保存的绑定，Renderers 不能临时传入任意脚本路径。
+绑定按项目种类、Host ID 和项目 ID 保存到 `${CODEXHOST_DATA_DIR}/project-tools.json`（默认 `~/.codexhost/project-tools.json`），项目重命名后仍保留，不同 Host 互不串用。Host 每次读取都重新解析文件，因此 AI 或其他工具直接修改文件后无需重启 Host。Renderer 的 `localStorage` 键 `codexhost.project-tools.v1` 仅作为同源窗口镜像和迁移来源；Host 文件是持久事实源。脚本执行请求只携带目标项目身份和动作，路径始终取自 Host 已保存的绑定，Renderers 不能临时传入任意脚本路径。
 
 本机项目省略号按钮的下拉菜单在“在 Finder 中显示”（或系统文件管理器入口）之后提供“复制绝对路径”“在终端中打开”和“用 VS Code 打开”。保留现有置顶、编辑、归档和移除操作；远程项目不显示这些本机入口。系统原生右键菜单保持现有行为。
 

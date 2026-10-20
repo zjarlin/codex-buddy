@@ -30,7 +30,12 @@ describe("Project tool Host persistence", () => {
       writeRequest(fixture.desktopInput, { id: 1, method: PROJECT_TOOLS_GET_METHOD, params: {} });
       await expect(
         fixture.collector.waitFor((message) => requestId(message, 1)),
-      ).resolves.toMatchObject({ result: { config: null } });
+      ).resolves.toMatchObject({
+        result: {
+          config: null,
+          metadataPath: path.join(fixture.mappingStoreDirectory, "project-tools.json"),
+        },
+      });
 
       writeRequest(fixture.desktopInput, {
         id: 2,

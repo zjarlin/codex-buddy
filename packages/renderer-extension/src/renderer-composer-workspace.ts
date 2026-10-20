@@ -58,7 +58,7 @@ function directDraftWorkspace(props: Record<string, unknown>, hostId: string): s
     : undefined;
 }
 
-/** Prompt 快捷动作只接受项目入口刚打开的新草稿，当前会话草稿不会被误填。 */
+/** 新会话快捷动作只接受项目入口刚打开的新草稿，当前会话草稿不会被误填。 */
 export function composerDraftTarget(composer: Element, hostId: string): string | undefined {
   const paths = new Set<string>();
   for (const element of composer.querySelectorAll("button")) {

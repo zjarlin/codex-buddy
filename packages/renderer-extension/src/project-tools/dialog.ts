@@ -1,3 +1,5 @@
+import createElement from "lucide/dist/esm/createElement.mjs";
+import Copy from "lucide/dist/esm/icons/copy.mjs";
 import type { ProjectToolBinding } from "@codexhost/shared-contracts";
 
 import type { SidebarProject } from "../project-tabs/model.js";
@@ -50,6 +52,8 @@ function urlField(
 export function configureProjectTools(options: {
   project: SidebarProject;
   binding: ProjectToolBinding | null;
+  metadataPath: string | null;
+  projectPath: string | null;
   labels: Labels;
   save(draft: ProjectToolDraft): Promise<void>;
   remove(): Promise<void>;
@@ -96,8 +100,37 @@ export function configureProjectTools(options: {
   prompt.value = options.binding?.prompt ?? "";
   prompt.rows = 4;
   prompt.spellcheck = false;
-  prompt.placeholder = "检查项目状态，定位运行问题，完成修复并验证端到端结果。";
+  prompt.placeholder = labels.scriptPromptPreview;
   promptLabel.append(promptText, prompt);
+
+  const metadata = document.createElement("fieldset");
+  const metadataLegend = document.createElement("legend");
+  metadataLegend.textContent = labels.metadataPath;
+  const metadataLabel = field(labels.metadataPath, options.metadataPath ?? "", "");
+  metadataLabel.input.readOnly = true;
+  metadataLabel.input.setAttribute("data-codexhost-project-tool-metadata-path", "");
+  const copy = actionButton(labels.copyPath, () => {
+    const path = metadataLabel.input.value;
+    if (!path) return;
+    void navigator.clipboard.writeText(path).then(
+      () => {
+        copy.textContent = labels.copyPath;
+      },
+      () => undefined,
+    );
+  });
+  copy.prepend(createElement(Copy, { width: 14, height: 14, "aria-hidden": "true" }));
+  copy.setAttribute("data-codexhost-project-tool-copy-metadata", "");
+  copy.disabled = !options.metadataPath;
+  copy.title = labels.copyPath;
+  metadataLabel.label.classList.add("codexhost-project-tool-copy-row");
+  metadataLabel.label.append(copy);
+  const targetHint = document.createElement("p");
+  targetHint.className = "codexhost-project-tool-hint";
+  targetHint.textContent = `${labels.metadataHint}\n${labels.targetHint}${
+    options.projectPath ? `\n${options.projectPath}` : ""
+  }`;
+  metadata.append(metadataLegend, metadataLabel.label, targetHint);
   const promptHint = document.createElement("p");
   promptHint.className = "codexhost-project-tool-hint";
   promptHint.textContent = labels.promptHint;
@@ -126,7 +159,7 @@ export function configureProjectTools(options: {
   save.type = "submit";
   save.textContent = labels.save;
   actions.append(remove, cancel, save);
-  form.append(urlGroup, scriptGroup, promptGroup, error, actions);
+  form.append(urlGroup, scriptGroup, promptGroup, metadata, error, actions);
   dialog.append(heading, description, form);
   dialog.addEventListener("close", () => {
     dialog.remove();

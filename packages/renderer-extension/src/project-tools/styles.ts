@@ -26,6 +26,8 @@ export const projectToolsStyle = `
 [data-codexhost-project-tools-dialog] input:focus-visible{outline:2px solid #508df2;outline-offset:1px}
 [data-codexhost-project-tools-dialog] textarea{box-sizing:border-box;width:100%;min-height:88px;resize:vertical;padding:7px 8px;border:1px solid #8886;border-radius:6px;background:transparent;color:inherit;font:inherit}
 [data-codexhost-project-tools-dialog] textarea:focus-visible{outline:2px solid #508df2;outline-offset:1px}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-copy-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-copy-row input{flex:1 1 280px}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-hint{color:GrayText;font-size:12px;line-height:18px}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:16px}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-actions button{min-height:32px;padding:5px 11px;border:1px solid #8884;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer}

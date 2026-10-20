@@ -37,14 +37,20 @@ describe("Project tool settings", () => {
     const directory = await mkdtemp(path.join(tmpdir(), "codexhost-project-tools-"));
     cleanup.push(directory);
     const environment = { CODEXHOST_DATA_DIR: directory };
+    const metadataPath = path.join(directory, "project-tools.json");
 
     await expect(new ProjectToolsSettingsStore(environment).load()).resolves.toEqual({
       config: null,
+      metadataPath,
     });
     await expect(new ProjectToolsSettingsStore(environment).set(config)).resolves.toEqual({
       config,
+      metadataPath,
     });
-    await expect(new ProjectToolsSettingsStore(environment).load()).resolves.toEqual({ config });
+    await expect(new ProjectToolsSettingsStore(environment).load()).resolves.toEqual({
+      config,
+      metadataPath,
+    });
     await expect(readFile(path.join(directory, "project-tools.json"), "utf8")).resolves.toContain(
       '"intranetUrl": "http://192.168.31.252:48201/"',
     );
@@ -61,5 +67,29 @@ describe("Project tool settings", () => {
     await expect(
       new ProjectToolsSettingsStore({ CODEXHOST_DATA_DIR: directory }).load(),
     ).rejects.toThrow();
+  });
+
+  it("reloads external edits instead of returning a stale in-memory configuration", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "codexhost-project-tools-"));
+    cleanup.push(directory);
+    const environment = { CODEXHOST_DATA_DIR: directory };
+    const store = new ProjectToolsSettingsStore(environment);
+    await store.set({ version: 1, bindings: [] });
+    const externallyEdited = {
+      version: 1 as const,
+      bindings: [
+        {
+          target: { projectKind: "local" as const, projectId: "project-one" },
+          label: "Project One",
+          scripts: { start: "/repo/start.sh" },
+        },
+      ],
+    };
+    await writeFile(
+      path.join(directory, "project-tools.json"),
+      `${JSON.stringify(externallyEdited, null, 2)}\n`,
+    );
+
+    await expect(store.load()).resolves.toMatchObject({ config: externallyEdited });
   });
 });

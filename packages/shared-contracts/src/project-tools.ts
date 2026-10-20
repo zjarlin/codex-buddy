@@ -135,6 +135,7 @@ export const projectToolsGetParamsSchema = z.object({}).strict();
 export const projectToolsStateSchema = z
   .object({
     config: projectToolsConfigSchema.nullable(),
+    metadataPath: z.string().min(1).max(32_768),
   })
   .strict();
 export type ProjectToolsState = z.infer<typeof projectToolsStateSchema>;

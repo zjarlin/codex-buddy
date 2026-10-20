@@ -1,6 +1,7 @@
 import {
   projectToolsConfigSchema,
   projectToolTargetKey,
+  type ProjectToolsState,
   type ProjectScriptAction,
   type ProjectScripts,
   type ProjectToolBinding,
@@ -13,8 +14,12 @@ import type { SidebarProject } from "../project-tabs/model.js";
 export const PROJECT_TOOLS_STORAGE_KEY = "codexhost.project-tools.v1";
 
 export interface ProjectToolsPersistenceClient {
-  getProjectTools?(): Promise<{ config: ProjectToolsConfig | null }>;
-  setProjectTools?(config: ProjectToolsConfig): Promise<{ config: ProjectToolsConfig | null }>;
+  getProjectTools?(): Promise<
+    Pick<ProjectToolsState, "config"> & Partial<Pick<ProjectToolsState, "metadataPath">>
+  >;
+  setProjectTools?(
+    config: ProjectToolsConfig,
+  ): Promise<Pick<ProjectToolsState, "config"> & Partial<Pick<ProjectToolsState, "metadataPath">>>;
   runProjectScript?(params: { target: ProjectToolTarget; action: ProjectScriptAction }): Promise<{
     action: ProjectScriptAction;
     state: "running" | "completed" | "failed";
@@ -125,7 +130,13 @@ export function projectToolLabels(locale: string): {
   promptSection: string;
   promptHint: string;
   promptFilled: string;
+  promptSent: string;
   promptUnavailable: string;
+  metadataPath: string;
+  metadataHint: string;
+  copyPath: string;
+  targetHint: string;
+  scriptPromptPreview: string;
   more: string;
   saved: string;
   started: string;
@@ -137,7 +148,7 @@ export function projectToolLabels(locale: string): {
     return {
       configure: "Configure project actions",
       title: "Project actions",
-      description: "Bind access URLs, a default prompt, and trusted local scripts to this project.",
+      description: "Bind access URLs, trusted scripts, and an AI task that generates both.",
       intranet: "Intranet URL",
       public: "Public URL",
       start: "Start",
@@ -150,11 +161,20 @@ export function projectToolLabels(locale: string): {
       scriptHint:
         "Use an absolute path to a .sh or .py file. Scripts run from their own directory.",
       prompt: "Open prompt",
-      promptField: "Default prompt",
+      promptField: "Script generation prompt",
       promptSection: "Prompt",
-      promptHint: "Opens a new conversation. The prompt is filled in but not sent automatically.",
-      promptFilled: "Prompt filled in. Review it before sending.",
+      promptHint:
+        "If empty, generates a task from this project's path and metadata location. Opens a new conversation and sends it automatically.",
+      promptFilled: "Prompt filled in but not sent. Review the draft before sending.",
+      promptSent: "Script generation task sent.",
       promptUnavailable: "The project new-conversation entry is unavailable.",
+      metadataPath: "Codex Buddy metadata",
+      metadataHint:
+        "Authoritative project-tools.json read by the local Host. Ask the AI to merge only this project's binding.",
+      copyPath: "Copy path",
+      targetHint: "The task includes this exact project identity and target key.",
+      scriptPromptPreview:
+        "Create start/restart/stop scripts and bind their paths in project-tools.json.",
       more: "More actions",
       saved: "Project actions saved",
       started: "Script started",
@@ -166,7 +186,7 @@ export function projectToolLabels(locale: string): {
   return {
     configure: "配置项目快捷操作",
     title: "项目快捷操作",
-    description: "为项目绑定访问地址、默认 Prompt 和可信的本机脚本。",
+    description: "为项目绑定访问地址、可信脚本，以及生成脚本并回写元数据的 AI 任务。",
     intranet: "内网地址",
     public: "公网地址",
     start: "启动",
@@ -178,11 +198,17 @@ export function projectToolLabels(locale: string): {
     scripts: "脚本",
     scriptHint: "填写 .sh 或 .py 脚本的绝对路径；脚本会以自身目录作为工作目录运行。",
     prompt: "打开 Prompt",
-    promptField: "默认 Prompt",
+    promptField: "脚本制作 Prompt",
     promptSection: "Prompt",
-    promptHint: "打开新的项目会话并填入 Prompt，不会自动发送。",
-    promptFilled: "Prompt 已填入，请确认后发送。",
+    promptHint: "留空时按项目路径和元数据位置动态生成任务；打开新会话后自动发送。",
+    promptFilled: "Prompt 已填入但未能发送，请核对草稿后手动发送。",
+    promptSent: "脚本制作任务已发送。",
     promptUnavailable: "项目的新建会话入口不可用。",
+    metadataPath: "Codex Buddy 元数据",
+    metadataHint: "本机 Host 实际读取的 project-tools.json；AI 只合并当前项目 binding。",
+    copyPath: "复制路径",
+    targetHint: "任务会携带当前项目的精确身份和 target 唯一键。",
+    scriptPromptPreview: "制作 start/restart/stop 脚本，并把绝对路径绑定到 project-tools.json。",
     more: "更多操作",
     saved: "项目快捷操作已保存",
     started: "脚本已启动",

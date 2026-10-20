@@ -206,13 +206,17 @@ describe("Renderer fixed Model request client", () => {
     };
     const sendRequest = vi
       .fn()
-      .mockResolvedValueOnce({ config: null })
-      .mockResolvedValueOnce({ config })
+      .mockResolvedValueOnce({
+        config: null,
+        metadataPath: "/home/test/.codexhost/project-tools.json",
+      })
+      .mockResolvedValueOnce({ config, metadataPath: "/home/test/.codexhost/project-tools.json" })
       .mockResolvedValueOnce(runResult);
     const client = createRendererModelClient([{ sendRequest }]);
 
-    await expect(client?.getProjectTools?.()).resolves.toEqual({ config: null });
-    await expect(client?.setProjectTools?.(config)).resolves.toEqual({ config });
+    const metadataPath = "/home/test/.codexhost/project-tools.json";
+    await expect(client?.getProjectTools?.()).resolves.toEqual({ config: null, metadataPath });
+    await expect(client?.setProjectTools?.(config)).resolves.toEqual({ config, metadataPath });
     await expect(
       client?.runProjectScript?.({
         target: { projectKind: "local", projectId: "project-one" },

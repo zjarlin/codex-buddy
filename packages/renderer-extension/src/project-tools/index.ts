@@ -1,13 +1,13 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import ExternalLink from "lucide/dist/esm/icons/external-link.mjs";
-import MessageSquarePlus from "lucide/dist/esm/icons/message-square-plus.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
-import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
 import Globe from "lucide/dist/esm/icons/globe.mjs";
 import LoaderCircle from "lucide/dist/esm/icons/loader-circle.mjs";
+import MessageSquarePlus from "lucide/dist/esm/icons/message-square-plus.mjs";
 import Network from "lucide/dist/esm/icons/network.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
 import RotateCw from "lucide/dist/esm/icons/rotate-cw.mjs";
+import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
 import Square from "lucide/dist/esm/icons/square.mjs";
 import type { ProjectScriptAction, ProjectToolsConfig } from "@codexhost/shared-contracts";
 
@@ -35,6 +35,7 @@ import {
   type ProjectToolsPersistenceClient,
 } from "./model.js";
 import { projectToolsStyle } from "./styles.js";
+import { buildProjectScriptPrompt } from "./prompt.js";
 
 const HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 const LABEL_SELECTOR = "[data-app-action-sidebar-project-label]";
@@ -73,9 +74,11 @@ export function installProjectTools(options: {
   styles.textContent = projectToolsStyle;
   document.head.append(styles);
   let config = emptyProjectTools();
+  let metadataPath: string | null = null;
   let failure: unknown = null;
   let loadedClient: ProjectToolsPersistenceClient | null = null;
   let loading = false;
+  let openingDialog = false;
   let disposed = false;
   let scheduled = false;
   let dialog: { element: HTMLDialogElement; projectKey: string } | null = null;
@@ -84,6 +87,7 @@ export function installProjectTools(options: {
   let toastTimer: number | null = null;
   const headers = new Map<HTMLElement, HeaderEntry>();
   const busy = new Map<string, ProjectScriptAction>();
+  const prompting = new Set<string>();
 
   try {
     config = parseProjectTools(window.localStorage.getItem(PROJECT_TOOLS_STORAGE_KEY));
@@ -199,8 +203,39 @@ export function installProjectTools(options: {
     });
 
   const openPrompt = async (project: SidebarProject): Promise<void> => {
+    const key = projectToolKey(project);
+    if (disposed || prompting.has(key)) return;
+    prompting.add(key);
+    try {
+      await sendPrompt(project);
+    } finally {
+      prompting.delete(key);
+    }
+  };
+
+  const sendPrompt = async (project: SidebarProject): Promise<void> => {
+    if (disposed) return;
+    const waitForDraftCleared = (
+      editor: HTMLElement,
+      expected: string,
+      timeoutMs: number,
+    ): Promise<boolean> =>
+      new Promise((resolve) => {
+        const started = Date.now();
+        const poll = (): void => {
+          if (!editor.isConnected || !sessionDraftText(editor).trim()) {
+            resolve(true);
+            return;
+          }
+          if (sessionDraftText(editor).trim() !== expected || Date.now() - started >= timeoutMs) {
+            resolve(false);
+            return;
+          }
+          window.setTimeout(poll, 50);
+        };
+        poll();
+      });
     const binding = bindingForProject(config, project);
-    if (!binding?.prompt || disposed) return;
     const labels = projectToolLabels(options.getLocale());
     const started = Date.now();
     const row = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)].find(
@@ -213,15 +248,24 @@ export function installProjectTools(options: {
     }
     const start = nativeProjectStart(row, project.projectId);
     if (!start) throw new Error(labels.promptUnavailable);
+    if (!metadataPath) {
+      throw new Error("Codex Buddy 元数据路径尚未就绪，请重新打开配置后重试。");
+    }
     start();
     const editor = await waitForPromptEditor(started, nativeProject);
+    const promptText =
+      binding?.prompt?.trim() ||
+      buildProjectScriptPrompt({
+        project: { ...nativeProject, path: nativeProject.path },
+        metadataPath,
+        currentBinding: binding,
+      });
     if (disposed) return;
     const existing = sessionDraftText(editor).trim();
-    if (existing && existing !== binding.prompt) {
+    if (existing && existing !== promptText) {
       throw new Error("目标新会话中已有其他草稿，未覆盖 Prompt。");
     }
-    if (existing !== binding.prompt) {
-      const promptText = binding.prompt;
+    if (existing !== promptText) {
       let inserted = insertNativeTextAtSelection(editor, () => promptText);
       if (!inserted && editor.getAttribute("contenteditable") === "true") {
         const selection = editor.ownerDocument.getSelection();
@@ -256,12 +300,24 @@ export function installProjectTools(options: {
           inserted = true;
         }
       }
-      if (!inserted || sessionDraftText(editor).trim() !== binding.prompt) {
+      if (!inserted || sessionDraftText(editor).trim() !== promptText) {
         throw new Error("无法填入项目 Prompt，草稿未覆盖任何内容。");
       }
     }
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    const composer = editor.closest("[data-codex-composer-root]");
+    const send = composer ? sendButtonWithin(composer) : null;
+    if (!composer || !editor.isConnected || !send || send.disabled) {
+      throw new Error(labels.promptFilled);
+    }
+    if (sessionDraftText(editor).trim() !== promptText) {
+      throw new Error("Prompt 草稿在发送前发生变化，未自动发送。");
+    }
+    send.click();
+    const sent = await waitForDraftCleared(editor, promptText, 5_000);
+    if (!sent) throw new Error(labels.promptFilled);
     editor.focus({ preventScroll: true });
-    showToast(labels.promptFilled);
+    showToast(labels.promptSent);
   };
 
   const openPicker = (button: HTMLButtonElement, project: SidebarProject): void => {
@@ -444,6 +500,9 @@ export function installProjectTools(options: {
   const persist = async (next: ProjectToolsConfig): Promise<void> => {
     const client = persistenceClient();
     if (!client) {
+      if (!metadataPath) {
+        throw new Error("Codex Buddy 元数据路径尚未就绪，无法保存配置。");
+      }
       mirror(next);
       failure = null;
       loadedClient = null;
@@ -458,13 +517,39 @@ export function installProjectTools(options: {
     refresh();
   };
 
-  const openDialog = (project: SidebarProject): void => {
+  const openDialog = async (project: SidebarProject): Promise<void> => {
+    if (disposed || dialog || openingDialog) return;
+    openingDialog = true;
+    try {
+      const client = persistenceClient();
+      if (client) {
+        const loaded = await client.getProjectTools();
+        mirror(loaded.config ?? emptyProjectTools());
+        metadataPath = loaded.metadataPath ?? null;
+        failure = null;
+      }
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : String(error), "failed");
+      return;
+    } finally {
+      openingDialog = false;
+    }
     if (disposed || dialog) return;
     const labels = projectToolLabels(options.getLocale());
     const binding = bindingForProject(config, project);
+    const row = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)].find(
+      (candidate) => projectToolKey(rowProject(candidate) ?? project) === projectToolKey(project),
+    );
+    const nativeProject = row
+      ? (rowProject(row) as (SidebarProject & { path?: string }) | null)
+      : null;
+    const projectPath = typeof nativeProject?.path === "string" ? nativeProject.path : null;
+    if (!projectPath) throw new Error("项目绝对路径尚未就绪，请刷新项目列表后重试。");
     const dialogElement = configureProjectTools({
       project,
       binding,
+      metadataPath,
+      projectPath,
       labels,
       save: async (draft) => {
         await persist(withProjectToolBinding(config, project, draft));
@@ -578,12 +663,20 @@ export function installProjectTools(options: {
     configure.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      openDialog(project);
+      void openDialog(project);
     });
     wrapper.append(configure);
-    if (binding?.prompt) {
+    const row = header.closest<HTMLElement>(PROJECT_ROW_SELECTOR);
+    const projectPath = row
+      ? (rowProject(row) as (SidebarProject & { path?: string }) | null)?.path
+      : undefined;
+    const canSendPrompt =
+      Boolean(binding?.prompt) || (typeof projectPath === "string" && projectPath.length > 0);
+    if (canSendPrompt) {
       const promptPreview =
-        binding.prompt.length > 240 ? `${binding.prompt.slice(0, 240)}…` : binding.prompt;
+        binding?.prompt && binding.prompt.length > 240
+          ? `${binding.prompt.slice(0, 240)}…`
+          : binding?.prompt || labels.scriptPromptPreview;
       wrapper.append(
         iconButton(
           project,
@@ -683,7 +776,8 @@ ${promptPreview}`,
         .then(
           (state) => {
             if (disposed) return;
-            if (state.config) mirror(state.config);
+            mirror(state.config ?? emptyProjectTools());
+            metadataPath = state.metadataPath ?? null;
             failure = null;
           },
           (error) => {

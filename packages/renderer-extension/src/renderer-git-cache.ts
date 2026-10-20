@@ -5,6 +5,33 @@ import { gitTargetKey, gitTargetParams, type RendererGitTarget } from "./rendere
 const FRESH_MS = 30_000;
 const MAX_ENTRIES = 48;
 const MAX_BYTES = 16 * 1024 * 1024;
+// Host 的 Git 队列可能被长任务占住，状态或历史请求会一直不回包。超时只结束
+// 渲染层的等待并释放操作锁；Host 的结果如果稍后到达仍由它自己处理。
+export const GIT_READ_TIMEOUT_MS = 60_000;
+
+// 超时与 Host 明确报错分开：超时只表示这次没等到结果，之前的状态仍然有效。
+export class GitReadTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitReadTimeoutError";
+  }
+}
+
+function withDeadline<T>(work: Promise<T>, timeout: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new GitReadTimeoutError(message)), timeout);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 interface Entry {
   client: RendererGitClient;
@@ -68,7 +95,11 @@ export class RendererGitCache {
       if (this.#entries.length > MAX_ENTRIES) this.#entries.shift();
     }
     const pending = entry;
-    const request = read()
+    const request = withDeadline(
+      read(),
+      GIT_READ_TIMEOUT_MS,
+      "Host 未在 60 秒内返回 Git 结果，请重试。",
+    )
       .then((value) => {
         // 已被写操作清理的请求可以完成，但不能重新填回缓存。
         if (this.#entries.includes(pending)) this.#store(pending, value);

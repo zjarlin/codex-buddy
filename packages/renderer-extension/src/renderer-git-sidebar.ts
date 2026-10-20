@@ -32,7 +32,7 @@ import { gitButtonLoadingStyles } from "./renderer-git-loading.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import { gitTargetKey, gitTargetParams, hasGitTarget } from "./renderer-git-target.js";
-import { RendererGitCache } from "./renderer-git-cache.js";
+import { GitReadTimeoutError, RendererGitCache } from "./renderer-git-cache.js";
 import { cachedGitMessageModels } from "./renderer-git-models.js";
 import { GitMessageDrafts } from "./renderer-git-message-drafts.js";
 import {
@@ -1714,6 +1714,16 @@ export function installRendererGitSidebar(options: {
     } catch (error) {
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       workspaceRead = true;
+      if (error instanceof GitReadTimeoutError) {
+        // 等待超时不等于工作区失效：保留上次状态与文件列表，只解除操作锁并提示重试。
+        repositoryGroups = repositoryGroups.map((group) =>
+          group.primary ? { ...group, loading: false } : group,
+        );
+        setNotice(error.message);
+        render();
+        scheduleRepositoryReads();
+        return;
+      }
       workspaceError = error instanceof Error ? error : new Error(String(error));
       current = null;
       repositoryGroups = [];

@@ -13,6 +13,29 @@ import {
   type RendererGitTarget,
 } from "./renderer-git-target.js";
 
+// 仓库清单、目录浏览和关联操作都经过 Host 的 Git 执行队列，队列被长任务占住时
+// 请求可能很久不回包。这里的上限只负责让界面结束加载并允许重试，不改变 Host 结果。
+const REPOSITORY_READ_TIMEOUT_MS = 30_000;
+const REPOSITORY_DIRECTORY_TIMEOUT_MS = 30_000;
+const REPOSITORY_LINK_TIMEOUT_MS = 60_000;
+
+// 超时后仍要消费原请求的结算，避免未处理的 rejection；迟到的结果不再写入界面。
+function withDeadline<T>(work: Promise<T>, timeout: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeout);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export interface GitRepositoryClient {
   listGitRepositories(input: GitRepositoriesParams): Promise<GitRepositories>;
   listGitRepositoryDirectories?(
@@ -40,9 +63,6 @@ export function createGitRepositorySelector(options: {
     .codexhost-git-repositories[hidden], .codexhost-git-repositories form[hidden], .codexhost-git-repositories .picker[hidden] { display:none; }
     .codexhost-git-repositories .repository-row, .codexhost-git-repositories form, .codexhost-git-repositories .picker-head, .codexhost-git-repositories .picker-path, .codexhost-git-repositories .picker-list { display:flex; gap:5px; align-items:center; }
     .codexhost-git-repositories[aria-busy="true"] { cursor:progress; }
-    .codexhost-git-repositories[aria-busy="true"]::before { content:""; flex:none; align-self:center; width:9px; height:9px; border:1.5px solid var(--text-link,#339cff); border-right-color:transparent; border-radius:50%; animation:codexhost-git-spin .7s linear infinite; }
-    @keyframes codexhost-git-spin { to { transform:rotate(360deg); } }
-    @media (prefers-reduced-motion:reduce) { .codexhost-git-repositories[aria-busy="true"]::before { animation-duration:1.8s; } }
     .codexhost-git-repositories .load-failed { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px; color:var(--text-secondary,inherit); }
     .codexhost-git-repositories .load-failed[hidden] { display:none; }
     .codexhost-git-repositories form { margin-top:6px; }
@@ -143,6 +163,7 @@ export function createGitRepositorySelector(options: {
   let generation = 0;
   let pickerGeneration = 0;
   let busy = false;
+  let unlinkBusy = false;
   let actionBusy = false;
   let pickerBusy = false;
   let disposed = false;
@@ -180,13 +201,13 @@ export function createGitRepositorySelector(options: {
     const selectedEntry = entries.find((entry) => (entry.primary ? "" : entry.path) === selected);
     const discovered = selectedEntry?.discovered === true;
     add.disabled = busy || actionBusy || pickerBusy;
-    remove.disabled = busy || actionBusy || pickerBusy || !selected || discovered;
+    remove.disabled = busy || unlinkBusy || actionBusy || pickerBusy || !selected || discovered;
     remove.title = discovered
       ? "项目目录内的仓库由目录自动识别，无需解除关联"
       : "仅移除关联，保留仓库文件";
     submit.disabled = busy || actionBusy || pickerBusy;
     submit.setAttribute("aria-busy", String(busy));
-    remove.setAttribute("aria-busy", String(busy));
+    remove.setAttribute("aria-busy", String(unlinkBusy));
     submit.textContent = busy ? "处理中…" : "关联";
     root.setAttribute("aria-busy", String(busy || actionBusy || pickerBusy));
     failed.hidden = !loadError;
@@ -248,6 +269,7 @@ export function createGitRepositorySelector(options: {
     selected = "";
     data = null;
     busy = false;
+    unlinkBusy = false;
     loadError = "";
     loadRequest = null;
     form.hidden = true;
@@ -275,8 +297,11 @@ export function createGitRepositorySelector(options: {
     loadError = "";
     loadRequest = retryLater;
     render();
-    void Promise.resolve()
-      .then(() => list.call(request.client, gitTargetParams(request)))
+    void withDeadline(
+      Promise.resolve().then(() => list.call(request.client, gitTargetParams(request))),
+      REPOSITORY_READ_TIMEOUT_MS,
+      "Host 未在 30 秒内返回仓库清单。",
+    )
       .then((value) => {
         if (generation !== version) return;
         data = value;
@@ -302,7 +327,11 @@ export function createGitRepositorySelector(options: {
     busy = true;
     render();
     try {
-      const value = await method.call(request.client, { ...gitTargetParams(request), repository });
+      const value = await withDeadline(
+        method.call(request.client, { ...gitTargetParams(request), repository }),
+        REPOSITORY_LINK_TIMEOUT_MS,
+        "关联仓库超时，请稍后重试。",
+      );
       if (generation !== version) return;
       data = value;
       options.onRepositories?.(value);
@@ -328,18 +357,22 @@ export function createGitRepositorySelector(options: {
   };
 
   const unlink = async () => {
-    if (busy || actionBusy || pickerBusy || !selected) return;
+    if (busy || unlinkBusy || actionBusy || pickerBusy || !selected) return;
     const request = context;
     const method = request.client?.unlinkGitRepository;
     if (!hasGitTarget(request) || !method) return;
     const version = generation;
-    busy = true;
+    unlinkBusy = true;
     render();
     try {
-      const value = await method.call(request.client, {
-        ...gitTargetParams(request),
-        repository: selected,
-      });
+      const value = await withDeadline(
+        method.call(request.client, {
+          ...gitTargetParams(request),
+          repository: selected,
+        }),
+        REPOSITORY_LINK_TIMEOUT_MS,
+        "解除仓库关联超时，请稍后重试。",
+      );
       if (generation !== version) return;
       data = value;
       options.onRepositories?.(value);
@@ -352,7 +385,7 @@ export function createGitRepositorySelector(options: {
       }
     } finally {
       if (generation === version) {
-        busy = false;
+        unlinkBusy = false;
         render();
       }
     }
@@ -372,10 +405,14 @@ export function createGitRepositorySelector(options: {
     picker.hidden = false;
     render();
     try {
-      const value = await method.call(request.client, {
-        ...gitTargetParams(request),
-        ...(pathValue?.trim() ? { path: pathValue.trim() } : {}),
-      });
+      const value = await withDeadline(
+        method.call(request.client, {
+          ...gitTargetParams(request),
+          ...(pathValue?.trim() ? { path: pathValue.trim() } : {}),
+        }),
+        REPOSITORY_DIRECTORY_TIMEOUT_MS,
+        "读取目录超时，请稍后重试。",
+      );
       if (generation !== version || pickerGeneration !== requestVersion) return;
       directories = value;
       input.value = value.path;

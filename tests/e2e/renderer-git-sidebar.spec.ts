@@ -1560,6 +1560,85 @@ test("ends the repository-list spinner when the Host rejects the read and retrie
   expect(errors).toEqual([]);
 });
 
+test("ends the repository-list spinner when the Host never answers and retries on demand", async ({
+  page,
+}) => {
+  await page.clock.install();
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.repositoriesAttempts = 0;
+    const client = {
+      ...fixture.client,
+      listGitRepositories: () => {
+        fixture.repositoriesAttempts += 1;
+        fixture.calls.push(["repositories"]);
+        // Host 队列被长任务占住时不回包；界面必须自行结束加载态。
+        return new Promise(() => {});
+      },
+      linkGitRepository: async () => {
+        throw new Error("Unused link operation");
+      },
+      unlinkGitRepository: async () => {
+        throw new Error("Unused unlink operation");
+      },
+    };
+    fixture.setContext("thread-1", client);
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const selectorRoot = root.locator(".codexhost-git-repositories");
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "true");
+  await page.clock.fastForward(30_000);
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "false");
+  await expect(selectorRoot.locator(".load-failed")).toContainText("Host 未在 30 秒内返回仓库清单");
+  const retry = selectorRoot.getByRole("button", { name: "重试", exact: true });
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "true");
+  await expect
+    .poll(() =>
+      page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").repositoriesAttempts),
+    )
+    .toBe(2);
+  await page.clock.fastForward(30_000);
+  await expect(selectorRoot).toHaveAttribute("aria-busy", "false");
+  // 提交并推送只依赖主仓库状态，不被仓库清单读取拖住。
+  await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: release");
+  await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeEnabled();
+});
+
+test("releases the Git action lock when a status read never returns", async ({ page }) => {
+  await page.clock.install();
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "刷新", exact: true }).click();
+  const refresh = root.getByRole("button", { name: "刷新", exact: true });
+  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.client.inspectGitStatus = () => new Promise(() => {});
+    fixture.status = { ...fixture.status };
+  });
+  await refresh.click();
+  await expect(refresh).toHaveAttribute("aria-busy", "true");
+  await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeDisabled();
+  await page.clock.fastForward(60_000);
+  await expect(refresh).toHaveAttribute("aria-busy", "false");
+  await expect(root.getByText("Host 未在 60 秒内返回 Git 结果，请重试。")).toBeVisible();
+  // 超时后释放操作锁，保留已有文件列表，允许直接提交或重试刷新。
+  await expect(root.locator(".codexhost-git-change").first()).toBeVisible();
+  await root.locator("[data-codexhost-git-sidebar-message]").fill("fix: after timeout");
+  await expect(root.locator("[data-codexhost-git-sidebar-commit-push]")).toBeEnabled();
+});
+
 test("links a frontend repository and scopes native review, staging, commit and push to it", async ({
   page,
 }) => {

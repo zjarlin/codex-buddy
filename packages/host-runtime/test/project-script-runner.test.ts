@@ -42,6 +42,23 @@ describe("Project script runner", () => {
     await expect(readFile(result.logPath, "utf8")).resolves.toContain(`script: ${scriptPath}`);
   });
 
+  it("runs a bound custom script by id", async () => {
+    const { directory, scriptPath } = await fixture(
+      "#!/usr/bin/env bash\nprintf 'custom %s\\n' \"$CODEXHOST_PROJECT_ACTION\"\n",
+    );
+    const result = await new ProjectScriptRunner({ CODEXHOST_DATA_DIR: directory }).run(
+      {
+        target: { projectKind: "local", projectId: "project" },
+        label: "Project",
+        customScripts: [{ id: "deploy", name: "部署", path: scriptPath }],
+      },
+      "deploy",
+    );
+
+    expect(result).toMatchObject({ action: "deploy", state: "completed", exitCode: 0 });
+    expect(result.output).toContain("custom deploy");
+  });
+
   it("reports an early non-zero exit and rejects missing bound actions", async () => {
     const { directory, scriptPath } = await fixture("#!/usr/bin/env bash\nexit 7\n");
     const runner = new ProjectScriptRunner({ CODEXHOST_DATA_DIR: directory });

@@ -2,9 +2,16 @@ export const projectToolsStyle = `
 [data-codexhost-project-tools]{display:inline-flex;align-items:center;gap:1px;margin-left:2px;flex:none;vertical-align:middle}
 [data-codexhost-project-tools] button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;opacity:.62;cursor:pointer}
 [data-codexhost-project-tools] button:hover{background:color-mix(in srgb,currentColor 12%,transparent);opacity:1}
+[data-codexhost-project-tools]:has(button:nth-of-type(4)) button{width:20px;height:20px}
 [data-codexhost-project-tools] button:focus-visible{outline:2px solid #508df2;outline-offset:1px;opacity:1}
 [data-codexhost-project-tools] button:disabled{opacity:.45;cursor:progress}
 [data-codexhost-project-tools] svg{width:14px;height:14px;flex:none}
+[data-codexhost-project-titlebar-tools]{display:inline-flex;align-items:center;gap:1px;flex:none;margin-inline-start:8px;padding-inline-start:6px;border-inline-start:1px solid color-mix(in srgb,currentColor 16%,transparent);vertical-align:middle}
+[data-codexhost-project-titlebar-tools] button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:transparent;color:inherit;opacity:.68;cursor:pointer}
+[data-codexhost-project-titlebar-tools] button:hover{background:color-mix(in srgb,currentColor 12%,transparent);opacity:1}
+[data-codexhost-project-titlebar-tools] button:focus-visible{outline:2px solid #508df2;outline-offset:1px;opacity:1}
+[data-codexhost-project-titlebar-tools] button:disabled{opacity:.45;cursor:progress}
+[data-codexhost-project-titlebar-tools] svg{width:14px;height:14px;flex:none}
 [data-codexhost-project-tool-spin]{animation:codexhost-project-tool-spin .8s linear infinite}
 @keyframes codexhost-project-tool-spin{to{transform:rotate(360deg)}}
 [data-codexhost-project-tool-picker]{position:fixed;z-index:10030;box-sizing:border-box;width:min(320px,calc(100vw - 16px));padding:6px;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:8px;background:var(--color-token-dropdown-background,Canvas);color:CanvasText;box-shadow:0 12px 36px #0003;font:13px/18px system-ui,sans-serif;color-scheme:inherit}
@@ -29,6 +36,11 @@ export const projectToolsStyle = `
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-copy-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-copy-row input{flex:1 1 280px}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-hint{color:GrayText;font-size:12px;line-height:18px}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-custom-list{display:grid;gap:8px;margin:0 0 8px}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-custom-row{display:grid;grid-template-columns:minmax(96px,.32fr) minmax(0,1fr) auto;align-items:end;gap:6px}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-custom-row label{margin:0}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-custom-remove{display:inline-flex;align-items:center;justify-content:center;width:32px;height:34px;margin-bottom:0;padding:0;border:1px solid #8884;border-radius:6px;background:transparent;color:inherit;cursor:pointer}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-add-script{display:inline-flex;align-items:center;gap:5px;margin:0 0 10px;padding:4px 9px;border:1px dashed #8886;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;margin-top:16px}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-actions button{min-height:32px;padding:5px 11px;border:1px solid #8884;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer}
 [data-codexhost-project-tools-dialog] .codexhost-project-tool-actions button[type=submit]{border-color:#1677d2;background:#1677d2;color:#fff}
@@ -39,6 +51,8 @@ export const projectToolsStyle = `
 @media (max-width:520px){
 [data-codexhost-project-tools-dialog]{width:calc(100vw - 16px);padding:16px}
 [data-codexhost-project-tools] button{width:24px;height:24px}
+[data-codexhost-project-tools-dialog] .codexhost-project-tool-custom-row{grid-template-columns:1fr auto}
+[data-codexhost-project-titlebar-tools]{margin-inline-start:4px;padding-inline-start:4px}
 }
 @media (prefers-reduced-motion:reduce){[data-codexhost-project-tool-spin]{animation:none}}
 `;

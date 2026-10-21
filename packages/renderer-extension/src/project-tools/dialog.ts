@@ -1,9 +1,11 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import Copy from "lucide/dist/esm/icons/copy.mjs";
+import Plus from "lucide/dist/esm/icons/plus.mjs";
+import Trash2 from "lucide/dist/esm/icons/trash-2.mjs";
 import type { ProjectToolBinding } from "@codexhost/shared-contracts";
 
 import type { SidebarProject } from "../project-tabs/model.js";
-import type { ProjectToolDraft } from "./model.js";
+import type { ProjectCustomScriptDraft, ProjectToolDraft } from "./model.js";
 import type { projectToolLabels } from "./model.js";
 
 type Labels = ReturnType<typeof projectToolLabels>;
@@ -88,7 +90,60 @@ export function configureProjectTools(options: {
   const hint = document.createElement("p");
   hint.className = "codexhost-project-tool-hint";
   hint.textContent = labels.scriptHint;
+
+  // 自定义脚本：名称 + 绝对路径，可增删；id 只在编辑已有绑定时保留，新增行由保存时分配。
+  const customDrafts: Array<{ id?: string; name: HTMLInputElement; path: HTMLInputElement }> = [];
+  const customList = document.createElement("div");
+  customList.className = "codexhost-project-tool-custom-list";
+  customList.setAttribute("data-codexhost-project-tool-custom-scripts", "");
+  const addCustom = document.createElement("button");
+  addCustom.type = "button";
+  addCustom.className = "codexhost-project-tool-add-script";
+  addCustom.setAttribute("data-codexhost-project-tool-add-script", "");
+  addCustom.append(
+    createElement(Plus, { width: 13, height: 13, "aria-hidden": "true" }),
+    labels.customScriptAdd,
+  );
+  const appendCustom = (draft: ProjectCustomScriptDraft = { name: "", path: "" }): void => {
+    const row = document.createElement("div");
+    row.className = "codexhost-project-tool-custom-row";
+    const name = field(labels.customScriptName, draft.name, labels.customScriptNamePlaceholder);
+    name.label.classList.add("codexhost-project-tool-custom-name");
+    const scriptPath = field(labels.customScriptPath, draft.path, labels.customScriptPlaceholder);
+    scriptPath.label.classList.add("codexhost-project-tool-custom-path");
+    const entry = {
+      ...(draft.id ? { id: draft.id } : {}),
+      name: name.input,
+      path: scriptPath.input,
+    };
+    customDrafts.push(entry);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "codexhost-project-tool-custom-remove";
+    remove.title = labels.customScriptRemove;
+    remove.setAttribute("aria-label", `${labels.customScriptRemove}: ${draft.name || ""}`);
+    remove.append(createElement(Trash2, { width: 14, height: 14, "aria-hidden": "true" }));
+    remove.addEventListener("click", () => {
+      const index = customDrafts.indexOf(entry);
+      if (index >= 0) customDrafts.splice(index, 1);
+      row.remove();
+    });
+    row.append(name.label, scriptPath.label, remove);
+    customList.append(row);
+    name.input.focus();
+  };
+  addCustom.addEventListener("click", () => appendCustom());
+  for (const script of options.binding?.customScripts ?? []) {
+    appendCustom({ id: script.id, name: script.name, path: script.path });
+  }
+
   scriptGroup.append(scriptLegend, start.label, restart.label, stop.label, hint);
+  if (customDrafts.length > 0) {
+    const customLegend = document.createElement("legend");
+    customLegend.textContent = labels.customScripts;
+    hint.before(customLegend, customList);
+  }
+  hint.after(addCustom);
 
   const promptGroup = document.createElement("fieldset");
   const promptLegend = document.createElement("legend");
@@ -178,6 +233,11 @@ export function configureProjectTools(options: {
           restart: restart.input.value,
           stop: stop.input.value,
         },
+        customScripts: customDrafts.map((draft) => ({
+          ...(draft.id ? { id: draft.id } : {}),
+          name: draft.name.value,
+          path: draft.path.value,
+        })),
         prompt: prompt.value,
       })
       .then(

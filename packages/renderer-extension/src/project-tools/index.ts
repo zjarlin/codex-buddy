@@ -1,15 +1,19 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import ExternalLink from "lucide/dist/esm/icons/external-link.mjs";
-import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Globe from "lucide/dist/esm/icons/globe.mjs";
 import LoaderCircle from "lucide/dist/esm/icons/loader-circle.mjs";
 import MessageSquarePlus from "lucide/dist/esm/icons/message-square-plus.mjs";
 import Network from "lucide/dist/esm/icons/network.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
 import RotateCw from "lucide/dist/esm/icons/rotate-cw.mjs";
+import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
 import Square from "lucide/dist/esm/icons/square.mjs";
-import type { ProjectScriptAction, ProjectToolsConfig } from "@codexhost/shared-contracts";
+import type {
+  ProjectScriptAction,
+  ProjectScriptId,
+  ProjectToolsConfig,
+} from "@codexhost/shared-contracts";
 
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
@@ -25,11 +29,14 @@ import { findComposerModelTarget } from "../versioned-renderer-adapter.js";
 import { configureProjectTools } from "./dialog.js";
 import {
   bindingForProject,
+  bindingForProjectName,
   emptyProjectTools,
   parseProjectTools,
   PROJECT_TOOLS_STORAGE_KEY,
   projectToolKey,
   projectToolLabels,
+  isBuiltInScript,
+  projectScriptEntries,
   projectToolTarget,
   withProjectToolBinding,
   type ProjectToolsPersistenceClient,
@@ -40,6 +47,14 @@ import { buildProjectScriptPrompt } from "./prompt.js";
 const HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 const LABEL_SELECTOR = "[data-app-action-sidebar-project-label]";
 const PROJECT_ID_ATTRIBUTE = "data-app-action-sidebar-project-id";
+const BUILTIN_SCRIPT_ICONS: Record<ProjectScriptAction, typeof Play> = {
+  start: Play,
+  restart: RotateCw,
+  stop: Square,
+};
+
+const TITLEBAR_CONTENT_SELECTOR = "[data-app-shell-titlebar-content]";
+const TITLEBAR_PROJECT_ATTRIBUTE = "data-codexhost-titlebar-project";
 
 interface HeaderEntry {
   wrapper: HTMLElement;
@@ -47,11 +62,12 @@ interface HeaderEntry {
 }
 
 interface ToolDefinition {
+  key: string;
   label: string;
   detail: string;
   icon: typeof ExternalLink;
   attribute: string;
-  action: ProjectScriptAction | null;
+  action: ProjectScriptId | null;
   onClick: (anchor: HTMLButtonElement) => void;
 }
 
@@ -78,6 +94,15 @@ export function installProjectTools(options: {
   let failure: unknown = null;
   let loadedClient: ProjectToolsPersistenceClient | null = null;
   let loading = false;
+  let resolveReady: () => void = () => undefined;
+  let readySettled = false;
+  const ready = new Promise<void>((resolve) => {
+    resolveReady = () => {
+      if (readySettled) return;
+      readySettled = true;
+      resolve();
+    };
+  });
   let openingDialog = false;
   let disposed = false;
   let scheduled = false;
@@ -85,8 +110,12 @@ export function installProjectTools(options: {
   let picker: Picker | null = null;
   let toast: HTMLElement | null = null;
   let toastTimer: number | null = null;
+  let titlebarWrapper: HTMLElement | null = null;
+  let titlebarSignature = "";
+  let observedTitlebar: HTMLElement | null = null;
+  let titlebarObserver: MutationObserver | null = null;
   const headers = new Map<HTMLElement, HeaderEntry>();
-  const busy = new Map<string, ProjectScriptAction>();
+  const busy = new Map<string, ProjectScriptId>();
   const prompting = new Set<string>();
 
   try {
@@ -402,101 +431,63 @@ export function installProjectTools(options: {
     element.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   };
 
-  const openTools = (anchor: HTMLButtonElement, project: SidebarProject): void => {
-    const binding = bindingForProject(config, project);
-    if (!binding || disposed) return;
-    closePicker();
-    const labels = projectToolLabels(options.getLocale());
-    const element = document.createElement("div");
-    element.setAttribute("data-codexhost-project-tool-picker", "");
-    element.setAttribute("role", "menu");
-    element.setAttribute("aria-label", `${project.label} · ${labels.title}`);
-    const addEntry = (
-      icon: typeof ExternalLink,
-      title: string,
-      detail: string,
-      run: () => void,
-      action: ProjectScriptAction | null = null,
-    ): void => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.setAttribute("role", "menuitem");
-      if (action) item.setAttribute("data-action", action);
-      const text = document.createElement("span");
-      const label = document.createElement("strong");
-      label.textContent = action ? `${title} · ${action}` : title;
-      const description = document.createElement("small");
-      description.textContent = detail;
-      text.append(label, description);
-      item.append(createElement(icon, { width: 16, height: 16, "aria-hidden": "true" }), text);
-      item.addEventListener("click", () => {
-        closePicker();
-        run();
-      });
-      element.append(item);
+  const titlebarProject = (): SidebarProject | null => {
+    const content = document.querySelector<HTMLElement>(TITLEBAR_CONTENT_SELECTOR);
+    const label = content?.getAttribute(TITLEBAR_PROJECT_ATTRIBUTE)?.trim();
+    if (!label) return null;
+    const binding = bindingForProjectName(config, label);
+    if (!binding) return null;
+    return {
+      projectId: binding.target.projectId,
+      projectKind: binding.target.projectKind,
+      ...(binding.target.projectKind === "remote" ? { hostId: binding.target.hostId } : {}),
+      label: binding.label,
     };
-    const intranetUrl = binding.intranetUrl;
-    if (intranetUrl) {
-      addEntry(Network, labels.intranet, intranetUrl, () => openUrl(intranetUrl));
-    }
-    const publicUrl = binding.publicUrl;
-    if (publicUrl) {
-      addEntry(Globe, labels.public, publicUrl, () => openUrl(publicUrl));
-    }
-    for (const [action, label, icon] of [
-      ["start", labels.start, Play],
-      ["restart", labels.restart, RotateCw],
-      ["stop", labels.stop, Square],
-    ] as const) {
-      const script = binding.scripts?.[action];
-      if (script) {
-        addEntry(icon, label, script, () => void runAction(project, action), action);
-      }
-    }
-    document.body.append(element);
-    const rect = anchor.getBoundingClientRect();
-    const width = element.getBoundingClientRect().width;
-    const height = element.getBoundingClientRect().height;
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-    const top =
-      rect.bottom + height + 8 <= window.innerHeight
-        ? rect.bottom + 6
-        : Math.max(8, rect.top - height - 6);
-    element.style.left = `${left}px`;
-    element.style.top = `${top}px`;
-    anchor.setAttribute("aria-expanded", "true");
-    let cleaned = false;
-    const onPointerDown = (event: PointerEvent): void => {
-      const target = event.target;
-      if (target instanceof Node && (element.contains(target) || anchor.contains(target))) return;
-      dispose();
-    };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      dispose();
-      anchor.focus();
-    };
-    const onViewportChange = (): void => dispose();
-    const dispose = (): void => {
-      if (cleaned) return;
-      cleaned = true;
-      document.removeEventListener("pointerdown", onPointerDown, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-      window.removeEventListener("resize", onViewportChange);
-      window.removeEventListener("scroll", onViewportChange, true);
-      anchor.setAttribute("aria-expanded", "false");
-      element.remove();
-      if (picker?.element === element) picker = null;
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    window.addEventListener("resize", onViewportChange);
-    window.addEventListener("scroll", onViewportChange, true);
-    picker = { button: anchor, element, dispose };
-    element.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
   };
 
+  const scriptDefinition = (
+    project: SidebarProject,
+    entry: ReturnType<typeof projectScriptEntries>[number],
+  ): ToolDefinition =>
+    definition(
+      entry.id,
+      entry.name,
+      entry.path,
+      isBuiltInScript(entry.id) ? BUILTIN_SCRIPT_ICONS[entry.id] : Terminal,
+      "data-codexhost-project-tool-action",
+      entry.id,
+      () => void runAction(project, entry.id),
+    );
+
+  const projectToolbarTools = (
+    project: SidebarProject,
+  ): { binding: ReturnType<typeof bindingForProject>; tools: ToolDefinition[] } => {
+    const binding = bindingForProject(config, project);
+    const labels = projectToolLabels(options.getLocale());
+    const tools: ToolDefinition[] = [];
+    if (binding?.intranetUrl || binding?.publicUrl) {
+      tools.push(
+        definition(
+          "url",
+          labels.title,
+          [
+            binding.intranetUrl ? `${labels.intranet}: ${binding.intranetUrl}` : "",
+            binding.publicUrl ? `${labels.public}: ${binding.publicUrl}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+          ExternalLink,
+          "data-codexhost-project-tool-url",
+          null,
+          (anchor) => openPicker(anchor, project),
+        ),
+      );
+    }
+    for (const entry of projectScriptEntries(binding, labels)) {
+      tools.push(scriptDefinition(project, entry));
+    }
+    return { binding, tools };
+  };
   const persist = async (next: ProjectToolsConfig): Promise<void> => {
     const client = persistenceClient();
     if (!client) {
@@ -518,19 +509,13 @@ export function installProjectTools(options: {
   };
 
   const openDialog = async (project: SidebarProject): Promise<void> => {
+    // 立即打开表单：配置已在 refresh 中预取并镜像到本地；Host 读取稍后补齐元数据路径。
     if (disposed || dialog || openingDialog) return;
     openingDialog = true;
     try {
-      const client = persistenceClient();
-      if (client) {
-        const loaded = await client.getProjectTools();
-        mirror(loaded.config ?? emptyProjectTools());
-        metadataPath = loaded.metadataPath ?? null;
-        failure = null;
-      }
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), "failed");
-      return;
+      await ready;
+    } catch {
+      // 预取失败不阻塞表单，保存时会再次校验元数据路径。
     } finally {
       openingDialog = false;
     }
@@ -566,7 +551,7 @@ export function installProjectTools(options: {
     dialog = { element: dialogElement, projectKey: projectToolKey(project) };
   };
 
-  const runAction = async (project: SidebarProject, action: ProjectScriptAction): Promise<void> => {
+  const runAction = async (project: SidebarProject, action: ProjectScriptId): Promise<void> => {
     const key = projectToolKey(project);
     if (busy.has(key)) return;
     const client = persistenceClient();
@@ -596,13 +581,15 @@ export function installProjectTools(options: {
   };
 
   const definition = (
+    key: string,
     label: string,
     detail: string,
     icon: typeof ExternalLink,
     attribute: string,
-    action: ProjectScriptAction | null,
+    action: ProjectScriptId | null,
     onClick: (button: HTMLButtonElement) => void,
   ): ToolDefinition => ({
+    key,
     label,
     detail,
     icon,
@@ -681,6 +668,7 @@ export function installProjectTools(options: {
         iconButton(
           project,
           definition(
+            "prompt",
             labels.prompt,
             `${labels.promptHint}
 ${promptPreview}`,
@@ -700,6 +688,7 @@ ${promptPreview}`,
     if (binding?.intranetUrl || binding?.publicUrl) {
       tools.push(
         definition(
+          "url",
           labels.title,
           [
             binding.intranetUrl ? `${labels.intranet}: ${binding.intranetUrl}` : "",
@@ -714,48 +703,13 @@ ${promptPreview}`,
         ),
       );
     }
-    const actions: Array<[ProjectScriptAction, string, typeof Play]> = [
-      ["start", labels.start, Play],
-      ["restart", labels.restart, RotateCw],
-      ["stop", labels.stop, Square],
-    ];
-    for (const [action, label, icon] of actions) {
-      const script = binding?.scripts?.[action];
-      if (!script) continue;
-      tools.push(
-        definition(
-          label,
-          script,
-          icon,
-          "data-codexhost-project-tool-action",
-          action,
-          () => void runAction(project, action),
-        ),
-      );
+    for (const entry of projectScriptEntries(binding, labels)) {
+      tools.push(scriptDefinition(project, entry));
     }
-    const primaryAction =
-      active ??
-      (["start", "restart", "stop"] as const).find((action) => binding?.scripts?.[action]);
-    const primaryTool = primaryAction ? tools.find((tool) => tool.action === primaryAction) : null;
-    if (primaryTool) {
-      const index = tools.indexOf(primaryTool);
-      tools.splice(index, 1);
-      const button = iconButton(project, primaryTool, active === primaryAction);
-      if (active === primaryAction) button.setAttribute("aria-busy", "true");
+    for (const tool of tools) {
+      const button = iconButton(project, tool, active === tool.action);
+      if (active === tool.action) button.setAttribute("aria-busy", "true");
       wrapper.append(button);
-    }
-    if (tools.length > 0) {
-      const more = definition(
-        labels.more,
-        tools
-          .map((tool) => (tool.action ? `${tool.label} (${tool.action})` : tool.label))
-          .join("、"),
-        Ellipsis,
-        "data-codexhost-project-tool-more",
-        null,
-        (anchor) => openTools(anchor, project),
-      );
-      wrapper.append(iconButton(project, more));
     }
     const label =
       header.querySelector<HTMLElement>(LABEL_SELECTOR) ??
@@ -765,9 +719,108 @@ ${promptPreview}`,
     headers.set(header, { wrapper, signature });
   };
 
+  let titlebarRenderScheduled = false;
+  const renderTitlebarSoon = (): void => {
+    if (disposed || titlebarRenderScheduled) return;
+    titlebarRenderScheduled = true;
+    queueMicrotask(() => {
+      titlebarRenderScheduled = false;
+      renderTitlebar();
+    });
+  };
+  const renderTitlebar = (): void => {
+    const content = document.querySelector<HTMLElement>(TITLEBAR_CONTENT_SELECTOR);
+    if (observedTitlebar !== content) {
+      titlebarObserver?.disconnect();
+      observedTitlebar = content;
+      if (content) {
+        titlebarObserver = new MutationObserver(() => {
+          if (titlebarWrapper && !content.contains(titlebarWrapper)) titlebarSignature = "";
+          renderTitlebarSoon();
+        });
+        titlebarObserver.observe(content, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: [TITLEBAR_PROJECT_ATTRIBUTE],
+        });
+      } else {
+        titlebarObserver = null;
+      }
+    }
+    const project = titlebarProject();
+    if (!content || !project) {
+      titlebarWrapper?.remove();
+      titlebarWrapper = null;
+      titlebarSignature = "";
+      return;
+    }
+    const { binding, tools } = projectToolbarTools(project);
+    const labels = projectToolLabels(options.getLocale());
+    const active = busy.get(projectToolKey(project)) ?? null;
+    const signature = JSON.stringify([binding, labels, active, project.label]);
+    if (
+      titlebarWrapper?.isConnected &&
+      content.contains(titlebarWrapper) &&
+      titlebarSignature === signature
+    ) {
+      return;
+    }
+    titlebarWrapper?.remove();
+    const wrapper = document.createElement("span");
+    wrapper.setAttribute("data-codexhost-project-titlebar-tools", "");
+    wrapper.setAttribute("role", "toolbar");
+    wrapper.setAttribute("aria-label", `${project.label} · ${labels.title}`);
+    wrapper.addEventListener("pointerdown", (event) => event.stopPropagation());
+    wrapper.addEventListener("click", (event) => event.stopPropagation());
+    for (const tool of tools) {
+      const button = iconButton(project, tool, active === tool.action);
+      if (active === tool.action) button.setAttribute("aria-busy", "true");
+      wrapper.append(button);
+    }
+    if (binding?.prompt) {
+      wrapper.append(
+        iconButton(
+          project,
+          definition(
+            "prompt",
+            labels.prompt,
+            labels.promptHint,
+            MessageSquarePlus,
+            "data-codexhost-project-tool-prompt",
+            null,
+            () => {
+              void openPrompt(project).catch((error) => {
+                showToast(error instanceof Error ? error.message : String(error), "failed");
+              });
+            },
+          ),
+        ),
+      );
+    }
+    wrapper.append(
+      iconButton(
+        project,
+        definition(
+          "configure",
+          labels.configure,
+          labels.description,
+          Settings2,
+          "data-codexhost-project-tool-configure",
+          null,
+          () => void openDialog(project),
+        ),
+      ),
+    );
+    content.append(wrapper);
+    titlebarWrapper = wrapper;
+    titlebarSignature = signature;
+  };
+
   const refresh = (): void => {
     if (disposed) return;
     const client = persistenceClient();
+    if (!client) resolveReady();
     if (client && client !== loadedClient && !loading) {
       loading = true;
       loadedClient = client;
@@ -779,6 +832,7 @@ ${promptPreview}`,
             mirror(state.config ?? emptyProjectTools());
             metadataPath = state.metadataPath ?? null;
             failure = null;
+            resolveReady();
           },
           (error) => {
             failure = error;
@@ -802,6 +856,7 @@ ${promptPreview}`,
       if (!project || !header) continue;
       renderHeader(header, project);
     }
+    renderTitlebar();
     if (failure && !dialog) {
       const message = failure instanceof Error ? failure.message : String(failure);
       if (toast?.textContent !== message) showToast(message, "failed");
@@ -810,7 +865,9 @@ ${promptPreview}`,
 
   const stopObserving = getDomMutationHub(document).subscribe({
     kinds: ["childList"],
-    test: (record) => mutationAffectsElements(record, "#app-shell-sidebar"),
+    test: (record) =>
+      mutationAffectsElements(record, "#app-shell-sidebar") ||
+      mutationAffectsElements(record, TITLEBAR_CONTENT_SELECTOR),
     onMutate: () => {
       if (scheduled || disposed) return;
       scheduled = true;
@@ -837,6 +894,10 @@ ${promptPreview}`,
       toast?.remove();
       toast = null;
       if (toastTimer !== null) window.clearTimeout(toastTimer);
+      titlebarWrapper?.remove();
+      titlebarWrapper = null;
+      titlebarObserver?.disconnect();
+      titlebarObserver = null;
       styles.remove();
     },
   };

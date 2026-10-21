@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import { projectToolsConfigSchema } from "@codexhost/shared-contracts";
+
 import { buildProjectScriptPrompt } from "../src/project-tools/prompt.js";
 import {
+  bindingForProjectName,
   bindingForProject,
   emptyProjectTools,
   parseProjectTools,
+  projectScriptEntries,
   projectToolKey,
+  projectToolTarget,
   withProjectToolBinding,
 } from "../src/project-tools/model.js";
 
@@ -58,6 +63,38 @@ describe("Project tool bindings", () => {
     expect(bindingForProject(removed, local)).toBeNull();
   });
 
+  it("persists custom scripts with stable ids and lists them after built-in actions", () => {
+    const configured = withProjectToolBinding(emptyProjectTools(), local, {
+      scripts: { start: "/repo/start.sh" },
+      customScripts: [
+        { name: "部署", path: " /repo/deploy.sh " },
+        { name: "部署", path: "/repo/deploy.py" },
+      ],
+    });
+    const binding = bindingForProject(configured, local);
+    expect(binding?.customScripts).toEqual([
+      { id: "script", name: "部署", path: "/repo/deploy.sh" },
+      { id: "script-2", name: "部署", path: "/repo/deploy.py" },
+    ]);
+    expect(projectScriptEntries(binding, { start: "启动", restart: "重启", stop: "停止" })).toEqual(
+      [
+        { id: "start", name: "启动", path: "/repo/start.sh" },
+        { id: "script", name: "部署", path: "/repo/deploy.sh" },
+        { id: "script-2", name: "部署", path: "/repo/deploy.py" },
+      ],
+    );
+    expect(() =>
+      withProjectToolBinding(emptyProjectTools(), local, {
+        customScripts: [{ id: "start", name: "冲突", path: "/repo/conflict.sh" }],
+      }),
+    ).toThrow("内置动作名");
+
+    const blank = withProjectToolBinding(configured, local, {
+      customScripts: [{ name: " ", path: " " }],
+    });
+    expect(bindingForProject(blank, local)).toBeNull();
+  });
+
   it("roundtrips persisted bindings and rejects unsafe stored URLs", () => {
     const config = withProjectToolBinding(emptyProjectTools(), local, {
       intranetUrl: "http://192.168.31.252:48201/",
@@ -102,6 +139,36 @@ describe("Project tool bindings", () => {
     expect(prompt).toContain("/opt/projects/demo/scripts/start.sh");
     expect(prompt).toContain("禁止无范围 pkill");
     expect(prompt).toContain("保留 version 和所有其他项目 binding");
+    expect(prompt).toContain("binding.customScripts");
+    expect(prompt).toContain("- 暂无；需要时自行新增");
+  });
+  it("resolves the titlebar label only when a project binding is unambiguous", () => {
+    const remoteConfig = withProjectToolBinding(emptyProjectTools(), remote, {
+      intranetUrl: "http://192.168.31.252:48201/",
+    });
+    expect(bindingForProjectName(remoteConfig, "Project One")?.target).toEqual(
+      projectToolTarget(remote),
+    );
+    expect(bindingForProjectName(remoteConfig, "remote_Project One")?.target).toEqual(
+      projectToolTarget(remote),
+    );
+
+    const duplicate = projectToolsConfigSchema.parse({
+      version: 1,
+      bindings: [
+        {
+          target: { projectKind: "local", projectId: "one" },
+          label: "remote_same",
+          intranetUrl: "http://one.example.com/",
+        },
+        {
+          target: { projectKind: "local", projectId: "two" },
+          label: "same",
+          intranetUrl: "http://two.example.com/",
+        },
+      ],
+    });
+    expect(bindingForProjectName(duplicate, "remote_same")).toBeNull();
   });
 
   it("includes the remote Host identity in generated metadata tasks", () => {

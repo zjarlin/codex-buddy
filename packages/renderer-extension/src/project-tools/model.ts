@@ -1,8 +1,10 @@
 import {
   projectToolsConfigSchema,
-  projectToolTargetKey,
   type ProjectToolsState,
+  projectToolTargetKey,
+  type ProjectCustomScript,
   type ProjectScriptAction,
+  type ProjectScriptId,
   type ProjectScripts,
   type ProjectToolBinding,
   type ProjectToolsConfig,
@@ -20,8 +22,8 @@ export interface ProjectToolsPersistenceClient {
   setProjectTools?(
     config: ProjectToolsConfig,
   ): Promise<Pick<ProjectToolsState, "config"> & Partial<Pick<ProjectToolsState, "metadataPath">>>;
-  runProjectScript?(params: { target: ProjectToolTarget; action: ProjectScriptAction }): Promise<{
-    action: ProjectScriptAction;
+  runProjectScript?(params: { target: ProjectToolTarget; action: ProjectScriptId }): Promise<{
+    action: ProjectScriptId;
     state: "running" | "completed" | "failed";
     exitCode: number | null;
     output: string;
@@ -29,11 +31,49 @@ export interface ProjectToolsPersistenceClient {
   }>;
 }
 
+/** 表单里的自定义脚本行；id 为空表示尚未分配稳定标识。 */
+export interface ProjectCustomScriptDraft {
+  id?: string;
+  name: string;
+  path: string;
+}
+
 export interface ProjectToolDraft {
   intranetUrl?: string;
   publicUrl?: string;
   scripts?: ProjectScripts;
+  customScripts?: ProjectCustomScriptDraft[];
   prompt?: string;
+}
+
+export interface ProjectScriptEntry {
+  id: ProjectScriptId;
+  name: string;
+  path: string;
+}
+
+/** 内置 start/restart/stop 在前，其余按保存顺序，供标题栏菜单和执行复用。 */
+export function projectScriptEntries(
+  binding: ProjectToolBinding | null,
+  labels: { start: string; restart: string; stop: string },
+): ProjectScriptEntry[] {
+  const entries: ProjectScriptEntry[] = [];
+  for (const [id, name] of [
+    ["start", labels.start],
+    ["restart", labels.restart],
+    ["stop", labels.stop],
+  ] as const) {
+    const path = binding?.scripts?.[id];
+    if (path) entries.push({ id, name, path });
+  }
+  for (const script of binding?.customScripts ?? []) {
+    entries.push({ id: script.id, name: script.name, path: script.path });
+  }
+  return entries;
+}
+
+export function isBuiltInScript(id: string): id is ProjectScriptAction {
+  return id === "start" || id === "restart" || id === "stop";
 }
 
 export function emptyProjectTools(): ProjectToolsConfig {
@@ -67,6 +107,16 @@ export function bindingForProject(
   return config.bindings.find((binding) => projectToolTargetKey(binding.target) === key) ?? null;
 }
 
+export function bindingForProjectName(
+  config: ProjectToolsConfig,
+  label: string,
+): ProjectToolBinding | null {
+  const matches = config.bindings.filter(
+    (binding) => binding.label === label || binding.label === label.replace(/^remote_/u, ""),
+  );
+  return matches.length === 1 ? (matches[0] ?? null) : null;
+}
+
 export function withProjectToolBinding(
   config: ProjectToolsConfig,
   project: SidebarProject,
@@ -78,16 +128,18 @@ export function withProjectToolBinding(
     (binding) => projectToolTargetKey(binding.target) !== key,
   );
   const scripts = trimScripts(draft.scripts);
+  const customScripts = normalizeCustomScripts(draft.customScripts);
   const intranetUrl = draft.intranetUrl?.trim() || undefined;
   const publicUrl = draft.publicUrl?.trim() || undefined;
   const prompt = draft.prompt?.trim() || undefined;
-  if (intranetUrl || publicUrl || scripts || prompt) {
+  if (intranetUrl || publicUrl || scripts || customScripts || prompt) {
     bindings.push({
       target,
       label: project.label,
       ...(intranetUrl ? { intranetUrl } : {}),
       ...(publicUrl ? { publicUrl } : {}),
       ...(scripts ? { scripts } : {}),
+      ...(customScripts ? { customScripts } : {}),
       ...(prompt ? { prompt } : {}),
     });
   }
@@ -99,6 +151,44 @@ export function removeProjectToolBinding(
   project: SidebarProject,
 ): ProjectToolsConfig {
   return withProjectToolBinding(config, project, {});
+}
+
+function normalizeCustomScripts(
+  drafts: ProjectCustomScriptDraft[] | undefined,
+): ProjectCustomScript[] | undefined {
+  // 内置动作名始终保留，避免未绑定的 start 以后被自定义脚本占用。
+  const used = new Set<string>(["start", "restart", "stop"]);
+  const result: ProjectCustomScript[] = [];
+  const claimed = new Set<string>();
+  for (const draft of drafts ?? []) {
+    const name = draft.name.trim();
+    const path = draft.path.trim();
+    if (!name && !path) continue;
+    if (!name) throw new Error("自定义脚本需要填写名称。");
+    if (!path) throw new Error(`自定义脚本“${name}”需要填写绝对路径。`);
+    const requested = draft.id?.trim() || "";
+    if (requested && isBuiltInScript(requested)) {
+      throw new Error(`自定义脚本不能使用内置动作名“${requested}”。`);
+    }
+    if (requested && claimed.has(requested)) {
+      throw new Error(`自定义脚本标识“${requested}”重复。`);
+    }
+    let id = requested;
+    if (!id) {
+      const base =
+        name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/gu, "-")
+          .replace(/^-+|-+$/gu, "")
+          .slice(0, 48) || "script";
+      id = base;
+      for (let suffix = 2; used.has(id); suffix += 1) id = `${base}-${suffix}`;
+    }
+    used.add(id);
+    claimed.add(id);
+    result.push({ id, name, path });
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 function trimScripts(scripts: ProjectScripts | undefined): ProjectScripts | undefined {
@@ -125,6 +215,13 @@ export function projectToolLabels(locale: string): {
   remove: string;
   scripts: string;
   scriptHint: string;
+  customScripts: string;
+  customScriptName: string;
+  customScriptPath: string;
+  customScriptPlaceholder: string;
+  customScriptAdd: string;
+  customScriptRemove: string;
+  customScriptNamePlaceholder: string;
   prompt: string;
   promptField: string;
   promptSection: string;
@@ -160,6 +257,13 @@ export function projectToolLabels(locale: string): {
       scripts: "Scripts",
       scriptHint:
         "Use an absolute path to a .sh or .py file. Scripts run from their own directory.",
+      customScripts: "Custom scripts",
+      customScriptName: "Name",
+      customScriptPath: "Path",
+      customScriptPlaceholder: "/repo/scripts/deploy.sh",
+      customScriptAdd: "Add script",
+      customScriptRemove: "Remove script",
+      customScriptNamePlaceholder: "Deploy",
       prompt: "Open prompt",
       promptField: "Script generation prompt",
       promptSection: "Prompt",
@@ -197,6 +301,13 @@ export function projectToolLabels(locale: string): {
     remove: "删除绑定",
     scripts: "脚本",
     scriptHint: "填写 .sh 或 .py 脚本的绝对路径；脚本会以自身目录作为工作目录运行。",
+    customScripts: "自定义脚本",
+    customScriptName: "名称",
+    customScriptPath: "路径",
+    customScriptPlaceholder: "/repo/scripts/deploy.sh",
+    customScriptAdd: "添加脚本",
+    customScriptRemove: "删除脚本",
+    customScriptNamePlaceholder: "部署",
     prompt: "打开 Prompt",
     promptField: "脚本制作 Prompt",
     promptSection: "Prompt",

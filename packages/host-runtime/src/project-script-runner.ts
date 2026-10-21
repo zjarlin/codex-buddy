@@ -5,8 +5,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  projectScriptActionSchema,
   projectToolTargetKey,
-  type ProjectScriptAction,
+  type ProjectScriptId,
   type ProjectScriptRunResult,
   type ProjectToolBinding,
 } from "@codexhost/shared-contracts";
@@ -71,11 +72,11 @@ export class ProjectScriptRunner {
     this.#logDirectory = path.join(dataDirectory(environment), "project-script-logs");
   }
 
-  async run(
-    binding: ProjectToolBinding,
-    action: ProjectScriptAction,
-  ): Promise<ProjectScriptRunResult> {
-    const scriptPath = binding.scripts?.[action];
+  async run(binding: ProjectToolBinding, action: ProjectScriptId): Promise<ProjectScriptRunResult> {
+    const builtin = projectScriptActionSchema.safeParse(action).data;
+    const scriptPath = builtin
+      ? binding.scripts?.[builtin]
+      : binding.customScripts?.find((script) => script.id === action)?.path;
     if (!scriptPath) {
       throw new Error(`项目“${binding.label}”未绑定 ${action} 脚本。`);
     }

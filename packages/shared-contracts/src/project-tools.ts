@@ -36,6 +36,7 @@ const httpUrlSchema = z
   });
 
 const projectPromptSchema = z.string().trim().min(1).max(20_000);
+const projectScriptNameSchema = z.string().trim().min(1).max(80);
 
 export const projectToolTargetSchema = z.discriminatedUnion("projectKind", [
   z
@@ -69,6 +70,12 @@ const absoluteScriptPathSchema = z
 export const projectScriptActionSchema = z.enum(["start", "restart", "stop"]);
 export type ProjectScriptAction = z.infer<typeof projectScriptActionSchema>;
 
+/** 内置动作和自定义脚本共用的执行标识；自定义 ID 不能占用内置动作名。 */
+export const projectScriptIdSchema = z
+  .string()
+  .regex(/^(?:start|restart|stop|[A-Za-z0-9][A-Za-z0-9_-]{0,63})$/u, "Unknown project script");
+export type ProjectScriptId = z.infer<typeof projectScriptIdSchema>;
+
 export const projectScriptsSchema = z
   .object({
     start: absoluteScriptPathSchema.optional(),
@@ -83,6 +90,28 @@ export const projectScriptsSchema = z
   });
 export type ProjectScripts = z.infer<typeof projectScriptsSchema>;
 
+export const projectCustomScriptSchema = z
+  .object({
+    id: projectScriptIdSchema.refine(
+      (id) => id !== "start" && id !== "restart" && id !== "stop",
+      "Custom script id must not reuse a built-in action",
+    ),
+    name: projectScriptNameSchema,
+    path: absoluteScriptPathSchema,
+  })
+  .strict();
+export type ProjectCustomScript = z.infer<typeof projectCustomScriptSchema>;
+
+const customScriptsSchema = z
+  .array(projectCustomScriptSchema)
+  .max(40)
+  .superRefine((scripts, context) => {
+    const ids = scripts.map((script) => script.id);
+    if (new Set(ids).size !== ids.length) {
+      context.addIssue({ code: "custom", message: "Custom script ids must be unique" });
+    }
+  });
+
 export const projectToolBindingSchema = z
   .object({
     target: projectToolTargetSchema,
@@ -90,11 +119,18 @@ export const projectToolBindingSchema = z
     intranetUrl: httpUrlSchema.optional(),
     publicUrl: httpUrlSchema.optional(),
     scripts: projectScriptsSchema.optional(),
+    customScripts: customScriptsSchema.optional(),
     prompt: projectPromptSchema.optional(),
   })
   .strict()
   .superRefine((binding, context) => {
-    if (!binding.intranetUrl && !binding.publicUrl && !binding.scripts && !binding.prompt) {
+    if (
+      !binding.intranetUrl &&
+      !binding.publicUrl &&
+      !binding.scripts &&
+      !binding.customScripts &&
+      !binding.prompt
+    ) {
       context.addIssue({
         code: "custom",
         path: ["prompt"],
@@ -143,14 +179,14 @@ export type ProjectToolsState = z.infer<typeof projectToolsStateSchema>;
 export const projectScriptRunParamsSchema = z
   .object({
     target: projectToolTargetSchema,
-    action: projectScriptActionSchema,
+    action: projectScriptIdSchema,
   })
   .strict();
 export type ProjectScriptRunParams = z.infer<typeof projectScriptRunParamsSchema>;
 
 export const projectScriptRunResultSchema = z
   .object({
-    action: projectScriptActionSchema,
+    action: projectScriptIdSchema,
     state: z.enum(["running", "completed", "failed"]),
     exitCode: z.number().int().nullable(),
     output: z.string().max(20_000),

@@ -12,11 +12,13 @@ import {
 const CONTENT_ATTRIBUTE = "data-app-shell-titlebar-content";
 const CONTENT_SELECTOR = `[${CONTENT_ATTRIBUTE}]`;
 const PROJECT_ICON_SELECTOR = '[role="img"][aria-label]';
+const PROJECT_CONTAINER_ATTRIBUTE = "data-sidebar-project-container-id";
 const PROJECT_ATTRIBUTE = "data-codexhost-titlebar-project";
 const SIDEBAR_SELECTOR = "#app-shell-sidebar";
-const PROJECT_CONTAINER_SELECTOR = "[data-sidebar-project-container-id]";
+const PROJECT_CONTAINER_SELECTOR = `[${PROJECT_CONTAINER_ATTRIBUTE}]`;
 const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 const PROJECT_LABEL_ATTRIBUTE = "data-app-action-sidebar-project-label";
+
 // 项目图标的 Fiber 链里，tooltip 与 project 都在很浅的祖先上；限制深度避免把
 // 上层无关组件的 tooltipContent 误当成项目名。
 const FIBER_DEPTH_LIMIT = 8;

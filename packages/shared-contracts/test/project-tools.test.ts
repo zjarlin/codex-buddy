@@ -79,6 +79,55 @@ describe("Project tool contracts", () => {
     ).toThrow();
   });
 
+  it("accepts custom scripts alongside built-in actions and rejects id misuse", () => {
+    const base = {
+      target: { projectKind: "local" as const, projectId: "project" },
+      label: "Project",
+      scripts: { start: "/repo/start.sh" },
+    };
+    const config = projectToolsConfigSchema.parse({
+      version: 1,
+      bindings: [
+        {
+          ...base,
+          customScripts: [{ id: "deploy", name: "部署", path: "/repo/deploy.sh" }],
+        },
+      ],
+    });
+    expect(config.bindings[0]?.customScripts).toEqual([
+      { id: "deploy", name: "部署", path: "/repo/deploy.sh" },
+    ]);
+    expect(
+      projectToolsConfigSchema.parse({
+        version: 1,
+        bindings: [
+          {
+            target: { projectKind: "local" as const, projectId: "project" },
+            label: "Project",
+            customScripts: [{ id: "deploy", name: "部署", path: "/repo/deploy.py" }],
+          },
+        ],
+      }).bindings[0]?.customScripts,
+    ).toHaveLength(1);
+
+    for (const customScripts of [
+      [{ id: "start", name: "Start", path: "/repo/start.sh" }],
+      [{ id: "bad id", name: "Bad", path: "/repo/bad.sh" }],
+      [{ id: "run", name: "Run", path: "relative.sh" }],
+      [
+        { id: "run", name: "Run", path: "/repo/run.sh" },
+        { id: "run", name: "Again", path: "/repo/again.sh" },
+      ],
+    ]) {
+      expect(() =>
+        projectToolsConfigSchema.parse({
+          version: 1,
+          bindings: [{ ...base, customScripts }],
+        }),
+      ).toThrow();
+    }
+  });
+
   it("validates script action requests without accepting a caller-supplied path", () => {
     expect(
       projectScriptRunParamsSchema.parse({

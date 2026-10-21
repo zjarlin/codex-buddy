@@ -722,6 +722,12 @@ class OrderedWriter {
   }
 }
 
+// 原生任务列表可能长期保留 active；超时只结束等待，不跳过启动前的仓库锁检查。
+function gitWorkflowWaitTimeoutMs(environment: NodeJS.ProcessEnv): number {
+  const parsed = Number(environment.CODEXHOST_GIT_WAIT_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60_000;
+}
+
 export class AppServerHost {
   #buddy: BuddyRouter | undefined;
   #interrupted = new InterruptedConversations(
@@ -820,6 +826,7 @@ export class AppServerHost {
       diagnose: (error) => this.#diagnose(error),
       changed: () => this.#signalActiveWorkChanged(false),
       automatic: () => (this.#options.environment ?? process.env).CODEXHOST_GIT_AUTO_PUSH !== "0",
+      waitTimeoutMs: gitWorkflowWaitTimeoutMs(this.#options.environment ?? process.env),
     });
     this.#writer = new OrderedWriter(this.#options.desktopOutput);
     const environment = this.#options.environment ?? process.env;
@@ -3528,6 +3535,8 @@ export class AppServerHost {
     }
   }
 
+  // 原生任务列表读取失败时只保留 Host 已观测到的运行状态，不让一个过期的
+  // active 记录或列表接口故障永久挡住项目推送。
   async #projectActiveThreads(): Promise<string[]> {
     const current = (): string[] => [
       ...this.#activeOfficialTurns.keys(),
@@ -3544,32 +3553,36 @@ export class AppServerHost {
         .map((thread) => thread.id),
     ];
     const active = new Set(current());
-    // 包含连接 Host 前已经运行的原生任务；分页读完，不能只判断侧栏可见任务。
-    let cursor: string | null = null;
-    const seen = new Set<string>();
-    do {
-      const response = await this.#requestOfficial("thread/list", {
-        limit: 100,
-        archived: false,
-        ...(cursor ? { cursor } : {}),
-      });
-      if (isRecord(response.error))
-        throw new Error(String(response.error.message ?? "无法读取项目任务状态"));
-      const page = isRecord(response.result) ? response.result : null;
-      if (!page || !Array.isArray(page.data)) throw new Error("项目任务状态响应无效");
-      for (const entry of page.data) {
-        if (
-          isRecord(entry) &&
-          typeof entry.id === "string" &&
-          isRecord(entry.status) &&
-          entry.status.type === "active"
-        )
-          active.add(entry.id);
-      }
-      cursor = typeof page.nextCursor === "string" ? page.nextCursor : null;
-      if (cursor && seen.has(cursor)) throw new Error("项目任务列表分页未前进");
-      if (cursor) seen.add(cursor);
-    } while (cursor);
+    try {
+      // 包含连接 Host 前已经运行的原生任务；分页读完，不能只判断侧栏可见任务。
+      let cursor: string | null = null;
+      const seen = new Set<string>();
+      do {
+        const response = await this.#requestOfficial("thread/list", {
+          limit: 100,
+          archived: false,
+          ...(cursor ? { cursor } : {}),
+        });
+        if (isRecord(response.error))
+          throw new Error(String(response.error.message ?? "无法读取项目任务状态"));
+        const page = isRecord(response.result) ? response.result : null;
+        if (!page || !Array.isArray(page.data)) throw new Error("项目任务状态响应无效");
+        for (const entry of page.data) {
+          if (
+            isRecord(entry) &&
+            typeof entry.id === "string" &&
+            isRecord(entry.status) &&
+            entry.status.type === "active"
+          )
+            active.add(entry.id);
+        }
+        cursor = typeof page.nextCursor === "string" ? page.nextCursor : null;
+        if (cursor && seen.has(cursor)) throw new Error("项目任务列表分页未前进");
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+    } catch (error) {
+      this.#diagnose(error);
+    }
     for (const id of current()) active.add(id);
     return [...active];
   }

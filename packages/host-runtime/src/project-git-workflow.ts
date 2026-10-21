@@ -21,6 +21,10 @@ interface Options {
   quietMs?: number;
   changed?(): void;
   automatic?(): boolean;
+  // 项目内有其他任务运行且长时间不结束时，最多等待这么久；超时后仍执行本次
+  // 已结束回合请求并返回实际结果，避免单个会话状态永久挡住自动推送。
+  // 超时检查发生在静默期之后的定时器里，仍以真实 Git 结果作为完成依据。
+  waitTimeoutMs?: number;
   group?: ProjectGitWorkflowGroup;
 }
 
@@ -34,7 +38,11 @@ interface Project {
   // 推送期间完成的新任务合并成一次后续检查，工作流自身的终态不会进入这里。
   queuedThreadId: string | null;
   timerOwner?: ProjectGitWorkflow;
+  // 等待起点；新完成事件会重置，避免沿用更早的超时预算。
+  waitingSince: number | null;
 }
+
+const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60_000;
 
 const initial = (workspace: string | null): GitWorkflowSnapshot => ({
   workspace,
@@ -121,6 +129,7 @@ export class ProjectGitWorkflow {
         pending: null,
         terminal: null,
         queuedThreadId: null,
+        waitingSince: null,
       };
       this.#projects.set(workspace, project);
     }
@@ -132,8 +141,9 @@ export class ProjectGitWorkflow {
     return workspace
       ? {
           ...this.#state(workspace).snapshot,
+          // 等待或空闲都要说明自动关闭，不能只显示永不结束的“等待其他任务”。
           ...(this.options.automatic?.() === false &&
-          this.#state(workspace).snapshot.phase === "idle"
+          this.#state(workspace).snapshot.phase !== "running"
             ? { message: "自动推送已关闭，可手动触发" }
             : {}),
         }
@@ -195,6 +205,7 @@ export class ProjectGitWorkflow {
   }
 
   #wait(project: Project, threadId: string): void {
+    project.waitingSince = Date.now();
     project.snapshot = {
       ...initial(project.snapshot.workspace),
       phase: "waiting",
@@ -217,7 +228,20 @@ export class ProjectGitWorkflow {
     project.timer = setTimeout(() => {
       project.timer = undefined;
       const id = project.snapshot.threadId;
-      if (id && !this.#closed) void this.run(id).catch(this.options.diagnose);
+      if (!id || this.#closed) return;
+      const timeout = this.options.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+      // 等待起点会在完成、排队或手动启动时重置；同一轮请求的超时预算从这里计算。
+      const expired =
+        project.snapshot.phase === "waiting" &&
+        project.waitingSince !== null &&
+        Date.now() - project.waitingSince >= timeout;
+      if (expired) {
+        this.options.diagnose(
+          `项目 ${project.snapshot.workspace ?? ""} 等待其他任务超过 ${Math.round(timeout / 1000)} 秒，按本轮完成继续推送`,
+        );
+      }
+      // 超时后按本次已完成回合继续推送；共享仓库锁仍由启动前检查保护。
+      void this.run(id, { ignoreBusy: expired }).catch(this.options.diagnose);
     }, this.options.quietMs ?? 750);
     project.timer.unref?.();
   }
@@ -306,13 +330,14 @@ export class ProjectGitWorkflow {
     if (project.snapshot.threadId !== threadId || project.snapshot.phase !== "waiting") return;
     clearTimeout(project.timer);
     project.timer = undefined;
+    project.waitingSince = null;
     project.snapshot = { ...initial(workspace), message: "仅提交，不触发本回合自动推送" };
     this.#changed();
   }
 
   async run(
     threadId: string,
-    options: { waitForIdle?: boolean } = {},
+    options: { waitForIdle?: boolean; ignoreBusy?: boolean } = {},
   ): Promise<GitWorkflowSnapshot> {
     if (this.#closed) throw new Error("推送工作流已关闭。");
     const workspace = await this.#project(threadId);
@@ -330,11 +355,13 @@ export class ProjectGitWorkflow {
       message: "正在准备推送工作流…",
     };
     project.terminal = null;
+    project.waitingSince = null;
     project.pending = this.#start(
       project,
       threadId,
       workspace,
       options.waitForIdle !== false,
+      options.ignoreBusy === true,
     ).finally(() => {
       project.pending = null;
       this.#resumeQueued(project);
@@ -349,10 +376,12 @@ export class ProjectGitWorkflow {
     threadId: string,
     workspace: string,
     waitForIdle: boolean,
+    ignoreBusy: boolean,
   ): Promise<void> {
     const beforeStart = async (): Promise<void> => {
       if (this.#closed) throw new Error("推送工作流已关闭。");
-      const busy = await this.#isBusy(workspace, project.repositories);
+      // 超时仍检查 Group 仓库锁，避免两个项目同时写同一个仓库。
+      const busy = ignoreBusy ? false : await this.#isBusy(workspace, project.repositories);
       const occupied = project.repositories.some(({ status }) => {
         const owner = this.#group.locks.get(status.workspace);
         return owner !== undefined && owner !== workspace;

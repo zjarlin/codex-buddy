@@ -60,6 +60,7 @@ function fixture(group?: ProjectGitWorkflowGroup) {
     start,
     diagnose,
     changed,
+    waitTimeoutMs: 3_000,
   });
   return {
     workflow,
@@ -263,6 +264,24 @@ describe("Project Git workflow", () => {
     f.workflow.activityChanged();
     await vi.advanceTimersByTimeAsync(750);
     expect((await f.workflow.inspect("a")).phase).toBe("running");
+  });
+
+  it("starts the finished request after the wait limit instead of waiting forever", async () => {
+    const f = fixture();
+    f.active.add("stuck-session");
+    await f.workflow.completed("a", "a-turn", "completed");
+    // 等待期间重新检查并为空跑定时器；第三次检查按等待上限放行本次请求。
+    for (let attempt = 0; attempt < 3 && f.start.mock.calls.length === 0; attempt++) {
+      f.workflow.activityChanged();
+      await vi.advanceTimersByTimeAsync(attempt === 0 ? 750 : 3_000);
+    }
+    expect(f.start).toHaveBeenCalledExactlyOnceWith(
+      "a",
+      "/repo",
+      expect.any(Function),
+      expect.any(Array),
+    );
+    f.workflow.close();
   });
 
   it("does not treat model completion as push success and allows an explicit retry", async () => {

@@ -33,18 +33,14 @@ export function createLocalHostModelClient(readRouting: () => RendererHostRoutin
   forRoute(route: RendererHostRoute | null): RendererModelClient | null;
   dispose(): void;
 } {
-  const cache = new Map<
-    string,
-    { route: RendererHostRoute; send: unknown; client: RendererModelClient }
-  >();
+  const cache = new Map<string, { route: RendererHostRoute; client: RendererModelClient }>();
   let disposed = false;
   const forRoute = (route: RendererHostRoute | null): RendererModelClient | null => {
     if (disposed || !route) return null;
     const current = readRouting()?.forHost(route.hostId);
     if (current !== route) return null;
     const cached = cache.get(route.hostId);
-    const source = route.manager.requestClient.sendRequest;
-    if (cached?.route === route && cached.send === source) return cached.client;
+    if (cached?.route === route) return cached.client;
     const target = route.manager;
     const client = createRendererModelClient([
       {
@@ -60,7 +56,7 @@ export function createLocalHostModelClient(readRouting: () => RendererHostRoutin
       },
     ]);
     if (!client) return null;
-    cache.set(route.hostId, { route, send: source, client });
+    cache.set(route.hostId, { route, client });
     return client;
   };
   const forHost = (hostId: string): RendererModelClient | null => {

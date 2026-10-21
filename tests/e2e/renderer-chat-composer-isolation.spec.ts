@@ -21,7 +21,7 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installRendererBindingProbe } from "./packages/renderer-extension/src/renderer-binding-probe.ts";
-      installRendererBindingProbe({ enabledAgents: ["codex", "pi"], defaultAgent: "pi" });
+      installRendererBindingProbe({ enabledAgents: ["codex", "pi"], defaultAgent: "codex" });
     `,
     resolveDir: repositoryRoot,
     sourcefile: "renderer-chat-composer-isolation-e2e-entry.ts",
@@ -62,6 +62,10 @@ async function dispatchInputIntents(page: Page): Promise<unknown> {
       return { accepted, prevented: event.defaultPrevented };
     };
     return {
+      digit: dispatch(new KeyboardEvent("keydown", { key: "1", bubbles: true, cancelable: true })),
+      digitBeforeInput: dispatch(
+        new InputEvent("beforeinput", { inputType: "insertText", bubbles: true, cancelable: true }),
+      ),
       backspace: dispatch(
         new KeyboardEvent("keydown", { key: "Backspace", bubbles: true, cancelable: true }),
       ),
@@ -80,6 +84,8 @@ async function dispatchInputIntents(page: Page): Promise<unknown> {
 }
 
 const unmodifiedInputResults = {
+  digit: { accepted: true, prevented: false },
+  digitBeforeInput: { accepted: true, prevented: false },
   backspace: { accepted: true, prevented: false },
   paste: { accepted: true, prevented: false },
   beforeInput: { accepted: true, prevented: false },

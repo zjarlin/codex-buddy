@@ -3240,7 +3240,9 @@ export function installRendererBindingProbe(
       mounted.modelTarget?.[0] !== "conversation"
     )
       return;
-    if (controller.isSwitching(composer) || !applyComposerAgent(composer)) blockEvent(event);
+    // 编辑类 beforeinput（输入数字、退格、粘贴）不能因为 Carrier 暂时绑定失败而
+    // 被吞掉；真正提交前 prepareComposer 会重新校验绑定与路由策略。
+    applyComposerAgent(composer);
   };
   const onSubmit = (event: Event): void => {
     const element = eventElement(event.target);
@@ -3277,11 +3279,18 @@ export function installRendererBindingProbe(
       if (isComposerSubmissionKey(event)) blockEvent(event);
       return;
     }
-    if (composer && !applyComposerAgent(composer)) {
+    // 输入按键不提交；Carrier 绑定暂时失败（如路由策略尚未就绪）时仍要让
+    // 数字、退格等正常编辑，否则整个 Composer 无法输入。提交键在发送前由
+    // prepareComposer 再次校验绑定并拦截，这里不能因为绑定失败吞掉按键。
+    if (!isComposerSubmissionKey(event) || !composer) return;
+    if (controller.isSwitching(composer)) {
       blockEvent(event);
       return;
     }
-    if (!isComposerSubmissionKey(event) || !composer) return;
+    if (!applyComposerAgent(composer)) {
+      blockEvent(event);
+      return;
+    }
     if (event.repeat) {
       blockEvent(event);
       return;

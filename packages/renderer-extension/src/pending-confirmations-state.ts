@@ -135,15 +135,46 @@ export function pendingConfirmationSummary(
 // pending-confirmation queue.
 const TITLE_GENERATION_FIELDS = new Set(["title", "description"]);
 
-function parseJsonObject(value: string): Record<string, unknown> | null {
+function stripCodeFence(value: string): string {
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/u.exec(value.trim());
-  const candidate = (fenced?.[1] ?? value).trim();
+  return (fenced?.[1] ?? value).trim();
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  const candidate = stripCodeFence(value);
   if (!candidate.startsWith("{") || !candidate.endsWith("}")) return null;
   try {
     return record(JSON.parse(candidate));
   } catch {
     return null;
   }
+}
+
+/**
+ * 标题生成要求返回 {"title","description"} JSON，但模型也可能按提示词里的字段名
+ * 直接回两行纯文本（实际出现：`Title: …` / `Description: …`）。两种形状都是内部
+ * 元数据，不能当成用户回合结果。
+ */
+const TITLE_LABEL_PATTERN = /^title\s*[:：]\s*(.+)$/iu;
+const DESCRIPTION_LABEL_PATTERN = /^description\s*[:：]\s*(.+)$/iu;
+
+/** 去掉列表符号与强调符，只保留 `Title: …` 这类字段行本身。 */
+function labeledLine(line: string): string {
+  return line
+    .replace(/^\s*(?:[-*+>]+|#{1,6})\s*/u, "")
+    .replace(/\*\*/gu, "")
+    .trim();
+}
+
+function isLabeledTitlePayload(value: string): boolean {
+  const lines = stripCodeFence(value)
+    .split("\n")
+    .map(labeledLine)
+    .filter((line) => line.length > 0);
+  if (lines.length !== 2) return false;
+  const title = TITLE_LABEL_PATTERN.exec(lines[0] ?? "");
+  const description = DESCRIPTION_LABEL_PATTERN.exec(lines[1] ?? "");
+  return Boolean(title?.[1]?.trim() && description?.[1]?.trim());
 }
 
 // 正在生成标题的 Thread 在命名完成前没有标题，侧栏按钮的 textContent 只有打字机
@@ -157,6 +188,7 @@ export function pendingConfirmationTitle(value: string): string {
 }
 
 export function isTitleGenerationPayload(value: string): boolean {
+  if (isLabeledTitlePayload(value)) return true;
   const object = parseJsonObject(value);
   if (!object) return false;
   const keys = Object.keys(object);
@@ -185,13 +217,16 @@ function normalizeStored(value: unknown): PendingConfirmationRecord | null {
   const status = pendingConfirmationStatus(entry.status);
   const state = entry.state === "confirmed" || entry.state === "pending" ? entry.state : null;
   if (!hostId || !threadId || !turnId || !status || !state) return null;
+  // 旧版本可能已经把标题生成的元数据存进队列；升级读取时直接丢弃，避免再弹一次。
+  const summary = summarize(text(entry.summary), 2_000);
+  if (isTitleGenerationPayload(summary)) return null;
   return {
     hostId,
     threadId,
     turnId,
     status,
     title: compact(pendingConfirmationTitle(text(entry.title)) || "未命名会话", 300),
-    summary: summarize(text(entry.summary), 2_000),
+    summary,
     project: text(entry.project),
     completedAt: timestamp(entry.completedAt, 0),
     state,

@@ -48,9 +48,9 @@ Renderer 为官方 Codex 与外部 Harness Thread 维护统一的“待确认”
 
 ## 提醒边界
 
-Codex 为 Thread 生成标题时会在后台的 ephemeral Thread 里跑一个内部 Turn，其唯一 `agentMessage` 是 `{"title","description"}` 形状的 JSON。这类 Turn 属于内部维护而非用户发起的工作，不会进入待确认队列，也不弹卡片。
+Codex 为 Thread 生成标题时会在后台的 ephemeral Thread 里跑一个内部 Turn，其唯一 `agentMessage` 是 `{"title","description"}` 形状的 JSON。这类 Turn 属于内部维护而非用户发起的工作，不会进入待确认队列，也不弹卡片。模型偶尔不按 JSON 返回，而是按提示词里的字段名回两行 `Title: …` / `Description: …`；这两种形状都按标题生成元数据过滤，读取旧队列时也会丢弃已经存入的同类记录。
 
-标题生成的 ephemeral Thread 没有 rollout 文件、不出现在 `thread/list`、也没有侧栏行，因此一旦把它的回合终态当成用户会话提醒，用户就会看到“会话已完成”卡片却永远定位不到任何会话。Renderer 在通知订阅里同时监听 `thread/started`：`thread.ephemeral === true` 的 Thread 记入本连接的 ephemeral 集合，其 `turn/started` / `turn/completed` 一律跳过，既不进入待确认队列也不触发语音播报；集合按连接维护并设上限，避免长会话无限累积。内容识别（`{"title","description"}` JSON）继续覆盖重启对账路径，两条路径互为补充。
+标题生成的 ephemeral Thread 没有 rollout 文件、不出现在 `thread/list`、也没有侧栏行，因此一旦把它的回合终态当成用户会话提醒，用户就会看到“会话已完成”卡片却永远定位不到任何会话。Renderer 在通知订阅里同时监听 `thread/started`：`thread.ephemeral === true` 的 Thread 记入本连接的 ephemeral 集合，其 `turn/started` / `turn/completed` 一律跳过，既不进入待确认队列也不触发语音播报；集合按连接维护并设上限，避免长会话无限累积。内容识别（`{"title","description"}` JSON 或 `Title:` / `Description:` 两行文本）继续覆盖重启对账路径；卡片入队后还会按 `thread/read` 返回的 `ephemeral` / `threadSource=thread_title` 兜底撤回，几条路径互为补充。
 
 当前提醒只发生在应用内：前台非当前会话完成时弹卡片，后台或最小化时保留侧栏蓝点和待确认数量，返回应用后再次显示。没有新增 Rust、系统通知或平台权限桥；侧栏原生未读状态语义保持不变，补充蓝点是待确认队列的投影，与卡片一一对应。
 

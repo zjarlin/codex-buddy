@@ -289,6 +289,40 @@ describe("pending confirmation state", () => {
     ).toBe(true);
   });
 
+  // 标题生成要求返回 JSON，但模型可能按字段名直接回两行纯文本，实际会顶到完成卡片上。
+  it("recognizes a title generation Turn that answers with labeled fields", () => {
+    expect(
+      isMetadataTitleTurn({
+        items: [
+          {
+            type: "agentMessage",
+            text: "Title: 移除继续按钮的会话结束校验\nDescription: 去掉继续按钮对会话正常结束状态的判断逻辑",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isMetadataTitleTurn({
+        items: [
+          {
+            type: "agentMessage",
+            text: "**Title:** 修复问号被遮挡\n**Description：** 调整标题栏布局",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      isMetadataTitleTurn({
+        items: [
+          {
+            type: "agentMessage",
+            text: "```\nTitle: 修复问号被遮挡\nDescription: 调整标题栏布局\n```",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("does not treat ordinary results as thread title generation", () => {
     expect(
       isMetadataTitleTurn({
@@ -345,6 +379,42 @@ describe("pending confirmation state", () => {
     expect(model.retitle(entry, "修复问号被遮挡")).toBe(true);
     expect(model.pending()[0]?.title).toBe("修复问号被遮挡");
     expect(model.retitle(entry, "...")).toBe(false);
+  });
+
+  it("migrates stored cards that already contain title generation metadata", () => {
+    const storage = memoryStorage(
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            hostId: "local",
+            threadId: "thread-a",
+            turnId: "title-turn",
+            status: "completed",
+            title: "未命名会话",
+            summary: "Title: 移除继续按钮的会话结束校验\nDescription: 去掉判断逻辑",
+            project: "",
+            completedAt: 100,
+            state: "confirmed",
+            confirmedAt: 100,
+          },
+          {
+            hostId: "local",
+            threadId: "thread-b",
+            turnId: "turn-b",
+            status: "completed",
+            title: "真实会话",
+            summary: "真正的结果",
+            project: "",
+            completedAt: 100,
+            state: "pending",
+            confirmedAt: null,
+          },
+        ],
+      }),
+    );
+    const entries = new PendingConfirmationsModel(storage).entries();
+    expect(entries.map((entry) => entry.threadId)).toEqual(["thread-b"]);
   });
 
   it("keeps title generation Turns out of the pending queue", () => {

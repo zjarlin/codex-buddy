@@ -218,6 +218,15 @@ function fallbackTitle(locale: Locale): string {
   return locale === "zh-CN" ? "未命名会话" : "Untitled conversation";
 }
 
+/** Thread 身份兜底：Codex 的标题生成 Thread 即使没带可识别 items 也不能提醒。 */
+function isTitleGenerationThread(thread: Record<string, unknown> | null): boolean {
+  if (!thread) return false;
+  if (thread.ephemeral === true) return true;
+  return (
+    text(thread.threadSource) === "thread_title" || text(thread.thread_source) === "thread_title"
+  );
+}
+
 function activeThreadFromDom(): { hostId: string; threadId: string } | null {
   const rows = [...document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)].filter(
     (row) => row.getAttribute(ACTIVE) === "true",
@@ -797,13 +806,20 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
                 // 语音播报与弹窗同一触发点：真正属于用户的回合完成通知。
                 options.speech?.announce(entry);
                 // 标题生成刚结束时侧栏按钮仍是打字机点阵，卡片先用“未命名会话”；
-                // 原生线程名一旦可读就就地更新标题。
+                // 原生线程名一旦可读就就地更新标题。同时按 Thread 身份兜底：标题生成
+                // 回合偶尔拿不到 items（或文字形状未识别），但 Thread 本身会声明
+                // ephemeral / threadSource=thread_title，这类卡片必须撤回。
                 const projection = options.getClient(hostId)?.requestThreadProjection;
                 if (projection)
                   void projection("thread/read", { threadId, includeTurns: false })
                     .then((result) => {
                       if (disposed || current.manager !== manager) return;
                       const thread = record(record(result)?.thread);
+                      if (isTitleGenerationThread(thread)) {
+                        model.remove(entry);
+                        render();
+                        return;
+                      }
                       const named = pendingConfirmationTitle(
                         text(thread?.name) || text(thread?.title),
                       );

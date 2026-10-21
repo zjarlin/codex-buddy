@@ -675,6 +675,27 @@ test("title generation ephemeral threads never raise a pending card", async ({ p
   ).toEqual(["thread-b"]);
 });
 
+// 标题生成要求 JSON，但模型也可能按字段名回两行纯文本；这类回合同样不能提醒。
+test("labeled title generation output never raises a pending card", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "title-thread",
+      "title-turn",
+      "Title: 移除继续按钮的会话结束校验\nDescription: 去掉继续按钮对会话正常结束状态的判断逻辑",
+    ),
+  );
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await expect(modal).toBeHidden();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state()),
+  ).toBeNull();
+});
+
 // 命名完成前侧栏标题是打字机点阵，标题生成的 JSON 也不是用户结果。
 test("naming turns do not replace the conversation title or summary", async ({ page }) => {
   await page.addInitScript(() => {

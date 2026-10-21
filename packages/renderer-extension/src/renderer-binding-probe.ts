@@ -344,6 +344,7 @@ export interface RendererBindingProbeApi {
     dispose?: () => void,
     applyAgent?: ApplyAdapterAgent,
     modelControl?: RendererModelClient | null,
+    localClient?: RendererModelClient | null,
   ): void;
   dispose(): void;
 }
@@ -793,6 +794,7 @@ export function installRendererBindingProbe(
   let adapterDispose: (() => void) | null = null;
   let applyAdapterAgent: ApplyAdapterAgent | null = null;
   let modelControl: RendererModelClient | null = null;
+  let localClient: RendererModelClient | null = null;
   let rendererLocaleValue = resolveRendererSettingsLocale(window.navigator.languages);
   const rendererLocale = (): "zh-CN" | "en" => rendererLocaleValue;
   const activeModelHostId = (): string | null => {
@@ -1057,7 +1059,7 @@ export function installRendererBindingProbe(
   const settingsLifecycle = installRendererSettingsLifecycle(window, {
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
     // 更新页读取本机安装版本；Composer 指向远端 SSH Host 时不能把本机版本请求路由过去。
-    getUpdateClient: () => modelClientForHost("local"),
+    getUpdateClient: () => localClient ?? modelClientForHost("local"),
     getAccountClient: () => modelControl,
     getConnectionDiagnostics: () => connectionDiagnostics,
     getBuddyClient: () => modelControl,
@@ -1107,7 +1109,7 @@ export function installRendererBindingProbe(
   rendererLocaleValue = settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en";
   const projectTabs = installProjectTabs({
     getLocale: rendererLocale,
-    getClient: () => modelClientForHost("local"),
+    getClient: () => localClient ?? modelClientForHost("local"),
   });
   revealThreadInProjectTab = projectTabs.revealThread;
   projectTools = installProjectTools({
@@ -3692,13 +3694,14 @@ export function installRendererBindingProbe(
         ...(permissionModeId ? { permissionModeId } : {}),
       };
     },
-    setAdapter(status, dispose, applyAgent, nextModelControl) {
+    setAdapter(status, dispose, applyAgent, nextModelControl, nextLocalClient) {
       usageNotificationDispose?.();
       usageNotificationDispose = null;
       adapterDispose?.();
       adapterDispose = dispose ?? null;
       applyAdapterAgent = applyAgent ?? null;
       modelControl = nextModelControl ?? null;
+      localClient = nextLocalClient ?? nextModelControl?.clientForHost?.("local") ?? null;
       sidebarUnread.refresh();
       pendingConfirmationPanel.refresh();
       sidebarStatusFilter.refresh();
@@ -3768,6 +3771,7 @@ export function installRendererBindingProbe(
       adapterDispose = null;
       applyAdapterAgent = null;
       modelControl = null;
+      localClient = null;
       stopObserving();
       if (scanFrame !== null) window.cancelAnimationFrame(scanFrame);
       disposeReasoningSoftWrap();

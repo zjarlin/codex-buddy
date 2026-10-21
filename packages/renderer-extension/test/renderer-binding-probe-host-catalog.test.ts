@@ -25,6 +25,9 @@ const testState = vi.hoisted(() => ({
   refreshModels: undefined as undefined | (() => void),
   getConnectionDiagnostics: null as null | (() => RendererConnectionDiagnostics | null),
   getSessionImportClient: null as null | (() => RendererSessionImportClient | null),
+  getUpdateClient: null as null | (() => unknown),
+  getProjectSyncClient: null as null | (() => unknown),
+  projectTabsOptions: null as null | { getClient?: () => unknown },
   sidebarOptions: null as null | Parameters<typeof installRendererSidebarAgentIcons>[0],
   documentListeners: new Map<string, EventListener>(),
   modelTarget: ["conversation", "thread-a"] as readonly unknown[],
@@ -100,7 +103,8 @@ vi.mock("../src/renderer-queued-transfer.js", () => ({
 }));
 
 vi.mock("../src/project-tabs/index.js", () => ({
-  installProjectTabs: (options: { getLocale(): "zh-CN" | "en" }) => {
+  installProjectTabs: (options: { getLocale(): "zh-CN" | "en"; getClient?: () => unknown }) => {
+    testState.projectTabsOptions = options;
     testState.localeReads.push(options.getLocale());
     return { refresh: vi.fn(), dispose: vi.fn() };
   },
@@ -268,12 +272,16 @@ vi.mock("../src/renderer-settings-lifecycle.js", () => ({
   installRendererSettingsLifecycle: (
     _window: unknown,
     options: {
-      getConnectionDiagnostics(): RendererConnectionDiagnostics | null;
-      getSessionImportClient(): RendererSessionImportClient | null;
+      getConnectionDiagnostics?: () => RendererConnectionDiagnostics | null;
+      getSessionImportClient?: () => RendererSessionImportClient | null;
+      getProjectSyncClient?: () => unknown;
+      getUpdateClient?: () => unknown;
     },
   ) => {
-    testState.getConnectionDiagnostics = options.getConnectionDiagnostics;
-    testState.getSessionImportClient = options.getSessionImportClient;
+    testState.getConnectionDiagnostics = options.getConnectionDiagnostics ?? (() => null);
+    testState.getSessionImportClient = options.getSessionImportClient ?? (() => null);
+    testState.getUpdateClient = options.getUpdateClient ?? (() => null);
+    testState.getProjectSyncClient = options.getProjectSyncClient ?? (() => null);
     return {
       locale: "en",
       refresh: vi.fn(),
@@ -392,6 +400,32 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
     },
   );
 }
+
+it("binds project tabs and updates to the local Host without an Adapter route", async () => {
+  installFakeBrowser();
+  const local = {
+    getProjectTabs: vi.fn(async () => ({ config: null })),
+    readUpdateStatus: vi.fn(async () => ({ currentVersion: "0.10.117", status: null })),
+  };
+  const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+  const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+  probe.setAdapter(
+    {
+      state: "installing",
+      reason: "draft-routing-policy-unavailable",
+      modelUpdates: 0,
+      hook: null,
+    },
+    undefined,
+    undefined,
+    null,
+    local as never,
+  );
+  expect(testState.projectTabsOptions?.getClient?.()).toBe(local);
+  expect(testState.getUpdateClient?.()).toBe(local);
+  expect(testState.getProjectSyncClient?.()).toBeNull();
+  probe.dispose();
+});
 
 afterEach(() => {
   const api = (

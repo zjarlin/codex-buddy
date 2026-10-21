@@ -26,6 +26,7 @@ function manager(hostId: string) {
   >(async (method, params) => {
     if (method === "codexhost/harness/inspect") return ready;
     if (method === "codexhost/thread/inspect") return { owner: "codex", locked: true };
+    if (method === "codexhost/settings/project-tabs/get") return { config: null };
     if (method === "codexhost/settings/idle-release/set") return params;
     if (method === "codexhost/update/status")
       return { currentVersion: "9.9.9", installation: "macos-dmg", status: null };
@@ -112,6 +113,25 @@ async function setup(initialHostId: string) {
 afterEach(() => {
   window.__codexhostHostRoutingV1?.dispose();
   vi.unstubAllGlobals();
+});
+
+it("keeps local page clients usable while the Composer route is unresolved", async () => {
+  const { adapter, fiber, managers } = await setup(remoteId);
+  try {
+    const local = adapter.localHostClient;
+    if (!local) throw new Error("Local page client is unavailable");
+    await expect(local.getProjectTabs?.()).resolves.toEqual({ config: null });
+    await expect(local.readUpdateStatus?.()).resolves.toMatchObject({ currentVersion: "9.9.9" });
+    Reflect.deleteProperty(fiber.memoizedProps, "executionTargetHostId");
+    expect(adapter.modelControl?.currentHostId?.()).toBeNull();
+    expect(adapter.localHostClient).toBe(local);
+    await expect(local.readUpdateStatus?.()).resolves.toMatchObject({ currentVersion: "9.9.9" });
+    managers.delete("local");
+    expect(adapter.localHostClient).toBe(local);
+    await expect(local.readUpdateStatus?.()).rejects.toThrow("unavailable");
+  } finally {
+    adapter.dispose();
+  }
 });
 
 it("reads upstream Auto observations through the saved SSH Host for the native turn", async () => {

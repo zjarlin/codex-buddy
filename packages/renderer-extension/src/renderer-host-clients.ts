@@ -27,10 +27,64 @@ import { createRendererSshAutoModelRoutesSender } from "./renderer-ssh-auto-mode
 import { createRendererSshRemoteProjectsSender } from "./renderer-ssh-remote-projects.js";
 import { installRendererThreadArchive } from "./renderer-thread-archive.js";
 
-/** Model clients follow native connection identities, never the active Composer.
- * A captured client may finish an in-flight request after replacement, but may
- * not dispatch another request through a retired manager. */
+/** 只读页面读取共享 Host 连接；聊天仍使用带 SSH 语义的完整客户端。 */
+export function createLocalHostModelClient(readRouting: () => RendererHostRouting | undefined): {
+  forHost(hostId: string): RendererModelClient | null;
+  forRoute(route: RendererHostRoute | null): RendererModelClient | null;
+  dispose(): void;
+} {
+  const cache = new Map<
+    string,
+    { route: RendererHostRoute; send: unknown; client: RendererModelClient }
+  >();
+  let disposed = false;
+  const forRoute = (route: RendererHostRoute | null): RendererModelClient | null => {
+    if (disposed || !route) return null;
+    const current = readRouting()?.forHost(route.hostId);
+    if (current !== route) return null;
+    const cached = cache.get(route.hostId);
+    const source = route.manager.requestClient.sendRequest;
+    if (cached?.route === route && cached.send === source) return cached.client;
+    const target = route.manager;
+    const client = createRendererModelClient([
+      {
+        sendRequest: (method: string, params: unknown, options?: unknown) => {
+          if (disposed || readRouting()?.forHost(route.hostId) !== route) {
+            throw new Error(`Renderer request manager is unavailable for Host ${route.hostId}`);
+          }
+          return target.sendRequest(method, params, options as RendererRequestOptions | undefined);
+        },
+        ...(target.addNotificationCallback
+          ? { addNotificationCallback: target.addNotificationCallback.bind(target) }
+          : {}),
+      },
+    ]);
+    if (!client) return null;
+    cache.set(route.hostId, { route, send: source, client });
+    return client;
+  };
+  const forHost = (hostId: string): RendererModelClient | null => {
+    if (disposed) return null;
+    const route = readRouting()?.forHost(hostId) ?? null;
+    if (!route) {
+      cache.delete(hostId);
+      return null;
+    }
+    return forRoute(route);
+  };
+  return {
+    forHost,
+    forRoute,
+    dispose() {
+      disposed = true;
+      cache.clear();
+    },
+  };
+}
+
 export function createRendererHostClients(readRouting: () => RendererHostRouting | undefined) {
+  const localHost = createLocalHostModelClient(readRouting);
+
   let disposed = false;
   const entries = new Map<
     string,
@@ -157,6 +211,7 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
   };
   return {
     forRoute,
+    localHost,
     forHost(hostId: string): RendererModelClient | null {
       if (disposed) return null;
       const route = readRouting()?.forHost(hostId) ?? null;
@@ -167,6 +222,7 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
       if (disposed) return;
       disposed = true;
       for (const hostId of entries.keys()) retire(hostId);
+      localHost.dispose();
     },
   };
 }

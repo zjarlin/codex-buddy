@@ -890,6 +890,7 @@ export function modelSelectionForAgent(
 export function installCurrentRendererAdapter(): {
   status: RendererAdapterStatus;
   modelControl: RendererModelClient | null;
+  localHostClient: RendererModelClient | null;
   applyAgent(
     agent: RendererAgent,
     model?: HarnessModelRef,
@@ -946,7 +947,7 @@ export function installCurrentRendererAdapter(): {
   // 设置页在原生页面（没有 Composer）打开时同样需要一个可用的本机 Host。
   const appUpdateClientOrNull = (): RendererModelClient | null => {
     if (disposed) return null;
-    return clients.forHost("local") ?? clients.forRoute(currentRequestRoute());
+    return clients.localHost.forHost("local") ?? clients.forRoute(currentRequestRoute());
   };
   const appUpdateClient = (): RendererModelClient => {
     const client = appUpdateClientOrNull();
@@ -1260,6 +1261,7 @@ export function installCurrentRendererAdapter(): {
   return {
     status: liveStatus,
     modelControl,
+    localHostClient: clients.localHost.forHost("local"),
     applyAgent,
     dispose() {
       if (disposed) return;

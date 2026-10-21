@@ -79,6 +79,32 @@ it("starts a browser Renderer before its editor mounts and shares one routing in
   }
 });
 
+it("discovers local services on a page without a Composer and tracks registry replacement", () => {
+  const fixture = setup("remote-ssh-discovered:linux");
+  const anchor = fixture.editors[0];
+  if (!anchor) throw new Error("测试缺少原生页面控件");
+  const root = {
+    querySelectorAll: (selector: string) => (selector === "button, nav, main" ? [anchor] : []),
+  };
+  const routing = installRendererWindowHostRouting(root, fixture.target);
+  try {
+    expect(routing.forHost("local")?.manager).toBe(fixture.local);
+    expect(routing.hostIdForComposer()).toBeNull();
+    expect(routing.forComposer()).toBeNull();
+    const replacement = fixture.manager("local");
+    const registry = {
+      addManager: vi.fn(),
+      getForHostId: vi.fn((hostId: string) => (hostId === "local" ? replacement : undefined)),
+      waitForManagerForHostId: vi.fn(),
+    };
+    fixture.fiber.memoizedState.memoizedState = registry;
+    expect(routing.forHost("local")?.manager).toBe(replacement);
+    expect(routing.forHost(fixture.remote.getHostId())).toBeNull();
+  } finally {
+    routing.dispose();
+  }
+});
+
 it.each(["local", "remote-ssh-discovered:linux"])(
   "keeps both Hosts addressable and switches immediately from %s without a Controller poll",
   async (initialHostId) => {

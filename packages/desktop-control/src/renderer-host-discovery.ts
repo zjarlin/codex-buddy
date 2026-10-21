@@ -83,7 +83,11 @@ export function discoverRendererHosts(
   const managers = new Set<RendererNativeRequestManager>();
   const registries = new Set<RendererHostRegistry>();
   const fibers = new Set<ReturnType<typeof committedReactAncestors>[number]>();
-  for (const editor of editors) {
+  // 项目首页和设置页没有 Composer；从原生页面控件的祖先读取共享连接注册表。
+  const anchors = editors.length
+    ? editors
+    : [...root.querySelectorAll("button, nav, main")].slice(0, 64);
+  for (const editor of anchors) {
     let element: RendererHostRoot | null = editor;
     let fiber: unknown;
     while (element && !fiber) {
@@ -98,7 +102,7 @@ export function discoverRendererHosts(
       const props = current.memoizedProps as Record<string, unknown> | null;
       for (const key of ["executionTargetHostId", "permissionsHostId"]) {
         const hostId = props?.[key];
-        if (typeof hostId === "string" && hostId) hostIds.add(hostId);
+        if (editors.length && typeof hostId === "string" && hostId) hostIds.add(hostId);
       }
     }
   }

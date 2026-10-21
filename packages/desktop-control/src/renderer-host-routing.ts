@@ -57,7 +57,13 @@ export function installRendererHostRouting(
     if (composer) return discovery;
     // Settings may unmount all editors. Retain the last native registry, but
     // still resolve its current entry on every request (never cache that entry).
-    if (discovery.editorCount === 0 && lastDiscovery) return lastDiscovery;
+    if (
+      discovery.editorCount === 0 &&
+      discovery.registries.length === 0 &&
+      discovery.managers.length === 0 &&
+      lastDiscovery
+    )
+      return lastDiscovery;
     lastDiscovery = discovery;
     return discovery;
   };
@@ -129,6 +135,7 @@ export function installRendererHostRouting(
     }
   };
   const composerHostId = (discovery: RendererHostDiscovery): string | null => {
+    if (discovery.editorCount === 0) return null;
     // A local hook beside a registry is not proof that a mounting Composer is
     // local. Registry-backed layouts must expose their actual Host identity.
     if (discovery.hostIds.length === 0 && discovery.registries.length > 0) return null;

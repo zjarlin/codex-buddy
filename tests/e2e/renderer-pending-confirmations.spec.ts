@@ -258,8 +258,8 @@ test("completed non-current conversations open a modal and support read/archive 
   await expect(modal).toBeVisible();
   await expect(modal).toContainText("B 会话已完成。");
   await expect(modal).toContainText("Task B");
-  // 正常结束（没报错）的会话没有可续跑的失败/中断状态，不提供“继续”。
-  await expect(modal.getByRole("button", { name: "继续", exact: true })).toBeHidden();
+  // “继续”不区分终态：正常结束的会话同样提供，操作顺序不变。
+  await expect(modal.getByRole("button", { name: "继续", exact: true })).toBeVisible();
   await expect(modal.locator("footer button").first()).toHaveText("查看结果");
 
   await page.getByRole("button", { name: "标为已读" }).click();
@@ -601,14 +601,8 @@ for (const draft of ["", "尚未发送的草稿"]) {
     await page.goto("https://codexhost.test/");
     await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
     const modal = page.locator("[data-codexhost-pending-confirmations]");
-    // 只有执行失败/中断的回合才提供“继续”，所以这里用失败状态。
     await page.evaluate(() =>
-      Reflect.get(globalThis, "pendingConfirmations").complete(
-        "thread-b",
-        "turn-b",
-        "结果。",
-        "failed",
-      ),
+      Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "结果。"),
     );
     await expect(modal).toBeVisible();
     await modal.getByPlaceholder("输入续发内容…").fill(draft);

@@ -207,6 +207,7 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       projects: hostId ? sessionProjects(hostId) : [],
       signal: abort.signal,
       isCurrent,
+      onClosed: () => options.clearPending(mounted),
       loadCandidates: async () => {
         if (!client?.routeSession) throw new Error("近期会话接口不可用");
         const result = await client.routeSession({ message: message.slice(0, 12_000), cwd });
@@ -259,11 +260,13 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       },
     });
     const operation = picker.closed.finally(() => {
+      // 选择器关闭（确认或放弃）后本次提交尝试即结束；不清除会让下一次
+      // Enter 一直被当成“仍在发送”，新会话里表现为发送键无响应。
+      options.clearPending(mounted);
       sessionRoutePending.delete(mounted.composer);
       sessionRouteAbort.delete(mounted.composer);
       sessionRouteCancel.delete(mounted.composer);
       sessionPickerControllers.delete(abort);
-      options.clearPending(mounted);
     });
     sessionRoutePending.set(mounted.composer, operation);
     sessionRouteCancel.set(mounted.composer, picker.cancel);

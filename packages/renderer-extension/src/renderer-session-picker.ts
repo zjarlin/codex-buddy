@@ -15,6 +15,7 @@ export function showSessionPicker(input: {
   threadId?: string | null;
   signal: AbortSignal;
   isCurrent: () => boolean;
+  onClosed?: () => void;
   projects: SessionProject[];
   loadCandidates: () => Promise<Candidate[]>;
   sendNew: (project: SessionProject) => Promise<void>;
@@ -111,6 +112,7 @@ export function showSessionPicker(input: {
     picker.remove();
     style.remove();
     input.signal.removeEventListener("abort", finish);
+    input.onClosed?.();
     resolve(undefined);
   };
   const select = async (id: string): Promise<void> => {

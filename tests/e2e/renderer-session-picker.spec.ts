@@ -260,6 +260,18 @@ for (const hostId of ["local", "remote-ssh-discovered:okm252"]) {
   });
 }
 
+test("closing the picker keeps the next Enter submittable", async ({ page }) => {
+  await setup(page, { existing: true });
+  await transfer(page).click();
+  await expect(picker(page)).toHaveCount(1);
+  await closePicker(page).click();
+  await expect(picker(page)).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Message" }).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => sends(page)).toHaveLength(1);
+  expect((await sends(page))[0]).toMatchObject({ threadId: sourceId });
+});
+
 test("background prewarm cannot invalidate the current project", async ({ page }) => {
   await setup(page, { hostId: "remote-ssh-discovered:okm252" });
   await transfer(page).click();

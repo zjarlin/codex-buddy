@@ -126,6 +126,7 @@ dependencies = [
  "codexhost-platform",
  "fs2",
  "nix",
+ "sha2",
  "signal-hook",
 ]
 

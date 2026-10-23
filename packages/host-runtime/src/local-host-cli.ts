@@ -69,10 +69,15 @@ async function stopListener(paths: LocalHostPaths): Promise<"stopped" | "not-run
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
     await rm(paths.pidPath, { force: true });
     await rm(paths.runtimePath, { force: true });
+    await rm(paths.runtimeIdentityPath, { force: true });
     return "not-running";
   }
   if (await waitForStop(paths)) {
-    await Promise.all([rm(paths.pidPath, { force: true }), rm(paths.runtimePath, { force: true })]);
+    await Promise.all([
+      rm(paths.pidPath, { force: true }),
+      rm(paths.runtimePath, { force: true }),
+      rm(paths.runtimeIdentityPath, { force: true }),
+    ]);
     return "stopped";
   }
   try {
@@ -80,7 +85,14 @@ async function stopListener(paths: LocalHostPaths): Promise<"stopped" | "not-run
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
-  if ((await waitForStop(paths)) && (await waitForProcessExit(state.pid))) return "stopped";
+  if ((await waitForStop(paths)) && (await waitForProcessExit(state.pid))) {
+    await Promise.all([
+      rm(paths.pidPath, { force: true }),
+      rm(paths.runtimePath, { force: true }),
+      rm(paths.runtimeIdentityPath, { force: true }),
+    ]);
+    return "stopped";
+  }
   throw new Error(`Local Host listener did not stop: ${paths.socketPath}`);
 }
 
@@ -159,6 +171,7 @@ export async function runLocalHostCli(input: {
       socketPath: paths.socketPath,
       pid: listener.pid,
       runtimePath: listener.runtimePath,
+      runtimeIdentity: listener.runtimeIdentity,
       runtime: probe.state,
       ...(probe.message ? { message: probe.message } : {}),
     });

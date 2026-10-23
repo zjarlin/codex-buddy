@@ -49,6 +49,8 @@ const LOCAL_HOST_ENABLED_FILE: &str = "enabled";
 const LOCAL_HOST_PID_FILE: &str = "listener.pid";
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const LOCAL_HOST_RUNTIME_FILE: &str = "runtime-path";
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+const LOCAL_HOST_RUNTIME_IDENTITY_FILE: &str = "runtime-identity";
 const INTERNAL_ORIGINATOR_OVERRIDE_ENV: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 const DESKTOP_ORIGINATOR: &str = "Codex Desktop";
 
@@ -778,29 +780,113 @@ fn local_listener_arguments(
     Ok(result)
 }
 
+/// Content fingerprint of the Host Runtime bundle the listener would execute.
+///
+/// The installed path is stable across upgrades, so path equality alone would let
+/// an older listener keep serving a socket after the runtime content changed.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn local_runtime_identity(runtime_path: &Path) -> ShimResult<String> {
+    use sha2::{Digest, Sha256};
+
+    let bytes = std::fs::read(runtime_path)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn recorded_runtime_identity(directory: &Path) -> Option<String> {
+    std::fs::read_to_string(directory.join(LOCAL_HOST_RUNTIME_IDENTITY_FILE))
+        .ok()
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn local_listener_pid(directory: &Path) -> Option<u32> {
+    std::fs::read_to_string(directory.join(LOCAL_HOST_PID_FILE))
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|process_id| *process_id > 0)
+}
+
+/// Last resort when the PID record is missing but a listener still holds the socket.
+///
+/// The socket owner is the node process running the Host Runtime entrypoint; only such a
+/// candidate is signalled, so an unrelated program that happens to own the path is never
+/// terminated. Process-scoped paths and a short-lived startup window are not portable, so the
+/// newest Host Runtime candidate is the best available signal.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn discover_local_listener_pid() -> Option<u32> {
+    use codexhost_platform::process_snapshots;
+
+    process_snapshots()
+        .ok()?
+        .into_iter()
+        .filter(|entry| {
+            entry.id != std::process::id()
+                && entry
+                    .executable
+                    .file_name()
+                    .is_some_and(|name| name == "node" || name == "node.exe")
+        })
+        .max_by_key(|entry| entry.started_at_micros)
+        .map(|entry| entry.id)
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn stop_local_listener(socket_path: &Path, directory: &Path) -> ShimResult<()> {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
     use std::os::unix::net::UnixStream;
 
-    let pid_path = directory.join(LOCAL_HOST_PID_FILE);
-    if let Ok(text) = std::fs::read_to_string(&pid_path)
-        && let Ok(process_id) = text.trim().parse::<i32>()
-    {
-        let _ = kill(Pid::from_raw(process_id), Signal::SIGTERM);
-    }
+    let recorded_pid = local_listener_pid(directory);
+    let process_id = recorded_pid.or_else(|| {
+        (UnixStream::connect(socket_path).is_ok())
+            .then(discover_local_listener_pid)
+            .flatten()
+    });
+    let Some(process_id) = process_id else {
+        if UnixStream::connect(socket_path).is_ok() {
+            return Err(format!(
+                "local Host socket {} is in use but its listener PID cannot be determined; \
+                 stop it manually before starting the current Host Runtime",
+                socket_path.display()
+            )
+            .into());
+        }
+        let _ = std::fs::remove_file(directory.join(LOCAL_HOST_RUNTIME_FILE));
+        let _ = std::fs::remove_file(directory.join(LOCAL_HOST_RUNTIME_IDENTITY_FILE));
+        return Ok(());
+    };
+    let signal = |signal: Signal| {
+        let _ = kill(
+            Pid::from_raw(i32::try_from(process_id).unwrap_or(i32::MAX)),
+            signal,
+        );
+    };
+    signal(Signal::SIGTERM);
     let deadline = Instant::now() + Duration::from_secs(3);
     while UnixStream::connect(socket_path).is_ok() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(20));
     }
-    if let Ok(text) = std::fs::read_to_string(&pid_path)
-        && let Ok(process_id) = text.trim().parse::<i32>()
-    {
-        let _ = kill(Pid::from_raw(process_id), Signal::SIGKILL);
+    if UnixStream::connect(socket_path).is_ok() || codexhost_platform::process_exists(process_id) {
+        signal(Signal::SIGKILL);
     }
-    let _ = std::fs::remove_file(&pid_path);
+    let kill_deadline = Instant::now() + Duration::from_secs(3);
+    while UnixStream::connect(socket_path).is_ok() && Instant::now() < kill_deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_file(directory.join(LOCAL_HOST_PID_FILE));
     let _ = std::fs::remove_file(directory.join(LOCAL_HOST_RUNTIME_FILE));
+    let _ = std::fs::remove_file(directory.join(LOCAL_HOST_RUNTIME_IDENTITY_FILE));
+    if UnixStream::connect(socket_path).is_ok() {
+        return Err(format!(
+            "previous local Host listener at {} survived SIGKILL",
+            socket_path.display()
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -819,11 +905,12 @@ fn launch_detached_local_listener(
     let expected_runtime = expected_runtime_path
         .canonicalize()
         .unwrap_or_else(|_| expected_runtime_path.to_path_buf());
-    let recorded_runtime = std::fs::read_to_string(directory.join(LOCAL_HOST_RUNTIME_FILE))
-        .ok()
-        .map(|text| PathBuf::from(text.trim()));
+    let expected_identity = local_runtime_identity(&expected_runtime)?;
     if UnixStream::connect(socket_path).is_ok() {
-        if recorded_runtime.is_none_or(|path| path == expected_runtime) {
+        // Only reuse a listener whose recorded fingerprint matches the runtime this
+        // process is about to run. Missing or stale identity means an upgraded (or
+        // pre-identity) listener, so the socket must be replaced.
+        if recorded_runtime_identity(directory).as_deref() == Some(expected_identity.as_str()) {
             return Ok(());
         }
         stop_local_listener(socket_path, directory)?;
@@ -1175,8 +1262,10 @@ mod tests {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{
-        LOCAL_HOST_DIRECTORY, LOCAL_HOST_ENABLED_FILE, local_listener_arguments,
-        local_persistence_enabled,
+        LOCAL_HOST_DIRECTORY, LOCAL_HOST_ENABLED_FILE, LOCAL_HOST_PID_FILE,
+        LOCAL_HOST_RUNTIME_FILE, LOCAL_HOST_RUNTIME_IDENTITY_FILE, local_listener_arguments,
+        local_persistence_enabled, local_runtime_identity, recorded_runtime_identity,
+        stop_local_listener,
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     use super::{PROCESS_TREE_REFRESH_INTERVAL, ShutdownSignals, process_tree_refresh_due};
@@ -1315,6 +1404,71 @@ mod tests {
             &arguments,
             Some(std::ffi::OsStr::new("Codex Desktop")),
         ));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn fixture_directory(name: &str) -> std::path::PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("codexhost-shim-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        directory
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn runtime_identity_tracks_runtime_contents_not_the_path() {
+        let directory = fixture_directory("identity");
+        let runtime = directory.join("host-runtime.mjs");
+        std::fs::write(&runtime, b"export const version = 1;\n").expect("first runtime");
+        let first = local_runtime_identity(&runtime).expect("first identity");
+        assert!(first.starts_with("sha256:"));
+        assert_eq!(first.len(), "sha256:".len() + 64);
+        assert_eq!(local_runtime_identity(&runtime).expect("stable"), first);
+
+        std::fs::write(&runtime, b"export const version = 2;\n").expect("upgraded runtime");
+        assert_ne!(local_runtime_identity(&runtime).expect("upgraded"), first);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn recorded_identity_is_absent_until_the_listener_records_one() {
+        let directory = fixture_directory("recorded");
+        assert_eq!(recorded_runtime_identity(&directory), None);
+        std::fs::write(
+            directory.join(LOCAL_HOST_RUNTIME_IDENTITY_FILE),
+            "  sha256:abc  \n",
+        )
+        .expect("identity file");
+        assert_eq!(
+            recorded_runtime_identity(&directory).as_deref(),
+            Some("sha256:abc")
+        );
+        std::fs::write(directory.join(LOCAL_HOST_RUNTIME_IDENTITY_FILE), "\n")
+            .expect("blank identity file");
+        assert_eq!(recorded_runtime_identity(&directory), None);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn stopping_without_a_socket_clears_stale_listener_records() {
+        let directory = fixture_directory("stale");
+        let socket = directory.join("app-server.sock");
+        for file in [
+            LOCAL_HOST_PID_FILE,
+            LOCAL_HOST_RUNTIME_FILE,
+            LOCAL_HOST_RUNTIME_IDENTITY_FILE,
+        ] {
+            std::fs::write(directory.join(file), "stale\n").expect("stale record");
+        }
+
+        // No socket is listening, so no process is signalled; only records are dropped.
+        stop_local_listener(&socket, &directory).expect("stop without a listener");
+        assert!(!directory.join(LOCAL_HOST_RUNTIME_FILE).exists());
+        assert!(!directory.join(LOCAL_HOST_RUNTIME_IDENTITY_FILE).exists());
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

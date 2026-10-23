@@ -70,9 +70,24 @@ export function installProjectTabs(options: {
       localReadFailure = null;
       failure = null;
     } catch (error) {
+      // 无法解析的镜像不代表已保存过设置；Host 为空时仍应迁移预置 Tab，
+      // 只有没有 Host 且本地也无法恢复时才把它当作真实存储错误。
       hasLocalConfig = false;
       localReadFailure = error;
       failure = error;
+    }
+  };
+  const resetLocalSnapshot = (): void => {
+    config = defaultProjectTabs();
+    hasLocalConfig = false;
+    localReadFailure = null;
+    failure = null;
+    try {
+      // 无法解析的镜像键留着只会让每次启动重复走损坏分支，Host 已确认可用
+      // 时直接删除；删除失败也只是回到可重建的默认状态。
+      window.localStorage.removeItem(PROJECT_TABS_STORAGE_KEY);
+    } catch {
+      // Storage 不可用不属于项目 Tab 配置失败，Host 仍是权威来源。
     }
   };
   read();
@@ -97,9 +112,13 @@ export function installProjectTabs(options: {
   error.hidden = true;
   const hiddenRows = new Set<HTMLElement>();
   const menus = new Map<HTMLElement, { anchor: HTMLElement; item: HTMLElement }>();
-  let loadedClient: ProjectTabsPersistenceClient | null = null;
-  let loadingClient: ProjectTabsPersistenceClient | null = null;
+  let loadedClient: Required<ProjectTabsPersistenceClient> | null = null;
+  let loadingClient: Required<ProjectTabsPersistenceClient> | null = null;
   let hostWrite = Promise.resolve();
+  // Host 客户端尚未就绪时，选择先落到 localStorage 镜像并在这里排队；
+  // 客户端出现后必须先补写这份更新，再读取 Host，否则旧 Host 配置会覆盖
+  // 用户刚做的选择。
+  let pendingHostConfig: { revision: number; config: ProjectTabsConfig } | null = null;
   const collapseRecents = createRecentSectionCollapse();
 
   const persistenceClient = (): Required<ProjectTabsPersistenceClient> | null => {
@@ -139,12 +158,20 @@ export function installProjectTabs(options: {
         return;
       }
       const client = persistenceClient();
-      if (!client) throw new Error("Local Host project-tab persistence is unavailable");
       const requestedRevision = ++revision;
       if (immediate) {
         // 分类切换先更新界面，后台串行保存；旧请求返回时不得覆盖最新选择。
         config = next;
         refresh();
+      }
+      if (!client) {
+        // Host 暂不可用不是存储失败：先保住本地镜像和待同步配置，界面照常
+        // 更新；等 setAdapter() 带来新客户端时再由 refresh() 补写并读取。
+        mirror(next, true);
+        pendingHostConfig = { revision: requestedRevision, config: next };
+        failure = null;
+        refresh();
+        return;
       }
       const saved = await saveHost(client, next);
       if (!saved.config) throw new Error("Local Host returned an empty project-tab configuration");
@@ -339,6 +366,59 @@ export function installProjectTabs(options: {
     }
   };
 
+  const syncLoadedClient = (
+    client: Required<ProjectTabsPersistenceClient>,
+    pending: { revision: number; config: ProjectTabsConfig } | null,
+  ): void => {
+    loadingClient = client;
+    const startingRevision = revision;
+    void (async () => {
+      try {
+        if (pending) {
+          // 待同步配置代表用户最后一次明确操作，必须先落 Host，再做读取。
+          const saved = await saveHost(client, pending.config);
+          if (saved.config && pendingHostConfig === pending && revision === pending.revision) {
+            mirror(saved.config);
+          }
+        }
+        const state = await client.getProjectTabs();
+        if (disposed || loadingClient !== client) return;
+        // 保存/读取期间用户又做了新操作：新操作自己负责补写 Host，这轮结果
+        // 不能覆盖界面，也不能把 pending 当作已同步。
+        if (pending && pendingHostConfig !== pending) return;
+        if (pending || revision === startingRevision) pendingHostConfig = null;
+        loadedClient = client;
+        loadingClient = null;
+        if (revision === startingRevision) {
+          if (state.config) {
+            mirror(state.config);
+          } else {
+            const localSnapshot = hasLocalConfig ? config : null;
+            if (localSnapshot) {
+              // Host 为空而本地有有效镜像：沿用启动时的迁移规则写回 Host。
+              const saved = await saveHost(client, localSnapshot);
+              if (saved.config && revision === startingRevision) mirror(saved.config);
+            } else {
+              // Host 是一次成功的空读取：本地镜像只是可重建副本，损坏的 JSON
+              // 不能继续显示“读写失败”。
+              resetLocalSnapshot();
+            }
+          }
+        }
+        if (localReadFailure) localReadFailure = null;
+        failure = null;
+        refresh();
+      } catch (error) {
+        if (disposed || loadingClient !== client) return;
+        loadingClient = null;
+        // 读取失败后不记成已加载：下一次 refresh()（侧栏变化、Host 路由切换、
+        // storage 事件或适配器更新）会重试，而不是永久停在“读写失败”。
+        loadedClient = null;
+        failure = error;
+        refresh();
+      }
+    })();
+  };
   const refresh = (): void => {
     if (disposed) {
       return;
@@ -346,32 +426,9 @@ export function installProjectTabs(options: {
     collapseRecents(config.selected);
     const client = persistenceClient();
     if (client && client !== loadedClient && client !== loadingClient) {
-      loadingClient = client;
-      const startedRevision = revision;
-      const localSnapshot = hasLocalConfig ? config : null;
-      void (async () => {
-        try {
-          const state = await client.getProjectTabs();
-          if (disposed || loadingClient !== client) return;
-          if (revision === startedRevision) {
-            if (state.config) {
-              mirror(state.config);
-            } else if (localSnapshot) {
-              await saveHost(client, localSnapshot);
-            }
-          }
-          loadedClient = client;
-          loadingClient = null;
-          failure = state.config || localSnapshot ? null : localReadFailure;
-          refresh();
-        } catch (error) {
-          if (disposed || loadingClient !== client) return;
-          loadingClient = null;
-          loadedClient = client;
-          failure = error;
-          refresh();
-        }
-      })();
+      syncLoadedClient(client, pendingHostConfig);
+    } else if (!client && localReadFailure) {
+      failure = localReadFailure;
     }
     const rows = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)];
     const rowProjects = rows.map((row) => ({ row, project: rowProject(row) }));
@@ -534,8 +591,73 @@ export function installProjectTabs(options: {
       return;
     }
     dialog?.close();
-    read();
     revision += 1;
+    if (loadedClient) {
+      // Host 已确认时 localStorage 只是镜像。先采用其他窗口刚写入的有效镜像，
+      // 损坏的镜像则静默忽略；随后向 Host 校正。hostWrite 保证读取排在本窗口
+      // 正在进行的保存之后，revision 防止过期的读取覆盖更新的选择。
+      let localSnapshot: ProjectTabsConfig | null = null;
+      try {
+        localSnapshot = parseProjectTabs(window.localStorage.getItem(PROJECT_TABS_STORAGE_KEY));
+      } catch (error) {
+        localReadFailure = error;
+      }
+      if (localSnapshot) {
+        config = localSnapshot;
+        hasLocalConfig = true;
+        localReadFailure = null;
+        failure = null;
+        refresh();
+      }
+      if (!loadedClient) {
+        refresh();
+        return;
+      }
+      const client = loadedClient;
+      const revisionAtRead = revision;
+      void hostWrite.then(() =>
+        client.getProjectTabs().then(
+          async (state) => {
+            if (disposed || loadedClient !== client || revision !== revisionAtRead) return;
+            if (state.config) {
+              config = state.config;
+              hasLocalConfig = true;
+              localReadFailure = null;
+              failure = null;
+              mirror(state.config);
+            } else if (localSnapshot) {
+              // Host 为空而镜像有效：沿用启动时的迁移规则写回 Host。
+              try {
+                const saved = await saveHost(client, localSnapshot);
+                if (disposed || loadedClient !== client || revision !== revisionAtRead) return;
+                if (saved.config) {
+                  config = saved.config;
+                  mirror(saved.config);
+                }
+                failure = null;
+              } catch (error) {
+                if (disposed || loadedClient !== client) return;
+                failure = error;
+              }
+            } else if (localReadFailure) {
+              // 没有可用镜像且 Host 为空：保留当前内存配置，不把镜像损坏
+              // 当作 Host 读写失败。
+              failure = null;
+            } else {
+              failure = null;
+            }
+            refresh();
+          },
+          (error: unknown) => {
+            if (disposed || loadedClient !== client) return;
+            failure = error;
+            refresh();
+          },
+        ),
+      );
+      return;
+    }
+    read();
     refresh();
   };
   // 只关心侧栏结构：整页订阅会在聊天内容流水时反复触发 refresh()，而 refresh

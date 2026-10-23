@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { homedir } from "node:os";
@@ -10,6 +11,7 @@ export const LOCAL_HOST_ENABLED_FILE = "enabled";
 export const LOCAL_HOST_SOCKET_FILE = "app-server.sock";
 export const LOCAL_HOST_PID_FILE = "listener.pid";
 export const LOCAL_HOST_RUNTIME_FILE = "runtime-path";
+export const LOCAL_HOST_RUNTIME_IDENTITY_FILE = "runtime-identity";
 
 const PROBE_TIMEOUT_MS = 3_000;
 
@@ -20,11 +22,13 @@ export interface LocalHostPaths {
   socketPath: string;
   pidPath: string;
   runtimePath: string;
+  runtimeIdentityPath: string;
 }
 
 export interface LocalHostListenerState {
   pid: number | null;
   runtimePath: string | null;
+  runtimeIdentity: string | null;
 }
 
 export interface LocalHostProbe {
@@ -49,6 +53,7 @@ export function localHostPaths(environment: NodeJS.ProcessEnv): LocalHostPaths {
     socketPath: path.join(directory, LOCAL_HOST_SOCKET_FILE),
     pidPath: path.join(directory, LOCAL_HOST_PID_FILE),
     runtimePath: path.join(directory, LOCAL_HOST_RUNTIME_FILE),
+    runtimeIdentityPath: path.join(directory, LOCAL_HOST_RUNTIME_IDENTITY_FILE),
   };
 }
 
@@ -88,26 +93,45 @@ export async function readLocalHostListenerState(
       throw error;
     },
   );
+  const runtimeIdentity = await readFile(paths.runtimeIdentityPath, "utf8").catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    },
+  );
   const pid = pidText === null ? null : Number.parseInt(pidText.trim(), 10);
   return {
     pid: pid !== null && Number.isSafeInteger(pid) && pid > 0 ? pid : null,
     runtimePath: runtimePath?.trim() || null,
+    runtimeIdentity: runtimeIdentity?.trim() || null,
   };
+}
+
+/** Stable content fingerprint consumed by the Shim to reject stale listeners. */
+export async function localHostRuntimeIdentity(runtimePath: string): Promise<string> {
+  const contents = await readFile(runtimePath);
+  return `sha256:${createHash("sha256").update(contents).digest("hex")}`;
 }
 
 export async function writeLocalHostListenerState(
   paths: LocalHostPaths,
   runtimePath: string,
 ): Promise<void> {
+  const runtimeIdentity = await localHostRuntimeIdentity(runtimePath);
   await mkdir(paths.directory, { recursive: true, mode: 0o700 });
   await writeFile(paths.pidPath, `${process.pid}\n`, { mode: 0o600 });
   await writeFile(paths.runtimePath, `${runtimePath}\n`, { mode: 0o600 });
+  await writeFile(paths.runtimeIdentityPath, `${runtimeIdentity}\n`, { mode: 0o600 });
 }
 
 export async function clearLocalHostListenerState(paths: LocalHostPaths): Promise<void> {
   const state = await readLocalHostListenerState(paths).catch(() => null);
   if (state?.pid !== process.pid) return;
-  await Promise.all([rm(paths.pidPath, { force: true }), rm(paths.runtimePath, { force: true })]);
+  await Promise.all([
+    rm(paths.pidPath, { force: true }),
+    rm(paths.runtimePath, { force: true }),
+    rm(paths.runtimeIdentityPath, { force: true }),
+  ]);
 }
 
 function probeSocket(socketPath: string): Promise<LocalHostProbe> {

@@ -49,7 +49,7 @@ describe.skipIf(process.platform === "win32")("local-host CLI", () => {
     });
     await expect(run(["status"], environment)).resolves.toMatchObject({
       code: 0,
-      json: { state: "enabled", enabled: true, runtime: "stopped" },
+      json: { state: "enabled", enabled: true, runtime: "stopped", runtimeIdentity: null },
     });
     await expect(run(["disable"], environment)).resolves.toMatchObject({
       code: 0,

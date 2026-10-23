@@ -3268,10 +3268,6 @@ export function installRendererBindingProbe(
     if (eventElement(event.target)?.closest(".codexhost-session-picker")) return;
     const composer = isComposerInputIntent(event) ? composerForTarget(event.target) : null;
     const mounted = composer ? mountedByComposer.get(composer) : undefined;
-    if (composer && controller.isSwitching(composer)) {
-      blockEvent(event);
-      return;
-    }
     if (
       composer &&
       mounted &&
@@ -3701,7 +3697,13 @@ export function installRendererBindingProbe(
       adapterDispose = dispose ?? null;
       applyAdapterAgent = applyAgent ?? null;
       modelControl = nextModelControl ?? null;
+      const previousLocalClient = localClient;
       localClient = nextLocalClient ?? nextModelControl?.clientForHost?.("local") ?? null;
+      if (localClient !== previousLocalClient) {
+        // 常驻 Host 客户端可能晚于首次安装到达；项目 Tab 在客户端缺席期间把
+        // 选择排在本地镜像里，这里必须立即补写并读取，不能等下一个路由事件。
+        projectTabs.refresh();
+      }
       sidebarUnread.refresh();
       pendingConfirmationPanel.refresh();
       sidebarStatusFilter.refresh();

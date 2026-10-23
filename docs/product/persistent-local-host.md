@@ -33,7 +33,9 @@ codexhost local-host disable  # 关闭并停止后台 Host
 - 后台 Host 监听当前用户私有目录下的 Unix socket，默认位于 `CODEXHOST_DATA_DIR/local-host-runtime-v1/app-server.sock`；未设置 `CODEXHOST_DATA_DIR` 时使用 `~/.codexhost/local-host-runtime-v1/`。命令行和 Codex Buddy 必须使用同一个 `CODEXHOST_DATA_DIR`。
 - 每个 Desktop 连接只启动一个轻量代理进程。Desktop 关闭时代理退出，后台 Host 保留；连接断开后，后台 Host 等待正在执行的回合自然结束，再释放该连接的 Session。
 - 重新打开 Desktop 会连接同一个后台 Host，项目、Thread 映射和已落盘历史继续可用；空闲的 Harness Session 按现有恢复路径重新解析。
-- 更新 codexhost 后，下一次启动会检测后台 Host 使用的 Host Runtime 路径；版本不一致时停止旧 listener 并启动新 listener。需要保留正在执行的任务时，先等待任务结束或手动执行 `codexhost local-host stop`。
+- listener 记录 Host Runtime 路径与内容指纹（`sha256:` 开头的 SHA-256）。每次启动都重新计算当前 Host Runtime 的指纹，只有与记录完全一致才复用已在监听的 socket；安装路径在升级前后不变，因此只看路径会让旧 listener 继续服务新的 Desktop。`codexhost local-host status` 的 `runtimeIdentity` 可用来核对记录值。
+- 指纹缺失（早于该记录版本）或与当前 Host Runtime 不一致时，启动会停止旧 listener 并拉起新 listener。需要保留正在执行的任务时，先等待任务结束或手动执行 `codexhost local-host stop`。
+- 停止时会先 SIGTERM 并等待 socket 释放，必要时 SIGKILL；PID 记录缺失但 socket 仍被占用时，只终止运行 Host Runtime 入口的 `node` 进程。无法确定该进程时启动直接报错，不会误杀其他进程——此时先手动执行 `codexhost local-host stop`，完全退出 Desktop 后重新启动。
 - 后台 Host 不会随 Desktop 退出而停止，也不再受 Desktop 进程树清理影响。`status` 与 `stop` 是显式的兜底入口。
 
 ## 边界
@@ -48,4 +50,4 @@ codexhost local-host disable  # 关闭并停止后台 Host
 
 - `status` 显示 `enabled` 但 `runtime: stopped`：后台 Host 未启动或已退出。重新启动 Desktop；仍失败时执行 `codexhost local-host disable` 后再 `enable`。
 - 启动后新项目无法打开，日志提示 Mapping Store 已有所有者：通常是切换启用状态时旧 Host 仍在运行。执行 `codexhost local-host stop`，完全退出 Desktop 后重新启动。
-- 升级后仍是旧行为：确认安装的是包含本功能的 codexhost 版本，然后重启 Desktop，让 Shim 加载新的 Host Runtime。
+- 升级后仍是旧行为（例如 Composer 数字键/退格失效、项目内新会话发送不了、项目 Tab 读写失败）：用 `codexhost local-host status` 核对 `runtimeIdentity` 是否与安装目录内的 `host-runtime.mjs` 指纹一致，不一致说明后台仍是旧 listener。执行 `codexhost local-host stop` 或完全退出并重新启动 Desktop，让 Shim 替换 listener。

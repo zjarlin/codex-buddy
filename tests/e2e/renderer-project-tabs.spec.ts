@@ -129,6 +129,8 @@ const { outputFiles } = await build({
         }
         const actions = installRendererProjectActions({ getClient: () => ({}), getLocale: () => "zh-CN" });
         let hostConfig = null;
+        let hostReads = 0;
+        let hostReadError = null;
         let saveGate = null;
         let releaseSave = null;
         globalThis.pauseProjectTabSaves = () => {
@@ -139,19 +141,29 @@ const { outputFiles } = await build({
           releaseSave?.();
         };
         const hostClient = {
-          getProjectTabs: async () => ({ config: hostConfig }),
+          getProjectTabs: async () => {
+            hostReads += 1;
+            if (hostReadError) throw new Error(hostReadError);
+            return { config: hostConfig };
+          },
           setProjectTabs: async (config) => {
             if (saveGate) await saveGate;
             return { config: hostConfig = structuredClone(config) };
           },
         };
+        globalThis.delayedHost = false;
         const projectTabsOptions = () => ({
           getLocale: () => "zh-CN",
-          ...(persistentHost ? { getClient: () => hostClient } : {}),
+          ...(persistentHost
+            ? { getClient: () => (globalThis.delayedHost ? null : hostClient) }
+            : {}),
         });
         let control = installProjectTabs(projectTabsOptions());
         globalThis.revealProjectThread = (input) => control.revealThread(input);
         globalThis.projectTabsHostState = () => structuredClone(hostConfig);
+        globalThis.projectTabsHostReads = () => hostReads;
+        globalThis.projectTabsHostError = (message) => { hostReadError = message; };
+        globalThis.projectTabsConnectHost = () => control.refresh();
         let createdProjects = 0;
         document.querySelector("#create").onclick = () => {
           createdProjects += 1;
@@ -604,6 +616,185 @@ for (const dark of [false, true]) {
     await expect(settings(page)).toHaveCount(0);
   });
 }
+
+test("project tabs recover when the Host client arrives after a rejected local read", async ({
+  page,
+}, info) => {
+  await setup(page, { corrupt: true, persistentHost: true });
+  const alert = page.locator("[data-codexhost-project-tabs-error]");
+  const state = () => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")());
+  await expect.poll(state).toBeNull();
+  await expect(alert).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("codexhost.project-tabs.v1")))
+    .toBeNull();
+
+  // 常驻 Host 客户端晚到不是失败：Tab 仍可切换，客户端到达后补写进 Host。
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "delayedHost", true);
+    Reflect.get(globalThis, "restartProjectTabs")();
+  });
+  await category(page, "个人的项目").click();
+  await expect(category(page, "个人的项目")).toHaveAttribute("aria-pressed", "true");
+  await expect(alert).toBeHidden();
+  await expect.poll(state).toBeNull();
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "delayedHost", false);
+    Reflect.get(globalThis, "projectTabsConnectHost")();
+  });
+  await expect.poll(state).toMatchObject({ selected: "personal" });
+  await expect(category(page, "个人的项目")).toHaveAttribute("aria-pressed", "true");
+  await expect(alert).toBeHidden();
+  await page.screenshot({ path: info.outputPath("late-host-flushed.png") });
+});
+
+test("a corrupt local mirror does not fail a successful empty Host read", async ({
+  page,
+}, info) => {
+  await setup(page, { corrupt: true, persistentHost: true });
+  const alert = page.locator("[data-codexhost-project-tabs-error]");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostReads")()))
+    .toBeGreaterThan(0);
+  // 损坏镜像不是已保存的配置：Host 成功返回空时回到预置 Tab，且不会再
+  // 以“Host 为空 + 镜像损坏”报读写失败。
+  await expect(alert).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toBeNull();
+  await expect(category(page, "项目")).toHaveAttribute("aria-pressed", "true");
+  // 默认配置未选中任何 Tab，因此只有不属于任何 Tab 的项目可见。
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).toContainText("other-project");
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("codexhost.project-tabs.v1")))
+    .toBeNull();
+  await page.screenshot({ path: info.outputPath("corrupt-mirror-recovered.png") });
+
+  await category(page, "公司的项目").click();
+  await expect(category(page, "公司的项目")).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toMatchObject({ selected: "company" });
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const raw = localStorage.getItem("codexhost.project-tabs.v1");
+        return raw === null ? null : JSON.parse(raw).selected;
+      }),
+    )
+    .toBe("company");
+  await expect(alert).toBeHidden();
+  await page.screenshot({ path: info.outputPath("corrupt-mirror-saved.png") });
+});
+
+test("a Host-backed mirror follows cross-window changes without surfacing their storage errors", async ({
+  page,
+}, info) => {
+  await setup(page, { persistentHost: true });
+  const alert = page.locator("[data-codexhost-project-tabs-error]");
+  const reads = () => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostReads")());
+  await expect.poll(reads).toBeGreaterThan(0);
+  await expect(alert).toBeHidden();
+  // 让出一次事件循环，确保首次读取的续体已经记录 loadedClient，再触发
+  // storage 校正路径。
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toBeNull();
+  const initialReads = await reads();
+
+  await page.evaluate(() => {
+    localStorage.setItem("codexhost.project-tabs.v1", "broken");
+    window.dispatchEvent(new StorageEvent("storage", { key: "codexhost.project-tabs.v1" }));
+  });
+  await expect.poll(reads).toBeGreaterThan(initialReads);
+  await expect(alert).toBeHidden();
+  // 损坏镜像被静默忽略，Host 仍为空，界面保持预置分类。
+  await expect(category(page, "项目")).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toBeNull();
+
+  await page.evaluate(() => {
+    const next = {
+      version: 2,
+      tabs: [{ id: "work", name: "工作", prefixes: ["remote_company"] }],
+      assignments: {},
+      selected: "work",
+    };
+    localStorage.setItem("codexhost.project-tabs.v1", JSON.stringify(next));
+    window.dispatchEvent(new StorageEvent("storage", { key: "codexhost.project-tabs.v1" }));
+  });
+  await expect(alert).toBeHidden();
+  await expect(category(page, "工作")).toHaveAttribute("aria-pressed", "true");
+  await expect(rows(page)).toHaveCount(2);
+  // Host 为空而镜像有效时迁移进 Host，随后以 Host 结果为准。
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toMatchObject({ selected: "work" });
+  await page.screenshot({ path: info.outputPath("host-mirror-synced.png") });
+
+  await page.evaluate(() => Reflect.get(globalThis, "projectTabsHostError")("Host unavailable"));
+  await page.evaluate(() => {
+    window.dispatchEvent(new StorageEvent("storage", { key: "codexhost.project-tabs.v1" }));
+  });
+  await expect(alert).toContainText("Host unavailable");
+  await page.screenshot({ path: info.outputPath("host-error-after-storage.png") });
+});
+
+test("a selection made before the Host client arrives is flushed before Host is read", async ({
+  page,
+}, info) => {
+  await setup(page, { persistentHost: true });
+  const alert = page.locator("[data-codexhost-project-tabs-error]");
+  await expect(alert).toBeHidden();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostReads")()))
+    .toBeGreaterThan(0);
+
+  // 模拟常驻 Host 客户端晚到：选择与配置都只落在本地镜像，不能报读写失败。
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "delayedHost", true);
+    const next = {
+      version: 2,
+      tabs: [
+        { id: "company", name: "公司的项目", prefixes: ["remote_company"] },
+        { id: "personal", name: "个人的项目", prefixes: ["remote_zjarlin"] },
+      ],
+      assignments: {},
+      selected: "personal",
+    };
+    localStorage.setItem("codexhost.project-tabs.v1", JSON.stringify(next));
+    Reflect.get(globalThis, "restartProjectTabs")();
+  });
+  await expect(category(page, "个人的项目")).toHaveAttribute("aria-pressed", "true");
+  await category(page, "公司的项目").click();
+  await expect(category(page, "公司的项目")).toHaveAttribute("aria-pressed", "true");
+  await expect(alert).toBeHidden();
+  // 客户端尚未到达时，Host 不能被读取或写入。
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toBeNull();
+  const readsBeforeConnect = await page.evaluate(() =>
+    Reflect.get(globalThis, "projectTabsHostReads")(),
+  );
+
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "delayedHost", false);
+    Reflect.get(globalThis, "projectTabsConnectHost")();
+  });
+  // 客户端到达后先补写本地选择，读取结果不得把界面退回旧配置。
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostState")()))
+    .toMatchObject({ selected: "company" });
+  await expect(category(page, "公司的项目")).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "projectTabsHostReads")()))
+    .toBeGreaterThan(readsBeforeConnect);
+  await expect(alert).toBeHidden();
+  await page.screenshot({ path: info.outputPath("delayed-host-flushed.png") });
+});
 
 test("storage errors are visible and failed saves keep the form open", async ({ page }, info) => {
   await setup(page, { corrupt: true, failSave: true });

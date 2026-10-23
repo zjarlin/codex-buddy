@@ -26,7 +26,7 @@ Prompt 按钮调用项目自身的“新建会话”入口，等待目标项目�
 
 选中某个自定义 Tab 后点击原生“新建项目”入口，新项目首次渲染时直接保存为该 Tab 的手动归属，不再先落到“项目”。选中“项目”时保持默认行为；原生创建入口标记不可用时不影响现有分类与移动操作。
 
-配置、手动归属与选中分类由本地 Host 原子写入 `${CODEXHOST_DATA_DIR}/project-tabs.json`，未设置数据目录时使用 `~/.codexhost/project-tabs.json`，因此退出并重启 Desktop 后仍会恢复。旧版 `localStorage` 键 `codexhost.project-tabs.v1` 在 Host 尚无配置时自动迁移，之后继续作为同源窗口镜像并通过 storage 事件更新；Host 文件是事实源，不跨设备同步，不修改项目路径、远程仓库或 Thread 归属。Host 保存失败会显示错误并保留配置或移动表单，读取损坏配置会显示错误而不自动覆盖文件。
+配置、手动归属与选中分类由本地 Host 原子写入 `${CODEXHOST_DATA_DIR}/project-tabs.json`，未设置数据目录时使用 `~/.codexhost/project-tabs.json`，因此退出并重启 Desktop 后仍会恢复。旧版 `localStorage` 键 `codexhost.project-tabs.v1` 在 Host 尚无配置时自动迁移，之后继续作为同源窗口镜像并通过 storage 事件更新；Host 文件是事实源，不跨设备同步，不修改项目路径、远程仓库或 Thread 归属。Host 保存失败会显示错误并保留配置或移动表单。持久化文件损坏（非法 JSON，或引用了已不存在 Tab 的旧归属/选中项）时，Host 忽略其内容并按空配置启动，不再让该窗口永久报“读写失败”，下一次保存会原子覆盖该文件；权限等真实 I/O 错误仍如实上报。
 
 Renderer 从原生已提交的项目行和菜单所有者读取项目身份，仅对已渲染项目应用分类，并随 DOM 更新重新匹配。原生分区、展开/加载更多、活动状态筛选仍由 Desktop 管理；被原生列表折叠或尚未加载的项目仍需展开。无法识别的项目行保持可见，避免 Desktop 私有契约变化后误隐藏项目。卸载扩展会移除分类栏、菜单入口和隐藏标记，恢复原生列表。
 

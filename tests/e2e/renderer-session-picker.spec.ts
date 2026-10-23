@@ -589,7 +589,7 @@ test("a target that starts running after listing cannot receive the draft", asyn
   await transfer(page).click();
   await page.getByRole("button", { name: "Start target" }).click();
   await page.getByRole("button", { name: /Existing discussion/ }).click();
-  await expect(picker(page)).toContainText("已不处于完成状态");
+  await expect(picker(page)).toContainText("已不处于可续接状态");
   expect(await sends(page)).toEqual([]);
 });
 
@@ -600,7 +600,7 @@ test("holding Enter does not repeat a direct send", async ({ page }) => {
   await page.keyboard.down("Enter");
   await page.keyboard.up("Enter");
   expect(await sends(page)).toHaveLength(1);
-  expect(picker(page)).toHaveCount(0);
+  await expect(picker(page)).toHaveCount(0);
 });
 
 test("arrow navigation explicitly selects a transfer project", async ({ page }) => {

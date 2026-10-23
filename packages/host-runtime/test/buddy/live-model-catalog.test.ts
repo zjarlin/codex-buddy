@@ -79,7 +79,7 @@ describe("LiveModelCatalog", () => {
       hidden: false,
       supportedReasoningEfforts: [{ reasoningEffort: "max", description: "Deep reasoning" }],
       defaultReasoningEffort: "max",
-      inputModalities: ["text", "audio"],
+      inputModalities: ["text", "image", "audio"],
       supportsPersonality: false,
       multiAgentVersion: "v2",
       additionalSpeedTiers: ["fast"],

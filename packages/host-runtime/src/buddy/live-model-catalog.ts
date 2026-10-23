@@ -92,6 +92,14 @@ export class LiveModelCatalog {
   }
 }
 
+// 视觉助手已覆盖所有目录模型，客户端不必再按上游能力关闭图片输入。
+// 保留 text 在前、image 恒在，audio 仅在显式声明时保留。
+function visionCapableInputModalities(modalities: string[]): string[] {
+  const result = ["text", "image"];
+  if (modalities.includes("audio")) result.push("audio");
+  return result;
+}
+
 function projectModel(model: Record<string, unknown>, path: string, slug: string): JsonObject {
   const visibility = choice(model.visibility, ["list", "hide", "none"], `${path}.visibility`);
   const multiAgentVersion = optionalString(
@@ -120,10 +128,13 @@ function projectModel(model: Record<string, unknown>, path: string, slug: string
     supportedReasoningEfforts,
     defaultReasoningEffort:
       optionalString(model.default_reasoning_level, `${path}.default_reasoning_level`) ?? "none",
-    inputModalities: array(
-      absent(model.input_modalities, ["text", "image"]),
-      `${path}.input_modalities`,
-    ).map((value) => choice(value, ["text", "image", "audio"], `${path}.input_modalities`)),
+    // 网关的视觉助手可把任意模型目录条目转成可读图片的输入，因此这里统一向
+    // Codex 声明图片输入能力；只有目录显式声明 audio 时才额外透传音频。
+    inputModalities: visionCapableInputModalities(
+      array(absent(model.input_modalities, ["text"]), `${path}.input_modalities`).map((value) =>
+        choice(value, ["text", "image", "audio"], `${path}.input_modalities`),
+      ),
+    ),
     supportsPersonality: false,
     // 与原生前向兼容行为一致：未知的可选运行时版本不宣称已支持。
     multiAgentVersion:

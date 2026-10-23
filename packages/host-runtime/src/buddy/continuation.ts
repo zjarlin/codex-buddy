@@ -1,7 +1,6 @@
 import type { BuddyInterrupted, ThreadArchiveCompletedResult } from "@codexhost/shared-contracts";
 import type { JsonObject } from "@codexhost/protocol-core";
 import { object, result, type NativeRequest } from "./native.js";
-import { isCompletedCompaction } from "./context-compaction.js";
 
 const continuation =
   "继续本会话上一次尚未完成的请求。先核对已有回答、工具结果和当前实际状态，从中断处继续；不要盲目重放已完成的命令、修改或外部操作。若上次请求已经完成，简要说明即可。";
@@ -67,8 +66,8 @@ export class InterruptedConversations {
 
   // 只读取会话元数据和最新回合：`thread/read includeTurns` 会物化整段历史，
   // 单个大会话可能超过内部请求超时，进而让整轮扫描失败。分页接口按需返回单个
-  // 回合，只有压缩校验才需要完整 items；旧版不支持分页时回退到完整历史读取。
-  async #read(threadId: string, options: { items?: boolean } = {}) {
+  // 回合，默认不加载 items；旧版不支持分页时回退到完整历史读取。
+  async #read(threadId: string) {
     const metadata = result(await this.request("thread/read", { threadId, includeTurns: false }));
     const thread = object(metadata.thread);
     const embedded = Array.isArray(thread.turns) ? thread.turns : [];
@@ -77,7 +76,7 @@ export class InterruptedConversations {
       threadId,
       limit: 1,
       sortDirection: "desc",
-      itemsView: options.items ? "full" : "notLoaded",
+      itemsView: "notLoaded",
     });
     const error = object(response.error);
     const unsupported =
@@ -220,7 +219,6 @@ export class InterruptedConversations {
       model?: string;
       collaborationMode?: JsonObject;
       context?: JsonObject;
-      afterCompaction?: boolean;
     },
   ): Promise<string> {
     if (this.#pending.has(threadId)) throw new Error("该会话正在续接，请勿重复点击。");
@@ -229,15 +227,10 @@ export class InterruptedConversations {
       await this.#checkAllowed();
       options?.signal?.throwIfAborted();
       const verify = async () => {
-        const { thread, turn } = await this.#read(threadId, {
-          items: options?.afterCompaction === true,
-        });
+        const { thread, turn } = await this.#read(threadId);
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
-        const eligible = options?.afterCompaction
-          ? isCompletedCompaction(turn)
-          : recoverableStatus(thread, turn) !== null;
-        if (turn.id !== turnId || !eligible) {
+        if (turn.id !== turnId || recoverableStatus(thread, turn) === null) {
           throw new Error("会话状态已改变，请刷新列表。");
         }
       };

@@ -50,46 +50,25 @@ function fixture() {
 }
 
 describe("interrupted conversations", () => {
-  it.each([true, false])(
-    "only allows an explicitly confirmed completed compact turn to continue: %s",
-    async (compacted) => {
-      const request = vi.fn<NativeRequest>(async (method) => {
-        if (method === "thread/read")
-          return {
-            result: {
-              thread: {
-                status: { type: "idle" },
-                turns: [
-                  {
-                    id: "compact",
-                    status: "completed",
-                    items: [{ type: compacted ? "contextCompaction" : "agentMessage" }],
-                  },
-                ],
-              },
-            },
-          };
-        if (method === "turn/start") return { result: { turn: { id: "continued" } } };
-        return { result: {} };
-      });
-      const service = new InterruptedConversations(
-        request,
-        () => false,
-        async () => true,
-      );
-      await expect(service.continue("thread", "compact")).rejects.toThrow("会话状态已改变");
-      if (compacted) {
-        await expect(
-          service.continue("thread", "compact", { afterCompaction: true }),
-        ).resolves.toBe("continued");
-      } else {
-        await expect(
-          service.continue("thread", "compact", { afterCompaction: true }),
-        ).rejects.toThrow("会话状态已改变");
-        expect(request.mock.calls.map(([method]) => method)).not.toContain("turn/start");
-      }
-    },
-  );
+  it.each([
+    { status: "completed", items: [{ type: "contextCompaction" }] },
+    { status: "completed", items: [{ type: "agentMessage" }] },
+    { status: "failed", items: [{ type: "contextCompaction" }] },
+  ])("never continues after a compaction turn: %j", async (turn) => {
+    const request = vi.fn<NativeRequest>(async (method) => {
+      if (method === "thread/read")
+        return { result: { thread: { status: { type: "idle" }, turns: [turn] } } };
+      if (method === "turn/start") return { result: { turn: { id: "continued" } } };
+      return { result: {} };
+    });
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+    );
+    await expect(service.continue("thread", "compact")).rejects.toThrow("会话状态已改变");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("turn/start");
+  });
 
   it("scans every official page so older failed turns are not hidden", async () => {
     const request = vi.fn<NativeRequest>(async (method, params) => {
@@ -453,47 +432,6 @@ describe("interrupted conversations", () => {
     });
     // 扫描过程不物化整段历史，避免大会话超时拖垮整轮发现。
     expect(calls.some((call) => call.params.includeTurns === true)).toBe(false);
-  });
-
-  it("requests full items only for the compaction verification read", async () => {
-    const calls: { method: string; params: Record<string, unknown> }[] = [];
-    const request = vi.fn<NativeRequest>(async (method, params) => {
-      calls.push({ method, params });
-      if (method === "thread/read")
-        return {
-          // 元数据读取不返回 turns 字段；不能显式给 undefined（JsonValue 不含 undefined）。
-          result: { thread: { status: { type: "idle" } } },
-        };
-      if (method === "thread/turns/list")
-        return {
-          result: {
-            data: [
-              {
-                id: "compact",
-                status: "completed",
-                items: [{ type: "contextCompaction" }],
-              },
-            ],
-            nextCursor: null,
-            backwardsCursor: null,
-          },
-        };
-      if (method === "thread/resume") return { result: {} };
-      if (method === "turn/start") return { result: { turn: { id: "continued" } } };
-      return { result: {} };
-    });
-    const service = new InterruptedConversations(
-      request,
-      () => false,
-      async () => true,
-    );
-    await expect(service.continue("thread", "compact", { afterCompaction: true })).resolves.toBe(
-      "continued",
-    );
-    expect(calls).toContainEqual({
-      method: "thread/turns/list",
-      params: { threadId: "thread", limit: 1, sortDirection: "desc", itemsView: "full" },
-    });
   });
 
   it("falls back to the legacy full-history read when pagination is unsupported", async () => {

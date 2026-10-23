@@ -17,14 +17,9 @@ interface RecoveryOptions {
   changed?(): void;
   wait?(milliseconds: number, signal: AbortSignal): Promise<void>;
   nextModel(threadId: string, excluded: Set<string>, signal: AbortSignal): Promise<string | null>;
+  // 只压缩、不续跑：压缩是用户可预期的历史整理，不是新的执行请求。
   compact?(threadId: string, turnId: string, signal: AbortSignal): Promise<string>;
-  resume(
-    threadId: string,
-    turnId: string,
-    model: string,
-    signal: AbortSignal,
-    afterCompaction?: boolean,
-  ): Promise<void>;
+  resume(threadId: string, turnId: string, model: string, signal: AbortSignal): Promise<void>;
   report(
     threadId: string,
     reason: string,
@@ -215,11 +210,16 @@ export class AutomaticRecovery {
       );
       const compact = this.options.compact;
       if (!compact) throw new Error("原生压缩能力不可用。");
-      const compactTurnId = await compact(threadId, turnId, signal);
+      await compact(threadId, turnId, signal);
       signal.throwIfAborted();
-      await this.options.resume(threadId, compactTurnId, state.model, signal, true);
-      if (!signal.aborted && !state.seen.has(state.turnId ?? ""))
-        this.options.report(threadId, "原生压缩和历史保存已确认，已自动续接。", state.model, false);
+      // 压缩完成即结束本次恢复：不发送续接回合，由用户决定是否继续原任务。
+      this.options.report(
+        threadId,
+        "原生压缩和历史保存已确认；未自动续接，请检查压缩结果后再继续。",
+        state.model,
+        false,
+      );
+      this.cancel(threadId);
     } catch (error) {
       if (!signal.aborted) {
         const message = error instanceof Error ? error.message : String(error);

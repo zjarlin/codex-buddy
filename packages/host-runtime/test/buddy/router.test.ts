@@ -558,20 +558,14 @@ describe("Buddy family policy", () => {
       });
       if (message === "prompt_too_long") {
         await vi.waitFor(() =>
-          expect(f.requested.filter((entry) => entry.method === "turn/start")).toHaveLength(1),
+          expect(
+            f.requested.filter((entry) => entry.method === "thread/compact/start"),
+          ).toHaveLength(1),
         );
-        expect(f.requested.find((entry) => entry.method === "turn/start")?.params).toMatchObject({
-          model: "deepseek-flash",
-          approvalPolicy: "on-request",
-          sandboxPolicy: { type: "readOnly" },
-          cwd: f.home,
-        });
-        expect(
-          f.requested.find((entry) => entry.method === "turn/start")?.params.collaborationMode,
-        ).toBeUndefined();
-        expect(f.requested.filter((entry) => entry.method === "thread/compact/start")).toHaveLength(
-          1,
-        );
+        await new Promise((resolve) => setImmediate(resolve));
+        // 压缩只是整理历史，不续跑：不发送任何新回合。
+        expect(f.requested.filter((entry) => entry.method === "turn/start")).toEqual([]);
+        expect(f.router.hasActiveWork).toBe(false);
       } else {
         await new Promise((resolve) => setImmediate(resolve));
         expect(f.requested).toEqual([]);
@@ -582,7 +576,7 @@ describe("Buddy family policy", () => {
     },
   );
 
-  it("automatically compacts an overflow and continues with the original model and permissions", async () => {
+  it("compacts an overflow once without starting or resuming a turn", async () => {
     const historyTurns: JsonObject[] = [{ id: "initial", status: "failed" }];
     const f = await fixture({
       recovery: true,
@@ -597,7 +591,6 @@ describe("Buddy family policy", () => {
         cwd: f.home,
       }),
     );
-    const initial = (f.forwarded[0]?.params as JsonObject)?.model;
     f.router.observe({
       method: "turn/started",
       params: { threadId: "work", turn: { id: "initial" } },
@@ -617,37 +610,24 @@ describe("Buddy family policy", () => {
       },
     });
     await vi.waitFor(() =>
-      expect(f.requested.filter((entry) => entry.method === "turn/start")).toHaveLength(1),
+      expect(f.requested.filter((entry) => entry.method === "thread/compact/start")).toHaveLength(
+        1,
+      ),
     );
-    const resumed = f.requested.find((entry) => entry.method === "turn/start");
-    expect(resumed?.params).toMatchObject({
-      model: initial,
-      approvalPolicy: "on-request",
-      sandboxPolicy: { type: "readOnly" },
-      cwd: f.home,
-    });
-    expect(resumed?.params.collaborationMode).toMatchObject({ settings: { model: initial } });
-    expect(resumed?.params.input).toEqual([
-      { type: "text", text: expect.stringContaining("不要盲目重放") },
-    ]);
-    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
-      turnId: "continued-1",
-      acceptedModel: initial,
-      phase: "executing",
-      reason: expect.stringContaining("历史保存已确认"),
-    });
-    expect(f.requested.filter((entry) => entry.method === "thread/compact/start")).toHaveLength(1);
-    historyTurns.splice(0, historyTurns.length, { id: "continued-1", status: "failed" });
-    f.router.observe({
-      method: "turn/completed",
-      params: {
-        threadId: "work",
-        turn: { id: "continued-1", status: "failed", error: { code: 11115 } },
-      },
-    });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(f.requested.filter((entry) => entry.method === "turn/start")).toHaveLength(1);
+    expect(f.requested.filter((entry) => entry.method === "turn/start")).toEqual([]);
+    expect((await f.router.snapshot()).decisions[0]).toMatchObject({
+      phase: "executing",
+      reason: expect.stringContaining("未自动续接"),
+    });
     expect(f.router.hasActiveWork).toBe(false);
+    // 压缩历史本身就是已完成回合，不能被中断恢复入口当作失败回合续接。
+    historyTurns.splice(0, historyTurns.length, {
+      id: "compact",
+      status: "completed",
+      items: [{ type: "contextCompaction" }],
+    });
+    expect(f.requested.filter((entry) => entry.method === "turn/start")).toEqual([]);
   });
 
   it("automatically continues native failures and changes both model fields after three failures", async () => {

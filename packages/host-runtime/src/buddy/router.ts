@@ -106,14 +106,13 @@ export class BuddyRouter {
         });
         return inventory.executors.find((candidate) => !excluded.has(candidate.id))?.id ?? null;
       },
-      resume: async (threadId, turnId, model, signal, afterCompaction) => {
+      resume: async (threadId, turnId, model, signal) => {
         const context = this.#recoveryContext.get(threadId) ?? {};
         const mode = object(context.collaborationMode) as JsonObject;
         const nextTurnId = await continuation.continue(threadId, turnId, {
           signal,
           model,
           context,
-          ...(afterCompaction ? { afterCompaction: true } : {}),
           ...(typeof mode.mode === "string"
             ? {
                 collaborationMode: {

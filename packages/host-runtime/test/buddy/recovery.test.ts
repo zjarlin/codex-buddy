@@ -42,39 +42,53 @@ describe("automatic recovery", () => {
     { code: "prompt_too_long" },
     { codexErrorInfo: "contextWindowExceeded" },
     { message: "HTTP 400", error: { code: "context_length_exceeded" } },
-  ])(
-    "compacts an overflow once before continuing, without backoff or switching: %j",
-    async (error) => {
-      const compact = vi.fn(async () => "compact-turn");
-      const resume = vi.fn(async () => {});
-      const wait = vi.fn(async () => {});
-      const nextModel = vi.fn(async () => "other");
-      const report = vi.fn();
-      const service = new AutomaticRecovery({ compact, resume, wait, nextModel, report });
-      services.push(service);
-      service.watch("thread", "deepseek-v4.1-flash");
-      service.started("thread", "failed-turn");
-      service.completed("thread", "failed-turn", "failed", error);
-      service.completed("thread", "failed-turn", "failed", error);
-      await flush();
-      expect(compact).toHaveBeenCalledTimes(1);
-      expect(resume).toHaveBeenCalledWith(
-        "thread",
-        "compact-turn",
-        "deepseek-v4.1-flash",
-        expect.any(AbortSignal),
-        true,
-      );
-      expect(wait).not.toHaveBeenCalled();
-      expect(nextModel).not.toHaveBeenCalled();
-      service.started("thread", "continued-turn");
-      service.completed("thread", "continued-turn", "failed", error);
-      await flush();
-      expect(compact).toHaveBeenCalledTimes(1);
-      expect(resume).toHaveBeenCalledTimes(1);
-      expect(service.started("thread", "another-turn")).toBe(false);
-    },
-  );
+  ])("compacts an overflow once without backoff, switching or continuing: %j", async (error) => {
+    const compact = vi.fn(async () => "compact-turn");
+    const resume = vi.fn(async () => {});
+    const wait = vi.fn(async () => {});
+    const nextModel = vi.fn(async () => "other");
+    const report = vi.fn();
+    const service = new AutomaticRecovery({ compact, resume, wait, nextModel, report });
+    services.push(service);
+    service.watch("thread", "deepseek-v4.1-flash");
+    service.started("thread", "failed-turn");
+    service.completed("thread", "failed-turn", "failed", error);
+    service.completed("thread", "failed-turn", "failed", error);
+    await flush();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(resume).not.toHaveBeenCalled();
+    expect(wait).not.toHaveBeenCalled();
+    expect(nextModel).not.toHaveBeenCalled();
+    expect(service.started("thread", "continued-turn")).toBe(false);
+    expect(service.threadIds).toEqual([]);
+  });
+
+  it("compacts once without resuming when the compact turn succeeds", async () => {
+    const compact = vi.fn(async () => "compact-turn");
+    const resume = vi.fn(async () => {});
+    const report = vi.fn();
+    const service = new AutomaticRecovery({
+      compact,
+      resume,
+      report,
+      nextModel: async () => null,
+    });
+    services.push(service);
+    service.watch("thread", "model");
+    service.started("thread", "turn");
+    service.completed("thread", "turn", "failed", { code: 11115 });
+    await flush();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(resume).not.toHaveBeenCalled();
+    expect(service.pending).toBe(false);
+    expect(service.threadIds).toEqual([]);
+    expect(report).toHaveBeenLastCalledWith(
+      "thread",
+      expect.stringContaining("未自动续接"),
+      "model",
+      false,
+    );
+  });
 
   it("never resumes when compaction fails or the user cancels it", async () => {
     for (const cancelled of [false, true]) {

@@ -13,26 +13,48 @@ function settingsDirectory(environment: NodeJS.ProcessEnv): string {
   return dataDirectory ? path.resolve(dataDirectory) : path.join(os.homedir(), ".codexhost");
 }
 
+async function readProjectTabsConfig(file: string): Promise<ProjectTabsConfig | null> {
+  try {
+    return projectTabsConfigSchema.parse(JSON.parse(await readFile(file, "utf8")));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    // 配置被手改或旧版本写坏时整体拒绝会让窗口永久无法读写 Tab 设置；
+    // 与终端设置一致：忽略无法解析的旧内容，下一次保存覆盖它。
+    if (error instanceof SyntaxError || (error as { name?: unknown }).name === "ZodError") {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export class ProjectTabsSettingsStore {
   readonly #file: string;
   #config: ProjectTabsConfig | null = null;
   #loaded = false;
+  #loading: Promise<void> | null = null;
+
+  /** 并发首次读取只解析一次文件，避免重复校验或交错覆盖缓存。 */
+  async #ensureLoaded(): Promise<void> {
+    if (this.#loaded) return;
+    this.#loading ??= readProjectTabsConfig(this.#file).then(
+      (config) => {
+        this.#config = config;
+        this.#loaded = true;
+      },
+      (error: unknown) => {
+        this.#loading = null;
+        throw error;
+      },
+    );
+    await this.#loading;
+  }
 
   constructor(environment: NodeJS.ProcessEnv = process.env) {
     this.#file = path.join(settingsDirectory(environment), "project-tabs.json");
   }
 
   async load(): Promise<ProjectTabsState> {
-    if (!this.#loaded) {
-      try {
-        this.#config = projectTabsConfigSchema.parse(
-          JSON.parse(await readFile(this.#file, "utf8")),
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      this.#loaded = true;
-    }
+    await this.#ensureLoaded();
     return { config: this.#config ? projectTabsConfigSchema.parse(this.#config) : null };
   }
 

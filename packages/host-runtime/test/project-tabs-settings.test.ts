@@ -39,13 +39,23 @@ describe("Project tab settings", () => {
     );
   });
 
-  it("rejects corrupted persisted configuration", async () => {
-    const directory = await mkdtemp(path.join(tmpdir(), "codexhost-project-tabs-"));
-    cleanup.push(directory);
-    await writeFile(path.join(directory, "project-tabs.json"), '{"version":2,"tabs":[]}');
+  for (const [name, contents] of [
+    ["invalid JSON", '{"version":2,"tabs":['],
+    ["stale assignments", '{"version":2,"tabs":[],"assignments":{"p":"gone"},"selected":"gone"}'],
+  ] as const) {
+    it(`recovers from ${name} instead of locking tab settings`, async () => {
+      const directory = await mkdtemp(path.join(tmpdir(), "codexhost-project-tabs-"));
+      cleanup.push(directory);
+      const environment = { CODEXHOST_DATA_DIR: directory };
+      await writeFile(path.join(directory, "project-tabs.json"), contents);
 
-    await expect(
-      new ProjectTabsSettingsStore({ CODEXHOST_DATA_DIR: directory }).load(),
-    ).rejects.toThrow();
-  });
+      await expect(new ProjectTabsSettingsStore(environment).load()).resolves.toEqual({
+        config: null,
+      });
+      await expect(new ProjectTabsSettingsStore(environment).set(config)).resolves.toEqual({
+        config,
+      });
+      await expect(new ProjectTabsSettingsStore(environment).load()).resolves.toEqual({ config });
+    });
+  }
 });

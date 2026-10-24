@@ -1,3 +1,6 @@
+import type { RendererUsageStatisticsRequest } from "./console/pages/usage-statistics.js";
+import type { RendererUsageStatisticsHostsProvider } from "./console/usage/usage-hosts.js";
+import type { RemoteConnectionsControl } from "./remote-connections-control.js";
 import type { LoadedSessionsClient } from "./settings/loaded-sessions-table.js";
 import type { EmergencyProviderClient } from "./settings/emergency-provider-page.js";
 import { readCodexLocaleSettings, type CodexLocaleSettings } from "./codex-locale-adapter.js";
@@ -39,6 +42,10 @@ export interface RendererSettingsLifecycleOptions {
   getEmergencyProviderClient?(): EmergencyProviderClient | null;
   getBuddyClient?(): RendererModelClient | null;
   getThreadTerminalClient?(): RendererThreadTerminalClient | null;
+  getRemoteConnections?(): RemoteConnectionsControl | null;
+  requestUsageStatistics?: RendererUsageStatisticsRequest;
+  /** Machines the usage statistics page may read besides the local Host. */
+  usageStatisticsHosts?: RendererUsageStatisticsHostsProvider;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
 }
@@ -91,13 +98,22 @@ export function installRendererSettingsLifecycle(
       options.getEmergencyProviderClient ?? (() => null),
       options.getThreadTerminalClient ?? (() => null),
       options.getBuddyClient ?? (() => null),
+      options.getRemoteConnections ?? (() => null),
+      options.requestUsageStatistics,
+      options.usageStatisticsHosts,
     );
-    const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document);
+    const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document, {
+      onOpenChange(open) {
+        trigger?.setSelected(open);
+      },
+    });
     const nextTrigger = installRendererSettingsRailTrigger({
       available: nextShell.supported,
       messages,
       ownerDocument: ownerWindow.document,
       onOpen(opener, pageId) {
+        // Like a native destination, the current page ignores repeat activation.
+        if (shell?.open) return;
         const generation = ++openGeneration;
         void refreshLocale().then(() => {
           if (disposed || generation !== openGeneration) return;

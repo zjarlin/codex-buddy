@@ -8,10 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   ANTIGRAVITY_TRANSPORT_MODEL_ID,
-  CLAUDE_CODE_TRANSPORT_MODEL_ID,
-  DEEPSEEK_HARNESS_TRANSPORT_MODEL_ID,
   GROK_TRANSPORT_MODEL_ID,
-  OPENCODE_TRANSPORT_MODEL_ID,
   PI_TRANSPORT_MODEL_ID,
   antigravityTransportModelId,
   claudeTransportModelId,
@@ -48,7 +45,11 @@ import {
 } from "../src/versioned-renderer-adapter.js";
 
 function composerWithFiber(fiber: object): Element {
-  const composer = { matches: () => true, parentElement: null } as unknown as Element;
+  const composer = {
+    matches: () => true,
+    querySelector: () => null,
+    parentElement: null,
+  } as unknown as Element;
   Object.defineProperty(composer, "__reactFiber$test", {
     configurable: true,
     value: fiber,
@@ -513,7 +514,15 @@ describe("current Codex Renderer Agent adapter", () => {
             fakeWindow.__codexhostDraftPrewarmPolicyV1 = policy;
             expect(adapter.modelControl?.clientForHost?.("local")).toBe(localClient);
           }
-          expect(requestTarget.sendRequest).toHaveBeenCalledTimes(2);
+          expect(requestTarget.sendRequest.mock.calls.map(([method]) => method)).toEqual([
+            "codexhost/harness/display-settings/get",
+            "codexhost/settings/idle-release/set",
+            "codexhost/settings/thread-auto-archive/set",
+          ]);
+          expect(requestTarget.sendRequest).toHaveBeenCalledWith(
+            "codexhost/harness/display-settings/get",
+            {},
+          );
           expect(remoteTarget.sendRequest).not.toHaveBeenCalled();
           // Auxiliary lookups must not disable real connection or explicit policy invalidation.
           Object.defineProperty(requestTarget, "requestClient", { value: { ...requestTarget } });
@@ -557,15 +566,18 @@ describe("current Codex Renderer Agent adapter", () => {
   });
 
   it("creates base transport selections and clears routing for Codex", () => {
-    expect(modelSelectionForAgent(null, null, "pi")?.model).toBe(PI_TRANSPORT_MODEL_ID);
-    expect(modelSelectionForAgent(null, null, "claude-code")?.model).toBe(
-      CLAUDE_CODE_TRANSPORT_MODEL_ID,
-    );
-    expect(modelSelectionForAgent(null, null, "deepseek-harness")?.model).toBe(
-      DEEPSEEK_HARNESS_TRANSPORT_MODEL_ID,
-    );
-    expect(modelSelectionForAgent(null, null, "grok")?.model).toBe(GROK_TRANSPORT_MODEL_ID);
-    expect(modelSelectionForAgent(null, null, "opencode")?.model).toBe(OPENCODE_TRANSPORT_MODEL_ID);
+    for (const agent of [
+      "pi",
+      "claude-code",
+      "deepseek-harness",
+      "grok",
+      "opencode",
+      "unknown-plugin",
+    ]) {
+      expect(decodeHarnessPluginRoute(modelSelectionForAgent(null, null, agent)?.model)).toEqual({
+        harnessId: agent,
+      });
+    }
     expect(modelSelectionForAgent(null, null, "codex")).toBeNull();
   });
 
@@ -576,9 +588,11 @@ describe("current Codex Renderer Agent adapter", () => {
     expect(piTransportModelId(model, thinkingOptionId)).toBe(
       `${PI_TRANSPORT_MODEL_ID}@${model.id}@${thinkingOptionId}`,
     );
-    expect(modelSelectionForAgent(null, null, "pi", model, thinkingOptionId)?.model).toBe(
-      `${PI_TRANSPORT_MODEL_ID}@${model.id}@${thinkingOptionId}`,
-    );
+    expect(
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "pi", model, thinkingOptionId)?.model,
+      ),
+    ).toEqual({ harnessId: "pi", model, thinkingOptionId });
     expect(isPiTransportModelId(`${PI_TRANSPORT_MODEL_ID}@${model.id}@${thinkingOptionId}`)).toBe(
       true,
     );
@@ -603,8 +617,10 @@ describe("current Codex Renderer Agent adapter", () => {
       thinkingOptionId,
     });
     expect(
-      modelSelectionForAgent(null, null, "omp", model, thinkingOptionId, permissionModeId)?.model,
-    ).toBe(carrier);
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "omp", model, thinkingOptionId, permissionModeId)?.model,
+      ),
+    ).toEqual({ harnessId: "omp", model, thinkingOptionId, permissionModeId });
   });
 
   it("encodes Claude Model, Permission Mode, and Thinking in the transport carrier", () => {
@@ -620,9 +636,11 @@ describe("current Codex Renderer Agent adapter", () => {
       permissionModeId,
     });
     expect(
-      modelSelectionForAgent(null, null, "claude-code", model, thinkingOptionId, permissionModeId)
-        ?.model,
-    ).toBe(carrier);
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "claude-code", model, thinkingOptionId, permissionModeId)
+          ?.model,
+      ),
+    ).toEqual({ harnessId: "claude-code", model, thinkingOptionId, permissionModeId });
   });
 
   it("encodes DeepSeek Harness Model and Permission Mode in the transport carrier", () => {
@@ -638,9 +656,11 @@ describe("current Codex Renderer Agent adapter", () => {
       model,
     });
     expect(
-      modelSelectionForAgent(null, null, "deepseek-harness", model, undefined, permissionModeId)
-        ?.model,
-    ).toBe(carrier);
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "deepseek-harness", model, undefined, permissionModeId)
+          ?.model,
+      ),
+    ).toEqual({ harnessId: "deepseek-harness", model, permissionModeId });
   });
 
   it("encodes Grok Model, Permission Mode, and Thinking in the transport carrier", () => {
@@ -656,8 +676,11 @@ describe("current Codex Renderer Agent adapter", () => {
       permissionModeId,
     });
     expect(
-      modelSelectionForAgent(null, null, "grok", model, thinkingOptionId, permissionModeId)?.model,
-    ).toBe(carrier);
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "grok", model, thinkingOptionId, permissionModeId)
+          ?.model,
+      ),
+    ).toEqual({ harnessId: "grok", model, thinkingOptionId, permissionModeId });
     expect(
       decodeGrokTransportModelId(`${GROK_TRANSPORT_MODEL_ID}@${model.id}@@${thinkingOptionId}`),
     ).toEqual({ model, thinkingOptionId });
@@ -678,9 +701,11 @@ describe("current Codex Renderer Agent adapter", () => {
       thinkingOptionId,
     });
     expect(
-      modelSelectionForAgent(null, null, "opencode", model, thinkingOptionId, permissionModeId)
-        ?.model,
-    ).toBe(carrier);
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "opencode", model, thinkingOptionId, permissionModeId)
+          ?.model,
+      ),
+    ).toEqual({ harnessId: "opencode", model, thinkingOptionId, permissionModeId });
   });
 
   it("encodes Hermes Model and Permission Mode through the shared plugin route", () => {
@@ -713,9 +738,11 @@ describe("current Codex Renderer Agent adapter", () => {
       thinkingOptionId,
     });
     expect(
-      modelSelectionForAgent(null, null, "antigravity", model, thinkingOptionId, permissionModeId)
-        ?.model,
-    ).toBe(carrier);
+      decodeHarnessPluginRoute(
+        modelSelectionForAgent(null, null, "antigravity", model, thinkingOptionId, permissionModeId)
+          ?.model,
+      ),
+    ).toEqual({ harnessId: "antigravity", model, thinkingOptionId, permissionModeId });
     expect(
       decodeAntigravityTransportModelId(
         `${ANTIGRAVITY_TRANSPORT_MODEL_ID}@${model.id}@@${thinkingOptionId}`,

@@ -14,7 +14,12 @@ import {
 import { installRendererHostRouting, type RendererHostRouting } from "./renderer-host-routing.js";
 
 // 注入扩展和网页 Renderer 共用的浏览器入口，不依赖 Electron 或 Inspector。
-export { committedReactAncestors } from "./renderer-react-ownership.js";
+
+// Browser-safe public contracts shared with the injected Renderer extension.
+export {
+  committedReactAncestors,
+  REACT_FIBER_WALK_LIMIT_EVENT,
+} from "./renderer-react-ownership.js";
 export type { RendererHostRoute, RendererHostRouting } from "./renderer-host-routing.js";
 export { recentCompletedSessions, type RecentSessionsRequest } from "./recent-sessions.js";
 

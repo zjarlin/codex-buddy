@@ -19,6 +19,8 @@ import {
   type BackgroundUpdateStatus,
 } from "./status.js";
 
+import { waitForUpdaterReady } from "./updater-ready.js";
+
 const REQUEST_SCHEMA_VERSION = 1;
 const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 30, 70, 150, 300] as const;
 
@@ -84,7 +86,8 @@ export interface BackgroundUpdateManager {
     options: WindowsInstallerUpdateOptions,
   ): Promise<PreparedBackgroundUpdate>;
   prepareMacOsDmg(options: MacOsDmgUpdateOptions): Promise<PreparedBackgroundUpdate>;
-  start(prepared: PreparedBackgroundUpdate): StartedBackgroundUpdate;
+  /** Resolves only after the Updater validates the owner and is waiting for its exit. */
+  start(prepared: PreparedBackgroundUpdate): Promise<StartedBackgroundUpdate>;
   confirmRestart(prepared: PreparedBackgroundUpdate): Promise<void>;
   readStatus(statusPath: string): Promise<BackgroundUpdateStatus | null>;
 }
@@ -497,7 +500,7 @@ export function createBackgroundUpdateManager(
       );
     },
 
-    start(prepared: PreparedBackgroundUpdate): StartedBackgroundUpdate {
+    async start(prepared: PreparedBackgroundUpdate): Promise<StartedBackgroundUpdate> {
       if (
         preparedRequests.has(prepared.requestPath) &&
         !startableRequests.has(prepared.requestPath)
@@ -510,10 +513,21 @@ export function createBackgroundUpdateManager(
         );
       }
       startableRequests.delete(prepared.requestPath);
-      const child = spawnUpdater(prepared.helperPath, prepared.requestPath);
-      if (child.pid === undefined)
-        throw new Error("background Updater did not report a process ID");
-      return Object.freeze({ ...prepared, updaterPid: child.pid });
+      try {
+        const child = spawnUpdater(prepared.helperPath, prepared.requestPath);
+        await waitForUpdaterReady(child, () => this.readStatus(prepared.statusPath));
+        if (child.pid === undefined)
+          throw new Error("background Updater did not report a process ID");
+        return Object.freeze({ ...prepared, updaterPid: child.pid });
+      } catch (error) {
+        await writeFailedStatus(
+          prepared.statusPath,
+          prepared.version,
+          prepared.installation,
+          error,
+        );
+        throw error;
+      }
     },
 
     async readStatus(statusPathValue: string): Promise<BackgroundUpdateStatus | null> {

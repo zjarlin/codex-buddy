@@ -1,5 +1,9 @@
-import { harnessIdSchema } from "@codexhost/shared-contracts";
-import { harnessModelRefSchema } from "@codexhost/shared-contracts";
+import {
+  harnessIdSchema,
+  harnessPluginDescriptorSchema,
+  harnessModelRefSchema,
+  harnessThinkingOptionIdSchema,
+} from "@codexhost/shared-contracts";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 
 import type { RendererGitContext } from "../src/renderer-git-sidebar.js";
@@ -7,6 +11,7 @@ import type * as RendererComposerDom from "../src/renderer-composer-dom.js";
 import type { BuddyControlContext } from "../src/buddy/control.js";
 import {
   isRendererModelPickerDisabled,
+  rendererModelSelectionFailed,
   type RendererModelControlView,
 } from "../src/renderer-model-picker.js";
 import type { RendererRequestOptions } from "../src/renderer-request-sender.js";
@@ -17,18 +22,22 @@ import type * as VersionedRendererAdapter from "../src/versioned-renderer-adapte
 
 const testState = vi.hoisted(() => ({
   prewarmClears: 0,
+  notifyMutations: null as null | ((records: MutationRecord[]) => void),
+  animationFrames: [] as FrameRequestCallback[],
   composer: null as unknown as Element,
   editor: null as unknown as Element,
   sendButton: null as unknown as HTMLButtonElement,
   renderedModelViews: [] as RendererModelControlView[],
   selectModel: null as null | ((modelId: string) => void),
   refreshModels: undefined as undefined | (() => void),
+  selectThinking: null as null | ((thinkingOptionId: string) => void),
   getConnectionDiagnostics: null as null | (() => RendererConnectionDiagnostics | null),
   getSessionImportClient: null as null | (() => RendererSessionImportClient | null),
   getUpdateClient: null as null | (() => unknown),
   getProjectSyncClient: null as null | (() => unknown),
   projectTabsOptions: null as null | { getClient?: () => unknown },
   sidebarOptions: null as null | Parameters<typeof installRendererSidebarAgentIcons>[0],
+  sidebarRefresh: vi.fn(),
   documentListeners: new Map<string, EventListener>(),
   modelTarget: ["conversation", "thread-a"] as readonly unknown[],
   gitContext: null as null | (() => RendererGitContext),
@@ -180,6 +189,8 @@ vi.mock("../src/buddy/control.js", () => ({
     };
   },
   prewarmClears: 0,
+  notifyMutations: null as null | ((records: MutationRecord[]) => void),
+  animationFrames: [] as FrameRequestCallback[],
 }));
 
 vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
@@ -188,16 +199,19 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
     ...original,
     composerForEditor: () => testState.composer,
     composerForElement: () => testState.composer,
-    editorForElement: () => testState.editor,
+    editorForElement: (element: Element) =>
+      element === testState.editor || element === testState.composer ? testState.editor : null,
     eventElement: () => testState.composer,
     mountComposerAgentControl: (
       ...args: Parameters<typeof RendererComposerDom.mountComposerAgentControl>
     ) => {
       testState.selectModel = args[7];
+      testState.selectThinking = args[8];
       testState.refreshModels = args[12];
       const control = {
         composer: testState.composer,
         composerId: "composer-1",
+        setPlugins: vi.fn(),
         root: { isConnected: true, remove: vi.fn() },
         picker: { root: { isConnected: true } },
         modelPicker: { root: { isConnected: true }, trigger: {} },
@@ -260,11 +274,12 @@ vi.mock("../src/versioned-renderer-adapter.js", async (importOriginal) => {
 });
 
 vi.mock("../src/renderer-sidebar-agent-icons.js", () => ({
+  SIDEBAR_THREAD_ROW_SELECTOR: "[data-app-action-sidebar-thread-row]",
   installRendererSidebarAgentIcons: (
     options: Parameters<typeof installRendererSidebarAgentIcons>[0],
   ) => {
     testState.sidebarOptions = options;
-    return { refresh: vi.fn(), dispose: vi.fn() };
+    return { refresh: testState.sidebarRefresh, dispose: vi.fn() };
   },
 }));
 
@@ -289,6 +304,16 @@ vi.mock("../src/renderer-settings-lifecycle.js", () => ({
     };
   },
 }));
+
+async function listHarnessPlugins() {
+  return {
+    plugins: ["pi", "claude-code", "deepseek-harness"].map((id) => ({
+      id,
+      name: id,
+      version: "1",
+    })),
+  };
+}
 
 function readyInspection(modelId = "claude-model-v1.b3B1cw") {
   const model = harnessModelRefSchema.parse({ id: modelId });
@@ -329,14 +354,25 @@ function emptyInspection() {
 
 function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   const listeners = new EventTarget();
-  const composer = {
+  class FakeElement {
+    readonly nodeType = 1;
+    closest(): Element | null {
+      return null;
+    }
+    querySelector(): Element | null {
+      return null;
+    }
+  }
+  const composer = Object.assign(new FakeElement(), {
     isConnected: true,
     getClientRects: () => [{}],
     matches: (selector: string) => selector === "[data-codex-composer-root]",
     querySelectorAll: (selector: string) => (selector === "button" ? [testState.sendButton] : []),
     querySelector: (selector: string) => (selector.includes("textarea") ? testState.editor : null),
-  } as unknown as Element;
-  const editor = { closest: () => composer } as unknown as Element;
+  }) as unknown as Element;
+  const editor = Object.assign(new FakeElement(), {
+    closest: () => composer,
+  }) as unknown as Element;
   const sendButton = {
     type: "submit",
     disabled: false,
@@ -349,6 +385,7 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   testState.renderedModelViews = [];
   testState.localeReads = [];
   testState.selectModel = null;
+  testState.selectThinking = null;
   testState.getConnectionDiagnostics = null;
   testState.getSessionImportClient = null;
   testState.documentListeners.clear();
@@ -356,6 +393,8 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   testState.prewarmClears = 0;
   testState.composerControl = null;
   testState.buddySetModelShortcutsView = vi.fn();
+  testState.notifyMutations = null;
+  testState.animationFrames = [];
   const window_ = {
     navigator: { languages },
     addEventListener: listeners.addEventListener.bind(listeners),
@@ -363,7 +402,8 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
     dispatchEvent: listeners.dispatchEvent.bind(listeners),
     setTimeout,
     clearTimeout,
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0),
+    requestAnimationFrame: (callback: FrameRequestCallback) =>
+      testState.animationFrames.push(callback),
     cancelAnimationFrame: clearTimeout,
     open: vi.fn(),
   };
@@ -381,9 +421,19 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   vi.stubGlobal("window", window_);
   vi.stubGlobal("document", document_);
   vi.stubGlobal("Node", { ELEMENT_NODE: 1 });
+  vi.stubGlobal("Element", FakeElement);
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    testState.animationFrames.push(callback),
+  );
   vi.stubGlobal(
     "MutationObserver",
     class {
+      constructor(callback: MutationCallback) {
+        testState.notifyMutations = (records) => callback(records, this);
+      }
+      takeRecords(): MutationRecord[] {
+        return [];
+      }
       observe(): void {}
       disconnect(): void {}
     },
@@ -450,6 +500,172 @@ it("reads locale before settings lifecycle initialization", async () => {
 });
 
 describe("Renderer binding Host-scoped Claude catalogs", () => {
+  it("loads remote sidebar artwork before any Composer opens on that Host", async () => {
+    installFakeBrowser();
+    const plugin = harnessPluginDescriptorSchema.parse({
+      id: "remote-only",
+      name: "Remote plugin",
+      version: "1",
+      icon: "data:image/svg+xml;base64,PHN2Zy8+",
+      iconStyle: {
+        vector: { viewBox: "0 0 24 24", color: "currentColor", paths: [{ d: "M0 0h4v4z" }] },
+      },
+    });
+    const local = {
+      listHarnessPlugins: vi.fn(async () => ({ plugins: [] })),
+      inspectThread: vi.fn(async () => ({ owner: "codex", locked: true })),
+      inspectThreadUsage: vi.fn(async () => ({ threadId: "thread-a", usage: null })),
+    };
+    const remote = {
+      listHarnessPlugins: vi.fn(async () => ({ plugins: [plugin] })),
+      inspectHarness: vi.fn(async () => readyInspection()),
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({});
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => "local",
+        knownHostIds: () => ["local", "remote"],
+        clientForHost: (host: string) => (host === "local" ? local : remote),
+      } as never,
+    );
+    try {
+      await vi.waitFor(() => expect(local.listHarnessPlugins).toHaveBeenCalledOnce());
+      expect(remote.listHarnessPlugins).not.toHaveBeenCalled();
+      const getPlugins = testState.sidebarOptions?.getPlugins;
+      assert(getPlugins);
+      expect(getPlugins("remote")).toBeUndefined();
+      await vi.waitFor(() => expect(getPlugins("remote")).toEqual([plugin]));
+      expect(remote.listHarnessPlugins).toHaveBeenCalledOnce();
+      expect(getPlugins("local")).toEqual([]);
+    } finally {
+      probe.dispose();
+    }
+  });
+
+  it("keeps main-branch styling for an identical old remote image without replacing metadata", async () => {
+    installFakeBrowser();
+    const localPlugin = harnessPluginDescriptorSchema.parse({
+      id: "pi",
+      name: "Local Pi",
+      version: "new",
+      icon: "data:image/svg+xml;base64,PHN2Zy8+",
+      iconStyle: {
+        vector: { viewBox: "0 0 24 24", color: "currentColor", paths: [{ d: "M0 0h4v4z" }] },
+      },
+    });
+    const remotePlugin = {
+      ...localPlugin,
+      name: "Remote Pi",
+      version: "old",
+      iconStyle: undefined,
+    };
+    const local = {
+      listHarnessPlugins: async () => ({ plugins: [localPlugin] }),
+      inspectHarness: async () => readyInspection(),
+      inspectThread: async () => ({ owner: "codex", locked: true }),
+      inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+    };
+    const remote = {
+      listHarnessPlugins: async () => ({ plugins: [remotePlugin] }),
+      inspectHarness: async () => readyInspection(),
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({});
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => "local",
+        knownHostIds: () => ["local", "remote"],
+        clientForHost: (host: string) => (host === "local" ? local : remote),
+      } as never,
+    );
+    try {
+      const getPlugins = testState.sidebarOptions?.getPlugins;
+      assert(getPlugins);
+      await vi.waitFor(() =>
+        expect(getPlugins("remote")).toEqual([
+          { ...remotePlugin, iconStyle: localPlugin.iconStyle },
+        ]),
+      );
+      expect(
+        testState
+          .getConnectionDiagnostics?.()
+          ?.snapshot()
+          .hosts.find(({ hostId }) => hostId === "remote")?.agents[0]?.plugin,
+      ).toEqual({
+        ...remotePlugin,
+        iconStyle: localPlugin.iconStyle,
+      });
+    } finally {
+      probe.dispose();
+    }
+  });
+
+  it("discovers session plugins per Host, excludes usage-only plugins and supports an empty directory", async () => {
+    installFakeBrowser();
+    let localPlugins = [
+      { id: "unseen-local", name: "Local plugin", version: "1" },
+      { id: "codex-usage", name: "Codex usage", version: "1", kind: "usage" as const },
+    ];
+    const local = {
+      listHarnessPlugins: async () => ({ plugins: localPlugins }),
+      inspectHarness: vi.fn(async () => readyInspection()),
+      inspectThread: vi.fn(async () => ({ owner: "codex", locked: true })),
+      inspectThreadUsage: vi.fn(async () => ({ threadId: "thread-a", usage: null })),
+    };
+    const remote = {
+      listHarnessPlugins: async () => ({
+        plugins: [{ id: "unseen-remote", name: "Remote plugin", version: "2" }],
+      }),
+      inspectHarness: vi.fn(async () => readyInspection()),
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({});
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => "local",
+        knownHostIds: () => ["local", "remote"],
+        clientForHost: (host: string) => (host === "local" ? local : remote),
+        subscribeThreadUsage: () => () => undefined,
+      } as never,
+    );
+    try {
+      const diagnostics = testState.getConnectionDiagnostics?.();
+      assert(diagnostics);
+      await diagnostics.refresh();
+      const hosts = diagnostics.snapshot().hosts;
+      expect(hosts.find(({ hostId }) => hostId === "local")?.agents).toMatchObject([
+        { agent: "unseen-local", plugin: { name: "Local plugin" }, availability: "ready" },
+      ]);
+      expect(hosts.find(({ hostId }) => hostId === "remote")?.agents).toMatchObject([
+        { agent: "unseen-remote", plugin: { name: "Remote plugin" }, availability: "ready" },
+      ]);
+      expect(local.inspectHarness.mock.calls.flat()).not.toContainEqual(
+        expect.objectContaining({ harnessId: "codex-usage" }),
+      );
+      expect(remote.inspectHarness).toHaveBeenCalledWith(
+        { harnessId: "unseen-remote", refresh: true, purpose: "availability" },
+        { priority: "background" },
+      );
+      localPlugins = [];
+      await diagnostics.refresh("local");
+      expect(diagnostics.snapshot().hosts.find(({ hostId }) => hostId === "local")?.agents).toEqual(
+        [],
+      );
+      expect(probe.lockedSelection()?.agent).toBe("codex");
+    } finally {
+      probe.dispose();
+    }
+  });
   it.each([
     { pendingHarness: "pi", modelFirst: true },
     { pendingHarness: "claude-code", modelFirst: true },
@@ -462,9 +678,11 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       const catalog = Promise.withResolvers<ReturnType<typeof readyInspection>>();
       if (modelFirst) catalog.resolve(readyInspection());
       const local = {
+        listHarnessPlugins,
         inspectHarness: vi.fn(async () => readyInspection()),
       };
       const remote = {
+        listHarnessPlugins,
         inspectHarness: vi.fn(
           async (input: { harnessId: string }, options?: RendererRequestOptions) => {
             if (!options) return catalog.promise;
@@ -508,15 +726,15 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
           });
         });
         expect(remote.inspectHarness).toHaveBeenCalledWith(
-          { harnessId: "pi", refresh: false },
+          { harnessId: "pi", refresh: false, purpose: "availability" },
           { priority: "background" },
         );
         expect(remote.inspectHarness).toHaveBeenCalledWith(
-          { harnessId: "claude-code", refresh: false },
+          { harnessId: "claude-code", refresh: false, purpose: "availability" },
           { priority: "background" },
         );
         expect(local.inspectHarness).toHaveBeenCalledWith(
-          { harnessId: "pi", refresh: false },
+          { harnessId: "pi", refresh: false, purpose: "availability" },
           { priority: "background" },
         );
         expect(remote.inspectThread).toHaveBeenCalledWith({ threadId: "thread-a" });
@@ -572,18 +790,50 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     );
     await Promise.resolve();
     const diagnostics = testState.getConnectionDiagnostics?.();
-    expect(
-      diagnostics
-        ?.snapshot()
-        .hosts.find(({ hostId }) => hostId === "local")
-        ?.agents.find(({ agent }) => agent === "pi"),
-    ).toMatchObject({ availability: "checking", error: null });
+    expect(diagnostics?.snapshot().hosts.find(({ hostId }) => hostId === "local")?.agents).toEqual(
+      [],
+    ); // An unresolved Host has no invented plugin directory.
     expect(inspectHarness).not.toHaveBeenCalled();
   });
+  it("includes discovered remote Hosts when the active Composer route is ambiguous", async () => {
+    installFakeBrowser();
+    const local = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
+    const remote = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "pi"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => null,
+        knownHostIds: () => ["local", "remote-ssh-discovered:linux"],
+        clientForHost: (hostId: string) => (hostId === "local" ? local : remote),
+      } as never,
+    );
+    const diagnostics = testState.getConnectionDiagnostics?.();
+    await diagnostics?.refresh();
+    expect(remote.inspectHarness).toHaveBeenCalledWith(
+      { harnessId: "pi", refresh: true, purpose: "availability" },
+      expect.anything(),
+    );
+    expect(diagnostics?.snapshot().hosts.map(({ hostId }) => hostId)).toEqual([
+      "local",
+      "remote-ssh-discovered:linux",
+    ]);
+    expect(
+      diagnostics?.snapshot().hosts[1]?.agents.find(({ agent }) => agent === "pi"),
+    ).toMatchObject({ availability: "ready", error: null });
+  });
+
   it("reports a disconnected Host and ignores its late availability reply without affecting local", async () => {
     installFakeBrowser();
     const pending = Promise.withResolvers<ReturnType<typeof readyInspection>>();
     const local = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection()),
       inspectThread: vi.fn(async () => ({ owner: "codex", locked: true })),
       inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
@@ -631,9 +881,162 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     ).toMatchObject({ availability: "ready", error: null });
   });
 
+  it("skips editor text/IME mutations but retains visibility and structural reconciliation", async () => {
+    installFakeBrowser();
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const { reconcileComposerNativeControls } = await import("../src/renderer-composer-dom.js");
+    installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+    const notify = testState.notifyMutations;
+    assert(notify);
+    const reconcile = vi.mocked(reconcileComposerNativeControls);
+    const flushFrame = () => {
+      for (const callback of testState.animationFrames.splice(0)) callback(performance.now());
+    };
+    reconcile.mockClear();
+    const text = { nodeType: 3, parentElement: testState.editor } as unknown as Text;
+    const mutation = (type: MutationRecordType, target: Node) =>
+      ({ type, target, addedNodes: [], removedNodes: [] }) as unknown as MutationRecord;
+
+    // Text replacement and rich-text paragraph edits are also childList changes.
+    for (let index = 0; index < 10; index += 1) {
+      notify([mutation("characterData", text), mutation("childList", testState.editor)]);
+      await Promise.resolve();
+    }
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(testState.animationFrames).toHaveLength(0);
+
+    notify([mutation("attributes", testState.editor)]);
+    notify([mutation("attributes", testState.editor)]);
+    await Promise.resolve();
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(testState.animationFrames).toHaveLength(1);
+    flushFrame();
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    reconcile.mockClear();
+
+    // Replacement/removal happens on the editor's parent, outside its contents.
+    const parent = Object.assign(Object.create(Element.prototype), { nodeType: 1 });
+    notify([mutation("childList", parent)]);
+    flushFrame();
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    reconcile.mockClear();
+
+    // Never drop a real structural change mixed into the same observer batch.
+    notify([
+      mutation("characterData", text),
+      mutation("childList", parent),
+      mutation("childList", testState.editor),
+    ]);
+    flushFrame();
+    expect(reconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh sidebar ownership during unchanged Host reconciliation, but refreshes on a Host switch", async () => {
+    installFakeBrowser();
+    let hostId = "local";
+    const host = {
+      listHarnessPlugins: async () => ({ plugins: [] }),
+      inspectThread: vi.fn(async () => ({ owner: "codex", locked: true })),
+      inspectThreadCommands: async () => ({ commands: [] }),
+      inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      { currentHostId: () => hostId, clientForHost: () => host } as never,
+    );
+    const getAgent = testState.sidebarOptions?.getLocalAgent;
+    assert(getAgent);
+    await vi.waitFor(() =>
+      expect(getAgent({ hostId: "local", threadId: "thread-a", draftId: null })).toBe("codex"),
+    );
+    const notify = testState.notifyMutations;
+    assert(notify);
+    const reconcile = () => {
+      notify([
+        {
+          type: "attributes",
+          target: testState.editor,
+          addedNodes: [],
+          removedNodes: [],
+        } as unknown as MutationRecord,
+      ]);
+      for (const callback of testState.animationFrames.splice(0)) callback(performance.now());
+    };
+    testState.sidebarRefresh.mockClear();
+    for (let index = 0; index < 10; index += 1) reconcile();
+    expect(testState.sidebarRefresh).not.toHaveBeenCalled();
+
+    hostId = "remote";
+    reconcile();
+    expect(testState.sidebarRefresh).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(getAgent({ hostId: "remote", threadId: "thread-a", draftId: null })).toBe("codex"),
+    );
+  });
+
+  it("refreshes sidebar ownership when a mounted Host disconnects or replaces its client without changing Host ID", async () => {
+    installFakeBrowser();
+    const unsubscribe = vi.fn();
+    const host = {
+      listHarnessPlugins: async () => ({ plugins: [] }),
+      inspectThread: async () => ({ owner: "codex", locked: true }),
+      inspectThreadCommands: async () => ({ commands: [] }),
+      inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+      subscribeThreadUsage: vi.fn(() => unsubscribe),
+    };
+    let client: typeof host | null = host;
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      { currentHostId: () => "local", clientForHost: () => client } as never,
+    );
+    await vi.waitFor(() =>
+      expect(
+        testState.sidebarOptions?.getLocalAgent?.({
+          hostId: "local",
+          threadId: "thread-a",
+          draftId: null,
+        }),
+      ).toBe("codex"),
+    );
+    const notify = testState.notifyMutations;
+    assert(notify);
+    const reconcile = () => {
+      notify([
+        {
+          type: "attributes",
+          target: testState.editor,
+          addedNodes: [],
+          removedNodes: [],
+        } as unknown as MutationRecord,
+      ]);
+      for (const callback of testState.animationFrames.splice(0)) callback(performance.now());
+    };
+    for (const next of [null, { ...host }]) {
+      testState.sidebarRefresh.mockClear();
+      client = next;
+      reconcile();
+      expect(testState.sidebarRefresh).toHaveBeenCalledOnce();
+      testState.sidebarRefresh.mockClear();
+      reconcile();
+      expect(testState.sidebarRefresh).not.toHaveBeenCalled();
+    }
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(host.subscribeThreadUsage).toHaveBeenCalledTimes(2);
+  });
+
   it("does not rediscover the request route for unrelated sidebar rows", async () => {
     installFakeBrowser();
     const host = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection()),
       inspectThread: vi.fn(async () => ({ owner: "codex", locked: true })),
       inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
@@ -686,6 +1089,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     const newModel = inspection.catalog.defaultModel;
     let resolveSelection!: (state: { effectiveModel: typeof newModel }) => void;
     const host = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => inspection),
       inspectThread: vi.fn(async () => ({
         owner: "external" as const,
@@ -743,7 +1147,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       expect(preventDefault).toHaveBeenCalledTimes(blocked ? 1 : 0);
       expect(stopImmediatePropagation).toHaveBeenCalledTimes(blocked ? 1 : 0);
     };
-    const expectRecoverableView = (error: string) => {
+    const expectRecoverableView = (error: string, selectionRejected: boolean) => {
       const view = testState.renderedModelViews.at(-1);
       assert(view);
       expect(view).toMatchObject({
@@ -754,12 +1158,16 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         error,
       });
       expect(isRendererModelPickerDisabled(view)).toBe(false);
+      // Only a rejected user choice pops the picker notice; a catalog mismatch does not.
+      expect(rendererModelSelectionFailed(view)).toBe(selectionRejected);
+      expect(view.selectionRejected).toBe(selectionRejected ? "model" : undefined);
+      expect(typeof view.selectionErrorId).toBe(selectionRejected ? "number" : "undefined");
       expect(probe.lockedSelection()?.model).toEqual(oldModel);
       expectSubmissionBlocked(true);
     };
 
     await vi.waitFor(() => {
-      expectRecoverableView("Existing Thread Model is absent from the current Catalog");
+      expectRecoverableView("Existing Thread Model is absent from the current Catalog", false);
     });
     expect(host.selectThreadModel).not.toHaveBeenCalled();
     expect(applyAgent).not.toHaveBeenCalled();
@@ -767,7 +1175,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     const selectModel = testState.selectModel;
     assert(selectModel);
     selectModel(newModel.id);
-    await vi.waitFor(() => expectRecoverableView("Model selection failed"));
+    await vi.waitFor(() => expectRecoverableView("Model selection failed", true));
     expect(host.selectThreadModel).toHaveBeenCalledExactlyOnceWith({
       threadId: "thread-a",
       model: newModel,
@@ -778,6 +1186,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       status: "selecting",
       selected: oldModel,
     });
+    expect(testState.renderedModelViews.at(-1)).not.toHaveProperty("selectionRejected");
     expect(probe.lockedSelection()?.model).toEqual(oldModel);
     expectSubmissionBlocked(true);
     resolveSelection({ effectiveModel: newModel });
@@ -788,15 +1197,117 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         selected: newModel,
       });
     });
+    expect(testState.renderedModelViews.at(-1)).not.toHaveProperty("selectionRejected");
+    expect(testState.renderedModelViews.at(-1)).not.toHaveProperty("selectionErrorId");
     expect(host.selectThreadModel).toHaveBeenCalledTimes(2);
     expect(probe.lockedSelection()?.model).toEqual(newModel);
     expectSubmissionBlocked(false);
     expect(applyAgent).not.toHaveBeenCalled();
   });
 
+  it("marks each rejected Thinking choice with a new notice id and keeps the confirmed option", async () => {
+    installFakeBrowser();
+    const model = harnessModelRefSchema.parse({ id: "claude-model-v1.b3B1cw" });
+    const high = harnessThinkingOptionIdSchema.parse("high");
+    const ultracode = harnessThinkingOptionIdSchema.parse("ultracode");
+    const inspection = readyInspection(model.id);
+    inspection.capabilities.configuration.selectThinkingOption = true;
+    const catalog = {
+      ...inspection.catalog,
+      models: [{ ref: model, label: "Haiku", supportedThinkingOptionIds: [high, ultracode] }],
+      thinkingOptions: [
+        { id: high, label: "High" },
+        { id: ultracode, label: "Ultracode" },
+      ],
+      defaultThinkingOptionId: high,
+    };
+    const rejection =
+      "Claude Code reports Ultracode is unavailable for the selected Model; choose another Model or Thinking option";
+    const host = {
+      inspectHarness: vi.fn(async () => ({ ...inspection, catalog })),
+      inspectThread: vi.fn(async () => ({
+        owner: "external" as const,
+        harnessId: "claude-code",
+        transportModelId:
+          "codexhost/claude-code-native@claude-model-v1.b3B1cw@bypassPermissions@high",
+        effectiveModel: model,
+        effectiveThinkingOptionId: high,
+        history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
+        locked: true,
+      })),
+      inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+      inspectThreadUsage: vi.fn(async () => ({
+        threadId: "thread-a",
+        usage: null,
+        accountCredits: null,
+      })),
+      selectThreadThinking: vi.fn(async () => {
+        throw new Error(rejection);
+      }),
+      subscribeThreadUsage: () => () => undefined,
+    };
+    const modelControl = {
+      ...host,
+      currentHostId: () => "local",
+      clientForHost: () => host,
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex", "claude-code"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      vi.fn(() => true),
+      modelControl as never,
+    );
+    await vi.waitFor(() => {
+      expect(testState.renderedModelViews.at(-1)).toMatchObject({
+        status: "ready",
+        selected: model,
+        selectedThinkingOptionId: high,
+      });
+    });
+
+    const rejectedView = async (): Promise<RendererModelControlView> => {
+      const selectThinking = testState.selectThinking;
+      assert(selectThinking);
+      const rendered = testState.renderedModelViews.length;
+      selectThinking(ultracode);
+      await vi.waitFor(() => {
+        expect(testState.renderedModelViews.length).toBeGreaterThan(rendered);
+        expect(testState.renderedModelViews.at(-1)).toMatchObject({ status: "error" });
+      });
+      const view = testState.renderedModelViews.at(-1);
+      assert(view);
+      expect(view).toMatchObject({
+        status: "error",
+        selected: model,
+        selectedThinkingOptionId: high,
+        error: rejection,
+        selectionRejected: "thinking",
+      });
+      expect(rendererModelSelectionFailed(view)).toBe(true);
+      expect(isRendererModelPickerDisabled(view)).toBe(false);
+      return view;
+    };
+
+    const first = await rejectedView();
+    const second = await rejectedView();
+    expect(host.selectThreadThinking).toHaveBeenCalledTimes(2);
+    expect(host.selectThreadThinking).toHaveBeenLastCalledWith({
+      threadId: "thread-a",
+      thinkingOptionId: ultracode,
+    });
+    // Same choice, same message: only the id tells the picker to show the notice again.
+    expect(second.selectionErrorId).toBeGreaterThan(first.selectionErrorId ?? Infinity);
+  });
+
   it("routes Session import to the current SSH Host", async () => {
     installFakeBrowser();
     const local = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection()),
       listSessionImportSources: vi.fn(async () => ({
         harnesses: [
@@ -807,6 +1318,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       importHarnessSession: vi.fn(async () => ({ threadId: "local-thread" })),
     };
     const remote = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection()),
       listSessionImportSources: vi.fn(async () => ({
         harnesses: [
@@ -863,6 +1375,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     let dshAvailable = true;
     let dshInspections = 0;
     const local = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async ({ harnessId }: { harnessId: string }) => {
         if (harnessId !== "deepseek-harness") return readyInspection();
         dshInspections += 1;
@@ -923,6 +1436,89 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     probe.dispose();
   });
 
+  it.each(["local", "remote"])(
+    "keeps %s Harness operations isolated with an ambiguous global route",
+    async (ownerHostId) => {
+      installFakeBrowser();
+      let globalHostId: string | null = null;
+      const local = {
+        listHarnessPlugins,
+        inspectHarness: vi.fn(async () => readyInspection()),
+        inspectThread: vi.fn(async () => ({
+          owner: "external" as const,
+          harnessId: "claude-code",
+          transportModelId:
+            "codexhost/claude-code-native@claude-model-v1.b3B1cw@bypassPermissions@auto",
+          effectiveModel: harnessModelRefSchema.parse({ id: "claude-model-v1.b3B1cw" }),
+          history: { fork: true, forkAcrossCwd: false, rollbackLastTurn: true },
+          locked: true,
+        })),
+        inspectThreadCommands: vi.fn(async () => ({ commands: [] })),
+        inspectThreadUsage: vi.fn(async () => ({ threadId: "thread-a", usage: null })),
+        selectThreadModel: vi.fn(async ({ model }: { model: unknown }) => ({
+          effectiveModel: model,
+        })),
+      };
+      const remote = {
+        listHarnessPlugins,
+        inspectHarness: vi.fn(async () => {
+          throw new Error("Harness unsupported on stock Codex");
+        }),
+        inspectThread: vi.fn(async () => {
+          throw new Error("Thread is not on this Host");
+        }),
+      };
+      const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex", "claude-code"],
+        defaultAgent: "codex",
+      });
+      probe.setAdapter(
+        {
+          state: "installing",
+          reason: "draft-routing-policy-unavailable",
+          modelUpdates: 0,
+          hook: null,
+        },
+        undefined,
+        undefined,
+        {
+          currentHostId: (composer?: Element) =>
+            composer === testState.composer ? ownerHostId : globalHostId,
+          clientForHost: (hostId: string) => (hostId === ownerHostId ? local : remote),
+          inspectThreadUsage: () => {
+            throw new Error("Global client must not be used");
+          },
+          selectThreadModel: () => {
+            throw new Error("Global client must not be used");
+          },
+        } as never,
+      );
+      await vi.waitFor(() => expect(testState.renderedModelViews.at(-1)?.status).toBe("ready"));
+      for (const hostId of [null, "local", "remote", "local"]) {
+        globalHostId = hostId;
+        window.dispatchEvent(new Event("codexhost:draft-prewarm-policy-changed"));
+        await Promise.resolve();
+      }
+      await testState
+        .getConnectionDiagnostics?.()
+        ?.refresh(ownerHostId === "local" ? "remote" : "local");
+      testState.selectModel?.("claude-model-v1.b3B1cw");
+      await vi.waitFor(() => expect(local.selectThreadModel).toHaveBeenCalled());
+      await vi.waitFor(() => expect(testState.renderedModelViews.at(-1)?.status).toBe("ready"));
+      expect(local.inspectThread).toHaveBeenCalledWith({ threadId: "thread-a" });
+      expect(remote.inspectThread).not.toHaveBeenCalled();
+      expect(testState.renderedModelViews.at(-1)?.status).toBe("ready");
+      expect(
+        testState.sidebarOptions?.getLocalAgent?.({
+          hostId: ownerHostId,
+          threadId: "thread-a",
+          draftId: null,
+        }),
+      ).toBe("claude-code");
+    },
+  );
+
   it("does not let a stale remote Host response mark a locked Claude Model unavailable", async () => {
     installFakeBrowser();
     let currentHostId = "host-a";
@@ -932,6 +1528,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     });
     let claudeInspections = 0;
     const hostA = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(({ harnessId }: { harnessId: string }) => {
         if (harnessId !== "claude-code") return Promise.resolve(readyInspection());
         claudeInspections += 1;
@@ -954,6 +1551,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       })),
     };
     const genericHostB = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection("opencodex-model-v1.generic")),
     };
     const modelControl = {
@@ -1002,11 +1600,14 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     });
     let claudeInspections = 0;
     const originalHost = {
-      inspectHarness: vi.fn(({ harnessId }: { harnessId: string }) => {
-        if (harnessId !== "claude-code") return Promise.resolve(readyInspection());
-        claudeInspections += 1;
-        return claudeInspections === 1 ? Promise.resolve(readyInspection()) : pendingCatalog;
-      }),
+      listHarnessPlugins,
+      inspectHarness: vi.fn(
+        ({ harnessId }: { harnessId: string }, options?: RendererRequestOptions) => {
+          if (harnessId !== "claude-code" || options) return Promise.resolve(readyInspection());
+          claudeInspections += 1;
+          return pendingCatalog;
+        },
+      ),
       inspectThread: vi.fn(async () => ({
         owner: "external" as const,
         harnessId: "claude-code",
@@ -1024,6 +1625,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       })),
     };
     const replacementHost = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection()),
     };
     let selectedHost: typeof originalHost | typeof replacementHost = originalHost;
@@ -1048,7 +1650,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
       modelControl as never,
     );
 
-    await vi.waitFor(() => expect(claudeInspections).toBe(2));
+    await vi.waitFor(() => expect(claudeInspections).toBe(1));
     selectedHost = replacementHost;
     resolveCatalog(readyInspection("claude-model-v1.c3RhbGU"));
     await Promise.resolve();
@@ -1066,6 +1668,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     installFakeBrowser();
     testState.modelTarget = ["default"];
     const hostA = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(async () => readyInspection()),
     };
     const modelControl = {
@@ -1107,9 +1710,12 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     installFakeBrowser();
     testState.modelTarget = ["default"];
     let hostId = "local";
-    const local = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const local = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
     const remoteModelId = "claude-model-v1.c29ubmV0";
-    const remote = { inspectHarness: vi.fn(async () => readyInspection(remoteModelId)) };
+    const remote = {
+      listHarnessPlugins,
+      inspectHarness: vi.fn(async () => readyInspection(remoteModelId)),
+    };
     const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
     const probe = installRendererBindingProbe({
       enabledAgents: ["codex", "claude-code"],
@@ -1155,8 +1761,8 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     installFakeBrowser();
     testState.modelTarget = ["default"];
     let hostId = "local";
-    const local = { inspectHarness: vi.fn(async () => readyInspection()) };
-    const remote = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const local = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
+    const remote = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
     const applyAgent = vi.fn<(agent: string) => boolean>(() => true);
     const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
     const probe = installRendererBindingProbe({
@@ -1192,6 +1798,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     installFakeBrowser();
     let claudeInspections = 0;
     const hostA = {
+      listHarnessPlugins,
       inspectHarness: vi.fn(({ harnessId }: { harnessId: string }) => {
         if (harnessId !== "claude-code") return Promise.resolve(readyInspection());
         claudeInspections += 1;
@@ -1213,7 +1820,7 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
         accountCredits: null,
       })),
     };
-    const local = { inspectHarness: vi.fn(async () => readyInspection()) };
+    const local = { listHarnessPlugins, inspectHarness: vi.fn(async () => readyInspection()) };
     const modelControl = {
       currentHostId: () => "host-a",
       clientForHost: vi.fn((hostId: string) => (hostId === "host-a" ? hostA : local)),

@@ -14,7 +14,11 @@ import {
   REMOTE_PROJECTS_SYNC_METHOD,
   sshGitMethods,
 } from "@codexhost/shared-contracts";
-import { createRendererModelClient, type RendererModelClient } from "./renderer-model-client.js";
+import {
+  createRendererModelClient,
+  THREAD_USAGE_UPDATED_METHOD,
+  type RendererModelClient,
+} from "./renderer-model-client.js";
 import { installRendererExternalQueue } from "./renderer-external-queue.js";
 import { installRendererExternalSteering } from "./renderer-external-steering.js";
 import {
@@ -26,6 +30,14 @@ import { createRendererSshGitSender } from "./renderer-ssh-git.js";
 import { createRendererSshAutoModelRoutesSender } from "./renderer-ssh-auto-model-routes.js";
 import { createRendererSshRemoteProjectsSender } from "./renderer-ssh-remote-projects.js";
 import { installRendererThreadArchive } from "./renderer-thread-archive.js";
+
+import { createRemoteAttachmentSender } from "./renderer-remote-attachments.js";
+import { restoreThreadReferenceCapability } from "./renderer-thread-reference-capability.js";
+import { createThreadReferenceContext } from "./renderer-thread-reference-context.js";
+import {
+  installRendererManualCompaction,
+  type RendererMessageTarget,
+} from "./renderer-manual-compaction.js";
 
 /** 只读页面读取共享 Host 连接；聊天仍使用带 SSH 语义的完整客户端。 */
 export function createLocalHostModelClient(readRouting: () => RendererHostRouting | undefined): {
@@ -78,7 +90,10 @@ export function createLocalHostModelClient(readRouting: () => RendererHostRoutin
   };
 }
 
-export function createRendererHostClients(readRouting: () => RendererHostRouting | undefined) {
+export function createRendererHostClients(
+  readRouting: () => RendererHostRouting | undefined,
+  messages: RendererMessageTarget | null = null,
+) {
   const localHost = createLocalHostModelClient(readRouting);
 
   let disposed = false;
@@ -87,7 +102,7 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
     {
       route: RendererHostRoute;
       client: RendererModelClient;
-      cleanups: (() => void)[];
+      cleanups: Set<() => void>;
     }
   >();
   const retire = (hostId: string): void => {
@@ -178,26 +193,91 @@ export function createRendererHostClients(readRouting: () => RendererHostRouting
         return sendRequest(method, params, options);
       };
     }
-    const client = createRendererModelClient([
+    const cleanups = new Set<() => void>();
+    const nativeClient = createRendererModelClient([
       {
         sendRequest: (method, params, options) =>
           send(method, params, options as RendererRequestOptions | undefined),
         ...(target.addNotificationCallback
-          ? { addNotificationCallback: target.addNotificationCallback.bind(target) }
+          ? {
+              addNotificationCallback(
+                methods: string | readonly string[],
+                listener: (notification: unknown) => void,
+              ) {
+                const unsubscribe = target.addNotificationCallback?.(methods, listener);
+                if (
+                  !messages ||
+                  !(typeof methods === "string" ? [methods] : methods).includes(
+                    THREAD_USAGE_UPDATED_METHOD,
+                  )
+                )
+                  return () => unsubscribe?.();
+                // Like manual compaction, observe the real Host frame before Desktop's
+                // app-server method table drops custom notifications. No synthetic Tokens.
+                const onMessage: Parameters<RendererMessageTarget["addEventListener"]>[1] = (
+                  event,
+                ) => {
+                  if (event.source != null && event.source !== messages) return;
+                  const message = event.data;
+                  if (
+                    disposed ||
+                    !message ||
+                    typeof message !== "object" ||
+                    !("type" in message) ||
+                    message.type !== "mcp-notification" ||
+                    !("hostId" in message) ||
+                    message.hostId !== route.hostId ||
+                    !("method" in message) ||
+                    message.method !== THREAD_USAGE_UPDATED_METHOD ||
+                    readRouting()?.forHost(route.hostId) !== route
+                  )
+                    return;
+                  listener(message);
+                };
+                const remove = () => {
+                  messages.removeEventListener("message", onMessage);
+                  cleanups.delete(remove);
+                };
+                messages.addEventListener("message", onMessage);
+                cleanups.add(remove);
+                return () => {
+                  remove();
+                  unsubscribe?.();
+                };
+              },
+            }
           : {}),
       },
     ]);
-    if (!client) return null;
-    const cleanups: (() => void)[] = [];
+    if (!nativeClient) return null;
+    const client = restoreThreadReferenceCapability(
+      nativeClient,
+      target,
+      () => !disposed && readRouting()?.forHost(route.hostId) === route,
+    );
     entries.set(route.hostId, { route, client, cleanups });
     try {
       for (const install of [
-        installRendererExternalQueue,
-        installRendererExternalSteering,
-        installRendererThreadArchive,
+        () => installRendererThreadArchive(target),
+        () => installRendererExternalQueue(target),
+        () =>
+          installRendererExternalSteering(
+            target,
+            createRemoteAttachmentSender(
+              target,
+              route.hostId,
+              () => !disposed && readRouting()?.forHost(route.hostId) === route,
+            ),
+            createThreadReferenceContext(
+              target,
+              route.hostId,
+              () => !disposed && readRouting()?.forHost(route.hostId) === route,
+            ),
+          ),
+        () => installRendererManualCompaction(target, route.hostId, messages),
       ]) {
-        const cleanup = install(target);
-        if (cleanup) cleanups.push(cleanup);
+        const cleanup = install();
+        if (cleanup) cleanups.add(cleanup);
       }
     } catch (error) {
       retire(route.hostId);

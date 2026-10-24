@@ -678,6 +678,46 @@ describe("KimiSession", () => {
       await rm(home, { recursive: true, force: true });
     });
 
+    it("rejects turn.steer and still rejects a second turn.start as sessionBusy", async () => {
+      const transport = new MockKimiTransport();
+      transport.promptMock = vi.fn(() => new Promise(() => {}));
+      const session = new KimiSession({
+        transport,
+        sessionId: "session-steer",
+        cwd: "D:/project",
+        initialState: {},
+      });
+      const turnId = hostTurnIdSchema.parse("turn-steer");
+      expect(session.capabilities.steer).toBeUndefined();
+      expect(
+        await session.execute({
+          type: "turn.start",
+          turnId,
+          input: [{ type: "text", text: "Task 1" }],
+        }),
+      ).toMatchObject({ ok: true });
+      expect(
+        await session.execute({
+          type: "turn.steer",
+          turnId,
+          input: [{ type: "text", text: "insert" }],
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "unsupported", message: expect.stringContaining("cannot steer") },
+      });
+      expect(
+        await session.execute({
+          type: "turn.start",
+          turnId: hostTurnIdSchema.parse("turn-steer-next"),
+          input: [{ type: "text", text: "Task 2" }],
+        }),
+      ).toMatchObject({ ok: false, error: { code: "sessionBusy" } });
+      await vi.waitFor(() => {
+        expect(transport.promptMock).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("rejects concurrent turn start with sessionBusy", async () => {
       const transport = new MockKimiTransport();
       transport.promptMock = vi.fn(
@@ -881,11 +921,25 @@ describe("KimiSession", () => {
         return { stopReason: "end_turn" };
       });
 
+      let snapshotReads = 0;
       const session = new KimiSession({
         transport,
         sessionId: "session-write",
         cwd: "D:/project",
         initialState: {},
+        readNativeSnapshot: async () => ({
+          turns:
+            snapshotReads++ === 0
+              ? []
+              : [
+                  {
+                    nativeTurnRef: createKimiNativeTurnRef("session-write", 0),
+                    input: [{ type: "text", text: "Create note.txt" }],
+                    items: [],
+                    outcome: { status: "succeeded" },
+                  },
+                ],
+        }),
       });
 
       const turnId = hostTurnIdSchema.parse("turn-write-1");
@@ -900,6 +954,11 @@ describe("KimiSession", () => {
         outputs.push(out);
         if (out.kind === "event" && out.event.type === "turn.completed") break;
       }
+
+      expect(outputs.at(-1)).toMatchObject({
+        kind: "event",
+        event: { type: "turn.completed", outcome: { status: "succeeded" } },
+      });
 
       // 1. Reasoning item was started and completed before tool
       const reasoningCompleted = outputs.find(
@@ -1182,11 +1241,25 @@ describe("KimiSession", () => {
         return { stopReason: "end_turn" };
       });
 
+      let snapshotReads = 0;
       const session = new KimiSession({
         transport,
         sessionId: "session-elic-fold",
         cwd: "D:/project",
         initialState: {},
+        readNativeSnapshot: async () => ({
+          turns:
+            snapshotReads++ === 0
+              ? []
+              : [
+                  {
+                    nativeTurnRef: createKimiNativeTurnRef("session-elic-fold", 0),
+                    input: [{ type: "text", text: "Test question tool" }],
+                    items: [],
+                    outcome: { status: "succeeded" },
+                  },
+                ],
+        }),
       });
 
       const turnId = hostTurnIdSchema.parse("turn-elic-fold-1");
@@ -1214,6 +1287,11 @@ describe("KimiSession", () => {
         }
         if (out.kind === "event" && out.event.type === "turn.completed") break;
       }
+
+      expect(outputs.at(-1)).toMatchObject({
+        kind: "event",
+        event: { type: "turn.completed", outcome: { status: "succeeded" } },
+      });
 
       // Verify reasoning item was emitted BEFORE interaction
       const reasoningCompleted = outputs.find(

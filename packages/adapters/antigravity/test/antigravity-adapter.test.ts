@@ -450,6 +450,7 @@ describe("Antigravity Adapter", () => {
     // the values are consumed percentages.
     expect(snapshot).toEqual({
       label: "Gemini Models · 5-hour window",
+      scope: { id: "Gemini Models", label: "Gemini Models" },
       usedPercent: 0,
       periodType: "five_hour",
       resetsAt: "2026-08-31T19:38:13Z",
@@ -457,11 +458,15 @@ describe("Antigravity Adapter", () => {
       productUsage: [
         {
           product: "Gemini Models · Weekly window",
+          periodType: "weekly",
+          scope: { id: "Gemini Models", label: "Gemini Models" },
           usagePercent: 2.65,
           resetsAt: "2026-09-01T03:17:57Z",
         },
         {
           product: "Claude and GPT models · Weekly window",
+          periodType: "weekly",
+          scope: { id: "Claude and GPT models", label: "Claude and GPT models" },
           usagePercent: 0,
           resetsAt: "2026-09-07T14:38:13Z",
         },
@@ -503,6 +508,8 @@ describe("Antigravity Adapter", () => {
     expect(snapshot?.productUsage).toEqual([
       {
         product: "Gemini Models · Weekly window",
+        periodType: "weekly",
+        scope: { id: "Gemini Models", label: "Gemini Models" },
         usagePercent: 54,
         resetsAt: "2026-09-15T00:56:00Z",
       },
@@ -855,7 +862,12 @@ if (${keepAlive}) {
       }
     });
 
-    it("passes a structured CLI result error through to the failed Turn", async () => {
+    it.each([
+      ["Synthetic native failure detail", true],
+      ["UNAVAILABLE (code 503): upstream temporarily unavailable", true],
+      ["FAILED_PRECONDITION (code 400): User location is not supported for the API use.", false],
+      ["Individual quota reached. Resets in 4h52m37s.", false],
+    ])("preserves native error %s with retryable=%s", async (nativeError, retryable) => {
       const streamLines = [
         JSON.stringify({
           event: "init",
@@ -867,8 +879,7 @@ if (${keepAlive}) {
           result: {
             conversation_id: "conv-err",
             status: "ERROR",
-            // Synthetic protocol fixture, not a captured agy error message.
-            error: "Synthetic native failure detail",
+            error: nativeError,
             num_turns: 1,
           },
         }),
@@ -905,11 +916,12 @@ if (${keepAlive}) {
             status: "failed",
             error: {
               code: "nativeFailure",
-              message: "Antigravity Turn ended with status ERROR: Synthetic native failure detail",
+              message: `Antigravity Turn ended with status ERROR: ${nativeError}`,
+              retryable,
             },
           },
         });
-        expect(JSON.stringify(completed)).toContain("Synthetic native failure detail");
+        expect(JSON.stringify(completed)).toContain(nativeError);
 
         await session.close();
       } finally {
@@ -917,6 +929,135 @@ if (${keepAlive}) {
         await cleanup();
       }
     });
+
+    it.each([
+      ["create", "ERROR"],
+      ["create", "SUCCESS"],
+      ["resume", "ERROR"],
+      ["resume", "SUCCESS"],
+    ] as const)(
+      "rejects another Conversation's result during %s (%s) before projecting it",
+      async (kind, status) => {
+        const conversationId = "conv-current";
+        const streamLines = [
+          ...(kind === "create"
+            ? [JSON.stringify({ event: "init", conversation_id: conversationId })]
+            : []),
+          JSON.stringify({
+            event: "result",
+            result: {
+              conversation_id: "conv-other",
+              status,
+              error: "User location is not supported for the API use.",
+              response: "Another Conversation's response",
+              usage: { input_tokens: 100 },
+              num_turns: 7,
+            },
+          }),
+        ];
+        const { command, cwd, cleanup } = await fakeStreamingAgy(streamLines);
+        const adapter = new AntigravityAdapter({
+          command,
+          environment: { ...process.env, CODEXHOST_DATA_DIR: cwd },
+        });
+        try {
+          const opened = await adapter.open(
+            kind === "create"
+              ? { kind, cwd }
+              : {
+                  kind,
+                  cwd,
+                  nativeRef: nativeSessionRefSchema.parse({
+                    harnessId: "antigravity",
+                    nativeSessionId: conversationId,
+                    formatVersion: 1,
+                  }),
+                },
+          );
+          if (!opened.ok) throw new Error(opened.error.message);
+          const session = opened.value;
+          const iterator = session.outputs[Symbol.asyncIterator]();
+          await session.execute({
+            type: "turn.start",
+            turnId: hostTurnIdSchema.parse("turn-result-isolation"),
+            input: [{ type: "text", text: "Continue this Conversation" }],
+          });
+          const events: HostEvent[] = [];
+          let event: HostEvent;
+          do {
+            event = await nextEvent(iterator);
+            events.push(event);
+          } while (event.type !== "turn.completed");
+          expect(event).toMatchObject({
+            outcome: {
+              status: "failed",
+              error: { code: "protocolError", retryable: false },
+            },
+          });
+          expect(event).not.toHaveProperty("nativeTurnRef");
+          expect(
+            events.some(({ type }) => type === "item.started" || type === "session.usage.changed"),
+          ).toBe(false);
+          expect(JSON.stringify(events)).not.toContain("User location is not supported");
+          const snapshot = await session.readSnapshot();
+          if (!snapshot.ok) throw new Error(snapshot.error.message);
+          expect(snapshot.value.turns).toEqual([]);
+          expect(snapshot.value.state?.nativeRef?.nativeSessionId).toBe(conversationId);
+        } finally {
+          await adapter.close();
+          await cleanup();
+        }
+      },
+    );
+
+    it.each(["conv-success", ""])(
+      "does not turn a successful result for %s into an error based on its text",
+      async (resultConversationId) => {
+        const response =
+          "The previous request reported: User location is not supported for the API use.";
+        const { command, cwd, cleanup } = await fakeStreamingAgy([
+          JSON.stringify({ event: "init", conversation_id: "conv-success" }),
+          JSON.stringify({
+            event: "result",
+            result: {
+              conversation_id: resultConversationId,
+              status: "SUCCESS",
+              response,
+              num_turns: 1,
+            },
+          }),
+        ]);
+        const adapter = new AntigravityAdapter({
+          command,
+          environment: { ...process.env, CODEXHOST_DATA_DIR: cwd },
+        });
+        try {
+          const opened = await adapter.open({ kind: "create", cwd });
+          if (!opened.ok) throw new Error(opened.error.message);
+          const iterator = opened.value.outputs[Symbol.asyncIterator]();
+          await opened.value.execute({
+            type: "turn.start",
+            turnId: hostTurnIdSchema.parse("turn-success-text"),
+            input: [{ type: "text", text: "Summarize the previous error" }],
+          });
+          let event: HostEvent;
+          do {
+            event = await nextEvent(iterator);
+          } while (event.type !== "turn.completed");
+          expect(event.outcome.status).toBe("succeeded");
+          expect(event.nativeTurnRef?.nativeSessionId).toBe("conv-success");
+          const snapshot = await opened.value.readSnapshot();
+          if (!snapshot.ok) throw new Error(snapshot.error.message);
+          expect(snapshot.value.turns[0]?.items[0]?.item).toMatchObject({
+            type: "agentMessage",
+            text: response,
+          });
+        } finally {
+          await adapter.close();
+          await cleanup();
+        }
+      },
+    );
 
     it("releases a completed Turn when its Subagent cannot be observed", async () => {
       const childId = "30dce1a0-bc56-4c5d-a50d-264f235f09a9";
@@ -1362,6 +1503,101 @@ setTimeout(() => { process.exit(0); }, 50);
           },
         });
 
+        await session.close();
+      } finally {
+        await adapter.close();
+        await cleanup();
+      }
+    });
+
+    it("does not fail a replied Turn that only repeats an earlier Turn's native error", async () => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), "codexhost-agy-sticky-error-"));
+      const cwd = await mkdtemp(path.join(os.tmpdir(), "codexhost-agy-sticky-error-cwd-"));
+      const cleanup = async (): Promise<void> => {
+        for (const target of [directory, cwd]) {
+          await rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+        }
+      };
+      const stale =
+        'request failed: Post "https://example.invalid/stream": proxyconnect tcp: connection refused';
+      const runsDir = path.join(directory, "runs");
+      // agy repeats the Conversation's first failure in every later result.
+      const results = [
+        { status: "ERROR", error: stale, num_turns: 1 },
+        { status: "ERROR", error: stale, num_turns: 2, response: "1\n" },
+        { status: "ERROR", error: "Individual quota reached.", num_turns: 3, response: "2\n" },
+        // no new reply: the response only carries the earlier Turn's
+        { status: "ERROR", error: stale, num_turns: 4, response: "2\n" },
+      ];
+      const scriptContent = `
+const fs = require('fs');
+const path = require('path');
+if (process.argv.includes("models")) {
+  process.stdout.write("gemini-3.7-flash-high\\tGemini 3.7 Flash High\\n");
+  process.exit(0);
+}
+if (!process.argv.includes("--input-format")) process.exit(0);
+const runsDir = ${JSON.stringify(runsDir)};
+fs.mkdirSync(runsDir, { recursive: true });
+const count = fs.readdirSync(runsDir).length;
+fs.writeFileSync(path.join(runsDir, "run-" + count + ".txt"), "");
+const result = ${JSON.stringify(results)}[count];
+process.stdout.write(JSON.stringify({ event: "init", conversation_id: "conv-sticky", init: { permission_mode: "default" } }) + "\\n");
+process.stdout.write(JSON.stringify({ event: "result", result: { conversation_id: "conv-sticky", ...result } }) + "\\n");
+`;
+      const jsPath = path.join(directory, "agy.cjs");
+      await writeFile(jsPath, scriptContent);
+      let command: string;
+      if (process.platform === "win32") {
+        command = path.join(directory, "agy.cmd");
+        await writeFile(command, `@node "${jsPath}" %*\r\n`);
+      } else {
+        command = path.join(directory, "agy");
+        await writeFile(command, `#!/usr/bin/env node\n${scriptContent}`);
+        await chmod(command, 0o755);
+      }
+
+      const adapter = new AntigravityAdapter({ command });
+      try {
+        const opened = await adapter.open({ kind: "create", cwd });
+        expect(opened.ok).toBe(true);
+        if (!opened.ok) return;
+        const session = opened.value;
+        const iterator = session.outputs[Symbol.asyncIterator]();
+        const outcomes: unknown[] = [];
+        const agentMessageTurns: string[] = [];
+        for (const [index, text] of ["fails", "print:1", "print:2", "fails again"].entries()) {
+          await session.execute({
+            type: "turn.start",
+            turnId: hostTurnIdSchema.parse(`turn-sticky-${String(index + 1)}`),
+            input: [{ type: "text", text }],
+          });
+          while (true) {
+            const event = await nextEvent(iterator);
+            if (event.type === "item.started" && event.item.type === "agentMessage") {
+              agentMessageTurns.push(event.turnId);
+            }
+            if (event.type === "turn.completed") {
+              outcomes.push(event.outcome);
+              break;
+            }
+          }
+        }
+        // the fourth Turn added no reply, so it must not get an agent message
+        expect(agentMessageTurns).toEqual(["turn-sticky-2", "turn-sticky-3"]);
+        expect(outcomes[0]).toMatchObject({
+          status: "failed",
+          error: { message: `Antigravity Turn ended with status ERROR: ${stale}` },
+        });
+        expect(outcomes[1]).toMatchObject({ status: "succeeded" });
+        expect(outcomes[2]).toMatchObject({
+          status: "failed",
+          error: { message: "Antigravity Turn ended with status ERROR: Individual quota reached." },
+        });
+        expect(outcomes[3]).toMatchObject({
+          status: "failed",
+          error: { message: `Antigravity Turn ended with status ERROR: ${stale}` },
+        });
         await session.close();
       } finally {
         await adapter.close();

@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 import path from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import { decodeHarnessPluginRoute, hostTurnIdSchema } from "@codexhost/shared-contracts";
+import { createHarnessAdapter } from "@codexhost/adapter-copilot/plugin";
 
 import { tailwindEsbuildPlugin } from "../../packages/renderer-extension/scripts/tailwind-esbuild-plugin.mjs";
 
@@ -21,12 +25,14 @@ const { outputFiles } = await build({
   stdin: {
     contents: `
       import { installRendererBindingProbe } from "./packages/renderer-extension/src/renderer-binding-probe.ts";
+      import { modelSelectionForAgent } from "./packages/renderer-extension/src/versioned-renderer-adapter.ts";
+      import { createDraftPrewarmPolicyBridge } from "./packages/desktop-control/src/renderer-draft-prewarm-runtime.ts";
       import { parseKiroModelCatalog } from "./packages/adapters/kiro-cli/src/models.ts";
       import { KIRO_COMMAND_CATALOG } from "./packages/adapters/kiro-cli/src/commands.ts";
 
       const model = { id: "pi-model-v1.startup" };
       const kiro = globalThis.startupAgent === "kiro-cli";
-      const inspection = {
+      const inspection = globalThis.startupInspection ?? {
         status: "ready",
         catalog: kiro ? parseKiroModelCatalog([{
           id: "model",
@@ -39,7 +45,7 @@ const { outputFiles } = await build({
             { value: "fixed", name: "Fixed Kiro Model", _meta: { kiro: { hasEffort: false } } },
           ],
         }]) : {
-          models: [{ ref: model, label: "Startup Model" }],
+          models: [{ ref: model, fastModel: { id: "pi-model-v1.startup-fast" }, label: "Startup Model" }],
           defaultModel: model,
           thinkingOptions: [],
         },
@@ -94,14 +100,17 @@ const { outputFiles } = await build({
       globalThis.appliedConfiguration = null;
       globalThis.buddyStatusRequests = 0;
       const binding = installRendererBindingProbe({
-        enabledAgents: ["codex", "pi", "deepseek-harness", "opencode", "claude-code", "grok", "omp", "kiro-cli"],
+        enabledAgents: ["codex", "pi", "deepseek-harness", "opencode", "claude-code", "grok", "omp", "kiro-cli", ...(globalThis.startupAgent ? [globalThis.startupAgent] : [])],
         defaultAgent: globalThis.startupAgent ?? "pi",
       });
       binding.setAdapter(
         { state: "ready", reason: "ready", modelUpdates: 0, hook: "model-state" },
         undefined,
-        (agent, model, thinkingOptionId) => {
-          globalThis.appliedConfiguration = { agent, model, thinkingOptionId };
+        (agent, model, thinkingOptionId, permissionModeId) => {
+          globalThis.appliedConfiguration = { agent, model, thinkingOptionId, ...(permissionModeId ? { permissionModeId } : {}) };
+          window.__codexhostHostRoutingV1?.forComposer()?.policy.select(
+            modelSelectionForAgent(null, null, agent, model, thinkingOptionId, permissionModeId)?.model ?? null,
+          );
           return true;
         },
         {
@@ -150,13 +159,32 @@ const { outputFiles } = await build({
       );
 
       setTimeout(() => {
-        const policy = {
-          state: "ready",
-          hostId: "local",
-          select: async () => undefined,
-          clear: async () => undefined,
+        globalThis.threadStartRequests = [];
+        const bridge = {
+          sendRequest: async (method, params) => {
+            globalThis.threadStartRequests.push({ method, params });
+            if (globalThis.nativeThreadStart) {
+              const result = await globalThis.nativeThreadStart(params, editor.textContent);
+              globalThis.nativeReply = result.text;
+            }
+            return { thread: { id: "fixture-thread" } };
+          },
+          prewarmThreadStart(params) { return this.sendRequest("thread/start", params); },
+          enqueueRequest: unavailable,
+          onResult: () => {},
+          onError: () => {},
         };
+        const policy = createDraftPrewarmPolicyBridge(
+          { onNotification() {}, onRequest() {}, dispatchAppServerResponse() {} },
+          bridge, "local", window, { discardAllPrewarmedThreads() {} },
+        );
         window.__codexhostHostRoutingV1 = { forComposer: () => ({ hostId: "local", policy }) };
+        globalThis.prewarmTestDraft = () => bridge.prewarmThreadStart({ cwd: "/fixture/workspace", model: "native" });
+        document.addEventListener("click", (event) => {
+          if (!event.defaultPrevented && event.target?.matches("button[type=submit]")) {
+            void bridge.sendRequest("thread/start", { cwd: "/fixture/workspace", model: "native" });
+          }
+        });
       }, 100);
     `,
     resolveDir: repositoryRoot,
@@ -180,6 +208,91 @@ test.beforeEach(async ({ page }) => {
     route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }),
   );
   await page.goto("http://codexhost.test/");
+});
+
+test("Copilot preselects Auto and sends without a manual Model choice", async ({ page }) => {
+  test.skip(
+    process.env.CODEXHOST_COPILOT_NATIVE_TEST !== "1",
+    "Requires the installed authenticated Copilot CLI",
+  );
+  test.setTimeout(90_000);
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "copilot-default-send-"));
+  const adapter = createHarnessAdapter({
+    environment: { ...process.env },
+    platform: process.platform,
+    managedRemoteHost: false,
+  });
+  try {
+    const inspection = await adapter.inspect({ cwd, refresh: true });
+    if (inspection.status !== "ready") throw new Error("Copilot inspection unavailable");
+    const initialModel = inspection.catalog.defaultModel;
+    expect(initialModel).toBeDefined();
+    await page.exposeFunction(
+      "nativeThreadStart",
+      async (params: { model: string }, text: string) => {
+        const route = decodeHarnessPluginRoute(params.model);
+        expect(route?.harnessId).toBe("copilot");
+        expect(route?.model).toEqual(initialModel);
+        expect(route?.permissionModeId).toBe("manual");
+        const opened = await adapter.open({
+          kind: "create",
+          cwd,
+          ...(route?.model ? { model: route.model } : {}),
+          ...(route?.permissionModeId ? { permissionModeId: route.permissionModeId } : {}),
+        });
+        if (!opened.ok) throw new Error(opened.error.message);
+        let terminal: string | undefined;
+        const reading = (async () => {
+          for await (const output of opened.value.outputs) {
+            if (output.kind === "event" && output.event.type === "turn.completed")
+              terminal = output.event.outcome.status;
+          }
+        })();
+        try {
+          expect(
+            (
+              await opened.value.execute({
+                type: "turn.start",
+                turnId: hostTurnIdSchema.parse("default-send"),
+                input: [{ type: "text", text }],
+              })
+            ).ok,
+          ).toBe(true);
+          await expect.poll(() => terminal, { timeout: 60_000 }).toBe("succeeded");
+          const snapshot = await opened.value.readSnapshot();
+          if (!snapshot.ok) throw new Error(snapshot.error.message);
+          return {
+            text: snapshot.value.turns
+              .flatMap((turn) =>
+                turn.items.flatMap(({ item }) => (item.type === "agentMessage" ? [item.text] : [])),
+              )
+              .join("\n"),
+          };
+        } finally {
+          await opened.value.close();
+          await reading;
+        }
+      },
+    );
+    await page.evaluate((inspection) => {
+      Reflect.set(globalThis, "startupAgent", "copilot");
+      Reflect.set(globalThis, "startupInspection", inspection);
+    }, inspection);
+    await page.addScriptTag({ content: browserBundle });
+    await expect(page.getByRole("button", { name: "Model: Auto", exact: true })).toBeEnabled();
+    await page
+      .getByRole("textbox")
+      .fill("Reply exactly AUTO_PRESELECTED_SEND_OK. Do not use tools.");
+    const send = page.locator("[data-codex-composer-root] button[type=submit]");
+    await expect(send).toBeEnabled();
+    await send.click();
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "nativeReply")), { timeout: 60_000 })
+      .toContain("AUTO_PRESELECTED_SEND_OK");
+  } finally {
+    await adapter.close();
+    await rm(cwd, { recursive: true, force: true });
+  }
 });
 
 test("a new conversation shows Harness commands but disables compact before a Thread exists", async ({
@@ -384,6 +497,76 @@ test("recovery follows the draft Harness without a routing panel or polling", as
   await expect(router).toHaveCount(0);
   await expect(recovery).toBeVisible();
   expect(await page.evaluate(() => Reflect.get(globalThis, "buddyStatusRequests"))).toBe(reads + 1);
+});
+
+test("a remounted draft keeps explicit Fast through submission, but a new draft starts without it", async ({
+  page,
+}) => {
+  await page.route("http://startup.test/", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }),
+  );
+  await page.goto("http://startup.test/");
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "codexhost.new-thread-preference.v1",
+      JSON.stringify({
+        version: 1,
+        lastAgent: "pi",
+        externalByAgent: {},
+      }),
+    ),
+  );
+  await page.addScriptTag({ content: browserBundle });
+  const fast = page.locator("[data-codexhost-fast-toggle]:visible");
+  await expect(fast).toHaveAttribute("aria-pressed", "false");
+  await fast.click();
+  await expect(fast).toHaveAttribute("aria-pressed", "true");
+  await page.evaluate(() => Reflect.get(globalThis, "prewarmTestDraft")());
+
+  const remount = async (newDraft: boolean) => {
+    await page.locator("[data-codex-composer-root]:visible").evaluate((original, newDraft) => {
+      const originalEditor = original.querySelector("[data-codex-composer]");
+      if (!originalEditor) throw new Error("Missing fixture editor");
+      const originalFiber = Object.getOwnPropertyDescriptor(
+        originalEditor,
+        "__reactFiber$startup",
+      )?.value;
+      if (!originalFiber) throw new Error("Missing fixture Fiber");
+      const data = originalFiber.updateQueue.memoCache.data.map((row: unknown[]) => [...row]);
+      if (newDraft) data[1][2] = "client-new-thread:next";
+      const fiber = { ...originalFiber, updateQueue: { memoCache: { data } } };
+      const composer = document.createElement("div");
+      composer.setAttribute("data-codex-composer-root", "true");
+      const editor = originalEditor.cloneNode(true);
+      Object.defineProperty(editor, "__reactFiber$startup", { configurable: true, value: fiber });
+      const toolbar = document.createElement("div");
+      const send = document.createElement("button");
+      send.type = "submit";
+      toolbar.append(send);
+      composer.append(editor, toolbar);
+      // Desktop can retain the old Composer or mount its replacement in another container;
+      // neither produces a paired removal/addition MutationRecord.
+      (original as HTMLElement).hidden = true;
+      document.body.append(composer);
+    }, newDraft);
+  };
+  await remount(false);
+  await expect(fast).toHaveAttribute("aria-pressed", "true");
+  await page.locator("[data-codex-composer-root]:visible button[type=submit]").click();
+  expect(await page.evaluate(() => Reflect.get(globalThis, "appliedConfiguration"))).toMatchObject({
+    agent: "pi",
+    model: { id: "pi-model-v1.startup-fast" },
+  });
+  const requests = await page.evaluate(() => Reflect.get(globalThis, "threadStartRequests"));
+  expect(requests).toHaveLength(2);
+  for (const request of requests) {
+    expect(request.method).toBe("thread/start");
+    expect(decodeHarnessPluginRoute(request.params.model)?.model).toEqual({
+      id: "pi-model-v1.startup-fast",
+    });
+  }
+  await remount(true);
+  await expect(fast).toHaveAttribute("aria-pressed", "false");
 });
 
 test("a draft waits for the Desktop prewarm policy before applying its Model", async ({ page }) => {

@@ -9,6 +9,7 @@ import type {
   RequestPermissionResponse,
 } from "@agentclientprotocol/sdk";
 import {
+  unsupportedSteer,
   HarnessOutputChannel,
   validateHostApprovalResponse,
   validateHostQuestionResponse,
@@ -43,6 +44,8 @@ import {
   type TurnOutcome,
   type TurnStartAccepted,
   type TurnStartCommand,
+  type TurnSteerAccepted,
+  type TurnSteerCommand,
 } from "@codexhost/harness-adapter";
 import {
   harnessIdSchema,
@@ -293,6 +296,7 @@ export class KimiSession implements HarnessSession {
   }
 
   execute(command: TurnStartCommand): Promise<HarnessResult<TurnStartAccepted>>;
+  execute(command: TurnSteerCommand): Promise<HarnessResult<TurnSteerAccepted>>;
   execute(command: TurnCancelCommand): Promise<HarnessResult<TurnCancelAccepted>>;
   execute(command: InteractionRespondCommand): Promise<HarnessResult<InteractionRespondAccepted>>;
   execute(command: ModelSelectCommand): Promise<HarnessResult<ModelSelectCompleted>>;
@@ -305,6 +309,7 @@ export class KimiSession implements HarnessSession {
   ): Promise<
     HarnessResult<
       | TurnStartAccepted
+      | TurnSteerAccepted
       | TurnCancelAccepted
       | InteractionRespondAccepted
       | ModelSelectCompleted
@@ -319,6 +324,9 @@ export class KimiSession implements HarnessSession {
     switch (command.type) {
       case "turn.start":
         return this.#handleTurnStart(command);
+      case "turn.steer":
+        // `kimi acp` has no same-turn insert. SDK Session.steer() starts another turn when idle.
+        return unsupportedSteer("Kimi ACP");
       case "turn.cancel":
         return this.#handleTurnCancel(command);
       case "interaction.respond":
@@ -589,7 +597,10 @@ export class KimiSession implements HarnessSession {
       });
     };
 
-    const completeAgentMessage = (phase?: "commentary" | "final_answer") => {
+    const completeAgentMessage = (
+      phase?: "commentary" | "final_answer",
+      outcome: HostItemOutcome = { status: "succeeded" },
+    ) => {
       if (currentAgentMessage) {
         const resolvedPhase = phase ?? currentAgentMessage.phase;
         const item: HostAgentMessageItem = {
@@ -598,9 +609,36 @@ export class KimiSession implements HarnessSession {
           text: currentAgentMessage.text,
           ...(resolvedPhase ? { phase: resolvedPhase } : {}),
         };
-        completeItem({ item, outcome: { status: "succeeded" } });
+        completeItem({ item, outcome });
         currentAgentMessage = null;
       }
+    };
+
+    const completeFinalMessage = (outcome: TurnOutcome) => {
+      completeAgentMessage(
+        outcome.status !== "succeeded"
+          ? "commentary"
+          : hasHadToolCallsInTurn
+            ? "final_answer"
+            : undefined,
+        outcome,
+      );
+    };
+
+    const getActiveTool = (
+      event: Extract<KimiTransportEvent, { type: "tool.call" | "tool.update" }>,
+    ) => {
+      const existing = accumulator.get(event.toolCallId);
+      if (existing) {
+        return existing.status === "completed" || existing.status === "failed"
+          ? undefined
+          : existing;
+      }
+      // A new tool begins a reply boundary; progress/results of an existing tool do not.
+      hasHadToolCallsInTurn = true;
+      completeReasoning();
+      completeAgentMessage("commentary");
+      return accumulator.getOrCreate(event.toolCallId, turnId, event.name, event.kind);
     };
 
     const handler: ActivePromptHandler = {
@@ -622,12 +660,8 @@ export class KimiSession implements HarnessSession {
             break;
           }
           case "tool.call": {
-            hasHadToolCallsInTurn = true;
-            completeReasoning();
-            if (currentAgentMessage) {
-              completeAgentMessage("commentary");
-            }
-            const state = accumulator.getOrCreate(event.toolCallId, turnId, event.name, event.kind);
+            const state = getActiveTool(event);
+            if (!state) break;
             state.name = canonicalizeKimiToolName(event.name, event.kind, event.args);
             if (event.kind) state.kind = event.kind;
             if (event.args !== undefined) state.rawInput = event.args;
@@ -642,11 +676,8 @@ export class KimiSession implements HarnessSession {
             break;
           }
           case "tool.update": {
-            completeReasoning();
-            if (currentAgentMessage) {
-              completeAgentMessage("commentary");
-            }
-            const state = accumulator.getOrCreate(event.toolCallId, turnId, event.name, event.kind);
+            const state = getActiveTool(event);
+            if (!state) break;
             if (state.name === "Tool" && event.name) {
               state.name = canonicalizeKimiToolName(
                 event.name,
@@ -814,10 +845,9 @@ export class KimiSession implements HarnessSession {
       });
     }
 
-    // Complete any open reasoning or message items immediately
     completeReasoning();
     if (isCommandTurn) appendAgentText(formatKimiCommandOutput(commandOutput));
-    completeAgentMessage(hasHadToolCallsInTurn ? "final_answer" : undefined);
+    // Normal prompts finalize their answer only after native outcome/identity validation.
 
     let currentNativeTurn: HostTurnSnapshot | null = null;
     if (isCommandTurn) {
@@ -829,6 +859,7 @@ export class KimiSession implements HarnessSession {
         : promptResponse?.stopReason === "cancelled"
           ? { status: "cancelled", reason: "Native command cancelled" }
           : { status: "succeeded" };
+      completeFinalMessage(outcome);
       const commandTurn: HostTurnSnapshot = {
         nativeTurnRef: createKimiNativeTurnRef(this.#sessionId, `command:${turnId}`),
         input: command.input,
@@ -941,6 +972,8 @@ export class KimiSession implements HarnessSession {
         status: "succeeded",
       };
     }
+
+    if (!isCommandTurn) completeFinalMessage(turnOutcome);
 
     const completedOutcome: TurnOutcome = currentNativeTurn?.checkpoint
       ? { ...turnOutcome, checkpoint: currentNativeTurn.checkpoint }

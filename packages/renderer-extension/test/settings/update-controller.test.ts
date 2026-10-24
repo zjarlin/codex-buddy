@@ -93,10 +93,10 @@ describe("shared update controller", () => {
     const { controller, client } = fixture();
     await controller.checkUpdate();
     await controller.startUpdate();
-    expect((await controller.checkUpdate()).status?.phase).toBe("downloading");
+    expect((await controller.checkUpdate())?.status?.phase).toBe("downloading");
     await controller.readUpdateStatus();
     client.checkUpdate.mockResolvedValue(check(null));
-    expect((await controller.checkUpdate()).status?.phase).toBe("ready-to-restart");
+    expect((await controller.checkUpdate())?.status?.phase).toBe("ready-to-restart");
     controller.dispose();
   });
 
@@ -134,7 +134,7 @@ describe("shared update controller", () => {
 
   it("ignores stale successful operations before a newer update", async () => {
     const { controller } = fixture(status("succeeded"));
-    expect((await controller.checkUpdate()).status).toBeNull();
+    expect((await controller.checkUpdate())?.status).toBeNull();
     controller.dispose();
   });
 });

@@ -27,7 +27,9 @@ ArchitecturesInstallIn64BitMode=arm64
 Source: "{#PayloadRoot}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
+Name: "{userdesktop}\CodexBuddy"; Filename: "{app}\bin\codexhost-start.exe"; WorkingDir: "{app}"
 Name: "{userprograms}\CodexBuddy"; Filename: "{app}\bin\codexhost-start.exe"; WorkingDir: "{app}"
+Name: "{userprograms}\CodexBuddy Console"; Filename: "{app}\bin\codexhost-start.exe"; Parameters: "--console"; WorkingDir: "{app}"
 
 [Dirs]
 Name: "{app}"

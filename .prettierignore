@@ -16,3 +16,5 @@ Cargo.lock
 
 # Pinned MIT sources from codex-buddy; retain upstream formatting.
 packages/buddy-engine/vendor/
+# Generated models.dev price snapshot.
+packages/host-runtime/src/model-prices.generated.ts

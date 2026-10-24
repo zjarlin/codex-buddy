@@ -87,6 +87,18 @@ describe("Renderer settings localization", () => {
       createDefaultRendererSettingsPages(rendererSettingsMessages("zh-CN")).map(
         ({ label }) => label,
       ),
-    ).toEqual(["连接", "账号", "路由", "应急供应商", "项目", "会话导入", "通用", "更新", "关于"]);
+    ).toEqual([
+      "连接",
+      "远程连接",
+      "账号",
+      "路由",
+      "应急供应商",
+      "项目",
+      "会话导入",
+      "用量统计",
+      "通用",
+      "更新",
+      "关于",
+    ]);
   });
 });

@@ -1,6 +1,7 @@
 import {
   BUDDY_SETTINGS_METHOD,
   buddySettingsSchema,
+  HARNESS_INSTALLATION_START_METHOD,
   HARNESS_LAUNCH_SETTINGS_GET_METHOD,
   HARNESS_LAUNCH_SETTINGS_SET_METHOD,
   PROJECT_TABS_GET_METHOD,
@@ -16,6 +17,7 @@ import {
   harnessThinkingOptionIdSchema,
   hostThreadIdSchema,
   hostTurnIdSchema,
+  type HarnessInstallationParams,
   type ThreadUsageInspection,
 } from "@codexhost/shared-contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -422,6 +424,71 @@ describe("Renderer fixed Model request client", () => {
     expect(sendRequest).toHaveBeenCalledExactlyOnceWith("codexhost/git/workflow/run", { threadId });
   });
 
+  it.each(["check", "update", "install"] as const)(
+    "routes Harness installation %s through the fixed Host method",
+    async (action) => {
+      const params = { harnessId: piHarnessId, action };
+      const result = {
+        currentVersion: "1.0.0",
+        latestVersion: "1.1.0",
+        updateAvailable: true,
+        canUpdate: true,
+      };
+      const task = { taskId: "00000000-0000-4000-8000-000000000001", status: "succeeded", result };
+      const sendRequest = vi.fn().mockResolvedValue(task);
+      const client = createRendererModelClient([{ sendRequest }]);
+      if (!client?.installation) throw new Error("Missing installation client");
+      await expect(client.installation(params)).resolves.toEqual(result);
+      expect(sendRequest).toHaveBeenCalledExactlyOnceWith(
+        HARNESS_INSTALLATION_START_METHOD,
+        params,
+        {
+          priority: "background",
+          timeoutMs: 15_000,
+        },
+      );
+      sendRequest.mockResolvedValueOnce({ ...task, result: { ...result, currentVersion: 42 } });
+      await expect(client.installation(params)).rejects.toThrow();
+      sendRequest.mockResolvedValueOnce({
+        ...task,
+        result: { ...result, command: "private-command" },
+      });
+      await expect(client.installation(params)).rejects.toThrow();
+    },
+  );
+
+  it.each([
+    { harnessId: "pi", action: "uninstall" },
+    { harnessId: "", action: "check" },
+    { harnessId: "pi", action: "update", command: "evil" },
+  ])("rejects invalid Harness installation params before sending: %j", async (params) => {
+    const sendRequest = vi.fn();
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client?.installation) throw new Error("Missing installation client");
+    await expect(client.installation(params as HarnessInstallationParams)).rejects.toThrow();
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+
+  it("asks an outdated remote for its runtime status again after it was updated", async () => {
+    const status = {
+      runningVersion: "0.12.0",
+      installedVersion: "0.12.0",
+      restartRequired: false,
+      remote: true,
+      updateSupported: true,
+      update: { phase: "idle", targetVersion: null, error: null },
+    };
+    const sendRequest = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("Method not found"), { code: -32601 }))
+      .mockResolvedValueOnce(status);
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client?.runtimeStatus) throw new Error("Missing runtime status client");
+    await expect(client.runtimeStatus()).rejects.toMatchObject({ code: -32601 });
+    await expect(client.runtimeStatus()).resolves.toEqual(status);
+    expect(sendRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("validates launch setting requests and responses on the selected request client", async () => {
     const harnessId = harnessIdSchema.parse("workbuddy");
     const result = { path: "D:\\Apps\\WorkBuddy", restartRequired: true };
@@ -599,6 +666,18 @@ describe("Renderer fixed Model request client", () => {
     await expect(remote?.listHarnessPlugins?.()).rejects.toThrow();
   });
 
+  it("opens the console through its fixed Host method and validates the address", async () => {
+    const sendRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ url: "http://127.0.0.1:4399/" })
+      .mockResolvedValueOnce({ url: "https://example.com/" });
+    const client = createRendererModelClient([{ addNotificationCallback: vi.fn(), sendRequest }]);
+    if (!client?.openConsole) throw new Error("Synthetic Model client cannot open the console");
+    await expect(client.openConsole()).resolves.toEqual({ url: "http://127.0.0.1:4399/" });
+    expect(sendRequest).toHaveBeenCalledWith("codexhost/console/open", {});
+    await expect(client.openConsole()).rejects.toThrow();
+  });
+
   it("calls only the fixed inspect and select methods with validated params", async () => {
     let usageNotification: ((notification: unknown) => void) | undefined;
     const removeUsageNotification = vi.fn();
@@ -699,6 +778,7 @@ describe("Renderer fixed Model request client", () => {
       "fetchGit",
       "forkThread",
       "generateGitMessage",
+      "getHarnessDisplaySettings",
       "getHarnessLaunchSettings",
       "getProjectTabs",
       "getProjectTools",
@@ -723,6 +803,7 @@ describe("Renderer fixed Model request client", () => {
       "inspectThreadCommands",
       "inspectThreadUsage",
       "inspectTurnActions",
+      "installation",
       "inviteProjectSync",
       "linkGitRepository",
       "listCodexAccounts",
@@ -740,6 +821,7 @@ describe("Renderer fixed Model request client", () => {
       "listThreadTerminals",
       "listWorkspaceFiles",
       "modelAvailability",
+      "openConsole",
       "openDoubao",
       "openHarnessWebUi",
       "openProjectTerminal",
@@ -751,6 +833,7 @@ describe("Renderer fixed Model request client", () => {
       "pushGit",
       "pushProjectSyncGit",
       "readAutoModelRoutes",
+      "readDelegationThread",
       "readThreadActivity",
       "readThreadTurnState",
       "readUpdateStatus",
@@ -763,10 +846,12 @@ describe("Renderer fixed Model request client", () => {
       "routeSession",
       "runGitWorkflow",
       "runProjectScript",
+      "runtimeStatus",
       "selectThreadModel",
       "selectThreadPermissionMode",
       "selectThreadThinking",
       "sendThreadMessage",
+      "setHarnessDisplaySettings",
       "setHarnessLaunchSettings",
       "setIdleReleaseSettings",
       "setProjectTabs",
@@ -774,6 +859,7 @@ describe("Renderer fixed Model request client", () => {
       "setThreadAutoArchiveSettings",
       "setThreadFolders",
       "setThreadTerminalSettings",
+      "setupSsh",
       "stageGitPaths",
       "startUpdate",
       "subscribeCodexAccounts",
@@ -789,6 +875,7 @@ describe("Renderer fixed Model request client", () => {
       "unlinkGitRepository",
       "unstageGitPaths",
       "updateGitSubmodule",
+      "updateRemote",
       "writeWorkspaceFile",
     ]);
 
@@ -1311,6 +1398,13 @@ describe("Renderer fixed Model request client", () => {
     ).rejects.toThrow("does not match");
   });
 
+  it("accepts a null update check when the Host has no update capability", async () => {
+    const client = createRendererModelClient([{ sendRequest: vi.fn(async () => null) }]);
+    if (!client) throw new Error("Synthetic update client was not created");
+
+    await expect(client.checkUpdate()).resolves.toBeNull();
+  });
+
   it("rejects update results that expose privileged artifact data", async () => {
     const sendRequest = vi.fn(async () => ({
       currentVersion: "1.2.2",
@@ -1483,5 +1577,36 @@ describe("Renderer fixed Model request client", () => {
       binary: false,
       truncated: false,
     });
+  });
+  it("retries an availability inspection without `purpose` on a Host that rejects it", async () => {
+    const sendRequest = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Invalid Harness inspection params"), { code: -32602 }),
+      )
+      .mockResolvedValueOnce(inspection);
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic Model client was not created");
+
+    await expect(
+      client.inspectHarness({ harnessId: piHarnessId, purpose: "availability" }),
+    ).resolves.toEqual(inspection);
+    expect(sendRequest.mock.calls.map(([, params]) => params)).toEqual([
+      { harnessId: piHarnessId, purpose: "availability" },
+      { harnessId: piHarnessId },
+    ]);
+  });
+
+  it("does not retry a full inspection rejected for its params", async () => {
+    const sendRequest = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Invalid params"), { code: -32602 }));
+    const client = createRendererModelClient([{ sendRequest }]);
+    if (!client) throw new Error("Synthetic Model client was not created");
+
+    await expect(client.inspectHarness({ harnessId: piHarnessId })).rejects.toThrow(
+      "Invalid params",
+    );
+    expect(sendRequest).toHaveBeenCalledOnce();
   });
 });

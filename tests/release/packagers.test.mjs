@@ -72,6 +72,9 @@ describe("platform packagers", () => {
     expect(workflow).toContain("if: runner.os != 'Linux'");
     expect(workflow).toContain("target: linux-x64");
     expect(workflow).toContain("runner: ubuntu-22.04");
+    expect(workflow).toContain(
+      "--require-hashes --only-binary :all: -r scripts/release/linux-zigbuild-requirements.txt",
+    );
     expect(workflow).toContain("rustTarget: x86_64-unknown-linux-gnu");
     expect(workflow).toContain("target: linux-arm64");
     expect(workflow).toContain("runner: ubuntu-22.04-arm");
@@ -138,6 +141,9 @@ describe("platform packagers", () => {
     expect(installer).toContain("DisableProgramGroupPage=yes");
     expect(installer).toContain("AppName=CodexBuddy");
     expect(installer).toContain("UninstallDisplayName=CodexBuddy");
+    expect(installer.split(/\r?\n/)).toContain(
+      'Name: "{userdesktop}\\CodexBuddy"; Filename: "{app}\\bin\\codexhost-start.exe"; WorkingDir: "{app}"',
+    );
     expect(installer).toContain("ArchitecturesAllowed=x64compatible");
     expect(installer).toContain("ArchitecturesAllowed=arm64");
   });

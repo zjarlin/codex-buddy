@@ -16,7 +16,6 @@ function controllerOptions() {
   return {
     rendererCdpEndpoint: "http://127.0.0.1:43123",
     rendererPath: "/renderer.js",
-    defaultAgent: "pi" as const,
     attachmentPort: 43124,
     attachmentNonce,
   };
@@ -39,8 +38,6 @@ describe("production Desktop Controller", () => {
         "http://127.0.0.1:43123",
         "--renderer",
         rendererPath,
-        "--default-agent",
-        "pi",
         "--attachment-port",
         "43124",
         "--attachment-nonce",
@@ -49,7 +46,6 @@ describe("production Desktop Controller", () => {
     ).toEqual({
       rendererCdpEndpoint: "http://127.0.0.1:43123",
       rendererPath,
-      defaultAgent: "pi",
       attachmentPort: 43124,
       attachmentNonce,
     });
@@ -75,8 +71,6 @@ describe("production Desktop Controller", () => {
         "http://127.0.0.1:43123",
         "--renderer",
         rendererPath,
-        "--default-agent",
-        "pi",
         "--attachment-port",
         "43124",
         "--attachment-nonce",
@@ -140,25 +134,7 @@ describe("production Desktop Controller", () => {
     expect(install).toHaveBeenCalledWith({
       rendererCdpEndpoint: "http://127.0.0.1:43123",
       rendererSource:
-        'globalThis.__zod_globalConfig ??= {}; globalThis.__zod_globalConfig.jitless = true;\nObject.defineProperty(window, "__codexhostProductionConfigV1", { configurable: true, value: { defaultAgent: "pi" } });\nproduction renderer',
-      enabledAgents: [
-        "codex",
-        "pi",
-        "claude-code",
-        "deepseek-harness",
-        "opencode",
-        "grok",
-        "omp",
-        "antigravity",
-        "kiro-cli",
-        "codebuddy",
-        "workbuddy",
-        "cursor-cli",
-        "hermes",
-        "qoder",
-        "qoder-cn",
-        "kimi-code",
-      ],
+        "globalThis.__zod_globalConfig ??= {}; globalThis.__zod_globalConfig.jitless = true;\nproduction renderer",
       timeoutMs: 90_000,
       signal: abort.signal,
     });
@@ -170,6 +146,8 @@ describe("production Desktop Controller", () => {
         rendererPath: controllerOptions().rendererPath,
       },
       attach: expect.any(Function),
+      openLocalPage: expect.any(Function),
+      remoteConnections: expect.any(Function),
     });
     expect(ready).toHaveBeenCalledWith({
       schemaVersion: 2,
@@ -204,18 +182,14 @@ describe("production Desktop Controller", () => {
         }),
     );
     const ready = vi.fn();
-    let attach: (() => Promise<void>) | undefined;
-    const startAttachmentServer = vi.fn(async (options) => {
-      attach = options.attach;
-      return attachmentServer();
-    });
+    const startAttachmentServer = vi.fn(async () => attachmentServer());
     const run = runDesktopController(controllerOptions(), abort.signal, {
       readRenderer: vi.fn(async () => "production renderer"),
       install,
       startAttachmentServer,
       ready,
-      sleep: vi.fn(async () => {
-        abort.abort();
+      sleep: vi.fn(async (milliseconds) => {
+        if (milliseconds === 1) abort.abort();
       }),
       monitorIntervalMs: 1,
     });
@@ -230,13 +204,10 @@ describe("production Desktop Controller", () => {
     expect(startAttachmentServer).toHaveBeenCalledOnce();
     expect(close).not.toHaveBeenCalled();
 
-    if (!attach) throw new Error("attachment handler was not published");
-    const attached = attach();
-    await vi.waitFor(() => expect(install).toHaveBeenCalledOnce());
     finishInstall(session);
-    await attached;
     await run;
     expect(install).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("retries a transient Renderer evaluation failure during cold startup", async () => {
@@ -343,6 +314,59 @@ describe("production Desktop Controller", () => {
     expect(ready).toHaveBeenCalledWith({ schemaVersion: 2, state: "compatible", issues: [] });
     expect(JSON.stringify(ready.mock.calls)).not.toContain("signature-mismatch");
     expect(startAttachmentServer).toHaveBeenCalledOnce();
+  });
+
+  it("publishes Renderer integration failure and recovery for the console", async () => {
+    const abort = new AbortController();
+    const session: RendererCdpControlSession = {
+      snapshot: controllerSnapshot(),
+      ensureInstalled: vi.fn(),
+      activateDesktop: vi.fn(async () => 1),
+
+      executeRenderer: vi.fn(),
+      close: vi.fn(),
+    };
+    const install = vi
+      .fn<DesktopControllerDependencies["install"]>()
+      .mockRejectedValueOnce(
+        new Error("Production Renderer Adapter is unsupported: signature-mismatch"),
+      )
+      .mockResolvedValueOnce(session);
+    const publishStatus = vi.fn();
+    let currentTime = 0;
+
+    await runDesktopController(controllerOptions(), abort.signal, {
+      readRenderer: vi.fn(async () => "production renderer"),
+      install,
+      startAttachmentServer: vi.fn(async () => attachmentServer()),
+      ready: vi.fn(),
+      publishStatus,
+      sleep: vi.fn(async (milliseconds: number) => {
+        if (milliseconds === 1) currentTime += 30_000;
+        if (install.mock.calls.length >= 2) abort.abort();
+      }),
+      now: () => currentTime,
+      monitorIntervalMs: 1,
+    });
+
+    const states = publishStatus.mock.calls.map(([document]) => document.renderer);
+    expect(states.map((renderer) => renderer.state)).toEqual([
+      "installing",
+      "unavailable",
+      "installing",
+      "installed",
+    ]);
+    expect(states[1]).toMatchObject({
+      error: "Production Renderer Adapter is unsupported: signature-mismatch",
+      failures: 1,
+    });
+    expect(states[3]).toMatchObject({
+      error: null,
+      failures: 1,
+      lastError: "Production Renderer Adapter is unsupported: signature-mismatch",
+      lastFailedAt: 0,
+      lastInstalledAt: 30_000,
+    });
   });
 
   it("suppresses an unclassified inspection failure without leaking its error", async () => {

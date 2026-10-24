@@ -5,8 +5,20 @@ import { runRemoteHostCli } from "./remote-host-cli.js";
 import { runLocalHostProxy } from "./local-host-proxy.js";
 import { runLocalHostCli } from "./local-host-cli.js";
 import { runClaudeAquaHarnessBroker } from "./aqua-harness-broker.js";
+import { installRuntimeLog, runtimeLogPath } from "./runtime-log.js";
 
 const arguments_ = process.argv.slice(2);
+
+// Only the long-lived Host Runtime is logged; the CLI subcommands report on their own stderr.
+function runLoggedHostRuntime(): Promise<number> {
+  installRuntimeLog({
+    filePath: runtimeLogPath(process.env, process.pid),
+    stream: process.stderr,
+    process,
+  });
+  return runHostRuntime({ arguments: arguments_, environment: process.env });
+}
+
 process.exitCode =
   arguments_[0] === "--codexhost-delegation-cli"
     ? await runDelegationCli({ arguments: arguments_.slice(1), environment: process.env })
@@ -20,4 +32,4 @@ process.exitCode =
             ? await runLocalHostProxy({ socketPath: arguments_[1] ?? "" })
             : arguments_[0] === "--codexhost-remote-control-bridge"
               ? await runRemoteControlAppServerBridge()
-              : await runHostRuntime({ arguments: arguments_, environment: process.env });
+              : await runLoggedHostRuntime();

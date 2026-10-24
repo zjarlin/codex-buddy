@@ -1,6 +1,11 @@
 // Repository governance only: no Host, Harness, or model runtime dependencies.
 export const CI_WORKFLOW = "ci.yml";
-export const CI_JOBS = ["Check macos-14", "Check windows-latest"];
+export const CI_JOBS = [
+  "Check ubuntu-22.04",
+  "Check macos-14",
+  "Check windows-latest",
+  "Check Linux ARM64",
+];
 export const TYPE_LABELS = ["bug", "enhancement", "documentation"];
 export const LABELS = {
   bug: ["d73a4a", "缺陷报告 / Bug report"],

@@ -56,6 +56,8 @@ vi.mock("../src/settings/trigger.js", () => ({
 
 import { installRendererSettingsLifecycle } from "../src/renderer-settings-lifecycle.js";
 import { createDefaultRendererSettingsPages } from "../src/settings/pages.js";
+import type { RendererUpdateController } from "../src/settings/update-controller.js";
+import { installRendererUpdateNotification } from "../src/settings/update-notification.js";
 import { installSystemOneModelHeaderControl } from "../src/settings/trigger.js";
 
 function failedUpdateCheck(): UpdateCheckResult {
@@ -70,6 +72,12 @@ function failedUpdateCheck(): UpdateCheckResult {
     status: null,
     error: "Update metadata is temporarily unavailable",
   };
+}
+
+type UpdateClientStub = ReturnType<typeof updateClient>;
+
+function updateClient(check: () => Promise<UpdateCheckResult | null>) {
+  return { checkUpdate: vi.fn(check), startUpdate: vi.fn(), readUpdateStatus: vi.fn() };
 }
 
 describe("Renderer Settings lifecycle", () => {
@@ -133,6 +141,88 @@ describe("Renderer Settings lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(checkUpdate).toHaveBeenCalledTimes(2);
 
+    lifecycle.dispose();
+  });
+
+  function installWithClients(clients: { current: UpdateClientStub }) {
+    const ownerWindow = {
+      navigator: { languages: ["en"] },
+      document: {},
+      setTimeout,
+      clearTimeout,
+    } as unknown as Window;
+    return installRendererSettingsLifecycle(ownerWindow, {
+      getUpdateClient: () => clients.current,
+    });
+  }
+
+  it("treats a null update check as final and clears the indicator", async () => {
+    vi.useFakeTimers();
+    const client = updateClient(async () => null);
+    const lifecycle = installWithClients({ current: client });
+    await vi.advanceTimersByTimeAsync(0);
+    const controller = vi.mocked(installRendererUpdateNotification).mock.calls.at(-1)?.[0]
+      .controller as RendererUpdateController;
+    expect(controller.snapshot.check).toBeNull();
+
+    for (let index = 0; index < 20; index += 1) lifecycle.refresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    lifecycle.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(1);
+    lifecycle.dispose();
+  });
+
+  it.each([
+    ["a structured error", async () => failedUpdateCheck()],
+    ["a rejected request", async () => Promise.reject(new Error("unavailable"))],
+  ])("stops refresh-driven checks after retries are exhausted by %s", async (_, check) => {
+    vi.useFakeTimers();
+    const clients = { current: updateClient(check) };
+    const failing = clients.current;
+    const lifecycle = installWithClients(clients);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(failing.checkUpdate).toHaveBeenCalledTimes(5);
+
+    for (let index = 0; index < 20; index += 1) lifecycle.refresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(failing.checkUpdate).toHaveBeenCalledTimes(5);
+
+    clients.current = updateClient(async () => ({
+      ...failedUpdateCheck(),
+      latestVersion: "0.3.3",
+      updateAvailable: true,
+      error: null,
+    }));
+    lifecycle.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(clients.current.checkUpdate).toHaveBeenCalledTimes(1);
+    const controller = vi.mocked(installRendererUpdateNotification).mock.calls.at(-1)?.[0]
+      .controller as RendererUpdateController;
+    expect(controller.snapshot.check?.updateAvailable).toBe(true);
+
+    for (let index = 0; index < 20; index += 1) lifecycle.refresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(clients.current.checkUpdate).toHaveBeenCalledTimes(1);
+    lifecycle.dispose();
+  });
+
+  it("passes the local statistics transport to settings pages", () => {
+    const requestUsageStatistics = vi.fn(async () => ({}));
+    const usageStatisticsHosts = vi.fn(async () => []);
+    const ownerWindow = {
+      navigator: { languages: ["en"] },
+      document: {},
+      setTimeout,
+      clearTimeout,
+    } as unknown as Window;
+    const lifecycle = installRendererSettingsLifecycle(ownerWindow, {
+      requestUsageStatistics,
+      usageStatisticsHosts,
+    });
+    const call = vi.mocked(createDefaultRendererSettingsPages).mock.calls.at(-1);
+    expect(call?.[12]).toBe(requestUsageStatistics);
+    expect(call?.[13]).toBe(usageStatisticsHosts);
     lifecycle.dispose();
   });
 

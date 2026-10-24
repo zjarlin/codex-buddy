@@ -14,16 +14,19 @@
     "packages/adapters/hermes",
     "packages/adapters/qoder",
     "packages/adapters/qoder-cn",
-    "packages/adapters/kimi-code"
+    "packages/adapters/kimi-code",
+    "packages/adapters/zcode",
+    "packages/adapters/copilot",
+    "packages/adapters/codex-usage"
   ],
   "runtimePackages": [
     "@agentclientprotocol/sdk",
     "@anthropic-ai/claude-agent-sdk",
-    "@deepseek-ai/cosmokit",
-    "@deepseek-ai/schemastery",
+    "@github/copilot-sdk",
     "@hono/node-server",
     "@modelcontextprotocol/sdk",
     "@opencode-ai/sdk",
+    "@opencode/client",
     "@qoder-ai/qoder-agent-sdk",
     "@qodercn-ai/qodercn-agent-sdk",
     "ajv",
@@ -34,7 +37,9 @@
     "fast-uri",
     "hono",
     "json-schema-traverse",
+    "koffi",
     "smol-toml",
+    "vscode-jsonrpc",
     "ws",
     "zod",
     "zod-to-json-schema"

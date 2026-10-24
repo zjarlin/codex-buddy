@@ -43,7 +43,7 @@ export function createRendererUpdateController(
   let scope = new AbortController();
   let disposed = false;
   let snapshot: RendererUpdateSnapshot = { check: null, status: null, busy: null, error: null };
-  let checkRequest: Promise<UpdateCheckResult> | null = null;
+  let checkRequest: Promise<UpdateCheckResult | null> | null = null;
   let statusRequest: Promise<UpdateStatusResult> | null = null;
   let command: Promise<UpdateStartResult> | null = null;
   let pollTimer: number | undefined;
@@ -113,12 +113,16 @@ export function createRendererUpdateController(
     }, 750);
   };
 
-  const checkUpdate = (): Promise<UpdateCheckResult> => {
+  const checkUpdate = (): Promise<UpdateCheckResult | null> => {
     if (checkRequest) return checkRequest;
     const current = requireClient();
     const signal = scope.signal;
     const request = runBoundedRendererUpdateRequest(() => current.checkUpdate(), signal, 5_000)
       .then((result) => {
+        if (!result) {
+          if (!signal.aborted) publish({ check: null, status: null, error: null });
+          return null;
+        }
         if (signal.aborted) return result;
         // 在线检查不能用旧快照覆盖正在下载或已就绪的本地操作。
         let status =
@@ -157,7 +161,7 @@ export function createRendererUpdateController(
       }, delay);
     };
     void checkUpdate().then((result) => {
-      if (result.error) retry(result.error);
+      if (result?.error) retry(result.error);
     }, retry);
   };
 

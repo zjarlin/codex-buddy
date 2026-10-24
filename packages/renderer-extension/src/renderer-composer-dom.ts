@@ -4,9 +4,11 @@ import type {
   RendererAgent,
   RendererAgentAvailability,
 } from "./agent-selection-state.js";
+import { catalogModelForRef } from "@codexhost/shared-contracts";
 import type {
   AccountCreditsSnapshot,
   CodexAccountSummary,
+  HarnessPluginDescriptor,
   ThreadUsageSnapshot,
 } from "@codexhost/shared-contracts";
 import {
@@ -41,6 +43,10 @@ import {
   renderRendererUsageControl,
   type RendererUsageControl,
 } from "./renderer-usage-control.js";
+import {
+  mountRendererComposerIndicators,
+  type RendererComposerIndicators,
+} from "./renderer-composer-indicators.js";
 import type { RendererSettingsLocale } from "./settings/localization.js";
 import type { ModelShortcutView } from "./renderer-model-shortcuts.js";
 import { mountModelShortcuts } from "./renderer-model-shortcuts.js";
@@ -48,6 +54,7 @@ import { nativeModelBinding } from "./renderer-native-model-binding.js";
 import type { RendererAdapterStatus } from "./versioned-renderer-adapter.js";
 import type { ModelRefreshReport } from "./renderer-model-refresh-summary.js";
 import type { ModelRefreshOutcome } from "./renderer-model-refresh-summary.js";
+import { isOrbitComposer } from "./renderer-composer-kind.js";
 import {
   mountRendererHarnessCommandControl,
   type RendererHarnessCommandControl,
@@ -91,6 +98,7 @@ export interface ComposerAgentControl {
   composer: Element;
   root: HTMLElement;
   picker: RendererAgentPickerControl;
+  setPlugins(plugins: readonly HarnessPluginDescriptor[]): void;
   modelPicker: RendererModelPickerControl;
   modelShortcuts?: ReturnType<typeof mountModelShortcuts>;
   onModelShortcutsViewChange?: (view: ModelShortcutView, harnessId: string) => void;
@@ -100,6 +108,7 @@ export interface ComposerAgentControl {
   nativeContextUsageControl?: NativeControlState | null;
   nativePermissionModeControlVerified: boolean;
   credits: RendererCreditsControl;
+  composerIndicators: RendererComposerIndicators;
   usage: RendererUsageControl | null;
   composerId: string;
   harnessCommands: RendererHarnessCommandControl;
@@ -135,7 +144,8 @@ function isOwnedRendererControl(element: Element): boolean {
     element.hasAttribute("data-codexhost-usage-control") ||
     element.hasAttribute("data-codexhost-credits-control") ||
     element.hasAttribute("data-codexhost-harness-command-control") ||
-    element.hasAttribute("data-codexhost-session-transfer-control")
+    element.hasAttribute("data-codexhost-session-transfer-control") ||
+    element.hasAttribute("data-codexhost-composer-indicators")
   );
 }
 
@@ -223,11 +233,12 @@ export function isComposerSubmissionKey(event: KeyboardEvent): boolean {
 }
 
 export function composerForEditor(editor: Element): Element | null {
-  return editor.closest(CODEX_COMPOSER_SELECTOR);
+  return composerForElement(editor);
 }
 
 export function composerForElement(element: Element): Element | null {
-  return element.closest(CODEX_COMPOSER_SELECTOR);
+  const composer = element.closest(CODEX_COMPOSER_SELECTOR);
+  return composer && !isOrbitComposer(composer) ? composer : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -446,9 +457,11 @@ function captureNativeControl(element: HTMLElement | null): NativeControlState |
 
 function restoreNativeControl(state: NativeControlState | null | undefined): void {
   if (!state) return;
-  state.element.hidden = state.hidden;
-  if (state.ariaHidden === null) state.element.removeAttribute("aria-hidden");
-  else state.element.setAttribute("aria-hidden", state.ariaHidden);
+  if (state.element.hidden !== state.hidden) state.element.hidden = state.hidden;
+  if (state.element.getAttribute("aria-hidden") !== state.ariaHidden) {
+    if (state.ariaHidden === null) state.element.removeAttribute("aria-hidden");
+    else state.element.setAttribute("aria-hidden", state.ariaHidden);
+  }
 }
 
 function refreshNativeContextUsageControl(control: ComposerAgentControl): void {
@@ -490,6 +503,8 @@ function usagePlacementAnchor(control: ComposerAgentControl): HTMLElement | null
  * account limits, not the current thread's context window.
  */
 export function creditsPlacementAnchor(control: ComposerAgentControl): HTMLElement | null {
+  // An unverified picker can be mounted at the Composer's end, outside the toolbar.
+  if (!control.nativePermissionModeControlVerified) return null;
   const root = control.permissionModePicker?.root;
   return root?.parentElement ? root : null;
 }
@@ -650,6 +665,11 @@ export function reconcileComposerNativeControls(
   refreshTrailingClusterPlacement(control);
   refreshUsagePlacement(control);
   refreshCreditsPlacement(control);
+  control.composerIndicators?.place(
+    control.nativePermissionModeControlVerified
+      ? (control.nativePermissionModeControl?.element ?? null)
+      : null,
+  );
   setNativeControlHidden(control.nativeModelControl, hideModel);
   // Context usage is shared by Codex and external Harnesses. External Usage
   // data is projected into the same native Codex indicator, so it must remain
@@ -714,6 +734,8 @@ export function mountComposerAgentControl(
     modelAvailability,
   );
   composer.before(modelShortcuts.root);
+  const composerIndicators = mountRendererComposerIndicators(composer);
+
   const toolbar = sendButton.parentElement;
   const harnessCommands = mountRendererHarnessCommandControl(
     toolbar ?? composer,
@@ -739,6 +761,35 @@ export function mountComposerAgentControl(
     composerId,
     root: picker.root,
     picker,
+    setPlugins(plugins: readonly HarnessPluginDescriptor[]) {
+      // Rendering can produce a new array (and remote presentation objects)
+      // without changing the catalog. Replacing the picker closes its popover.
+      const current = control.picker.plugins;
+      if (
+        current === plugins ||
+        (current.length === plugins.length &&
+          current.every(
+            (plugin, index) =>
+              plugin === plugins[index] ||
+              JSON.stringify(plugin) === JSON.stringify(plugins[index]),
+          ))
+      ) {
+        return;
+      }
+      const next = mountRendererAgentPicker(
+        composerId,
+        ["codex", ...plugins.map(({ id }) => id)],
+        onSelect,
+        onDownload,
+        onOpenProviderPicker,
+        undefined,
+        plugins,
+      );
+      control.picker.root.replaceWith(next.root);
+      control.picker.dispose();
+      control.picker = next;
+      control.root = next.root;
+    },
     modelPicker,
     modelShortcuts,
     permissionModePicker,
@@ -747,6 +798,7 @@ export function mountComposerAgentControl(
     nativeContextUsageControl,
     nativePermissionModeControlVerified,
     credits,
+    composerIndicators,
     usage: null,
     harnessCommands,
     sessionTransfer,
@@ -805,9 +857,7 @@ export function renderComposerAgentControl(
   }
 
   const selectedModel = modelView.selected;
-  const selectedCatalogModel = modelView.catalog?.models.find(
-    (model) => model.ref.id === selectedModel?.id,
-  );
+  const selectedCatalogModel = catalogModelForRef(modelView.catalog, selectedModel);
   const availableThinkingOptions =
     modelView.thinkingSelectionSupported === false
       ? []
@@ -818,11 +868,11 @@ export function renderComposerAgentControl(
   const modelReady = selectedModel !== undefined && selectedCatalogModel !== undefined;
   const modelBlocked =
     state.agent !== "codex" && (modelView.status === "selecting" || !modelReady || !thinkingReady);
+  // Recording replaces the native footer, including its permission trigger.
+  // Submission depends on confirmed Harness configuration, not that UI slot;
+  // native ownership verification still guards picker visibility and placement.
   const permissionModeBlocked =
-    state.agent !== "codex" &&
-    (!isPermissionModeControlReady(permissionModeView) ||
-      (permissionModeView.status !== "unsupported" &&
-        !control.nativePermissionModeControlVerified));
+    state.agent !== "codex" && !isPermissionModeControlReady(permissionModeView);
   const submissionBlocked = switching || ownershipError || modelBlocked || permissionModeBlocked;
   if (submissionBlocked && control.sendDisabledBeforeSwitch === null) {
     control.sendDisabledBeforeSwitch = control.sendButton.disabled;
@@ -909,15 +959,12 @@ export function renderComposerAgentControl(
     permissionModeVisible,
     locale,
   );
-  const selectedCodexAccount =
-    state.agent === "codex" && !ownershipError ? currentCodexAccount : undefined;
+  control.composerIndicators?.render(
+    permissionModeVisible ? (usage?.composerIndicators ?? []) : [],
+    locale,
+  );
   if (control.usage) {
-    renderRendererUsageControl(
-      control.usage,
-      usage,
-      locale,
-      selectedCodexAccount?.email ?? selectedCodexAccount?.label ?? null,
-    );
+    renderRendererUsageControl(control.usage, usage, locale);
   }
   control.harnessCommands.setLocale(locale);
   control.harnessCommands.root.hidden = state.agent === "codex";
@@ -938,6 +985,7 @@ export function disposeComposerAgentControl(control: ComposerAgentControl): void
   restoreNativeControl(control.nativeModelControl);
   restoreNativeControl(control.nativeContextUsageControl);
   restoreNativeControl(control.nativePermissionModeControl);
+  control.composerIndicators?.dispose();
   control.credits.dispose();
   control.usage?.dispose();
   control.usage = null;

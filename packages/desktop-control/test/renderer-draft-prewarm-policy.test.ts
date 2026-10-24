@@ -195,10 +195,34 @@ describe("Renderer draft prewarm policy", () => {
     ).toBeNull();
   });
 
+  it("reads a Host from a registry without waitForManagerForHostId", () => {
+    const manager = fiberRequestManagerFixture();
+    expect(
+      requestManagerFromHookState(
+        { addManager: () => undefined, getForHostId: () => manager },
+        "remote",
+      ),
+    ).toBe(manager);
+  });
+
+  it("returns null when a registry getForHostId throws", () => {
+    expect(
+      requestManagerFromHookState(
+        {
+          addManager: () => undefined,
+          getForHostId: () => {
+            throw new Error("host registry unavailable");
+          },
+        },
+        "remote",
+      ),
+    ).toBeNull();
+  });
+
   it("retries while the current Renderer request manager is mounting", async () => {
     const evaluate = vi
       .fn<() => Promise<unknown>>()
-      .mockRejectedValueOnce(new Error("Renderer request manager is ambiguous"))
+      .mockRejectedValueOnce(new Error("Renderer Host request manager is unavailable"))
       .mockResolvedValue({ state: "ready", reason: "owned-request-bridge" });
     const inspector = {
       async evaluate<T>(): Promise<T> {
@@ -318,6 +342,7 @@ describe("Renderer draft prewarm policy", () => {
     expect(prewarmThreadStart).toHaveBeenNthCalledWith(1, {
       cwd: "/tmp/project",
       model: "codexhost/pi-native",
+      codexhostPrewarm: true,
     });
     expect(prewarmThreadStart).toHaveBeenNthCalledWith(2, {
       ephemeral: true,
@@ -384,7 +409,8 @@ describe("Renderer draft prewarm policy", () => {
       .mockImplementationOnce(() => stalePrewarm.promise)
       .mockImplementationOnce(async (parameters) => parameters);
     const manager = requestManagerFixture();
-    const bridge = requestBridgeFixture({ prewarmThreadStart });
+    const sendRequest = vi.fn();
+    const bridge = requestBridgeFixture({ prewarmThreadStart, sendRequest });
     const discardAllPrewarmedThreads = vi.fn();
     const target: DraftPrewarmPolicyTarget = {};
     installDraftPrewarmPolicyBridge(manager, bridge, "local", target, {
@@ -404,14 +430,20 @@ describe("Renderer draft prewarm policy", () => {
     await expect(pendingPi).rejects.toThrow(
       "Renderer draft prewarm was invalidated by a configuration change",
     );
+    expect(sendRequest).toHaveBeenCalledWith("codexhost/thread/prewarm/discard", {
+      threadId: "stale-pi",
+    });
     await expect(bridge.prewarmThreadStart({ model: "native-model" })).resolves.toEqual({
       model: "codexhost/claude-code-native",
+      codexhostPrewarm: true,
     });
     expect(prewarmThreadStart).toHaveBeenNthCalledWith(1, {
       model: "codexhost/pi-native",
+      codexhostPrewarm: true,
     });
     expect(prewarmThreadStart).toHaveBeenNthCalledWith(2, {
       model: "codexhost/claude-code-native",
+      codexhostPrewarm: true,
     });
     expect(discardAllPrewarmedThreads).toHaveBeenCalledOnce();
   });

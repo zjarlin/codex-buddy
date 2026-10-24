@@ -3,6 +3,7 @@
  * capacity remains reserved for native Thread/Turn lifecycle operations. */
 export interface RendererRequestOptions {
   readonly priority: "background" | "interactive";
+  readonly timeoutMs?: number;
 }
 
 export class RendererMethodUnavailableError extends Error {
@@ -17,7 +18,8 @@ export class RendererMethodUnavailableError extends Error {
   }
 }
 
-function isUnsupportedMethod(error: unknown, method: string): boolean {
+/** Return true only when the peer explicitly rejects this RPC method. */
+export function isUnsupportedMethod(error: unknown, method: string): boolean {
   if (typeof error !== "object" || error === null) return false;
   const code = "code" in error ? error.code : undefined;
   const message = "message" in error ? error.message : undefined;

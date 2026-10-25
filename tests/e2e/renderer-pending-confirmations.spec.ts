@@ -261,6 +261,13 @@ test("completed non-current conversations open a modal and support read/archive 
   // “继续”不区分终态：正常结束的会话同样提供，操作顺序不变。
   await expect(modal.getByRole("button", { name: "继续", exact: true })).toBeVisible();
   await expect(modal.locator("footer button").first()).toHaveText("查看结果");
+  // “继续”会立刻发消息，与只处理提醒的“已读”“归档”分组隔开，避免误触。
+  await expect(
+    modal.locator("footer .codexhost-pending-action-group").first().getByRole("button"),
+  ).toHaveText(["查看结果", "标为已读", "归档"]);
+  await expect(modal.locator("footer .codexhost-pending-followup").getByRole("button")).toHaveText([
+    "继续",
+  ]);
 
   await page.getByRole("button", { name: "标为已读" }).click();
   await expect(modal).toBeHidden();

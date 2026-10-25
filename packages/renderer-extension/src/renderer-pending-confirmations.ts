@@ -117,6 +117,7 @@ function messages(locale: Locale) {
         placeholder: "输入续发内容…",
         send: "发送",
         continue: "继续",
+        continueHint: `发送「${CONTINUE_MESSAGE}」到该会话`,
         sendFailed: "发送失败，请重试。",
         archiveFailed: "归档失败，已保留待确认状态。",
         openFailed: "无法打开该会话，请从侧栏重试。",
@@ -142,6 +143,7 @@ function messages(locale: Locale) {
         placeholder: "Type a follow-up message…",
         send: "Send",
         continue: "Continue",
+        continueHint: `Send "${CONTINUE_MESSAGE}" to this conversation`,
         sendFailed: "Could not send. Try again.",
         archiveFailed: "Archive failed. The confirmation was kept.",
         openFailed: "Could not open the conversation. Retry from the sidebar.",
@@ -268,6 +270,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   project.className = "codexhost-pending-project";
   const time = document.createElement("time");
   const actions = document.createElement("footer");
+  const finishActions = document.createElement("div");
+  const followUpActions = document.createElement("div");
   const view = document.createElement("button");
   const continueButton = document.createElement("button");
   const read = document.createElement("button");
@@ -348,13 +352,19 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--spacing-token-button-composer,28px);height:var(--spacing-token-button-composer,28px);margin-bottom:4px;padding:0;border:0;border-radius:50%;background:var(--color-background-composer-primary,var(--color-token-text-primary,light-dark(#0d0d0d,#f3f3f3)));color:var(--color-text-composer-primary,var(--color-token-main-surface-primary,light-dark(#fff,#0d0d0d)));cursor:pointer;transition:opacity .15s}
 [${MODAL}] .codexhost-pending-send:hover:not(:disabled){opacity:.85}
 [${MODAL}] .codexhost-pending-send:disabled{opacity:.55;cursor:wait}
-[${MODAL}] .codexhost-pending-actions{display:flex;justify-content:flex-start;gap:8px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
+[${MODAL}] .codexhost-pending-actions{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
+[${MODAL}] .codexhost-pending-action-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+[${MODAL}] .codexhost-pending-followup{margin-left:auto;padding-left:24px;border-left:1px solid color-mix(in srgb,CanvasText 12%,transparent)}
 [${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
+[${MODAL}] .codexhost-pending-actions button:hover:not(:disabled){background:color-mix(in srgb,CanvasText 8%,transparent)}
 [${MODAL}] .codexhost-pending-actions button[data-primary="true"]{border-color:Highlight;background:Highlight;color:HighlightText}
+[${MODAL}] .codexhost-pending-actions button[data-primary="true"]:hover:not(:disabled){background:Highlight}
+[${MODAL}] .codexhost-pending-followup button{border-color:color-mix(in srgb,Highlight 55%,transparent);color:Highlight}
+[${MODAL}] .codexhost-pending-followup button:hover:not(:disabled){background:color-mix(in srgb,Highlight 12%,transparent)}
 [${MODAL}] .codexhost-pending-actions button:disabled{opacity:.55;cursor:wait}
 [${MODAL}] .codexhost-pending-notice{min-height:18px;margin:-6px 16px 0;color:#c2410c;font-size:12px;overflow-wrap:anywhere}
 [${MODAL}] .codexhost-pending-notice:empty{visibility:hidden}
-@media (max-width:520px){[${MODAL}]{padding:8px}[${PANEL}]{width:calc(100vw - 16px);max-height:calc(100vh - 16px)}[${MODAL}] .codexhost-pending-body{padding:14px}[${MODAL}] .codexhost-pending-actions button{flex:1 1 auto}}
+@media (max-width:520px){[${MODAL}]{padding:8px}[${PANEL}]{width:calc(100vw - 16px);max-height:calc(100vh - 16px)}[${MODAL}] .codexhost-pending-body{padding:14px}[${MODAL}] .codexhost-pending-actions{flex-direction:column;align-items:stretch;gap:10px}[${MODAL}] .codexhost-pending-action-group{flex:1 1 auto}[${MODAL}] .codexhost-pending-followup{margin-left:0;padding-left:0;border-left:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);padding-top:10px}[${MODAL}] .codexhost-pending-actions button{flex:1 1 auto}}
 `;
   title.textContent = "";
   queue.type = "button";
@@ -389,7 +399,13 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   replay.className = "codexhost-pending-replay";
   replay.append(createElement(Volume2, { width: 15, height: 15, "aria-hidden": "true" }));
   actions.className = "codexhost-pending-actions";
-  actions.append(view, continueButton, read, archive);
+  finishActions.className = "codexhost-pending-action-group";
+  followUpActions.className = "codexhost-pending-action-group codexhost-pending-followup";
+  // “继续”会立刻向会话发送消息；“标为已读”“归档”只处理提醒本身。两者分组并
+  // 隔开，避免误点“已读”时把一条续发消息发出去。
+  finishActions.append(view, read, archive);
+  followUpActions.append(continueButton);
+  actions.append(finishActions, followUpActions);
   notice.className = "codexhost-pending-notice";
   notice.setAttribute("role", "alert");
   panel.append(heading, body, notice, actions);
@@ -572,6 +588,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     time.textContent = formatTime(entry.completedAt, locale);
     view.textContent = copy.view;
     continueButton.textContent = copy.continue;
+    continueButton.title = copy.continueHint;
     continueButton.disabled = sending;
     continueButton.setAttribute("aria-busy", String(sending));
     read.textContent = copy.read;

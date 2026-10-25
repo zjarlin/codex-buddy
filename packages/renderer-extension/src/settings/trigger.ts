@@ -8,8 +8,10 @@ import type { RendererModelClient } from "../renderer-model-client.js";
 export const SETTINGS_TRIGGER_ATTRIBUTE = "data-codexhost-settings-trigger";
 export const UPDATE_TRIGGER_ATTRIBUTE = "data-codexhost-update-trigger";
 const SYSTEM_ONE_TRIGGER_ATTRIBUTE = "data-codexhost-system-one-model";
+export const PROVIDERS_TRIGGER_ATTRIBUTE = "data-codexhost-providers-trigger";
+export const RECOVERY_TRIGGER_ATTRIBUTE = "data-codexhost-recovery-trigger";
 /** 由 codexhost 注入、不属于 Desktop 原生结构的 header 控件。 */
-export const RENDERER_INJECTED_CONTROL_SELECTOR = `[${SETTINGS_TRIGGER_ATTRIBUTE}],[${SYSTEM_ONE_TRIGGER_ATTRIBUTE}],[${UPDATE_TRIGGER_ATTRIBUTE}]`;
+export const RENDERER_INJECTED_CONTROL_SELECTOR = `[${SETTINGS_TRIGGER_ATTRIBUTE}],[${SYSTEM_ONE_TRIGGER_ATTRIBUTE}],[${UPDATE_TRIGGER_ATTRIBUTE}],[${PROVIDERS_TRIGGER_ATTRIBUTE}],[${RECOVERY_TRIGGER_ATTRIBUTE}]`;
 export const SETTINGS_HEADER_SURFACE_SELECTOR =
   '[data-testid="app-shell-header-context-menu-surface"]';
 const SETTINGS_APPLICATION_HEADER_SELECTOR = 'header[data-pip-obstacle="app-shell-header"]';
@@ -135,7 +137,7 @@ function findNativeHeaderActionGroup(header: HTMLElement): HTMLElement | null {
   return groups.at(-1) ?? null;
 }
 
-function findRendererSettingsHeaderInsertionPoint(
+export function findRendererSettingsHeaderInsertionPoint(
   ownerDocument: Document,
 ): RendererSettingsHeaderInsertionPoint | null {
   const header = ownerDocument.querySelector<HTMLElement>(SETTINGS_APPLICATION_HEADER_SELECTOR);
@@ -610,6 +612,54 @@ export function installRendererUpdateRailTrigger(options: {
       disposed = true;
       button.removeEventListener("click", onClick);
       root.remove();
+    },
+  };
+}
+
+export function installProvidersHeaderTrigger(options: {
+  ownerDocument: Document;
+  label: string;
+  onOpen(button: HTMLButtonElement): void;
+}) {
+  const button = options.ownerDocument.createElement("button");
+  button.type = "button";
+  button.setAttribute(PROVIDERS_TRIGGER_ATTRIBUTE, "");
+  button.setAttribute("aria-label", options.label);
+  button.textContent = options.label;
+  Object.assign(button.style, {
+    display: "inline-flex",
+    alignItems: "center",
+    flex: "0 0 auto",
+    whiteSpace: "nowrap",
+    padding: "5px 9px",
+    border: "1px solid light-dark(#b7cfee, #345477)",
+    borderRadius: "7px",
+    background: "light-dark(#eaf2fd, #1b304b)",
+    color: "light-dark(#185bb1, #93c5fd)",
+    font: "500 12px system-ui",
+    cursor: "pointer",
+    marginInline: "4px",
+  });
+  button.addEventListener("click", () => options.onOpen(button));
+  let disposed = false;
+  return {
+    refresh(): boolean {
+      if (disposed) {
+        return false;
+      }
+      const point = findRendererSettingsHeaderInsertionPoint(options.ownerDocument);
+      if (!point) {
+        button.remove();
+        return false;
+      }
+      if (button.parentElement !== point.parent) {
+        point.parent.insertBefore(button, point.before);
+      }
+      return true;
+    },
+    dispose(): void {
+      disposed = true;
+      button.remove();
     },
   };
 }

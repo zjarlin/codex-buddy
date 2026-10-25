@@ -829,6 +829,7 @@ describe("Renderer fixed Model request client", () => {
       "openThreadTerminal",
       "openThreadWorkspace",
       "pairProjectSync",
+      "providerRouting",
       "pullProjectSyncGit",
       "pushGit",
       "pushProjectSyncGit",

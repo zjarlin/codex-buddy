@@ -1,3 +1,4 @@
+import { ProviderRouting } from "./provider-routing/routing.js";
 import { mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -39,7 +40,9 @@ export async function prepareLocalCodex(input: {
     input.environment.CODEX_HOME ?? path.join(homedir(), ".codex"),
   );
   await mkdir(home, { recursive: true });
+  const providerRouting = new ProviderRouting(home);
   const scope = new OfficialRuntimeScope({
+    providerRouting,
     permanentHome: home,
     diagnosticOutput: input.diagnosticOutput,
     // Local Desktop connections outlive a failed official backend generation.
@@ -48,7 +51,7 @@ export async function prepareLocalCodex(input: {
       createOwnedLoopbackBackend({
         stockCodexPath: input.stockCodexPath,
         cwd: home,
-        arguments: input.arguments,
+        arguments: providerRouting.arguments(input.arguments),
         environment: { ...officialEnvironment(input.environment), CODEX_HOME: home },
       }),
   });

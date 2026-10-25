@@ -1,8 +1,7 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
-import type { BuddyInterrupted } from "@codexhost/shared-contracts";
+import type { InterruptedQueue, InterruptedQueueEntry } from "./interrupted-queue.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
-import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import {
@@ -12,24 +11,11 @@ import {
   threadIdFromSidebarRowElement,
 } from "../renderer-sidebar-agent-icons.js";
 
-type InterruptedThread = BuddyInterrupted["threads"][number];
+type InterruptedThread = InterruptedQueueEntry;
 type RecoveryStatus = InterruptedThread["status"];
 const marker = "data-buddy-sidebar-recovery";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
 const stateMarker = "data-buddy-sidebar-state";
-const FALLBACK_REFRESH_MS = 15_000;
-const MAX_CONCURRENT_FALLBACK_READS = 4;
-
-interface FallbackState {
-  hostId: string;
-  threadId: string;
-  client: RendererModelClient;
-  running: boolean;
-  status: RecoveryStatus | null;
-  checkedAt: number;
-  pending: boolean;
-}
-
 // 覆盖原生状态槽的视觉内容，卸载时保留 React 管理的原始节点。
 const style = `
 [${recoverableMarker}]{background:color-mix(in srgb,#d99000 9%,transparent)!important;box-shadow:inset 3px 0 0 #d99000!important}
@@ -48,6 +34,7 @@ const style = `
 `;
 
 export function installSidebarContinuation(options: {
+  queue: InterruptedQueue;
   getClient(hostId: string): RendererModelClient | null;
   getLocale(): "zh-CN" | "en";
 }): { refresh(): void; dispose(): void } {
@@ -58,28 +45,12 @@ export function installSidebarContinuation(options: {
   error.setAttribute("role", "alert");
   document.head.append(styles);
   document.body.append(error);
-  const hosts = new Map<
-    string,
-    {
-      client: RendererModelClient;
-      threads: Map<string, InterruptedThread>;
-      runningThreadIds: Set<string>;
-      resumeEnabled: boolean;
-      pending: boolean;
-      updatedAt: number;
-    }
-  >();
-  const unavailableRecoveryClients = new WeakSet<RendererModelClient>();
   const mounted = new Map<
     HTMLElement,
-    { slot: HTMLElement; button: HTMLButtonElement; key: string }
+    { slot: HTMLElement; button: HTMLButtonElement; key: string; client: RendererModelClient }
   >();
-  const fallbackStates = new Map<HTMLElement, FallbackState>();
-  const pending = new Set<string>();
-  const continued = new Set<string>();
   let disposed = false;
   let scheduled = false;
-  let fallbackInFlight = 0;
   const chinese = () => options.getLocale() === "zh-CN";
   const keyFor = (hostId: string, thread: InterruptedThread) =>
     JSON.stringify([hostId, thread.threadId, thread.turnId]);
@@ -112,207 +83,61 @@ export function installSidebarContinuation(options: {
     scheduled = true;
     queueMicrotask(scan);
   };
-  const fallbackFor = (
-    row: HTMLElement,
-    hostId: string,
-    threadId: string,
-    client: RendererModelClient,
-  ): FallbackState => {
-    const current = fallbackStates.get(row);
-    if (current?.hostId === hostId && current.threadId === threadId && current.client === client) {
-      return current;
-    }
-    const next: FallbackState = {
-      hostId,
-      threadId,
-      client,
-      running: false,
-      status: null,
-      checkedAt: 0,
-      pending: false,
-    };
-    fallbackStates.set(row, next);
-    return next;
-  };
-  const readFallback = (row: HTMLElement, entry: FallbackState): void => {
-    const read = entry.client.readThreadTurnState?.bind(entry.client);
-    if (!read) return;
-    entry.pending = true;
-    entry.checkedAt = Date.now();
-    fallbackInFlight += 1;
-    void read(entry.threadId)
-      .then(
-        (value) => {
-          if (fallbackStates.get(row) !== entry || disposed) return;
-          entry.running = value.running;
-          entry.status = value.status;
-        },
-        () => {
-          if (fallbackStates.get(row) !== entry || disposed) return;
-          entry.running = false;
-          entry.status = null;
-        },
-      )
-      .finally(() => {
-        entry.pending = false;
-        fallbackInFlight = Math.max(0, fallbackInFlight - 1);
-        schedule();
-      });
-  };
-  const load = async (hostId: string, state: NonNullable<ReturnType<typeof hosts.get>>) => {
-    if (
-      document.hidden ||
-      state.pending ||
-      unavailableRecoveryClients.has(state.client) ||
-      !state.client.buddyInterrupted
-    ) {
-      return;
-    }
-    state.pending = true;
-    state.updatedAt = Date.now();
-    state.resumeEnabled = false;
-    try {
-      try {
-        await state.client.buddyStatus?.();
-      } catch (failure) {
-        if (!(failure instanceof RendererMethodUnavailableError)) throw failure;
-      }
-      if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
-        return;
-      // 路由状态缺失时独立探测恢复能力；其他状态错误保持禁用。
-      state.resumeEnabled = true;
-      const result = await state.client.buddyInterrupted();
-      if (disposed || hosts.get(hostId) !== state || unavailableRecoveryClients.has(state.client))
-        return;
-      state.threads = new Map(result.threads.map((thread) => [thread.threadId, thread]));
-      state.runningThreadIds = new Set(result.runningThreadIds);
-    } catch (failure) {
-      if (disposed || hosts.get(hostId) !== state) return;
-      if (failure instanceof RendererMethodUnavailableError) {
-        unavailableRecoveryClients.add(state.client);
-        state.resumeEnabled = false;
-        state.threads.clear();
-        state.runningThreadIds.clear();
-      }
-      // 后台发现失败不弹窗打断用户；实际点击的续接错误通过 alert 显示。
-      console.warn("[codexhost] Sidebar continuation discovery failed", failure);
-    } finally {
-      state.pending = false;
-      schedule();
-    }
-  };
   const resume = async (hostId: string, thread: InterruptedThread, client: RendererModelClient) => {
-    const key = keyFor(hostId, thread);
-    if (!client.buddyContinue) return;
-    if (pending.has(key) || continued.has(key) || options.getClient(hostId) !== client) return;
-    pending.add(key);
+    if (options.getClient(hostId) !== client || options.queue.isPending(thread)) return;
     error.textContent = "";
-    schedule();
     try {
-      await client.buddyContinue(thread.threadId, thread.turnId);
-      if (disposed || options.getClient(hostId) !== client) return;
-      continued.add(key);
-      hosts.get(hostId)?.threads.delete(thread.threadId);
+      await options.queue.resume(thread);
     } catch (failure) {
       if (disposed || options.getClient(hostId) !== client) return;
-      if (failure instanceof RendererMethodUnavailableError) {
-        unavailableRecoveryClients.add(client);
-        const state = hosts.get(hostId);
-        if (state) {
-          state.resumeEnabled = false;
-          state.threads.clear();
-          state.runningThreadIds.clear();
-        }
-        error.textContent = chinese()
-          ? "当前连接不支持会话恢复。"
-          : "Conversation recovery is unavailable on this connection.";
-      } else {
-        error.textContent = `${chinese() ? "恢复失败，可点击状态图标重试" : "Could not resume. Click the status icon to retry"}: ${failure instanceof Error ? failure.message : String(failure)}`;
-      }
+      error.textContent = `${chinese() ? "恢复失败" : "Could not resume"}: ${failure instanceof Error ? failure.message : String(failure)}`;
     } finally {
-      pending.delete(key);
       schedule();
     }
   };
   function scan(): void {
     scheduled = false;
     if (disposed) return;
-    const visibleHosts = new Set<string>();
+    const snapshots = new Map<string, Map<string, InterruptedThread>>();
     const rows = new Set(document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR));
     for (const row of mounted.keys()) {
       if (!rows.has(row)) clearRow(row);
-    }
-    for (const row of fallbackStates.keys()) {
-      if (!rows.has(row)) fallbackStates.delete(row);
     }
     for (const row of rows) {
       const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
       const threadId = hostId ? nativeThreadId(hostId, row) : null;
       const client = hostId ? options.getClient(hostId) : null;
       if (!hostId || !threadId || !client) {
-        fallbackStates.delete(row);
         clearRow(row);
         continue;
       }
-      visibleHosts.add(hostId);
-      let state = hosts.get(hostId);
-      if (!state || state.client !== client) {
-        state = {
-          client,
-          threads: new Map(),
-          runningThreadIds: new Set(),
-          resumeEnabled: false,
-          pending: false,
-          updatedAt: 0,
-        };
-        hosts.set(hostId, state);
+      let threads = snapshots.get(hostId);
+      if (!threads) {
+        threads = new Map(options.queue.list(hostId).map((entry) => [entry.threadId, entry]));
+        snapshots.set(hostId, threads);
       }
-      // 恢复接口缺失只影响“能否续接”，不影响未完成状态的着色。此时按当前可见行
-      // 读取原生最新回合，避免把状态展示绑死在 Host 的恢复能力上。
-      const primary = Boolean(client.buddyInterrupted) && !unavailableRecoveryClients.has(client);
-      if (!primary) {
-        clear(row);
-        if (!client.readThreadTurnState) {
-          fallbackStates.delete(row);
-          clearRow(row);
-          continue;
-        }
-        const entry = fallbackFor(row, hostId, threadId, client);
-        if (
-          !entry.pending &&
-          Date.now() - entry.checkedAt >= FALLBACK_REFRESH_MS &&
-          fallbackInFlight < MAX_CONCURRENT_FALLBACK_READS
-        ) {
-          readFallback(row, entry);
-        }
-        decorate(row, entry.running, entry.status ?? undefined);
-        continue;
-      }
-      fallbackStates.delete(row);
-      // 只在从未读取或显式 refresh() 后读取一次；DOM 变化仅重绑行，不再定时轮询。
-      if (!state.pending && state.updatedAt === 0) void load(hostId, state);
-      const thread = state.threads.get(threadId);
-      const running = state.runningThreadIds.has(threadId);
-      decorate(row, running, thread?.status);
+      const thread = threads.get(threadId);
+      decorate(row, false, thread?.status);
       const title = row.querySelector("[data-thread-title-trigger]");
       const slot = title?.previousElementSibling;
       // 仅接管已验证的标题前状态槽，结构变化时不猜测其他按钮的位置。
       if (
         !thread ||
-        thread.owner !== "codex" ||
-        running ||
-        !state.resumeEnabled ||
         !client.buddyContinue ||
         !(slot instanceof HTMLElement) ||
-        !slot.matches("div.w-4.shrink-0") ||
-        continued.has(keyFor(hostId, thread))
+        !slot.matches("div.w-4.shrink-0")
       ) {
         clear(row);
         continue;
       }
       const key = keyFor(hostId, thread);
       let entry = mounted.get(row);
-      if (entry?.key !== key || entry.slot !== slot || entry.button.parentElement !== slot) {
+      if (
+        entry?.key !== key ||
+        entry.client !== client ||
+        entry.slot !== slot ||
+        entry.button.parentElement !== slot
+      ) {
         clear(row);
         const button = document.createElement("button");
         button.type = "button";
@@ -323,9 +148,7 @@ export function installSidebarContinuation(options: {
           event.stopPropagation();
           if (
             row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE) !== hostId ||
-            nativeThreadId(hostId, row) !== thread.threadId ||
-            !hosts.get(hostId)?.resumeEnabled ||
-            hosts.get(hostId)?.runningThreadIds.has(thread.threadId) === true
+            nativeThreadId(hostId, row) !== thread.threadId
           )
             return;
           void resume(hostId, thread, client);
@@ -336,14 +159,14 @@ export function installSidebarContinuation(options: {
         button.addEventListener("pointerdown", (event) => event.stopPropagation());
         slot.setAttribute(marker, "");
         slot.append(button);
-        entry = { slot, button, key };
+        entry = { slot, button, key, client };
         mounted.set(row, entry);
       }
-      const busy = pending.has(key);
+      const busy = options.queue.isPending(thread);
       const statusLabel = busy
         ? chinese()
-          ? "正在恢复会话…"
-          : "Resuming conversation…"
+          ? "正在处理会话…"
+          : "Processing conversation…"
         : chinese()
           ? thread.status === "failed"
             ? "会话执行失败，点击恢复"
@@ -361,38 +184,26 @@ export function installSidebarContinuation(options: {
         entry.button.setAttribute("aria-label", statusLabel);
       }
     }
-    for (const hostId of hosts.keys()) {
-      if (!visibleHosts.has(hostId)) hosts.delete(hostId);
-    }
   }
-  const refresh = () => {
-    for (const state of hosts.values()) state.updatedAt = 0;
-    for (const state of fallbackStates.values()) state.checkedAt = 0;
-    schedule();
-  };
+  const refresh = () => schedule();
+  const stopQueue = options.queue.subscribe(schedule);
   const stopObserving = getDomMutationHub(document).subscribe({
     kinds: ["childList", "attributes"],
     attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE],
     test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
     onMutate: () => schedule(),
   });
-  // 中断发现的读取完全由事件驱动：连接绑定后读取一次，切换 Host 时通过 refresh()
-  // 重新读取，窗口重新聚焦时刷新；不再运行后台定时轮询。
-  window.addEventListener("focus", refresh);
+  // DOM 变化只重画本地队列，不读取历史或按时间重试。
   schedule();
   return {
     refresh,
     dispose() {
       disposed = true;
       stopObserving();
-      window.removeEventListener("focus", refresh);
+      stopQueue();
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {
         clearRow(row);
       }
-      hosts.clear();
-      fallbackStates.clear();
-      pending.clear();
-      continued.clear();
       error.remove();
       styles.remove();
     },

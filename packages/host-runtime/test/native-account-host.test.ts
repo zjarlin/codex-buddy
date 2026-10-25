@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -112,6 +112,32 @@ async function startLocal() {
 }
 
 describe("local Codex read-only identity startup", () => {
+  it("starts the shared provider proxy before spawning the local native backend", async () => {
+    nativeFixture();
+    const home = await mkdtemp(path.join(os.tmpdir(), "codexhost-local-providers-"));
+    temporaryDirectories.add(home);
+    await writeFile(
+      path.join(home, "config.toml"),
+      '[model_providers.fixture]\nname="Fixture"\nbase_url="https://primary.invalid/v1"\nwire_api="responses"\n',
+    );
+    const local = await prepareLocalCodex({
+      stockCodexPath: "/synthetic/codex",
+      arguments: ["app-server"],
+      environment: { CODEX_HOME: home },
+      diagnosticOutput: new PassThrough(),
+    });
+    prepared.add(local);
+    const args = vi.mocked(createOwnedLoopbackBackend).mock.calls[0]?.[0].arguments;
+    expect(args).toContain("model_providers.fixture.supports_websockets=false");
+    expect(
+      args?.some((arg) => arg.startsWith('model_providers.fixture.base_url="http://127.0.0.1:')),
+    ).toBe(true);
+    expect(
+      (await local.officialRuntimeScope.providerRouting?.configure({ action: "read" }))
+        ?.primaryProviders[0]?.covered,
+    ).toBe(true);
+  });
+
   it("recovers the local backend so an existing client can explicitly retry voice startup", async () => {
     const first = nativeFixture();
     const local = await startLocal();

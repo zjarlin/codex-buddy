@@ -366,6 +366,67 @@ test("a native Codex draft hides the external Harness command button", async ({ 
   await expect(root).toBeHidden();
 });
 
+test("a new native draft mounts its Agent controls and becomes idle without a routing event", async ({
+  page,
+}) => {
+  await page.evaluate(() => Reflect.set(globalThis, "startupAgent", "codex"));
+  await page.addScriptTag({ content: browserBundle });
+  await expect(page.locator("[data-codexhost-agent-control]")).toHaveCount(1);
+  await expect
+    .poll(() => page.evaluate(() => typeof Reflect.get(globalThis, "prewarmTestDraft")))
+    .toBe("function");
+  await page.locator("[data-codex-composer-root]").evaluate((original) => {
+    const originalEditor = original.querySelector("[contenteditable]");
+    const originalFiber =
+      originalEditor &&
+      Object.getOwnPropertyDescriptor(originalEditor, "__reactFiber$startup")?.value;
+    if (!originalEditor || !originalFiber) throw new Error("Missing fixture editor");
+    const data = originalFiber.updateQueue.memoCache.data.map((row: unknown[]) => [...row]);
+    data[1][2] = "client-new-thread:navigation";
+    const composer = document.createElement("div");
+    composer.setAttribute("data-codex-composer-root", "true");
+    const editor = originalEditor.cloneNode(true);
+    Object.defineProperty(editor, "__reactFiber$startup", {
+      value: { ...originalFiber, updateQueue: { memoCache: { data } } },
+    });
+    const send = document.createElement("button");
+    send.type = "submit";
+    composer.append(editor, send);
+    original.replaceWith(composer);
+  });
+  await expect(page.locator("[data-codexhost-agent-control]")).toHaveCount(1);
+  await expect
+    .poll(() => page.evaluate(() => window.__codexhostRendererBindingProbeV1?.status().selections))
+    .toMatchObject([{ agent: "codex", phase: "draft" }]);
+  const scans = await page.evaluate(async () => {
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    const queryAll = document.querySelectorAll;
+    let count = 0;
+    document.querySelectorAll = function (selector: string) {
+      if (selector === 'textarea, [contenteditable="true"], [role="textbox"]') count += 1;
+      return queryAll.call(this, selector);
+    };
+    try {
+      for (let frame = 0; frame < 6; frame += 1) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      return count;
+    } finally {
+      document.querySelectorAll = queryAll;
+    }
+  });
+  expect(scans).toBe(0);
+  await page.locator("[data-codex-composer-root] button[type=submit]").click();
+  await expect
+    .poll(() => page.evaluate(() => Reflect.get(globalThis, "threadStartRequests")))
+    .toHaveLength(1);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "appliedConfiguration"))).toMatchObject({
+    agent: "codex",
+  });
+});
+
 test("streamed transcript text does not rescan the Composer", async ({ page }) => {
   await page.addScriptTag({ content: browserBundle });
   await expect(

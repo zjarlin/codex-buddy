@@ -1,3 +1,4 @@
+import { ProviderRouting } from "./provider-routing/routing.js";
 import { ProjectGitWorkflowGroup } from "./project-git-workflow.js";
 import { randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
@@ -400,7 +401,11 @@ export async function runHostRuntime(input: {
     createHost: async (delegationEnvironment, _onDelegationApi, registry) => {
       const socketPath = remoteAppServerSocketPath(delegationEnvironment, listenUrl);
       const officialPlan = createRemoteOfficialAppServerPlan(input.arguments, socketPath);
+      const providerRouting = new ProviderRouting(
+        path.resolve(delegationEnvironment.CODEX_HOME ?? path.join(homedir(), ".codex")),
+      );
       const officialRuntimeScope = new OfficialRuntimeScope({
+        providerRouting,
         permanentHome: path.resolve(
           delegationEnvironment.CODEX_HOME ?? path.join(homedir(), ".codex"),
         ),
@@ -411,7 +416,7 @@ export async function runHostRuntime(input: {
         createBackend: () =>
           createOwnedUnixBackend({
             stockCodexPath,
-            arguments: officialPlan.listenerArguments,
+            arguments: providerRouting.arguments(officialPlan.listenerArguments),
             socketPath: officialPlan.socketPath,
             environment: officialEnvironment(delegationEnvironment),
             diagnosticOutput: process.stderr,

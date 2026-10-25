@@ -1,8 +1,7 @@
 import type { RendererModelClient } from "../renderer-model-client.js";
 import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
+import type { InterruptedQueue } from "./interrupted-queue.js";
 import { createInterruptedPanel } from "./interrupted-panel.js";
-import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
-import { BUDDY_SETTINGS_CHANGED_EVENT } from "./settings-events.js";
 
 const style = `
 [data-buddy-recovery]{font:12px/1.5 system-ui;color:inherit;margin:6px 0;max-width:100%}
@@ -20,6 +19,7 @@ const style = `
 [data-buddy-recovery] .buddy-interrupted-note{font-size:11px;opacity:.65}
 [data-buddy-recovery] .buddy-interrupted-list{display:flex;flex-direction:column;gap:4px;min-width:0}
 [data-buddy-recovery] .buddy-interrupted-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:7px;padding:6px 7px}
+[data-buddy-recovery] .buddy-interrupted-actions{display:flex;gap:6px}
 [data-buddy-recovery] .buddy-interrupted-copy{min-width:0}
 [data-buddy-recovery] .buddy-interrupted-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 [data-buddy-recovery] .buddy-interrupted-status{display:block;margin-top:2px;font-size:10px;opacity:.65}
@@ -29,6 +29,7 @@ const style = `
 
 export interface BuddyControlContext {
   anchor: Element;
+  hostId: string;
   threadId: string | null;
   client: RendererModelClient;
 }
@@ -37,6 +38,11 @@ export interface BuddyControlContext {
 export function installBuddyControl(
   getContext: () => BuddyControlContext | null,
   getLocale: () => "zh-CN" | "en",
+  options: {
+    queue: InterruptedQueue;
+    getRecoveryContext?: () => { client: RendererModelClient; hostId: string } | null;
+    onResumed?: () => void;
+  },
 ): {
   dispose(): void;
   refresh(): Promise<void>;
@@ -47,27 +53,25 @@ export function installBuddyControl(
   recovery.dataset.buddyRecovery = "";
   const styles = document.createElement("style");
   styles.textContent = style;
-  const interrupted = createInterruptedPanel(getLocale);
+  const interrupted = createInterruptedPanel(getLocale, options.queue, options.onResumed);
   recovery.append(styles, interrupted.root);
-  let context: BuddyControlContext | null = null;
+  let client: RendererModelClient | null = null;
+  let hostId: string | null = null;
   let disposed = false;
-  let epoch = 0;
-  let privateMode = true;
   let modelView: ModelShortcutView | null = null;
   let harnessId = "";
-  let pending: { client: RendererModelClient; epoch: number; promise: Promise<void> } | null = null;
   const render = (): void => {
-    interrupted.update(context?.client ?? null, privateMode, modelView, harnessId);
+    interrupted.update(client, modelView, harnessId, hostId);
   };
   const refreshContext = (): void => {
     const next = disposed ? null : getContext();
-    const changed = context?.client !== next?.client;
-    if (changed) {
-      epoch += 1;
-      privateMode = true;
-    }
-    context = next;
+    const fallback = disposed ? null : (next ?? options.getRecoveryContext?.());
+    const nextClient = fallback?.client ?? null;
+    const nextHostId = fallback?.hostId ?? null;
+    client = nextClient;
+    hostId = nextHostId;
     render();
+    interrupted.repositionHeader();
     if (!next) {
       recovery.remove();
       return;
@@ -77,38 +81,10 @@ export function installBuddyControl(
     );
     const anchor = shortcuts ?? next.anchor;
     if (recovery.nextElementSibling !== anchor) anchor.before(recovery);
-    if (changed) void readStatus(next);
   };
-  function readStatus(target: BuddyControlContext): Promise<void> {
-    const generation = epoch;
-    if (pending?.client === target.client && pending.epoch === generation) return pending.promise;
-    const promise = (async () => {
-      try {
-        const snapshot = await target.client.buddyStatus?.();
-        if (disposed || context?.client !== target.client || epoch !== generation) return;
-        privateMode = snapshot?.settings.privateMode ?? false;
-      } catch (error) {
-        // 恢复接口独立探测；不支持路由的官方连接仍可能提供会话恢复。
-        if (disposed || context?.client !== target.client || epoch !== generation) return;
-        privateMode = !(error instanceof RendererMethodUnavailableError);
-      }
-      render();
-    })();
-    pending = { client: target.client, epoch: generation, promise };
-    void promise.finally(() => {
-      if (pending?.promise === promise) pending = null;
-    });
-    return promise;
-  }
   const refresh = async (): Promise<void> => {
-    if (disposed) return;
-    refreshContext();
-    if (context) await readStatus(context);
+    if (!disposed) refreshContext();
   };
-  const settingsChanged = (): void => {
-    void refresh();
-  };
-  window.addEventListener(BUDDY_SETTINGS_CHANGED_EVENT, settingsChanged);
   void refresh();
   return {
     refresh,
@@ -120,8 +96,6 @@ export function installBuddyControl(
     },
     dispose() {
       disposed = true;
-      epoch += 1;
-      window.removeEventListener(BUDDY_SETTINGS_CHANGED_EVENT, settingsChanged);
       interrupted.dispose();
       recovery.remove();
     },

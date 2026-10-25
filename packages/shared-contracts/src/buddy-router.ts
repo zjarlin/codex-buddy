@@ -9,6 +9,8 @@ export const BUDDY_CANCEL_METHOD = "codexhost/buddy/cancel";
 export const EMERGENCY_PROVIDER_METHOD = "codexhost/emergency/provider";
 export const BUDDY_INTERRUPTED_METHOD = "codexhost/buddy/interrupted";
 export const BUDDY_CONTINUE_METHOD = "codexhost/buddy/continue";
+export const nativeContinuationPrompt =
+  "继续本会话上一次尚未完成的请求。先核对已有回答、工具结果和当前实际状态，从中断处继续；不要盲目重放已完成的命令、修改或外部操作。若上次请求已经完成，简要说明即可。";
 export const buddyContinueSchema = z
   .object({
     threadId: z.string().min(1),

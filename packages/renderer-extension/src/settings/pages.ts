@@ -1,3 +1,4 @@
+import { createProvidersSettingsPage } from "./providers/page.js";
 import {
   createUsageStatisticsPage,
   type RendererUsageStatisticsHostsProvider,
@@ -42,10 +43,7 @@ import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
 import { createProjectSyncPage, type ProjectSyncClient } from "./project-sync-page.js";
-import {
-  createEmergencyProviderSettingsPage,
-  type EmergencyProviderClient,
-} from "./emergency-provider-page.js";
+import { type EmergencyProviderClient } from "../renderer-model-client.js";
 
 export type {
   RendererConnectionAgentSnapshot,
@@ -82,10 +80,10 @@ function windowsInstallerDownloadUrl(window: Window | null | undefined, version:
 
 export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "connections",
+  "providers",
   "remote-connections",
   "accounts",
   "routing",
-  "emergency-provider",
   "project-sync",
   "session-import",
   "usage-statistics",
@@ -793,12 +791,14 @@ export function createDefaultRendererSettingsPages(
     Promise.reject(new Error("Local Host connection is unavailable")),
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider,
 ): readonly RendererSettingsPageDefinition[] {
+  // 保留既有调用方的参数位置；旧应急入口合并到多供应商页面。
+  void getEmergencyProviderClient;
   return Object.freeze([
     createConnectionsSettingsPage(messages, getDiagnostics, undefined, getRemoteConnections),
+    createProvidersSettingsPage(messages, getBuddyClient),
     createRemoteConnectionsPage(messages, getRemoteConnections),
     createAccountsSettingsPage(messages, getAccountClient),
     createRoutingSettingsPage(messages, getBuddyClient),
-    createEmergencyProviderSettingsPage(messages, getEmergencyProviderClient),
     createProjectSyncPage(messages, getProjectSyncClient),
     createSessionImportSettingsPage(
       messages,

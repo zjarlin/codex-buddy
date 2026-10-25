@@ -3,54 +3,52 @@ import ChevronDown from "lucide/dist/esm/icons/chevron-down.mjs";
 import ChevronRight from "lucide/dist/esm/icons/chevron-right.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
-import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../renderer-model-client.js";
-import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
 import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "../renderer-model-favorites.js";
+import { createRecoveryHeader } from "./recovery-header.js";
+import type { InterruptedQueue, InterruptedQueueEntry } from "./interrupted-queue.js";
 
-type InterruptedThread = BuddyInterrupted["threads"][number];
+type InterruptedThread = InterruptedQueueEntry;
 const messages = {
   "zh-CN": {
-    heading: "最近中断会话",
-    empty: "暂无最近中断会话。",
-    loading: "正在读取最近中断会话…",
-    refresh: "刷新中断会话",
-    collapse: "收起最近中断会话",
-    expand: "展开最近中断会话",
+    heading: "中断队列",
+    empty: "中断队列为空。",
+    loading: "正在补录历史中断…",
+    refresh: "补录历史中断",
+    collapse: "收起中断队列",
+    expand: "展开中断队列",
     resume: "恢复",
     resuming: "正在恢复…",
-    resumeAll: "全部继续",
+    resumeAll: "一键恢复所有",
+    resumeAllHint: "按顺序恢复当前连接下列表中的所有中断会话。",
     resumeWithModel: "以某模型 ID 继续",
     resumeWithModelHint: "复用当前模型选择；指定模型 ID 可避免自动选模导致再次中断。",
     resumeFailed: "恢复失败",
     unavailable: "当前连接不支持会话恢复。",
     waiting: "连接状态尚未确认，暂时无法恢复会话。",
-    unavailableHint:
-      "请确认当前连接已接入支持会话恢复的 Codex Buddy；SSH 会话需在远端启用后重新连接。",
     unreadable: "条会话历史暂时无法读取",
     failed: "失败",
     interrupted: "已中断",
     cancelled: "已取消",
   },
   en: {
-    heading: "Recent interrupted conversations",
-    empty: "No recently interrupted conversations.",
-    loading: "Loading recently interrupted conversations…",
-    refresh: "Refresh interrupted conversations",
-    collapse: "Collapse recent interrupted conversations",
-    expand: "Expand recent interrupted conversations",
+    heading: "Interrupted queue",
+    empty: "The interruption queue is empty.",
+    loading: "Importing interrupted history…",
+    refresh: "Import interrupted history",
+    collapse: "Collapse interrupted queue",
+    expand: "Expand interrupted queue",
     resume: "Resume",
     resuming: "Resuming…",
     resumeAll: "Resume all",
+    resumeAllHint: "Resume all interrupted conversations listed on this connection, one by one.",
     resumeWithModel: "Resume with model ID",
     resumeWithModelHint:
       "Reuse current model picker; specifying a model ID avoids repeated interruptions from auto selection.",
     resumeFailed: "Resume failed",
     unavailable: "Conversation recovery is unavailable on this connection.",
     waiting: "Waiting for connection status before allowing conversation recovery.",
-    unavailableHint:
-      "Check that this connection runs Codex Buddy with conversation recovery; for SSH, enable it on the remote machine and reconnect.",
     unreadable: "conversation histories could not be read",
     failed: "Failed",
     interrupted: "Interrupted",
@@ -62,25 +60,30 @@ const keyFor = (thread: InterruptedThread) => JSON.stringify([thread.threadId, t
 const errorMessage = (failure: unknown) =>
   failure instanceof Error ? failure.message : String(failure);
 
-function session(client: RendererModelClient | null) {
+function session(client: RendererModelClient | null, hostId: string | null = null) {
   return {
     client,
+    hostId,
     threads: [] as InterruptedThread[],
     pending: new Set<string>(),
-    continued: new Set<string>(),
     failures: new Map<string, string>(),
     loading: false,
     batch: false,
-    loaded: false,
+    total: null as number | null,
+    completed: 0,
+    succeeded: 0,
     unreadable: 0,
-    unavailable: false,
     error: "",
     modelView: null as ModelShortcutView | null,
     harnessId: "",
   };
 }
 
-export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
+export function createInterruptedPanel(
+  getLocale: () => "zh-CN" | "en",
+  queue: InterruptedQueue,
+  onResumed?: () => void,
+) {
   const chinese = () => getLocale() === "zh-CN";
   const root = document.createElement("div");
   root.className = "buddy-recovery-panel";
@@ -93,38 +96,44 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
   let focusToggle = false;
   let selectedModelId = "";
   let customModelId = "";
+  const header = createRecoveryHeader(getLocale, () => resumeAll());
+  const syncQueue = () => {
+    state.threads = state.hostId ? queue.list(state.hostId) : [];
+    render();
+  };
+  const stopQueue = queue.subscribe(syncQueue);
   const favoritesChanged = (): void => render();
   window.addEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
   window.addEventListener("storage", favoritesChanged);
 
   const current = (target: typeof state) => !disposed && state === target;
-  const canResume = (target: typeof state) => current(target) && !target.unavailable;
 
-  // 中断列表只在首次绑定连接或用户手动刷新时读取，不再后台轮询。
-  async function refresh(): Promise<void> {
+  // 补录历史只由用户主动点击，不由连接绑定、聚焦或布局更新触发。
+  async function refresh(): Promise<boolean> {
     const target = state;
-    if (!canResume(target) || !target.client?.buddyInterrupted || target.loading || target.batch) {
-      return;
+    if (
+      !current(target) ||
+      !target.hostId ||
+      !target.client?.buddyInterrupted ||
+      target.loading ||
+      target.batch
+    ) {
+      return false;
     }
     target.loading = true;
     target.error = "";
     render();
     try {
-      const result = await target.client.buddyInterrupted();
-      if (!canResume(target)) return;
-      const running = new Set(result.runningThreadIds);
-      target.threads = result.threads.filter(
-        (thread) =>
-          thread.owner === "codex" &&
-          !running.has(thread.threadId) &&
-          !target.continued.has(keyFor(thread)),
-      );
-      target.unreadable = result.unreadable;
+      const unreadable = await queue.importHistory(target.hostId);
+      if (!current(target)) return false;
+      target.threads = queue.list(target.hostId);
+      target.unreadable = unreadable;
+      return true;
     } catch (failure) {
       if (current(target)) {
-        target.unavailable ||= failure instanceof RendererMethodUnavailableError;
         target.error = errorMessage(failure);
       }
+      return false;
     } finally {
       target.loading = false;
       if (current(target)) render();
@@ -135,13 +144,15 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     target: typeof state,
     thread: InterruptedThread,
     modelId?: string,
+    action: "resume" | "archive" = "resume",
   ): Promise<void> {
     const key = keyFor(thread);
     if (
-      !canResume(target) ||
-      !target.client?.buddyContinue ||
+      !current(target) ||
+      !target.client ||
+      (action === "resume" && !target.client.buddyContinue) ||
       target.pending.has(key) ||
-      target.continued.has(key)
+      queue.isPending(thread)
     ) {
       return;
     }
@@ -149,16 +160,18 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     target.failures.delete(key);
     render();
     try {
-      if (modelId) {
-        await target.client.buddyContinue(thread.threadId, thread.turnId, modelId);
+      if (action === "archive") {
+        await queue.archive(thread);
       } else {
-        await target.client.buddyContinue(thread.threadId, thread.turnId);
+        await queue.resume(thread, modelId);
       }
-      target.continued.add(key);
-      target.threads = target.threads.filter((candidate) => keyFor(candidate) !== key);
+      target.threads = target.hostId ? queue.list(target.hostId) : [];
+      if (current(target) && !target.batch) onResumed?.();
     } catch (failure) {
-      target.unavailable ||= failure instanceof RendererMethodUnavailableError;
-      target.failures.set(key, errorMessage(failure));
+      target.failures.set(
+        key,
+        `${action === "archive" ? (chinese() ? "归档失败" : "Archive failed") : messages[getLocale()].resumeFailed}: ${errorMessage(failure)}`,
+      );
     } finally {
       target.pending.delete(key);
       if (current(target)) render();
@@ -167,27 +180,63 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
 
   async function resumeAll(modelId?: string): Promise<void> {
     const target = state;
-    if (!canResume(target) || target.batch || target.loading || target.pending.size > 0) return;
+    if (
+      !current(target) ||
+      target.batch ||
+      target.loading ||
+      target.pending.size > 0 ||
+      target.threads.some(queue.isPending)
+    )
+      return;
     const candidates = [...target.threads];
     const startedAtEpoch = epoch;
     target.batch = true;
+    target.total = candidates.length;
+    target.completed = 0;
+    target.succeeded = 0;
     render();
     try {
-      // 只处理点击时的列表；逐条提交，切换连接或开启隐私后停止剩余请求。
+      // 只处理点击时的列表；逐条提交，切换连接或卸载后停止剩余请求。
       for (const thread of candidates) {
-        if (!canResume(target) || epoch !== startedAtEpoch) break;
+        if (!current(target) || epoch !== startedAtEpoch) break;
         await resume(target, thread, modelId);
+        target.completed += 1;
+        if (!target.failures.has(keyFor(thread))) target.succeeded += 1;
+        if (current(target)) render();
       }
     } finally {
       target.batch = false;
-      if (current(target)) render();
+      if (current(target)) {
+        render();
+        if (target.succeeded > 0) onResumed?.();
+      }
     }
   }
 
   function render(): void {
     const m = messages[getLocale()];
+    header.update({
+      available: Boolean(state.hostId && state.client?.buddyContinue),
+      busy:
+        state.loading ||
+        state.batch ||
+        state.pending.size > 0 ||
+        state.threads.some(queue.isPending),
+      loading: state.loading,
+      batch: state.batch,
+      count: state.threads.length,
+      total: state.total,
+      completed: state.completed,
+      succeeded: state.succeeded,
+      unreadable: state.unreadable,
+      error:
+        state.error ||
+        [...state.failures.values()].join("; ") ||
+        (state.hostId ? queue.problem(state.hostId) : ""),
+    });
     const favoriteIds = state.harnessId ? [...readModelFavorites(state.harnessId)] : [];
     const signature = JSON.stringify([
+      epoch,
       getLocale(),
       Boolean(state.client?.buddyContinue),
       Boolean(state.client?.buddyInterrupted),
@@ -196,7 +245,8 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       state.batch,
       state.error,
       state.unreadable,
-      state.unavailable,
+      state.hostId ? queue.problem(state.hostId) : "",
+      state.threads.map((entry) => queue.isPending(entry)),
       state.modelView,
       state.harnessId,
       favoriteIds,
@@ -255,14 +305,15 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
         toggle.focus();
       }
     };
-    if (state.unavailable || !state.client?.buddyInterrupted || !state.client.buddyContinue) {
+    if (!state.hostId || !state.client) {
       note(state.client ? m.unavailable : m.waiting);
-      if (state.unavailable) note(m.unavailableHint);
       finish();
       return;
     }
     if (state.loading) note(m.loading);
     if (state.error) note(state.error, true);
+    const queueError = state.hostId ? queue.problem(state.hostId) : "";
+    if (queueError) note(queueError, true);
     if (state.unreadable > 0) note(`${state.unreadable} ${m.unreadable}`);
     if (!collapsed && !state.loading && state.threads.length === 0 && !state.error) note(m.empty);
     const reload = document.createElement("button");
@@ -270,17 +321,23 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
     reload.title = m.refresh;
     reload.setAttribute("aria-label", m.refresh);
     reload.append(createElement(RefreshCw, { width: 14, height: 14, "aria-hidden": "true" }));
-    reload.disabled = state.loading || state.batch;
+    reload.disabled = state.loading || state.batch || !state.client.buddyInterrupted;
     reload.addEventListener("click", () => {
       void refresh();
     });
     const all = document.createElement("button");
     all.type = "button";
     all.dataset.buddyResumeAll = "";
+    all.title = m.resumeAllHint;
     all.append(createElement(Play, { width: 14, height: 14, "aria-hidden": "true" }));
     all.append(`${state.batch ? m.resuming : m.resumeAll} (${state.threads.length})`);
     all.disabled =
-      state.loading || state.batch || state.pending.size > 0 || state.threads.length === 0;
+      !state.client.buddyContinue ||
+      state.loading ||
+      state.batch ||
+      state.pending.size > 0 ||
+      state.threads.some(queue.isPending) ||
+      state.threads.length === 0;
     all.addEventListener("click", () => {
       void resumeAll();
     });
@@ -328,7 +385,11 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
         ? "__custom__"
         : "";
     modelSelect.disabled =
-      state.loading || state.batch || state.pending.size > 0 || state.threads.length === 0;
+      state.loading ||
+      state.batch ||
+      state.pending.size > 0 ||
+      state.threads.some(queue.isPending) ||
+      state.threads.length === 0;
     const modelInput = document.createElement("input");
     modelInput.type = "search";
     modelInput.className = "buddy-interrupted-model-input";
@@ -387,16 +448,39 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
       status.textContent = m[thread.status];
       copy.append(title, status);
       const failure = state.failures.get(key);
-      if (failure) note(`${m.resumeFailed}: ${failure}`, true, copy);
+      if (failure) note(failure, true, copy);
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = state.pending.has(key) ? m.resuming : m.resume;
-      button.disabled = state.batch || state.pending.has(key);
+      button.textContent =
+        state.pending.has(key) || queue.isPending(thread)
+          ? chinese()
+            ? "正在处理…"
+            : "Processing…"
+          : m.resume;
+      button.disabled =
+        !state.client.buddyContinue ||
+        state.batch ||
+        state.pending.has(key) ||
+        queue.isPending(thread);
       const target = state;
       button.addEventListener("click", () => {
         void resume(target, thread, selectedModel() || undefined);
       });
-      item.append(copy, button);
+      const archive = document.createElement("button");
+      archive.type = "button";
+      archive.textContent = chinese() ? "归档" : "Archive";
+      archive.title = chinese()
+        ? "归档此会话并移出中断队列"
+        : "Archive this chat and remove it from the queue";
+      archive.disabled = state.batch || state.pending.has(key) || queue.isPending(thread);
+      archive.dataset.buddyArchive = "";
+      archive.addEventListener("click", () => {
+        void resume(target, thread, undefined, "archive");
+      });
+      const actions = document.createElement("div");
+      actions.className = "buddy-interrupted-actions";
+      actions.append(button, archive);
+      item.append(copy, actions);
       list.append(item);
     }
     wrapper.append(list);
@@ -405,31 +489,29 @@ export function createInterruptedPanel(getLocale: () => "zh-CN" | "en") {
 
   return {
     root,
+    repositionHeader: header.reposition,
     update(
       client: RendererModelClient | null,
-      _privacy: boolean,
       modelView?: ModelShortcutView | null,
       harnessId?: string,
+      hostId: string | null = null,
     ) {
       if (disposed) return;
-      if (client !== state.client) {
-        state = session(client);
+      if (client !== state.client || hostId !== state.hostId) {
+        state = session(client, hostId);
         epoch += 1;
       }
       if (modelView !== undefined) state.modelView = modelView;
       if (harnessId !== undefined) state.harnessId = harnessId;
-      render();
-      // 首次绑定连接时读取一次；之后仅依赖手动刷新，不再后台轮询。
-      if (!state.loaded && canResume(state) && state.client?.buddyInterrupted) {
-        state.loaded = true;
-        void refresh();
-      }
+      syncQueue();
     },
     refresh,
     dispose() {
       disposed = true;
       window.removeEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
       window.removeEventListener("storage", favoritesChanged);
+      stopQueue();
+      header.dispose();
       root.remove();
     },
   };

@@ -19,10 +19,10 @@ describe("Renderer settings foundation", () => {
     expect(pages.map(({ id }) => id)).toEqual(DEFAULT_RENDERER_SETTINGS_PAGE_IDS);
     expect(pages.map(({ label }) => label)).toEqual([
       "Connections",
+      "Multiple providers",
       "Remote connections",
       "Accounts",
       "Routing",
-      "Emergency Provider",
       "Projects",
       "Session Import",
       "Usage statistics",
@@ -32,10 +32,10 @@ describe("Renderer settings foundation", () => {
     ]);
     expect(pages.map(({ icon }) => icon)).toEqual([
       "connections",
+      "routes",
       "gateway",
       "accounts",
       "routes",
-      "alert",
       "project-sync",
       "session-import",
       "dashboard",
@@ -53,10 +53,10 @@ describe("Renderer settings foundation", () => {
 
     expect(pages.map(({ id }) => id)).toEqual([
       "connections",
+      "providers",
       "remote-connections",
       "accounts",
       "routing",
-      "emergency-provider",
       "project-sync",
       "session-import",
       "usage-statistics",

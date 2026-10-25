@@ -1,3 +1,4 @@
+import type { ProviderRouting } from "../provider-routing/routing.js";
 import type { Writable } from "node:stream";
 
 import { parseJsonFrame, type JsonObject } from "@codexhost/protocol-core";
@@ -28,6 +29,7 @@ export class OfficialRuntimeScope {
   readonly owner: OfficialRuntimeOwner;
   readonly gate: OfficialWorkGate;
   readonly permanentHome: string;
+  readonly providerRouting: ProviderRouting | undefined;
   readonly #diagnosticOutput: Writable;
   readonly #recovery: { delaysMs: readonly number[]; stableMs: number } | undefined;
   #starting: Promise<void> | undefined;
@@ -40,11 +42,13 @@ export class OfficialRuntimeScope {
   constructor(
     input: Omit<OfficialRuntimeOwnerOptions, "gate"> & {
       permanentHome: string;
+      providerRouting?: ProviderRouting;
       /** Only long-lived deployments opt in; others keep one generation per Scope start. */
       recovery?: OfficialRuntimeRecoveryOptions;
     },
   ) {
     this.permanentHome = input.permanentHome;
+    this.providerRouting = input.providerRouting;
     this.#diagnosticOutput = input.diagnosticOutput;
     const delaysMs = input.recovery?.delaysMs ?? DEFAULT_RECOVERY_DELAYS_MS;
     if (input.recovery && delaysMs.length === 0)
@@ -83,6 +87,7 @@ export class OfficialRuntimeScope {
     this.#clearRecoveryTimer();
     const starting = (async () => {
       if (this.#recovery) await this.owner.stop();
+      await this.providerRouting?.start();
       await this.owner.start();
       if (this.#closed) throw new OfficialAdmissionError("unavailable");
       this.#started = true;
@@ -113,6 +118,7 @@ export class OfficialRuntimeScope {
     this.#clearRecoveryTimer();
     // A failed close still owns a possibly live backend; allow stop retries.
     await this.owner.stop();
+    await this.providerRouting?.close();
   }
 
   /** One ready generation became unavailable. The Scope, not each client, owns the response. */

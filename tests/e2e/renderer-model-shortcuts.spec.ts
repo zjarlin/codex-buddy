@@ -11,6 +11,7 @@ const { outputFiles } = await build({
       import { nativeModelBinding } from "./packages/renderer-extension/src/renderer-native-model-binding.ts";
       import { refreshNativeModels } from "./packages/renderer-extension/src/renderer-native-model-refresh.ts";
       import { selectFixedModel } from "./packages/renderer-extension/src/renderer-fixed-model-selection.ts";
+      import { createInterruptedQueue } from './packages/renderer-extension/src/buddy/interrupted-queue.ts';
       import { installBuddyControl } from "./packages/renderer-extension/src/buddy/control.ts";
       const composer = document.querySelector("#composer");
       const trigger = document.querySelector("#native");
@@ -65,7 +66,8 @@ const { outputFiles } = await build({
           return structuredClone(snapshot);
         },
       };
-      const router = installBuddyControl(() => ({ anchor: composer, threadId: "fixture", client }), () => "zh-CN");
+      const queue=createInterruptedQueue({storage:{getItem:()=>null,setItem:()=>{}},getHostIds:()=>['local'],getManager:()=>null,getClient:()=>client});
+      const router = installBuddyControl(() => ({ anchor: composer, hostId:'local', threadId: "fixture", client }), () => "zh-CN", {queue});
       const shortcuts = mountModelShortcuts(async (id) => {
         if (harness !== "codex" && globalThis.resolveSelectionError) {
           viewOverrides = { ...viewOverrides, error: "External selection unavailable" };

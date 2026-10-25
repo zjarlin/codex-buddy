@@ -11,7 +11,7 @@ const bundle = await build({
   stdin: {
     contents: `
     import { installSidebarContinuation } from './packages/renderer-extension/src/buddy/continuation.ts';
-    import { installBuddyControl } from './packages/renderer-extension/src/buddy/control.ts';
+    import { createInterruptedQueue } from './packages/renderer-extension/src/buddy/interrupted-queue.ts';
     import { createRoutingSettingsPage } from './packages/renderer-extension/src/settings/routing-page.ts';
     import { createRendererSettingsPageRegistry } from './packages/renderer-extension/src/settings/core.ts';
     import { rendererSettingsMessages } from './packages/renderer-extension/src/settings/localization.ts';
@@ -22,7 +22,8 @@ const bundle = await build({
         threadId:'work',turnId:'failed',phase:'retrying',role:'executor',difficulty:'simple',score:15,
         reason:'失败 3/9 次，8 秒后自动续接并切换模型。',executorModel:'cheap-a',acceptedModel:'cheap-a',plan:null,command:null,exitCode:null,updatedAt:'fixture'
       }] };
-      const client = { buddyStatus:async()=>snapshot, buddyCancel:async()=>{ snapshot.decisions[0].phase='cancelled'; snapshot.decisions[0].reason='已取消自动续接。'; return snapshot; } };
+      const client = {
+      requestThreadProjection:async(method,{threadId})=>({thread:{id:threadId,name:'网络中断的会话',modelProvider:globalThis.owner==='external'?'codexhost':'openai',cliVersion:'fixture'}}), buddyStatus:async()=>snapshot, buddyCancel:async()=>{ snapshot.decisions[0].phase='cancelled'; snapshot.decisions[0].reason='已取消自动续接。'; return snapshot; } };
       const anchor=document.createElement('div'); document.body.replaceChildren(anchor);
       const messages=rendererSettingsMessages('zh-CN');
       const shell=mountRendererSettingsShell(createRendererSettingsPageRegistry([createRoutingSettingsPage(messages,()=>client)]),document,messages);
@@ -83,12 +84,26 @@ const bundle = await build({
       readThreadTurnState: async () => ({
         running: globalThis.running,
         status: globalThis.running ? null : globalThis.threadStatus,
-        turnId: 'failed'
+        turnId: globalThis.turnId ?? 'failed'
       })
     };
     if (globalThis.recoveryMode === 'missing') delete client.buddyInterrupted;
     globalThis.sidebarClient = client;
-    globalThis.sidebar = installSidebarContinuation({getClient:host=>host===globalThis.activeHost?globalThis.sidebarClient:null,getLocale:()=> 'zh-CN'});
+    let notify;
+    const manager={addNotificationCallback:(_methods,callback)=>{notify=callback;return ()=>{};}};
+    const getClient=host=>host===globalThis.activeHost?globalThis.sidebarClient:null;
+    const queue=createInterruptedQueue({storage:{getItem:()=>null,setItem:()=>{}},getHostIds:()=>['local'],getManager:()=>manager,getClient});
+    queue.refresh();
+    globalThis.emitTurn=(status,turnId)=>{
+      globalThis.turnId=turnId;
+      globalThis.running=status==='active';
+      globalThis.threadStatus=status;
+      notify({method:status==='active'?'turn/started':'turn/completed',params:{threadId:'thread',turn:{id:turnId,status}}});
+    };
+    globalThis.archiveThread=()=>notify({method:'thread/archived',params:{threadId:'thread'}});
+    const initial=globalThis.interrupted?.threads[0];
+    globalThis.emitTurn(initial?.status??globalThis.threadStatus,initial?.turnId??'failed');
+    globalThis.sidebar = installSidebarContinuation({queue,getClient,getLocale:()=> 'zh-CN'});
 
   `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -197,256 +212,69 @@ for (const width of [390, 1200]) {
   });
 }
 
-test("sidebar recovery ignores legacy privacy settings and follows running state, row replacement and disposal", async ({
+test("queue events clear running and archived rows and survive row replacement", async ({
   page,
 }) => {
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });
   const resume = page.locator("[data-buddy-resume]");
   await expect(resume).toHaveCount(1);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "running", true);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
+  await page.evaluate(() => Reflect.get(globalThis, "emitTurn")("active", "next"));
   await expect(resume).toHaveCount(0);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "running", false);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
+  await expect(page.locator("[data-native-status]")).toBeVisible();
+  await page.evaluate(() => Reflect.get(globalThis, "emitTurn")("cancelled", "next"));
   await expect(resume).toHaveCount(1);
   await page.evaluate(() => {
     Reflect.get(globalThis, "row").remove();
     Reflect.set(globalThis, "row", Reflect.get(globalThis, "mountSidebar")());
   });
   await expect(resume).toHaveCount(1);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "privateMode", true);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(resume).toHaveCount(1);
-  // 旧隐私字段不影响续接按钮与原生状态色。
-  await expect(page.locator('[data-buddy-sidebar-state="failed"]')).toHaveCount(1);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "privateMode", false);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(resume).toHaveCount(1);
-  await page.evaluate(() => Reflect.get(globalThis, "sidebar").dispose());
+  await page.evaluate(() => Reflect.get(globalThis, "archiveThread")());
   await expect(resume).toHaveCount(0);
-  await expect(page.locator("[data-native-status]")).toBeVisible();
+  await expect(page.locator("[data-buddy-sidebar-state]")).toHaveCount(0);
+  await page.evaluate(() => Reflect.get(globalThis, "sidebar").dispose());
   await expect(page.locator("[data-buddy-sidebar-recovery]")).toHaveCount(0);
 });
 
-test("sidebar recovery keeps the last successful state when discovery fails", async ({ page }) => {
-  await page.setContent("<body></body>");
-  await page.addScriptTag({ content: browserBundle });
-  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
-  await expect(
-    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
-  ).toHaveCount(1);
-  const recoverableStyle = await page
-    .locator("[data-app-action-sidebar-thread-row]")
-    .evaluate((row) => ({
-      background: getComputedStyle(row).backgroundColor,
-      boxShadow: getComputedStyle(row).boxShadow,
-    }));
-  expect(recoverableStyle.background).not.toBe("rgba(0, 0, 0, 0)");
-  expect(recoverableStyle.boxShadow).not.toBe("none");
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "discoveryFail", true);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
-  await expect(
-    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
-  ).toHaveCount(1);
-  await page.evaluate(() => {
-    document
-      .querySelector("[data-app-action-sidebar-thread-row]")
-      ?.setAttribute("data-app-action-sidebar-thread-active", "true");
-  });
-  await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "discoveryFail", false);
-    Reflect.set(globalThis, "running", true);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  // 进行中的会话只隐藏续接按钮，绿色状态条不再接管，转圈由原生状态槽负责。
-  await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
-  await expect(
-    page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
-  ).toHaveCount(0);
-  await page.screenshot({ path: "test-results/buddy-continuation-state.png" });
-});
-
-for (const statusMode of ["unsupported", "missing"]) {
-  test(`sidebar recovery works when router status is ${statusMode}`, async ({ page }) => {
+for (const mode of ["unsupported", "missing", "failed"]) {
+  test(`queue recovery does not depend on router status or discovery: ${mode}`, async ({
+    page,
+  }) => {
     await page.setContent("<body></body>");
-    await page.evaluate((mode) => Reflect.set(globalThis, "statusMode", mode), statusMode);
+    await page.evaluate((value) => {
+      Reflect.set(globalThis, "statusMode", value);
+      Reflect.set(globalThis, "recoveryMode", value);
+    }, mode);
     await page.addScriptTag({ content: browserBundle });
     const resume = page.locator("[data-buddy-resume]");
     await expect(resume).toHaveCount(1);
-    expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(
-      statusMode === "missing" ? 0 : 1,
-    );
-    expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(1);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(0);
     await resume.click();
     await expect(resume).toBeDisabled();
-    expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
-      ["thread", "failed"],
-    ]);
     await page.evaluate(() => {
       Reflect.set(globalThis, "fail", false);
       Reflect.get(globalThis, "finishResume")();
     });
     await expect(resume).toHaveCount(0);
-    await expect(page.locator("[data-buddy-recovery-error]")).toBeEmpty();
+    expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
+      ["thread", "failed"],
+    ]);
   });
 }
 
-test("sidebar discovery runs once per connection without background polling", async ({ page }) => {
+test("startup, elapsed time, focus and DOM refresh never scan history", async ({ page }) => {
   await page.clock.install();
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });
   await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
-  const discoveries = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
-  expect(discoveries).toBe(1);
-  // 不再有定时轮询：长时间静置不产生新的中断列表读取。
   await page.clock.runFor(60_000);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
-  // 切换 Host 触发的 refresh() 仍会重新读取一次。
-  await page.evaluate(() => Reflect.get(globalThis, "sidebar").refresh());
-  await expect
-    .poll(() => page.evaluate(() => Reflect.get(globalThis, "interruptedCalls")))
-    .toBe(discoveries + 1);
-});
-
-test("sidebar recovery disables an existing resume action after a router status error", async ({
-  page,
-}) => {
-  const warnings: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "warning") warnings.push(message.text());
-  });
-  await page.setContent("<body></body>");
-  await page.addScriptTag({ content: browserBundle });
-  const resume = page.locator("[data-buddy-resume]");
-  await expect(resume).toHaveCount(1);
-  const discoveries = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
   await page.evaluate(() => {
-    Reflect.set(globalThis, "statusMode", "failed");
+    window.dispatchEvent(new Event("focus"));
     Reflect.get(globalThis, "sidebar").refresh();
   });
-  await expect(resume).toHaveCount(0);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
-  await expect.poll(() => warnings.join("\n")).toContain("状态读取失败");
-  await expect(page.locator("[data-buddy-sidebar-state]")).toHaveAttribute(
-    "data-buddy-sidebar-state",
-    "failed",
-  );
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "statusMode", null);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(resume).toHaveCount(1);
-});
-
-for (const recoveryMode of ["unsupported", "missing"]) {
-  test(`sidebar styles unfinished turns when recovery is ${recoveryMode}`, async ({ page }) => {
-    await page.setContent("<body></body>");
-    await page.evaluate((mode) => {
-      Reflect.set(globalThis, "statusMode", "unsupported");
-      Reflect.set(globalThis, "recoveryMode", mode);
-    }, recoveryMode);
-    await page.addScriptTag({ content: browserBundle });
-    if (recoveryMode === "unsupported") {
-      await expect
-        .poll(() => page.evaluate(() => Reflect.get(globalThis, "interruptedCalls")))
-        .toBe(1);
-    }
-    await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
-    await expect(page.locator("[data-native-status]")).toBeVisible();
-    await expect(page.locator("[data-buddy-sidebar-state]")).toHaveAttribute(
-      "data-buddy-sidebar-state",
-      "failed",
-    );
-    await expect(
-      page.locator("[data-app-action-sidebar-thread-row][data-buddy-sidebar-recoverable]"),
-    ).toHaveCount(1);
-    expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
-  });
-}
-
-test("sidebar fallback clears the style while the native turn is running", async ({ page }) => {
-  await page.setContent("<body></body>");
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "recoveryMode", "missing");
-    Reflect.set(globalThis, "threadStatus", "interrupted");
-  });
-  await page.addScriptTag({ content: browserBundle });
-  const row = page.locator("[data-app-action-sidebar-thread-row]");
-  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "interrupted");
-  await expect(row).toHaveAttribute("data-buddy-sidebar-recoverable", "");
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "running", true);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "running");
-  await expect(row).not.toHaveAttribute("data-buddy-sidebar-recoverable", "");
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "running", false);
-    Reflect.set(globalThis, "threadStatus", "cancelled");
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "cancelled");
-  await expect(row).toHaveAttribute("data-buddy-sidebar-recoverable", "");
-  await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
-});
-
-test("sidebar remembers unavailable continuation until the connection is replaced", async ({
-  page,
-}) => {
-  await page.setContent("<body></body>");
-  await page.evaluate(() => Reflect.set(globalThis, "continueMode", "unsupported"));
-  await page.addScriptTag({ content: browserBundle });
-  const resume = page.locator("[data-buddy-resume]");
-  await expect(resume).toHaveCount(1);
-  await resume.click();
-  await expect(resume).toHaveCount(0);
-  await expect(page.getByRole("alert")).toHaveText("当前连接不支持会话恢复。");
-  await expect(page.locator("[data-native-status]")).toBeVisible();
-  const discoveries = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
-  await page.evaluate(() => Reflect.get(globalThis, "sidebar").refresh());
-  await expect(resume).toHaveCount(0);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
-    ["thread", "failed"],
-  ]);
-  await page.evaluate(() => Reflect.get(globalThis, "row").remove());
-  await expect(page.locator("[data-native-status]")).toHaveCount(0);
-  await page.evaluate(() =>
-    Reflect.set(globalThis, "row", Reflect.get(globalThis, "mountSidebar")()),
-  );
-  await expect(page.locator("[data-native-status]")).toBeVisible();
-  await expect(resume).toHaveCount(0);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discoveries);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "continueMode", null);
-    Reflect.set(globalThis, "fail", false);
-    Reflect.set(globalThis, "sidebarClient", { ...Reflect.get(globalThis, "sidebarClient") });
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(resume).toHaveCount(1);
-  await resume.click();
-  await expect(resume).toBeDisabled();
-  await page.evaluate(() => Reflect.get(globalThis, "finishResume")());
-  await expect(resume).toHaveCount(0);
-  await expect(page.locator("[data-buddy-recovery-error]")).toBeEmpty();
-  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
-    ["thread", "failed"],
-    ["thread", "failed"],
-  ]);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(0);
 });
 
 test("sidebar recovery matches native thread ids inside host-prefixed rows", async ({ page }) => {
@@ -500,15 +328,15 @@ test("sidebar state colors remain distinct in light and dark themes", async ({ p
   const recoverable = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
   await expect(row).toHaveAttribute("data-buddy-sidebar-state", "failed");
   await page.evaluate(() => {
-    Reflect.set(globalThis, "threadStatus", "cancelled");
-    Reflect.get(globalThis, "sidebar").refresh();
+    Reflect.get(globalThis, "emitTurn")("active", "cancelled-turn");
+    Reflect.get(globalThis, "emitTurn")("cancelled", "cancelled-turn");
   });
   await expect(row).toHaveAttribute("data-buddy-sidebar-state", "cancelled");
   const cancelled = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(cancelled).not.toBe(recoverable);
   await page.evaluate(() => {
-    Reflect.set(globalThis, "threadStatus", "interrupted");
-    Reflect.get(globalThis, "sidebar").refresh();
+    Reflect.get(globalThis, "emitTurn")("active", "interrupted-turn");
+    Reflect.get(globalThis, "emitTurn")("interrupted", "interrupted-turn");
   });
   await expect(row).toHaveAttribute("data-buddy-sidebar-state", "interrupted");
   const interrupted = await row.evaluate((element) => getComputedStyle(element).backgroundColor);
@@ -517,8 +345,7 @@ test("sidebar state colors remain distinct in light and dark themes", async ({ p
     element.setAttribute("data-app-action-sidebar-thread-active", "true"),
   );
   await page.evaluate(() => {
-    Reflect.set(globalThis, "running", true);
-    Reflect.get(globalThis, "sidebar").refresh();
+    Reflect.get(globalThis, "emitTurn")("active", "running-turn");
   });
   // 进行中的会话不再有绿色状态条，只清除可恢复标记，转圈由原生状态槽负责。
   await expect(row).not.toHaveAttribute("data-buddy-sidebar-recoverable", "");
@@ -548,36 +375,25 @@ test("host changes ignore an in-flight continuation response", async ({ page }) 
   await expect(page.locator("[data-buddy-recovery-error]")).toBeEmpty();
 });
 
-test("fixed-model recovery remains available while external Harness recovery stays hidden", async ({
-  page,
-}) => {
+test("external Harness terminal events do not offer native recovery", async ({ page }) => {
   await page.setContent("<body></body>");
+  await page.evaluate(() => Reflect.set(globalThis, "owner", "external"));
+  await page.addScriptTag({ content: browserBundle });
+  await expect(page.locator("[data-buddy-resume]")).toHaveCount(0);
+  await expect(page.locator("[data-buddy-sidebar-state]")).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([]);
+});
+
+test("fixed-model recovery works with routing disabled", async ({ page }) => {
+  await page.setContent("<body></body>");
+  await page.evaluate(() => Reflect.set(globalThis, "enabled", false));
   await page.addScriptTag({ content: browserBundle });
   const resume = page.locator("[data-buddy-resume]");
-  await expect(resume).toHaveCount(1);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "owner", "external");
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(resume).toHaveCount(0);
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "owner", "codex");
-    Reflect.set(globalThis, "enabled", false);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
   await expect(resume).toHaveCount(1);
   await resume.click();
   await expect(resume).toBeDisabled();
   await page.evaluate(() => Reflect.get(globalThis, "finishResume")());
   await expect(page.locator("[data-buddy-recovery-error]")).toContainText("网络不可用");
-  await page.evaluate(() => {
-    Reflect.set(globalThis, "enabled", true);
-    Reflect.get(globalThis, "sidebar").refresh();
-  });
-  await expect(resume).toHaveCount(1);
   await page.locator("[data-thread-title]").click();
   expect(await page.evaluate(() => Reflect.get(globalThis, "opened"))).toBe(1);
-  expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
-    ["thread", "failed"],
-  ]);
 });

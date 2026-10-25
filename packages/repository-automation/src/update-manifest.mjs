@@ -9,15 +9,19 @@ export async function createInstallerUpdateManifest({ repository, version, notes
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(repository)) {
     throw new Error("Invalid release repository");
   }
-  const expected = ["macos-arm64.dmg", "windows-x64.exe", "windows-arm64.exe"].map(
-    (target) => "codex-buddy-" + version + "-" + target,
-  );
+  const expected = [
+    ...["macos-arm64.dmg", "windows-x64.exe", "windows-arm64.exe"].map(
+      (target) => "codex-buddy-" + version + "-" + target,
+    ),
+    `codexhost-cli-${version}.tgz`,
+    ...["linux-x64", "linux-arm64"].map((target) => `codexhost-cli-${version}-${target}.tgz`),
+  ];
   const names = files.map((file) => path.basename(file));
   if (
     files.length !== expected.length ||
     expected.some((name) => names.filter((value) => value === name).length !== 1)
   ) {
-    throw new Error("Update manifest requires exactly one installer for each release target");
+    throw new Error("Update manifest requires exactly one artifact for each release target");
   }
   const tag = "v" + version;
   const releaseUrl = "https://github.com/" + repository + "/releases";
@@ -25,7 +29,7 @@ export async function createInstallerUpdateManifest({ repository, version, notes
     files.map(async (file) => {
       const metadata = await lstat(file);
       if (!metadata.isFile() || metadata.size <= 0) {
-        throw new Error("Installer must be a nonempty regular file");
+        throw new Error("Release artifact must be a nonempty regular file");
       }
       const hash = createHash("sha256");
       for await (const chunk of createReadStream(file)) {

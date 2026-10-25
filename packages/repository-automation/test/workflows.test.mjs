@@ -65,7 +65,7 @@ describe("workflow and form contracts", () => {
     expect(workflow).not.toMatch(/github\.event\.(?:issue|pull_request)\.(?:body|title)/u);
   });
 
-  it("allows explicit installer-only recovery without bypassing release prerequisites", async () => {
+  it("allows GitHub publication without npm without bypassing release prerequisites", async () => {
     const workflow = await read(".github/workflows/release-packages.yml");
     expect(workflow).toContain("skip_npm:");
     expect(workflow).toContain("github.repository == 'BytePioneer-AI/codex-host'");
@@ -80,11 +80,26 @@ describe("workflow and form contracts", () => {
     expect(publishRelease).toContain("await verifyRelease(");
   });
 
-  it("publishes the update manifest alongside installers using trusted automation", async () => {
+  it("publishes installers and Linux CLI packages in the same verified update manifest", async () => {
     const workflow = await read(".github/workflows/release-packages.yml");
     expect(workflow).toContain("./.release-automation/packages/repository-automation/index.mjs");
     expect(workflow).toContain("createInstallerUpdateManifest");
     expect(workflow).toContain('files+=("$RUNNER_TEMP/codex-buddy-update.json")');
+    const publication = workflow.slice(workflow.indexOf("  publish-release:"));
+    const expected = publication.slice(
+      publication.indexOf("expected=("),
+      publication.indexOf("files=()"),
+    );
+    for (const name of [
+      "codexhost-cli-${VERSION}.tgz",
+      "codexhost-cli-${VERSION}-linux-x64.tgz",
+      "codexhost-cli-${VERSION}-linux-arm64.tgz",
+    ]) {
+      expect(expected).toContain(`"${name}"`);
+    }
+    expect(publication).toContain("\"${files[@]}\" <<'NODE'");
+    expect(publication).toContain('gh release create "$TAG" "${files[@]}"');
+    expect(publication).toContain('gh release upload "$TAG" "${files[@]}"');
   });
 
   it("dispatches release CI and installer publication without a PAT", async () => {

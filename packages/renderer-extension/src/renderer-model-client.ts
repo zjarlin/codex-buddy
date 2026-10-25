@@ -1,4 +1,11 @@
 import {
+  PROVIDER_ROUTING_METHOD,
+  providerRoutingParamsSchema,
+  providerRoutingSnapshotSchema,
+  type ProviderRoutingParams,
+  type ProviderRoutingSnapshot,
+} from "@codexhost/shared-contracts";
+import {
   TURN_ACTIONS_INSPECT_METHOD,
   TURN_ACTION_EXECUTE_METHOD,
   nativeGitWorkflowPrompt,
@@ -375,6 +382,7 @@ import {
   RendererMethodUnavailableError,
   type RendererRequestOptions,
 } from "./renderer-request-sender.js";
+import { createNativeContinuation } from "./renderer-native-continuation.js";
 import { verifyNativeCodexThread } from "./renderer-native-thread.js";
 import {
   MODEL_AVAILABILITY_METHOD,
@@ -635,6 +643,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     apiKey?: string | null | undefined;
     baseURL?: string | null | undefined;
   }): Promise<BuddySnapshot>;
+  providerRouting?(params: ProviderRoutingParams): Promise<ProviderRoutingSnapshot>;
   emergencyProvider?(config: {
     apiKey?: string | null | undefined;
     baseURL?: string | null | undefined;
@@ -873,9 +882,10 @@ export function createRendererModelClient(
         sortDirection: "desc",
         itemsView: "notLoaded",
       });
-      const turns =
-        isRecord(history) && Array.isArray(history.data) ? history.data : ([] as unknown[]);
-      const latest = turns[0];
+      if (!isRecord(history) || !Array.isArray(history.data)) {
+        throw new Error("Thread turn history is unavailable");
+      }
+      const latest = history.data[0];
       return { thread, turn: isRecord(latest) ? latest : null };
     } catch (error) {
       if (!unsupportedTurnsList(error)) throw error;
@@ -889,6 +899,14 @@ export function createRendererModelClient(
       return { thread: legacyThread, turn: isRecord(latest) ? latest : null };
     }
   };
+
+  const nativeContinuation = createNativeContinuation({
+    sendRequest: manager.sendRequest,
+    async readThread(threadId) {
+      const value = await readNativeThreadTurn(threadId);
+      return { ...value, status: nativeThreadTurnStatus(value.thread, value.turn) };
+    },
+  });
 
   const inspectHarness = async (
     input: HarnessInspectParams,
@@ -1401,8 +1419,21 @@ export function createRendererModelClient(
     },
     buddyStatus: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
-    buddyInterrupted: async () =>
-      buddyInterruptedSchema.parse(await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {})),
+    buddyInterrupted: async () => {
+      try {
+        return buddyInterruptedSchema.parse(
+          await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {}),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof RendererMethodUnavailableError) ||
+          error.method !== BUDDY_INTERRUPTED_METHOD
+        ) {
+          throw error;
+        }
+        return nativeContinuation.list();
+      }
+    },
     readAutoModelRoutes: async (
       threadId: string,
       runId?: string,
@@ -1440,11 +1471,21 @@ export function createRendererModelClient(
       };
     },
     buddyContinue: async (threadId: string, turnId: string, model?: string) => {
-      await manager.sendRequest(BUDDY_CONTINUE_METHOD, {
-        threadId,
-        turnId,
-        ...(model ? { model } : {}),
-      });
+      try {
+        await manager.sendRequest(BUDDY_CONTINUE_METHOD, {
+          threadId,
+          turnId,
+          ...(model ? { model } : {}),
+        });
+      } catch (error) {
+        if (
+          !(error instanceof RendererMethodUnavailableError) ||
+          error.method !== BUDDY_CONTINUE_METHOD
+        ) {
+          throw error;
+        }
+        await nativeContinuation.continue(threadId, turnId, model);
+      }
     },
     archiveCompletedThreads: async (threadId: string) =>
       threadArchiveCompletedResultSchema.parse(
@@ -1481,6 +1522,13 @@ export function createRendererModelClient(
       apiKey?: string | null | undefined;
       baseURL?: string | null | undefined;
     }) => buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_JEV_KEY_METHOD, config)),
+    providerRouting: async (input: ProviderRoutingParams) =>
+      providerRoutingSnapshotSchema.parse(
+        await manager.sendRequest(
+          PROVIDER_ROUTING_METHOD,
+          providerRoutingParamsSchema.parse(input),
+        ),
+      ),
     emergencyProvider: async (config: {
       apiKey?: string | null | undefined;
       baseURL?: string | null | undefined;
@@ -1787,3 +1835,5 @@ export function createRendererModelClient(
 function isInvalidParams(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === -32602;
 }
+
+export type EmergencyProviderClient = Pick<RendererModelClient, "emergencyProvider">;

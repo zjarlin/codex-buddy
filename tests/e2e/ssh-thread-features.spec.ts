@@ -9,6 +9,7 @@ const { outputFiles } = await build({
     loader: "ts",
     contents: `
       import { installRendererThreadActions } from './packages/renderer-extension/src/renderer-thread-actions.ts';
+      import { createInterruptedQueue } from './packages/renderer-extension/src/buddy/interrupted-queue.ts';
       import { installSidebarContinuation } from './packages/renderer-extension/src/buddy/continuation.ts';
       import { installBuddyControl } from './packages/renderer-extension/src/buddy/control.ts';
       import { createRoutingSettingsPage } from './packages/renderer-extension/src/settings/routing-page.ts';
@@ -18,10 +19,12 @@ const { outputFiles } = await build({
       globalThis.calls = [];
       let active = 'local';
       let finishConfigure;
-      const clients = Object.fromEntries(['local', 'remote-ssh-discovered:okm252'].map(hostId => {
+      const clients = Object.fromEntries(['local', 'remote-ssh-discovered:fixture'].map(hostId => {
         const snapshot = { settings: { enabled: true, privateMode: false, bypass: true, role: 'auto', executorModel: null }, models: [], decisions: [] };
         let recovered = false;
         const client = {
+          requestThreadProjection:async(method,{threadId})=>({thread:{id:threadId,name:hostId,modelProvider:'openai',cliVersion:'fixture'}}),
+          readThreadTurnState:async()=>({running:false,turnId:'failed',status:'interrupted'}),
           threadOpenTarget: async threadId => {
             globalThis.calls.push({hostId, method:'target',threadId});
             return {workspace:'/remote/project',codexPath:'/remote/bin/codex',codexHome:'/root/.codex'};
@@ -44,8 +47,13 @@ const { outputFiles } = await build({
         row.__reactFiber$fixture={memoizedProps:{conversationId:'same-id',dataAttributes:Object.fromEntries(row.getAttributeNames().map(name=>[name,row.getAttribute(name)]))}};
       }
       installRendererThreadActions({getClient:hostId=>clients[hostId],getLocale:()=> 'zh-CN'});
-      installSidebarContinuation({getClient:hostId=>clients[hostId],getLocale:()=> 'zh-CN'});
-      const control = installBuddyControl(()=>({anchor:document.querySelector('#composer'),threadId:'same-id',client:clients[active]}),()=> 'zh-CN');
+      const callbacks=new Map();
+      const managers=Object.fromEntries(Object.keys(clients).map(hostId=>[hostId,{addNotificationCallback:(_methods,callback)=>{callbacks.set(hostId,callback);return ()=>callbacks.delete(hostId);}}]));
+      const queue=createInterruptedQueue({storage:{getItem:()=>null,setItem:()=>{}},getHostIds:()=>Object.keys(clients),getManager:hostId=>managers[hostId],getClient:hostId=>clients[hostId]});
+      queue.refresh();
+      for(const callback of callbacks.values()) callback({method:'turn/completed',params:{threadId:'same-id',turn:{id:'failed',status:'interrupted'}}});
+      installSidebarContinuation({queue,getClient:hostId=>clients[hostId],getLocale:()=> 'zh-CN'});
+      const control = installBuddyControl(()=>({anchor:document.querySelector('#composer'),hostId:active,threadId:'same-id',client:clients[active]}),()=> 'zh-CN',{queue});
       const switchHost = document.querySelector('#switch-host');
       const finish = document.querySelector('#finish');
       const open = document.createElement('button');open.textContent='设置';document.body.prepend(open);
@@ -56,7 +64,7 @@ const { outputFiles } = await build({
       const shell = mountRendererSettingsShell(registry,document,rendererSettingsMessages('zh-CN'));
       open.addEventListener('click',()=>shell.openSettings(open,'routing'));
       switchHost.addEventListener('click',()=> {
-        active='remote-ssh-discovered:okm252';void control.refresh();
+        active='remote-ssh-discovered:fixture';void control.refresh();
         if(shell.open)shell.openSettings(open,'routing');
       });
       finish.addEventListener('click',()=>finishConfigure?.());
@@ -75,7 +83,7 @@ if (!bundle) throw new Error("SSH fixture bundle missing");
 test.beforeEach(async ({ page }) => {
   await page.setContent(`<body style="background:#191b20;color:#eee;color-scheme:dark;font:14px system-ui;padding:24px">
     <button id="switch-host">Switch to SSH</button><button id="finish">Complete local request</button>
-    ${["local", "remote-ssh-discovered:okm252"]
+    ${["local", "remote-ssh-discovered:fixture"]
       .map(
         (host) => `<div
       data-app-action-sidebar-thread-row data-app-action-sidebar-thread-host-id="${host}"
@@ -93,7 +101,7 @@ test("SSH terminal and workspace use the local desktop and remote thread metadat
   page,
 }) => {
   const row = page.locator(
-    '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:okm252"]',
+    '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:fixture"]',
   );
   await row.hover();
   await row.locator("[data-codexhost-thread-actions-trigger]").click();
@@ -113,7 +121,7 @@ test("SSH terminal and workspace use the local desktop and remote thread metadat
       params: {
         threadId: "same-id",
         remote: {
-          hostId: "remote-ssh-discovered:okm252",
+          hostId: "remote-ssh-discovered:fixture",
           workspace: "/remote/project",
           codexHome: "/root/.codex",
           codexPath: "/remote/bin/codex",
@@ -126,7 +134,7 @@ test("SSH terminal and workspace use the local desktop and remote thread metadat
 
 test("interrupted SSH thread resumes only on its owning Host", async ({ page }) => {
   const remote = page.locator(
-    '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:okm252"]',
+    '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:fixture"]',
   );
   const local = page.locator('[data-app-action-sidebar-thread-host-id="local"]');
   await expect(remote.locator("[data-buddy-resume]")).toBeVisible();
@@ -136,7 +144,7 @@ test("interrupted SSH thread resumes only on its owning Host", async ({ page }) 
   await expect(local.locator("[data-buddy-resume]")).toBeVisible();
   expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
     {
-      hostId: "remote-ssh-discovered:okm252",
+      hostId: "remote-ssh-discovered:fixture",
       method: "continue",
       threadId: "same-id",
       turnId: "failed",

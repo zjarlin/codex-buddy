@@ -89,10 +89,10 @@ describe("Renderer settings localization", () => {
       ),
     ).toEqual([
       "连接",
+      "多供应商配置",
       "远程连接",
       "账号",
       "路由",
-      "应急供应商",
       "项目",
       "会话导入",
       "用量统计",

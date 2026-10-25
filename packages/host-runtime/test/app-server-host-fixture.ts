@@ -345,6 +345,7 @@ export function createFixture(
       : {}),
     environment: {
       CODEXHOST_DATA_DIR: mappingStoreDirectory,
+      CODEX_HOME: path.join(mappingStoreDirectory, "codex-home"),
       CODEXHOST_GIT_AUTO_PUSH: "0",
       ...(options.environment ?? {}),
     },

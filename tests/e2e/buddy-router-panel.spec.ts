@@ -6,6 +6,7 @@ import { tailwindEsbuildPlugin } from "../../packages/renderer-extension/scripts
 const { outputFiles } = await build({
   stdin: {
     contents: `
+      import { createInterruptedQueue } from './packages/renderer-extension/src/buddy/interrupted-queue.ts';
       import { installBuddyControl } from './packages/renderer-extension/src/buddy/control.ts';
       import { createDefaultRendererSettingsPages } from './packages/renderer-extension/src/settings/pages.ts';
       import { createRendererSettingsPageRegistry } from './packages/renderer-extension/src/settings/core.ts';
@@ -20,6 +21,8 @@ const { outputFiles } = await build({
       const calls = {writes:[],keys:[],continuations:[],status:0,interrupted:0,cancels:[]};
       let threads = [{threadId:'stalled',turnId:'interrupted-turn',title:'网络中断的会话',status:'interrupted',owner:'codex'}];
       const client = {
+        requestThreadProjection:async(method,{threadId})=>({thread:{id:threadId,name:'网络中断的会话',modelProvider:'openai',cliVersion:'fixture'}}),
+        readThreadTurnState:async()=>({running:false,turnId:'interrupted-turn',status:'interrupted'}),
         buddyStatus: async()=>{
           calls.status++;
           if(globalThis.unsupported) throw new RendererMethodUnavailableError('codexhost/buddy/status',null);
@@ -47,6 +50,11 @@ const { outputFiles } = await build({
         },
       };
       globalThis.fixture={snapshot,calls,client};
+      let notify;
+      const manager={addNotificationCallback:(_methods,callback)=>{notify=callback;return ()=>{};}};
+      const queue=createInterruptedQueue({storage:{getItem:()=>null,setItem:()=>{}},getHostIds:()=>['local'],getManager:()=>manager,getClient:()=>globalThis.fixture.client});
+      queue.refresh();
+      notify({method:'turn/completed',params:{threadId:'stalled',turn:{id:'interrupted-turn',status:'interrupted'}}});
       const favorite=document.createElement('div');
       favorite.dataset.codexhostModelShortcuts=''; favorite.textContent='收藏模型';
       const anchor=document.createElement('div'); anchor.textContent='输入消息';
@@ -56,7 +64,7 @@ const { outputFiles } = await build({
       const registry=createRendererSettingsPageRegistry(createDefaultRendererSettingsPages(messages,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,undefined,()=>globalThis.fixture.client));
       const shell=mountRendererSettingsShell(registry,document,messages);
       open.addEventListener('click',()=>shell.openSettings(open,'routing'));
-      globalThis.fixture.control=installBuddyControl(()=>({anchor,threadId:'work',client:globalThis.fixture.client}),()=> 'zh-CN');
+      globalThis.fixture.control=installBuddyControl(()=>({anchor,hostId:'local',threadId:'work',client:globalThis.fixture.client}),()=> 'zh-CN',{queue});
       globalThis.fixture.control.setModelShortcutsView({models:[{id:'gpt-6',label:'GPT-6'}],supportsCustomModel:true},'codex');
     `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -255,7 +263,7 @@ test("interrupted recovery folds from its heading and keeps the resume-all entry
   await page.addScriptTag({ content: bundle });
   const recovery = page.locator("[data-buddy-recovery]");
   const toggle = recovery.locator("[data-buddy-interrupted-toggle]");
-  const resumeAll = recovery.getByRole("button", { name: /全部继续/ });
+  const resumeAll = recovery.getByRole("button", { name: /一键恢复所有/ });
   const resume = recovery.getByRole("button", { name: "恢复", exact: true });
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(resume).toBeVisible();

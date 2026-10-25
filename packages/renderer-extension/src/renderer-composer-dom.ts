@@ -523,7 +523,7 @@ function lastNativeButtonWithin(composer: Element): HTMLButtonElement | null {
   return null;
 }
 
-function isInsideOwnedRendererControl(element: Element, composer: Element): boolean {
+export function isInsideOwnedRendererControl(element: Element, composer: Element): boolean {
   for (let node: Element | null = element; node && node !== composer; node = node.parentElement) {
     if (typeof node.hasAttribute === "function" && isOwnedRendererControl(node)) return true;
   }

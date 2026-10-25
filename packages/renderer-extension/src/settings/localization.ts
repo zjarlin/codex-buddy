@@ -732,7 +732,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     "usage-statistics": "Usage statistics",
     updates: "Updates",
     about: "About",
-    "emergency-provider": "Emergency Provider",
+    providers: "Multiple providers",
   }),
   emergencyProvider: Object.freeze({
     description:
@@ -1111,7 +1111,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     "usage-statistics": "用量统计",
     updates: "更新",
     about: "关于",
-    "emergency-provider": "应急供应商",
+    providers: "多供应商配置",
   }),
   emergencyProvider: Object.freeze({
     description:

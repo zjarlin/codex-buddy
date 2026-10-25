@@ -1,3 +1,4 @@
+import type { RendererModelClient } from "../../src/renderer-model-client.js";
 import {
   harnessIdSchema,
   hostThreadIdSchema,
@@ -8,6 +9,8 @@ import {
   type HarnessAccountSourceListResult,
   type HarnessId,
   type HarnessSessionListParams,
+  type ProviderRoutingParams,
+  type ProviderRoutingSnapshot,
   type UpdateCheckResult,
   type UpdateStatus,
 } from "@codexhost/shared-contracts";
@@ -36,6 +39,7 @@ import { createConnectionUpdates } from "../../src/settings/connection-updates.j
 import { rendererSettingsMessages } from "../../src/settings/localization.js";
 import { createRendererModelClient } from "../../src/renderer-model-client.js";
 import { RendererSessionImportUnavailableError } from "../../src/renderer-session-import-client.js";
+import { RendererMethodUnavailableError } from "../../src/renderer-request-sender.js";
 const HARNESS_SESSION_LIST_METHOD = "codexhost/harness/session-import/list";
 const HARNESS_SESSION_IMPORT_METHOD = "codexhost/harness/session-import/import";
 import {
@@ -68,6 +72,9 @@ class FakeElement {
   value = "";
   tabIndex = 0;
   disabled = false;
+  checked = false;
+  required = false;
+  placeholder = "";
   focused = false;
   open = false;
   parent: FakeElement | undefined;
@@ -3982,5 +3989,394 @@ describe("Renderer Session Import page", () => {
     await Promise.resolve();
 
     expect(visibleText(content)).toBe(before);
+  });
+});
+
+describe("Multiple provider settings", () => {
+  const fallback = {
+    id: "backup",
+    name: "Backup",
+    baseUrl: "https://backup.invalid/v1",
+    model: "",
+    enabled: true,
+    keyConfigured: true,
+  };
+
+  async function mountProviders(
+    locale: "en" | "zh-CN" = "en",
+    overrides: Partial<ProviderRoutingSnapshot> = {},
+    unavailableLocal = false,
+  ) {
+    const document = new FakeDocument();
+    const confirm = vi.fn(() => true);
+    document.defaultView.confirm = confirm;
+    const content = document.createElement("main");
+    const snapshot: ProviderRoutingSnapshot = {
+      enabled: true,
+      ready: true,
+      providers: [],
+      primaryProviders: [
+        { id: "gateway", name: "Company", baseUrl: "https://primary.invalid/v1", covered: true },
+      ],
+      lastRoute: null,
+      ...overrides,
+    };
+    const local = {
+      providerRouting: vi.fn<(params: ProviderRoutingParams) => Promise<ProviderRoutingSnapshot>>(
+        async () => snapshot,
+      ),
+    };
+    const remote = {
+      providerRouting: vi.fn<(params: ProviderRoutingParams) => Promise<ProviderRoutingSnapshot>>(
+        async () => snapshot,
+      ),
+    };
+    const source = {
+      currentHostId: () => "remote",
+      knownHostIds: () => ["local", "remote"],
+      clientForHost: (id: string) => (id === "local" ? (unavailableLocal ? {} : local) : remote),
+    };
+    const pages = createDefaultRendererSettingsPages(
+      rendererSettingsMessages(locale),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => source as unknown as RendererModelClient,
+    );
+    const page = pages.find((entry) => entry.id === "providers");
+    assert(page);
+    const abort = new AbortController();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: abort.signal,
+      runLatest: vi.fn(),
+    });
+    await vi.waitFor(() => expect(remote.providerRouting).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    const find = (label: string) => {
+      const element = descendants(content).find(
+        (item) => item.textContent === label || item.getAttribute("aria-label") === label,
+      );
+      assert(element, label);
+      return element;
+    };
+    const form = descendants(content).find((element) => element.tagName === "form");
+    const controls = descendants(content).find((element) => element.tagName === "fieldset");
+    assert(form);
+    assert(controls);
+    return { content, local, remote, find, abort, confirm, snapshot, form, controls };
+  }
+
+  it("exposes a distinct page, pins writes to the selected execution Host and clears keys on Host changes", async () => {
+    const { local, remote, find, content } = await mountProviders();
+    expect(find("Company · Connected")).toBeDefined();
+    find("Add provider").dispatch("click");
+    find("Provider name").value = "Fallback";
+    find("API base URL").value = "https://backup.invalid/v1";
+    find("API key").value = "fixture-secret";
+    const form = descendants(content).find((element) => element.tagName === "form");
+    assert(form);
+    form.dispatch("submit", { preventDefault() {} });
+    await vi.waitFor(() =>
+      expect(remote.providerRouting).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "save", apiKey: "fixture-secret" }),
+      ),
+    );
+    expect(local.providerRouting).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(find("API key").value).toBe("");
+    find("Add provider").dispatch("click");
+    find("API key").value = "unsaved-secret";
+    const host = find("Execution Host");
+    host.value = "local";
+    host.dispatch("change");
+    await vi.waitFor(() => expect(local.providerRouting).toHaveBeenCalledWith({ action: "read" }));
+    expect(find("API key").value).toBe("");
+  });
+
+  it("does not render stale results after leaving the settings page", async () => {
+    const { remote, find, abort, content } = await mountProviders();
+    const pending = Promise.withResolvers<Awaited<ReturnType<typeof remote.providerRouting>>>();
+    remote.providerRouting.mockReturnValueOnce(pending.promise);
+    find("Refresh status").dispatch("click");
+    abort.abort();
+    pending.resolve({
+      enabled: false,
+      ready: true,
+      providers: [],
+      primaryProviders: [],
+      lastRoute: null,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(descendants(content).some((item) => item.textContent === "Company · Connected")).toBe(
+      true,
+    );
+  });
+
+  it("asks to update an unsupported Host without hiding other request errors", async () => {
+    const { remote, find, content } = await mountProviders("zh-CN");
+    remote.providerRouting.mockRejectedValueOnce(
+      new RendererMethodUnavailableError("codexhost/providers/routing", { code: -32601 }),
+    );
+    find("刷新状态").dispatch("click");
+    const unavailable = "此 Host 未提供多供应商功能，请先更新对应 Host。";
+    await vi.waitFor(() => expect(visibleText(content)).toContain(unavailable));
+    expect(visibleText(content)).not.toContain("codexhost/providers/routing");
+    expect(find(unavailable).getAttribute("role")).toBe("alert");
+
+    remote.providerRouting.mockRejectedValueOnce(new Error("Connection timed out"));
+    find("刷新状态").dispatch("click");
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Connection timed out"));
+    expect(visibleText(content)).not.toContain(unavailable);
+  });
+
+  it("keeps dirty drafts when Add, another provider or Host changes are cancelled", async () => {
+    const { find, local, confirm, form } = await mountProviders("en", {
+      providers: [fallback],
+    });
+    find("Add provider").dispatch("click");
+    find("Provider name").value = "Unsaved";
+    find("API key").value = "draft-secret";
+    confirm.mockReturnValue(false);
+    find("Add provider").dispatch("click");
+    find("Edit: Backup").dispatch("click");
+    const host = find("Execution Host");
+    host.value = "local";
+    host.dispatch("change");
+    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(confirm).toHaveBeenLastCalledWith("Discard the unsaved provider changes?");
+    expect(host.value).toBe("remote");
+    expect(local.providerRouting).not.toHaveBeenCalled();
+    expect(form.hidden).toBe(false);
+    expect(find("Provider name").value).toBe("Unsaved");
+    expect(find("API key").value).toBe("draft-secret");
+
+    confirm.mockReturnValue(true);
+    find("Edit: Backup").dispatch("click");
+    expect(find("Provider name").value).toBe("Backup");
+    expect(find("API key").value).toBe("");
+    find("Provider name").value = "Changed";
+    find("Add provider").dispatch("click");
+    expect(find("Provider name").value).toBe("");
+  });
+
+  it("does not recreate a deleted provider from its open editor", async () => {
+    const { find, remote, form, snapshot, confirm } = await mountProviders("en", {
+      providers: [fallback],
+    });
+    find("Edit: Backup").dispatch("click");
+    find("API key").value = "unsaved-secret";
+    remote.providerRouting.mockRejectedValueOnce(new Error("Could not delete"));
+    find("Delete: Backup").dispatch("click");
+    await vi.waitFor(() => expect(find("Could not delete")).toBeDefined());
+    expect(confirm).toHaveBeenCalledWith("Delete this fallback provider? (Backup)");
+    expect(form.hidden).toBe(false);
+    expect(find("API key").value).toBe("unsaved-secret");
+
+    remote.providerRouting.mockResolvedValueOnce({ ...snapshot, providers: [] });
+    find("Delete: Backup").dispatch("click");
+    await vi.waitFor(() => expect(form.hidden).toBe(true));
+    expect(find("API key").value).toBe("");
+    expect(find("Add provider").focused).toBe(true);
+    form.dispatch("submit", { preventDefault() {} });
+    expect(remote.providerRouting).toHaveBeenCalledTimes(3);
+  });
+
+  it("requires a replacement key only when the endpoint changes or no saved key exists", async () => {
+    const { find, remote, form, content } = await mountProviders("en", {
+      providers: [fallback, { ...fallback, id: "unkeyed", name: "Unkeyed", keyConfigured: false }],
+    });
+    find("Edit: Backup").dispatch("click");
+    const key = find("API key");
+    const url = find("API base URL");
+    expect(key.required).toBe(false);
+    expect(key.placeholder).toBe("Leave blank to keep the saved key");
+    url.value = "https://changed.invalid/v1";
+    url.dispatch("input");
+    expect(key.required).toBe(true);
+    expect(visibleText(content)).toContain("The endpoint changed. Enter its API key");
+    form.dispatch("submit", { preventDefault() {} });
+    expect(remote.providerRouting).toHaveBeenCalledTimes(1);
+    expect(key.focused).toBe(true);
+
+    url.value = `${fallback.baseUrl} `;
+    url.dispatch("input");
+    expect(key.required).toBe(false);
+    expect(key.placeholder).toBe("Leave blank to keep the saved key");
+    form.dispatch("submit", { preventDefault() {} });
+    await vi.waitFor(() => expect(form.hidden).toBe(true));
+    expect(remote.providerRouting).toHaveBeenLastCalledWith({
+      action: "save",
+      provider: {
+        id: fallback.id,
+        name: fallback.name,
+        baseUrl: `${fallback.baseUrl} `,
+        model: "",
+        enabled: true,
+      },
+    });
+    find("Edit: Unkeyed").dispatch("click");
+    expect(key.required).toBe(true);
+    expect(visibleText(content)).toContain("No key configured");
+  });
+
+  it("clears the previous toggle and prevents writes to Hosts without provider support", async () => {
+    const { find, controls, local, form } = await mountProviders("en", {}, true);
+    const enabled = find("Automatic failover");
+    expect(enabled.checked).toBe(true);
+    const host = find("Execution Host");
+    host.value = "local";
+    host.dispatch("change");
+    expect(enabled.checked).toBe(false);
+    expect(controls.disabled).toBe(true);
+    expect(host.disabled).toBe(false);
+    expect(find("Refresh status").disabled).toBe(false);
+    expect(find("Refresh status").parent).not.toBe(controls);
+    find("Add provider").dispatch("click");
+    enabled.dispatch("change");
+    expect(form.hidden).toBe(true);
+    expect(local.providerRouting).not.toHaveBeenCalled();
+
+    host.value = "remote";
+    host.dispatch("change");
+    await vi.waitFor(() => expect(controls.disabled).toBe(false));
+    expect(enabled.checked).toBe(true);
+  });
+
+  it("leaves refresh available after a Host read fails and recovers on retry", async () => {
+    const { find, controls, local, content } = await mountProviders();
+    local.providerRouting.mockRejectedValueOnce(new Error("Host disconnected"));
+    const host = find("Execution Host");
+    host.value = "local";
+    host.dispatch("change");
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Host disconnected"));
+    expect(controls.disabled).toBe(true);
+    expect(find("Automatic failover").checked).toBe(false);
+    expect(host.disabled).toBe(false);
+    const refresh = find("Refresh status");
+    expect(refresh.disabled).toBe(false);
+    refresh.dispatch("click");
+    await vi.waitFor(() => expect(controls.disabled).toBe(false));
+    expect(local.providerRouting).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects duplicate submissions and preserves a failed save for retry", async () => {
+    const { find, remote, form, controls, snapshot } = await mountProviders();
+    find("Add provider").dispatch("click");
+    find("Provider name").value = "Fallback";
+    find("API base URL").value = fallback.baseUrl;
+    find("API key").value = "draft-secret";
+    const pending = Promise.withResolvers<ProviderRoutingSnapshot>();
+    remote.providerRouting.mockReturnValueOnce(pending.promise);
+    form.dispatch("submit", { preventDefault() {} });
+    form.dispatch("submit", { preventDefault() {} });
+    expect(remote.providerRouting).toHaveBeenCalledTimes(2);
+    expect(controls.disabled).toBe(true);
+    expect(controls.parent?.getAttribute("aria-busy")).toBe("true");
+    pending.reject(new Error("Save failed"));
+    await vi.waitFor(() => expect(find("Save failed")).toBeDefined());
+    expect(controls.disabled).toBe(false);
+    expect(controls.parent?.getAttribute("aria-busy")).toBe("false");
+    expect(form.hidden).toBe(false);
+    expect(find("API key").value).toBe("draft-secret");
+    remote.providerRouting.mockResolvedValueOnce(snapshot);
+    form.dispatch("submit", { preventDefault() {} });
+    await vi.waitFor(() => expect(form.hidden).toBe(true));
+    expect(find("API key").value).toBe("");
+  });
+
+  it.each([
+    [{ providers: [] }, "Add and enable a fallback provider with a saved key"],
+    [
+      { providers: [{ ...fallback, enabled: false }] },
+      "Add and enable a fallback provider with a saved key",
+    ],
+    [
+      { providers: [{ ...fallback, keyConfigured: false }] },
+      "Add and enable a fallback provider with a saved key",
+    ],
+    [{ ready: false }, "Waiting for the Host runtime"],
+    [{ primaryProviders: [] }, "No primary provider is connected to this runtime"],
+    [
+      {
+        primaryProviders: [
+          {
+            id: "primary",
+            name: "Uncovered",
+            baseUrl: "https://primary.invalid/v1",
+            covered: false,
+          },
+        ],
+      },
+      "No primary provider is connected to this runtime",
+    ],
+  ])("explains why enabled routing is not ready: %s", async (overrides, reason) => {
+    const { content } = await mountProviders("en", { providers: [fallback], ...overrides });
+    expect(visibleText(content)).toContain(`Automatic failover is not ready: ${reason}`);
+    expect(visibleText(content)).not.toContain("Automatic failover enabled");
+  });
+
+  it("shows operational readiness and works without optional failure telemetry", async () => {
+    const { content } = await mountProviders("en", { providers: [fallback] });
+    expect(visibleText(content)).toContain("Automatic failover enabled");
+    expect(visibleText(content)).not.toContain("Latest failure");
+    expect(visibleText(content)).toContain("Key saved");
+  });
+
+  it("shows localized failures, cooldowns and resolved primary or fallback request names", async () => {
+    const at = Date.now();
+    const retryAt = at + 30_000;
+    const { content, find, remote, snapshot } = await mountProviders("zh-CN", {
+      providers: [fallback],
+      failures: [
+        { provider: "primary:gateway", kind: "http", status: 503, at, retryAt },
+        { provider: "backup", kind: "network", at, retryAt },
+      ],
+      lastRoute: { provider: "primary:gateway", fallback: false, at },
+    });
+    expect(visibleText(content)).toContain("最近故障: HTTP 错误 (503)");
+    expect(visibleText(content)).toContain("最近故障: 连接失败");
+    expect(visibleText(content)).toContain(`冷却至 ${new Date(retryAt).toLocaleString("zh-CN")}`);
+    expect(visibleText(content)).toContain(
+      `最近成功请求: Company · ${new Date(at).toLocaleString("zh-CN")}`,
+    );
+    expect(visibleText(content)).not.toContain("primary:gateway");
+    remote.providerRouting.mockResolvedValueOnce({
+      ...snapshot,
+      lastRoute: { provider: "backup", fallback: true, at },
+    });
+    find("刷新状态").dispatch("click");
+    await vi.waitFor(() => expect(visibleText(content)).toContain("最近成功请求: Backup"));
+  });
+
+  it("does not invent a cooldown for authentication failures", async () => {
+    const { content } = await mountProviders("en", {
+      providers: [fallback],
+      failures: [{ provider: "backup", kind: "http", status: 401, at: Date.now(), retryAt: 0 }],
+    });
+    expect(visibleText(content)).toContain("Latest failure: HTTP error (401)");
+    expect(visibleText(content)).not.toContain("Cooldown");
+    expect(visibleText(content)).not.toContain("1970");
+  });
+
+  it("distinguishes elapsed cooldowns from providers still cooling down", async () => {
+    const at = Date.now() - 60_000;
+    const retryAt = at + 30_000;
+    const { content } = await mountProviders("en", {
+      providers: [fallback],
+      failures: [{ provider: "backup", kind: "timeout", at, retryAt }],
+    });
+    expect(visibleText(content)).toContain("Latest failure: Response timeout");
+    expect(visibleText(content)).toContain(
+      `Cooldown ended ${new Date(retryAt).toLocaleString("en")}`,
+    );
+    expect(visibleText(content)).not.toContain("Cooldown until");
   });
 });

@@ -33,7 +33,7 @@ describe("platform packagers", () => {
     expect(source).not.toContain("cargo-packager");
   });
 
-  it("publishes one tag-bound three-installer and npm release", async () => {
+  it("publishes tag-bound installers and Host packages with gated npm publication", async () => {
     const [workflow, releaseBuilder, releaseClient, releaseValidation] = await Promise.all([
       readFile(path.join(root, ".github/workflows/release-packages.yml"), "utf8"),
       readFile(path.join(root, "scripts/release/prepare-payload.mjs"), "utf8"),
@@ -98,7 +98,9 @@ describe("platform packagers", () => {
     expect(publishRelease).not.toContain('"codex-buddy-${VERSION}-macos-x64.dmg"');
     expect(workflow).not.toContain("macos-x64");
     expect(workflow).not.toContain("macos-15-intel");
-    expect(publishRelease).not.toContain('"codexhost-cli-${VERSION}');
+    expect(publishRelease).toContain('"codexhost-cli-${VERSION}.tgz"');
+    expect(publishRelease).toContain('"codexhost-cli-${VERSION}-linux-x64.tgz"');
+    expect(publishRelease).toContain('"codexhost-cli-${VERSION}-linux-arm64.tgz"');
     expect(workflow).not.toContain("softprops/action-gh-release");
     expect(workflow).not.toContain("codexhost-*.sha256");
     expect(workflow).not.toContain("checksums.txt");

@@ -930,43 +930,47 @@ describe("GitWorkspace", () => {
 
 // 用真实仓库验证操作副作用与返回状态，避免把成功的提交误报成失败。
 describe("GitWorkspace pending mutations and submodule warnings", () => {
-  it("keeps healthy submodules and returns stage, commit and push results with an orphan gitlink", async () => {
-    const { parent } = await submoduleRepository();
-    const git = (...args: string[]) => execFileAsync("git", ["-C", parent, ...args]);
-    const head = (await git("rev-parse", "HEAD")).stdout.trim();
-    const orphan = "aio-plugin-documentation-agent";
-    await git("update-index", "--add", "--cacheinfo", `160000,${head},${orphan}`);
-    await git("commit", "-qm", "add orphan gitlink");
-    const remote = await mkdtemp(path.join(tmpdir(), "codexhost-warning-remote-"));
-    cleanup.push(remote);
-    await execFileAsync("git", ["init", "-q", "--bare", remote]);
-    await git("remote", "add", "origin", remote);
-    await git("push", "-qu", "origin", "HEAD");
-    const workspace = new GitWorkspace(testGitEnvironment);
-    const status = await workspace.status(parent);
-    expect(status.submodules).toContainEqual({ path: "vendor/child", status: "current" });
-    expect(status.warnings).toEqual([expect.stringContaining(orphan)]);
-    await expect(workspace.submodules(parent)).resolves.toMatchObject({
-      warnings: status.warnings,
-    });
-    await writeFile(path.join(parent, "parent.txt"), "updated\n");
-    const staged = await workspace.stage(parent, ["parent.txt"]);
-    expect(staged.changes).toContainEqual(
-      expect.objectContaining({ path: "parent.txt", staged: true }),
-    );
-    expect(staged.warnings).toEqual(status.warnings);
-    const committed = await workspace.commit(parent, "fix: healthy change", false);
-    expect(committed.commit).toBeTruthy();
-    expect(committed.status.warnings).toEqual(status.warnings);
-    const pushed = await workspace.push(parent);
-    expect(pushed.ahead).toBe(0);
-    expect(pushed.warnings).toEqual(status.warnings);
-    const remoteHead = (
-      await execFileAsync("git", ["-C", remote, "rev-parse", `refs/heads/${pushed.branch}`])
-    ).stdout.trim();
-    expect(remoteHead).toBe((await git("rev-parse", "HEAD")).stdout.trim());
-    expect((await git("show", "HEAD:.gitmodules")).stdout).not.toContain(orphan);
-  }, 30_000);
+  it(
+    "keeps healthy submodules and returns stage, commit and push results with an orphan gitlink",
+    async () => {
+      const { parent } = await submoduleRepository();
+      const git = (...args: string[]) => execFileAsync("git", ["-C", parent, ...args]);
+      const head = (await git("rev-parse", "HEAD")).stdout.trim();
+      const orphan = "aio-plugin-documentation-agent";
+      await git("update-index", "--add", "--cacheinfo", `160000,${head},${orphan}`);
+      await git("commit", "-qm", "add orphan gitlink");
+      const remote = await mkdtemp(path.join(tmpdir(), "codexhost-warning-remote-"));
+      cleanup.push(remote);
+      await execFileAsync("git", ["init", "-q", "--bare", remote]);
+      await git("remote", "add", "origin", remote);
+      await git("push", "-qu", "origin", "HEAD");
+      const workspace = new GitWorkspace(testGitEnvironment);
+      const status = await workspace.status(parent);
+      expect(status.submodules).toContainEqual({ path: "vendor/child", status: "current" });
+      expect(status.warnings).toEqual([expect.stringContaining(orphan)]);
+      await expect(workspace.submodules(parent)).resolves.toMatchObject({
+        warnings: status.warnings,
+      });
+      await writeFile(path.join(parent, "parent.txt"), "updated\n");
+      const staged = await workspace.stage(parent, ["parent.txt"]);
+      expect(staged.changes).toContainEqual(
+        expect.objectContaining({ path: "parent.txt", staged: true }),
+      );
+      expect(staged.warnings).toEqual(status.warnings);
+      const committed = await workspace.commit(parent, "fix: healthy change", false);
+      expect(committed.commit).toBeTruthy();
+      expect(committed.status.warnings).toEqual(status.warnings);
+      const pushed = await workspace.push(parent);
+      expect(pushed.ahead).toBe(0);
+      expect(pushed.warnings).toEqual(status.warnings);
+      const remoteHead = (
+        await execFileAsync("git", ["-C", remote, "rev-parse", `refs/heads/${pushed.branch}`])
+      ).stdout.trim();
+      expect(remoteHead).toBe((await git("rev-parse", "HEAD")).stdout.trim());
+      expect((await git("show", "HEAD:.gitmodules")).stdout).not.toContain(orphan);
+    },
+    process.platform === "win32" ? undefined : 30_000,
+  );
 
   it("coalesces concurrent identical commits and clears failed requests for retry", async () => {
     const directory = await repository();

@@ -28,6 +28,7 @@ const testState = vi.hoisted(() => ({
   editor: null as unknown as Element,
   sendButton: null as unknown as HTMLButtonElement,
   renderedModelViews: [] as RendererModelControlView[],
+  renderedOwnershipErrors: [] as boolean[],
   selectModel: null as null | ((modelId: string) => void),
   refreshModels: undefined as undefined | (() => void),
   selectThinking: null as null | ((thinkingOptionId: string) => void),
@@ -245,14 +246,10 @@ vi.mock("../src/renderer-composer-dom.js", async (importOriginal) => {
       return control as unknown as ReturnType<typeof RendererComposerDom.mountComposerAgentControl>;
     },
     renderComposerAgentControl: (
-      _control: unknown,
-      _selection: unknown,
-      _adapter: unknown,
-      _switching: unknown,
-      _availability: unknown,
-      modelView: RendererModelControlView,
+      ...args: Parameters<typeof RendererComposerDom.renderComposerAgentControl>
     ) => {
-      testState.renderedModelViews.push({ ...modelView });
+      testState.renderedModelViews.push({ ...(args[5] ?? { status: "idle" }) });
+      testState.renderedOwnershipErrors.push(args[11] ?? false);
     },
     reconcileComposerNativeControls: vi.fn(),
     disposeComposerAgentControl: vi.fn(),
@@ -275,6 +272,7 @@ vi.mock("../src/versioned-renderer-adapter.js", async (importOriginal) => {
 
 vi.mock("../src/renderer-sidebar-agent-icons.js", () => ({
   SIDEBAR_THREAD_ROW_SELECTOR: "[data-app-action-sidebar-thread-row]",
+  SIDEBAR_THREAD_HOST_ID_ATTRIBUTE: "data-app-action-sidebar-thread-host-id",
   installRendererSidebarAgentIcons: (
     options: Parameters<typeof installRendererSidebarAgentIcons>[0],
   ) => {
@@ -366,12 +364,14 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   const composer = Object.assign(new FakeElement(), {
     isConnected: true,
     getClientRects: () => [{}],
-    matches: (selector: string) => selector === "[data-codex-composer-root]",
+    matches: (selector: string) =>
+      selector.split(",").some((candidate) => candidate.trim() === "[data-codex-composer-root]"),
     querySelectorAll: (selector: string) => (selector === "button" ? [testState.sendButton] : []),
     querySelector: (selector: string) => (selector.includes("textarea") ? testState.editor : null),
   }) as unknown as Element;
   const editor = Object.assign(new FakeElement(), {
-    closest: () => composer,
+    closest: (selector: string) =>
+      selector.includes("[data-codex-composer-root]") ? composer : null,
   }) as unknown as Element;
   const sendButton = {
     type: "submit",
@@ -383,6 +383,7 @@ function installFakeBrowser(languages: readonly string[] = ["en"]): void {
   testState.editor = editor;
   testState.sendButton = sendButton;
   testState.renderedModelViews = [];
+  testState.renderedOwnershipErrors = [];
   testState.localeReads = [];
   testState.selectModel = null;
   testState.selectThinking = null;
@@ -895,7 +896,12 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     reconcile.mockClear();
     const text = { nodeType: 3, parentElement: testState.editor } as unknown as Text;
     const mutation = (type: MutationRecordType, target: Node) =>
-      ({ type, target, addedNodes: [], removedNodes: [] }) as unknown as MutationRecord;
+      ({
+        type,
+        target,
+        addedNodes: type === "childList" && target !== testState.editor ? [testState.composer] : [],
+        removedNodes: [],
+      }) as unknown as MutationRecord;
 
     // Text replacement and rich-text paragraph edits are also childList changes.
     for (let index = 0; index < 10; index += 1) {
@@ -1032,6 +1038,126 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(host.subscribeThreadUsage).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ["local", "codexhost:draft-prewarm-policy-changed"],
+    ["remote-host", "codexhost:draft-prewarm-policy-changed"],
+    ["local", "codexhost:renderer-adapter-status"],
+    ["remote-host", "codexhost:renderer-adapter-status"],
+  ])("recovers the Composer Agent for %s on %s without window focus", async (hostId, eventName) => {
+    installFakeBrowser();
+    const ownership = Promise.withResolvers<{ owner: "codex"; locked: true }>();
+    const host = {
+      listHarnessPlugins: async () => ({ plugins: [] }),
+      inspectThread: vi.fn(() => ownership.promise),
+      inspectThreadCommands: async () => ({ commands: [] }),
+      inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+    };
+    let client: typeof host | null = null;
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({
+      enabledAgents: ["codex"],
+      defaultAgent: "codex",
+    });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      {
+        currentHostId: () => hostId,
+        clientForHost: (id: string) => (id === hostId ? client : null),
+      } as never,
+    );
+    await vi.waitFor(() => expect(testState.renderedOwnershipErrors.at(-1)).toBe(true));
+    const preventDefault = vi.fn();
+    const submit = () =>
+      testState.documentListeners.get("submit")?.({
+        target: testState.composer,
+        preventDefault,
+        stopImmediatePropagation: vi.fn(),
+      } as unknown as Event);
+    submit();
+    expect(preventDefault).toHaveBeenCalledOnce();
+
+    client = host;
+    window.dispatchEvent(new Event(eventName));
+    await vi.waitFor(() => expect(host.inspectThread).toHaveBeenCalledOnce());
+    expect(
+      testState.sidebarOptions?.getLocalAgent?.({ hostId, threadId: "thread-a", draftId: null }),
+    ).toBeNull();
+    ownership.resolve({ owner: "codex", locked: true });
+    await vi.waitFor(() =>
+      expect(
+        testState.sidebarOptions?.getLocalAgent?.({
+          hostId,
+          threadId: "thread-a",
+          draftId: null,
+        }),
+      ).toBe("codex"),
+    );
+    expect(testState.renderedOwnershipErrors.at(-1)).toBe(false);
+    preventDefault.mockClear();
+    submit();
+    expect(preventDefault).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event(eventName));
+    expect(host.inspectThread).toHaveBeenCalledOnce();
+  });
+
+  it.each(["success", "failure"])(
+    "ignores a replaced connection's late ownership %s",
+    async (outcome) => {
+      installFakeBrowser();
+      const ownership = Promise.withResolvers<{ owner: "codex"; locked: true }>();
+      const host = {
+        listHarnessPlugins: async () => ({ plugins: [] }),
+        inspectThread: vi.fn(() => ownership.promise),
+        inspectThreadCommands: async () => ({ commands: [] }),
+        inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+      };
+      let client = host;
+      const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+      const probe = installRendererBindingProbe({
+        enabledAgents: ["codex"],
+        defaultAgent: "codex",
+      });
+      probe.setAdapter(
+        { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+        undefined,
+        undefined,
+        { currentHostId: () => "local", clientForHost: () => client } as never,
+      );
+      await vi.waitFor(() => expect(host.inspectThread).toHaveBeenCalled());
+      const replacement = {
+        ...host,
+        inspectThread: vi.fn(async () => ({ owner: "codex" as const, locked: true as const })),
+      };
+      client = replacement;
+      if (outcome === "success") ownership.resolve({ owner: "codex", locked: true });
+      else ownership.reject(new Error("The previous Host connection closed"));
+      await ownership.promise.catch(() => undefined);
+      await Promise.resolve();
+      expect(testState.renderedOwnershipErrors.at(-1)).toBe(false);
+      expect(
+        testState.sidebarOptions?.getLocalAgent?.({
+          hostId: "local",
+          threadId: "thread-a",
+          draftId: null,
+        }),
+      ).toBeNull();
+
+      window.dispatchEvent(new Event("codexhost:draft-prewarm-policy-changed"));
+      await vi.waitFor(() =>
+        expect(
+          testState.sidebarOptions?.getLocalAgent?.({
+            hostId: "local",
+            threadId: "thread-a",
+            draftId: null,
+          }),
+        ).toBe("codex"),
+      );
+      expect(replacement.inspectThread).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not rediscover the request route for unrelated sidebar rows", async () => {
     installFakeBrowser();

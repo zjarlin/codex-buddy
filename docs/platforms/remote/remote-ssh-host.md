@@ -66,7 +66,43 @@ The page distinguishes installed files from the running version. When installed 
 
 Buddy Desktop updates from its own GitHub Release. Upstream npm `@codexhost/cli` belongs to a separate release line; their version numbers cannot be compared. Buddy disables installation and software upgrades through that npm package, while retaining status inspection, restart of the installed version, repair and uninstall.
 
-Maintain an upstream remote using upstream release instructions and independently selected versions. Never substitute a Buddy Desktop version for an upstream npm version. Changes to a Buddy remote require building and installing the corresponding platform artifact; updating Desktop does not upload remote code.
+Maintain an upstream remote using upstream release instructions and independently selected versions. Never substitute a Buddy Desktop version for an upstream npm version. Buddy publishes Linux remote packages as formal GitHub Release assets; updating Desktop does not upload remote code.
+
+### Install a Linux Host from a formal Release
+
+Download these files from the same [Buddy formal Release](https://github.com/zjarlin/codex-buddy/releases). Replace `<version>` with that Release's version and select only the Linux package matching the remote CPU architecture. If an older Release lacks these assets, do not substitute the same version from upstream npm.
+
+| File | Purpose |
+| --- | --- |
+| `codexhost-cli-<version>.tgz` | CLI entry point shared by both architectures |
+| `codexhost-cli-<version>-linux-x64.tgz` or `codexhost-cli-<version>-linux-arm64.tgz` | Host, native executables and plugins for the selected architecture |
+| `codex-buddy-update.json` | Versioned download URL, byte count and SHA-256 for each asset in that Release |
+
+Check that `tag_name`, the two package entries' `assets[].name`, and their `browser_download_url` belong to the selected version. Compare the downloaded files' byte counts with `size`, then use `sha256sum` to compare each file with the value after `sha256:` in `digest`. Refuse missing, duplicate or mismatched packages. These assets use the existing CLI package format; Buddy versions are not published to the npm registry.
+
+For an existing service, read `$HOME/.codexhost/remote/manifest.json` to identify its actual `nodePath`, `hostRuntimePath`, `profilePath` and npm installation prefix. Preserve the login shell, configuration and data directory. Back up the manifest, managed profile and old CLI/platform packages, wait for all remote tasks to finish, then run `remote stop` with the old CLI to enter maintenance. Downloading and verifying assets does not require stopping the service.
+
+Run the commands below on the remote computer. Set every variable explicitly to an absolute path: `BUDDY_NODE` and `BUDDY_NPM_CLI` must belong to the same Node installation, `BUDDY_NPM_PREFIX` is the verified installation prefix, and the two `TGZ` variables point to the verified local packages. Keep an existing installation's prefix; do not rely on the global `.npmrc` default.
+
+```bash
+set -eu
+: "${BUDDY_NODE:?BUDDY_NODE is required}"
+: "${BUDDY_NPM_CLI:?BUDDY_NPM_CLI is required}"
+: "${BUDDY_NPM_PREFIX:?BUDDY_NPM_PREFIX is required}"
+: "${BUDDY_META_TGZ:?BUDDY_META_TGZ is required}"
+: "${BUDDY_PLATFORM_TGZ:?BUDDY_PLATFORM_TGZ is required}"
+"$BUDDY_NODE" "$BUDDY_NPM_CLI" install --global --prefix "$BUDDY_NPM_PREFIX" \
+  --offline --omit=optional --ignore-scripts --no-audit --no-fund \
+  "$BUDDY_PLATFORM_TGZ" "$BUDDY_META_TGZ"
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" --version
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" remote install
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" remote start
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" remote status
+```
+
+Install both packages together. `--offline --omit=optional` prevents fetching platform packages from the upstream registry. If installation fails, restore the old packages, manifest and profile before starting the original service; do not continue the switch after an error.
+
+Acceptance requires matching CLI and actual platform-package versions, a manifest pointing to the new package, and `remote status` reporting `ready`, `issues=[]` and `runtime.protocol=codexhost`. Reconnect Desktop and verify the running version. The remote **Multiple providers** page must read that Host's primary providers and save a fallback before claiming that the new Host feature is active. Successful file installation or a local Desktop update does not establish this. Remote installation remains explicit maintenance and never runs automatically with a Desktop update.
 
 ## Test from source with a specified version
 

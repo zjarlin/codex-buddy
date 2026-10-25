@@ -132,19 +132,60 @@ it.each(["local", "remote-ssh-discovered:linux"])(
   },
 );
 
-it("resolves a remote Host from a registry without waitForManagerForHostId", async () => {
-  const fixture = setup("remote-ssh-discovered:linux", { withWaitFor: false });
-  await installRendererDraftPrewarmPolicyDirect(fixture.renderer);
-  const routing = fixture.target.__codexhostHostRoutingV1 as Routing;
-  expect(routing).toBeDefined();
-  try {
-    expect(routing.forComposer()?.manager).toBe(fixture.remote);
-    expect(routing.forHost(fixture.remote.getHostId())?.manager).toBe(fixture.remote);
-    expect(routing.forHost("local")?.manager).toBe(fixture.local);
-  } finally {
-    routing.dispose();
-  }
-});
+it.each(["local", "remote-ssh-discovered:linux"])(
+  "resolves %s through Desktop 26.1021's committed registry without a direct manager hook",
+  async (initialHostId) => {
+    const fixture = setup(initialHostId, { withWaitFor: false });
+    const editor = fixture.editors[0];
+    if (!editor) {
+      throw new Error("测试缺少编辑器");
+    }
+    const first: Record<string, unknown> = {};
+    let fiber = first;
+    for (let index = 0; index <= 302; index += 1) {
+      if (index === 31) {
+        fiber.memoizedProps = {
+          executionTargetHostId: initialHostId,
+          permissionsHostId: initialHostId,
+        };
+      }
+      // 实际 Renderer 只在祖先注册表中持有连接；不存在可回退的直接 manager hook。
+      if (index === 245) {
+        fiber.memoizedState = {
+          memoizedState: fixture.fiber.memoizedState.memoizedState,
+          next: null,
+        };
+      }
+      if (index === 302) {
+        break;
+      }
+      const parent: Record<string, unknown> = { child: fiber };
+      fiber.return = parent;
+      fiber = parent;
+    }
+    fiber.stateNode = { current: fiber };
+    Reflect.set(editor, "__reactFiber$host", first);
+
+    const routing = installRendererWindowHostRouting(
+      { querySelectorAll: () => fixture.editors },
+      fixture.target,
+    );
+    try {
+      const selected = initialHostId === "local" ? fixture.local : fixture.remote;
+      expect(routing.forComposer()?.manager).toBe(selected);
+      expect(routing.forHost(fixture.remote.getHostId())?.manager).toBe(fixture.remote);
+      expect(routing.forHost("local")?.manager).toBe(fixture.local);
+      await expect(
+        installRendererDraftPrewarmPolicyDirect(fixture.renderer),
+      ).resolves.toMatchObject({ state: "ready" });
+      fixture.managers.delete(initialHostId);
+      expect(routing.forComposer()).toBeNull();
+      expect(routing.hostIdForComposer()).toBe(initialHostId);
+    } finally {
+      routing.dispose();
+    }
+  },
+);
 
 it("keeps routing closed when a registry lookup throws", async () => {
   const fixture = setup("local", { throwingHostId: "remote-ssh-discovered:linux" });

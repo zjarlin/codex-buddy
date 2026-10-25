@@ -1,3 +1,4 @@
+export * from "./provider-routing.js";
 export {
   MODEL_AVAILABILITY_METHOD,
   modelAvailabilityParamsSchema,
@@ -37,6 +38,7 @@ export type {
 export {
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
+  nativeContinuationPrompt,
   buddyContinueSchema,
   buddyInterruptedSchema,
   type BuddyInterrupted,

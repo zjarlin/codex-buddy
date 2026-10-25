@@ -66,7 +66,43 @@ Web 控制台的「远程连接」（`#remote-connections`）也提供同一套�
 
 Buddy 桌面通过自己的 GitHub Release 更新；上游 npm `@codexhost/cli` 不属于 Buddy 发行线。版本号不能跨发行线比较。Buddy 当前不提供通过该 npm 包安装或升级远端的按钮，也拒绝相应安装请求，避免误装上游或使用不存在的 Buddy npm 版本。保留现有远端的状态查询、已安装版本重启、修复和卸载。
 
-维护上游远端时，应按照上游发布说明独立选择版本；不要用 Buddy 桌面版本号作为 npm 版本。Buddy 远端源码变更需要构建并安装对应平台产物，更新桌面包不会把这些代码传到远端。
+维护上游远端时，应按照上游发布说明独立选择版本；不要用 Buddy 桌面版本号作为 npm 版本。Buddy 的 Linux 远端包通过正式 GitHub Release 附件交付；更新桌面包不会把这些代码传到远端。
+
+### 从正式 Release 安装 Linux Host
+
+从同一个 [Buddy 正式 Release](https://github.com/zjarlin/codex-buddy/releases) 下载以下文件。`<version>` 必须与所选 Release 的版本一致；Linux 平台只选对应 CPU 架构的一项。旧 Release 若没有这些附件，不能用上游 npm 同名版本代替。
+
+| 文件 | 用途 |
+| --- | --- |
+| `codexhost-cli-<version>.tgz` | CLI 入口，两个架构共用 |
+| `codexhost-cli-<version>-linux-x64.tgz` 或 `codexhost-cli-<version>-linux-arm64.tgz` | 对应架构的 Host、原生程序及插件 |
+| `codex-buddy-update.json` | 同一 Release 内每个附件的版本地址、字节数及 SHA-256 |
+
+先核对清单的 `tag_name`、两个包的 `assets[].name` 和 `browser_download_url` 都属于选中的版本，再将本地文件字节数与 `size` 比较，使用 `sha256sum` 校验 `digest` 中 `sha256:` 后的值。缺少、重复或校验不符的包不能安装。这些包使用现有 CLI 包格式，不向 npm registry 发布 Buddy 版本。
+
+已有服务先读取 `$HOME/.codexhost/remote/manifest.json`，确认实际的 `nodePath`、`hostRuntimePath`、`profilePath` 和 npm 安装前缀；保留原登录 shell、配置及数据目录。备份 manifest、托管 profile 和旧 CLI/平台包后，等所有远程任务结束，再使用旧 CLI 执行 `remote stop` 进入维护。下载与校验不要求停止服务。
+
+以下命令在远端执行。所有变量都必须显式提供绝对路径：`BUDDY_NODE` 和 `BUDDY_NPM_CLI` 指向同一 Node 安装，`BUDDY_NPM_PREFIX` 是确认后的安装前缀，两个 `TGZ` 变量指向已校验的本地包。已有安装应沿用原前缀，不能依赖全局 `.npmrc` 的默认值。
+
+```bash
+set -eu
+: "${BUDDY_NODE:?BUDDY_NODE is required}"
+: "${BUDDY_NPM_CLI:?BUDDY_NPM_CLI is required}"
+: "${BUDDY_NPM_PREFIX:?BUDDY_NPM_PREFIX is required}"
+: "${BUDDY_META_TGZ:?BUDDY_META_TGZ is required}"
+: "${BUDDY_PLATFORM_TGZ:?BUDDY_PLATFORM_TGZ is required}"
+"$BUDDY_NODE" "$BUDDY_NPM_CLI" install --global --prefix "$BUDDY_NPM_PREFIX" \
+  --offline --omit=optional --ignore-scripts --no-audit --no-fund \
+  "$BUDDY_PLATFORM_TGZ" "$BUDDY_META_TGZ"
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" --version
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" remote install
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" remote start
+"$BUDDY_NODE" "$BUDDY_NPM_PREFIX/bin/codexhost" remote status
+```
+
+两个包必须一起安装；`--offline --omit=optional` 避免从上游 registry 补齐平台包。安装失败时先恢复原包，再恢复原 manifest/profile 并启动原服务，不跳过错误继续切换。
+
+验收需确认 CLI 与实际平台包版本相同、manifest 指向新包，`remote status` 为 `ready`、`issues=[]` 且 `runtime.protocol=codexhost`。重新连接 Desktop 后核对运行中版本；远程「多供应商配置」能读取该 Host 的主供应商并保存备用项，才证明新 Host 功能已经生效。安装文件成功或本地 Desktop 更新成功都不能代替这一步。远端安装仍是显式维护操作，不随桌面更新自动执行。
 
 ## 指定版本从源码测试
 

@@ -16,7 +16,7 @@ on:
         default: false
         type: boolean
       skip_npm:
-        description: "Skip npm publication and publish GitHub installers only"
+        description: "Skip npm publication and publish GitHub release artifacts only"
         required: false
         default: false
         type: boolean
@@ -362,6 +362,9 @@ jobs:
             "codex-buddy-${VERSION}-macos-arm64.dmg"
             "codex-buddy-${VERSION}-windows-x64.exe"
             "codex-buddy-${VERSION}-windows-arm64.exe"
+            "codexhost-cli-${VERSION}.tgz"
+            "codexhost-cli-${VERSION}-linux-x64.tgz"
+            "codexhost-cli-${VERSION}-linux-arm64.tgz"
           )
           files=()
           for name in "${expected[@]}"; do

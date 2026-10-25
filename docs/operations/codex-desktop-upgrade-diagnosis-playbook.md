@@ -57,6 +57,14 @@ Codex Desktop 启动
 
 **重要：Adapter `ready` 不是最终验收标准。** 本次事故中 Adapter 已经是 `ready`，但 Agent 点击仍被旧的 prewarm 清理 RPC 中断。
 
+### 新会话无法发送或已有会话无法确认 Agent
+
+若发送按钮可用但草稿不提交，同时 Adapter 为 `installing / draft-routing-policy-unavailable`，先核对当前已提交 React 祖先中的 Host 注册表与请求管理器。Desktop 26.1021 的注册表保留 `addManager`、`getForHostId`，没有 `waitForManagerForHostId`；该等待方法不是路由所需能力，不能用它拒绝有效注册表。注册表里的当前连接是归属依据，断开后不能退回旧 Hook 中残留的管理器。
+
+若 Adapter 已就绪但新会话没有 Agent 控件，检查 `mountedComposers` 和 DOM 变化监听是否已注册。Renderer 必须在输入框异步插入、替换及项目切换后重新扫描并挂载控件，不能仅靠首次安装或窗口聚焦触发。
+
+已有会话的 Agent 归属按当前 Host 连接确认。同一 Host 的连接恢复或替换后，Renderer 自动重新查询归属，无需用户重新聚焦窗口；旧连接的迟到成功或失败结果均不覆盖当前会话。归属尚未确认时继续阻止提交。验收应分别覆盖本地和远程的新会话发送、已有会话归属确认及连接恢复后的自动重查。
+
 ## 二、第一步：记录现场版本和启动方式
 
 本地 Host 的官方后端异常退出或连接异常关闭后，Host 使用与远程部署相同的退避恢复机制：确认旧进程退出，再重建后端并重新初始化已有客户端。恢复期间官方请求仍返回不可用；失败的回合或语音启动请求不会自动重放。后端就绪后，用户可以显式重试，已订阅的持久 Thread 在需要时通过原生 `thread/resume` 恢复。此过程不重启 Desktop，也不关闭外部 Harness。

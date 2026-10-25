@@ -18,7 +18,7 @@ vi.mock("../src/codex-locale-adapter.js", () => ({
 }));
 
 vi.mock("../src/settings/localization.js", () => ({
-  rendererSettingsMessages: vi.fn(() => ({})),
+  rendererSettingsMessages: vi.fn(() => ({ pageLabels: { providers: "Multiple providers" } })),
   resolveRendererSettingsLocale: vi.fn((languageTags: readonly string[]) =>
     languageTags[0]?.toLowerCase().startsWith("zh") ? "zh-CN" : "en",
   ),
@@ -46,6 +46,7 @@ vi.mock("../src/settings/trigger.js", () => ({
     setUpdateAvailable: triggerSetUpdateAvailable,
     dispose: vi.fn(),
   })),
+  installProvidersHeaderTrigger: vi.fn(() => ({ refresh: vi.fn(() => false), dispose: vi.fn() })),
   installSystemOneModelHeaderControl: vi.fn(() => ({
     root: null,
     refresh: vi.fn(() => false),

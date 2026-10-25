@@ -13,6 +13,10 @@ import { readRendererSpeechEnabled } from "./renderer-speech-preference.js";
 import { installRendererPendingConfirmations } from "./renderer-pending-confirmations.js";
 import { installRendererSidebarVisits } from "./renderer-sidebar-visits.js";
 import { installBuddyControl } from "./buddy/control.js";
+import {
+  createInterruptedQueue,
+  INTERRUPTED_QUEUE_STORAGE_KEY,
+} from "./buddy/interrupted-queue.js";
 import { selectFixedModel } from "./renderer-fixed-model-selection.js";
 import { nativeModelBinding } from "./renderer-native-model-binding.js";
 import { refreshNativeModelCatalog } from "./renderer-native-model-refresh.js";
@@ -64,6 +68,7 @@ import {
   eventElement,
   isComposerInputIntent,
   isComposerSubmissionKey,
+  isInsideOwnedRendererControl,
   mountComposerAgentControl,
   reconcileComposerNativeControls,
   renderComposerAgentControl,
@@ -81,6 +86,8 @@ import {
   TRANSCRIPT_ITEM_SELECTOR,
 } from "./renderer-transcript-dom.js";
 import { installTranscriptAutoScroll } from "./renderer-transcript-scroll.js";
+import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { RENDERER_INJECTED_CONTROL_SELECTOR } from "./settings/trigger.js";
 import { resolveRendererSettingsLocale } from "./settings/localization.js";
 import { RendererCodexAccountState } from "./renderer-codex-account-state.js";
 import {
@@ -733,6 +740,10 @@ export function mutationMayAffectComposer(mutation: MutationRecord): boolean {
   // Identity changes are lifecycle events even after the marker is removed.
   if (mutation.type === "attributes" && mutation.attributeName === "data-codex-composer-root")
     return true;
+  // 注入控件的菜单、用量和隐藏状态由渲染更新，不能反向触发整轮扫描。
+  const composer = target.closest(CODEX_COMPOSER_SELECTOR);
+  if (composer && isInsideOwnedRendererControl(target, composer)) return false;
+  if (target.closest(RENDERER_INJECTED_CONTROL_SELECTOR)) return false;
   // Text/IME and rich-text changes inside an editor do not change its owner.
   if (mutation.type !== "attributes" && editorForElement(target)) return false;
   if (target.closest(CODEX_COMPOSER_SELECTOR)) return true;
@@ -761,6 +772,13 @@ function mutationMayChangeComposerTarget(mutation: MutationRecord): boolean {
     mutation.target instanceof Element ? mutation.target : mutation.target.parentElement;
   return !target || editorForElement(target) === null;
 }
+
+const BINDING_SURFACE_SELECTOR = [
+  CODEX_COMPOSER_SELECTOR,
+  "[data-above-composer-conversation-id]",
+  'header[data-pip-obstacle="app-shell-header"]',
+  "nav[data-app-navigation-rail]",
+].join(",");
 
 function catalogWithConfigurationState(
   catalog: HarnessModelCatalog,
@@ -918,7 +936,30 @@ export function installRendererBindingProbe(
     },
     getLocalAgent: localAgentForSidebarThread,
   });
+  const interruptedQueue = createInterruptedQueue({
+    getHostIds: () => {
+      const hostIds = new Set(window.__codexhostHostRoutingV1?.knownHostIds?.() ?? ["local"]);
+      const activeHostId = activeModelHostId();
+      if (activeHostId) hostIds.add(activeHostId);
+      for (const row of document.querySelectorAll<HTMLElement>(
+        `[${SIDEBAR_THREAD_HOST_ID_ATTRIBUTE}]`,
+      )) {
+        const hostId = row.getAttribute(SIDEBAR_THREAD_HOST_ID_ATTRIBUTE);
+        if (hostId) hostIds.add(hostId);
+      }
+      return [...hostIds];
+    },
+    getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
+    getClient: (hostId) => modelClientForHost(hostId),
+    ...(window.localStorage ? { storage: window.localStorage } : {}),
+  });
+  const onRecoveryStorage = (event: StorageEvent) => {
+    if (event.key === INTERRUPTED_QUEUE_STORAGE_KEY) interruptedQueue.syncStorage();
+  };
+  window.addEventListener("storage", onRecoveryStorage);
+  interruptedQueue.refresh();
   const sidebarContinuation = installSidebarContinuation({
+    queue: interruptedQueue,
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: rendererLocale,
   });
@@ -1247,6 +1288,7 @@ export function installRendererBindingProbe(
 
   // Re-read requests that settle while a retained root cannot be classified.
   const ownershipRecovery = new WeakMap<MountedComposer, number>();
+  const ownershipClients = new WeakMap<MountedComposer, RendererModelClient | null>();
   const modelRecovery = new WeakMap<MountedComposer, number>();
   const isRetainedComposer = (mounted: MountedComposer): boolean =>
     mounted.composer.isConnected &&
@@ -1672,6 +1714,11 @@ export function installRendererBindingProbe(
     const requestModelControl = modelControl;
     const requestHostId = activeModelHostId(mounted.composer);
     const client = modelClientForHostFrom(requestModelControl, requestHostId);
+    ownershipClients.set(mounted, client);
+    const isCurrentConnection = (): boolean =>
+      modelControl === requestModelControl &&
+      activeModelHostId(mounted.composer) === requestHostId &&
+      modelClientForHostFrom(requestModelControl, requestHostId) === client;
     const generation = controller.beginOwnershipRequest(mounted.composer);
     const usageGeneration = mounted.usageRequestGeneration;
     mounted.ownershipStatus = "loading";
@@ -1685,8 +1732,7 @@ export function installRendererBindingProbe(
         mountedByComposer.get(mounted.composer) !== mounted ||
         threadIdFromComposerModelTarget(mounted.modelTarget) !== threadId ||
         mounted.hostId !== requestHostId ||
-        modelControl !== requestModelControl ||
-        activeModelHostId(mounted.composer) !== requestHostId
+        !isCurrentConnection()
       ) {
         return;
       }
@@ -1734,7 +1780,7 @@ export function installRendererBindingProbe(
         mounted.permissionModeView = { status: "idle" };
       }
     } catch {
-      if (!isCurrentOwnershipRequest(mounted, generation)) return;
+      if (!isCurrentOwnershipRequest(mounted, generation) || !isCurrentConnection()) return;
       mounted.ownershipStatus = "error";
     } finally {
       if (isCurrentOwnershipRequest(mounted, generation)) {
@@ -2918,7 +2964,17 @@ export function installRendererBindingProbe(
     let changed = false;
     for (const mounted of mountedByComposer.values()) {
       const hostId = activeModelHostId(mounted.composer);
-      if (!hostId || mounted.hostId === hostId) continue;
+      if (!hostId) continue;
+      if (mounted.hostId === hostId) {
+        if (!threadIdFromComposerModelTarget(mounted.modelTarget)) continue;
+        const client = modelClientForHost(hostId);
+        // 同一 Host 重连后仍需重新确认归属，不能把错误状态留到用户切换窗口。
+        if (ownershipClients.has(mounted) && ownershipClients.get(mounted) !== client) {
+          ownershipClients.set(mounted, client);
+          if (client) void loadThreadOwnership(mounted);
+        }
+        continue;
+      }
       changed = true;
       if (!threadIdFromComposerModelTarget(mounted.modelTarget)) {
         controller.clearPendingSubmission(mounted.composer);
@@ -3300,6 +3356,7 @@ export function installRendererBindingProbe(
     refreshTargetsOnNextScan = false;
     if (disposed) return;
     settingsLifecycle.refresh();
+    interruptedQueue.refresh();
     const transferredComposers = new Set<Element>();
     for (const [target, replacement] of pendingReplacements) {
       const sourceState = controller.get(replacement.source.composer);
@@ -3593,12 +3650,18 @@ export function installRendererBindingProbe(
   };
 
   const mutationObserver = new MutationObserver((mutations) => {
-    const relevant = mutations.filter(mutationMayAffectComposer);
+    const relevant = mutations.filter(
+      (mutation) =>
+        (mutation.attributeName === "data-codex-composer-root" ||
+          mutationAffectsElements(mutation, BINDING_SURFACE_SELECTOR)) &&
+        mutationMayAffectComposer(mutation),
+    );
     if (relevant.length === 0) return;
     transferReplacedComposers(relevant);
     scheduleScan(relevant.some(mutationMayChangeComposerTarget));
   });
   const onHostRouteChange = (): void => {
+    interruptedQueue.refresh();
     scheduleScan(true);
     sidebarContinuation.refresh();
     sidebarUnread.refresh();
@@ -3646,6 +3709,7 @@ export function installRendererBindingProbe(
     }
   };
   const onAdapterStatus = () => {
+    reconcileHarnessAvailabilityHost();
     publishConnectionStatus();
     if (shouldRefreshCodexAccountsForAdapterState(adapterStatus.state)) {
       void loadCodexAccounts();
@@ -3665,6 +3729,17 @@ export function installRendererBindingProbe(
       renderMounted(mounted);
     }
   };
+  mutationObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: [
+      "hidden",
+      "aria-hidden",
+      "data-codex-composer-root",
+      "data-above-composer-conversation-id",
+    ],
+    childList: true,
+    subtree: true,
+  });
   document.addEventListener("beforeinput", onBeforeInput, true);
   document.addEventListener("submit", onSubmit, true);
   document.addEventListener("keydown", onKeyDown, true);
@@ -3810,11 +3885,21 @@ export function installRendererBindingProbe(
       }
       return {
         anchor: mounted.composer,
+        hostId: mounted.hostId ?? activeModelHostId() ?? "local",
         threadId,
         client,
       };
     },
     () => (settingsLifecycle.locale === "zh-CN" ? "zh-CN" : "en"),
+    {
+      queue: interruptedQueue,
+      getRecoveryContext: () => {
+        const hostId = activeModelHostId();
+        const client = hostId ? modelClientForHost(hostId) : null;
+        return hostId && client ? { hostId, client } : null;
+      },
+      onResumed: () => sidebarContinuation.refresh(),
+    },
   );
 
   const turnActionCards = installTurnActionCards({
@@ -4057,6 +4142,8 @@ export function installRendererBindingProbe(
       translateCards.dispose();
       turnActionCards.dispose();
       sidebarContinuation.dispose();
+      interruptedQueue.dispose();
+      window.removeEventListener("storage", onRecoveryStorage);
       sidebarUnread.dispose();
       pendingConfirmationPanel.dispose();
       speechAnnouncer.dispose();

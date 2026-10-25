@@ -2,7 +2,7 @@ import type { RendererUsageStatisticsRequest } from "./console/pages/usage-stati
 import type { RendererUsageStatisticsHostsProvider } from "./console/usage/usage-hosts.js";
 import type { RemoteConnectionsControl } from "./remote-connections-control.js";
 import type { LoadedSessionsClient } from "./settings/loaded-sessions-table.js";
-import type { EmergencyProviderClient } from "./settings/emergency-provider-page.js";
+import type { EmergencyProviderClient } from "./renderer-model-client.js";
 import { readCodexLocaleSettings, type CodexLocaleSettings } from "./codex-locale-adapter.js";
 import {
   rendererSettingsMessages,
@@ -23,6 +23,7 @@ import type {
 import { installRendererSettingsShell, type RendererSettingsShell } from "./settings/shell.js";
 import {
   installRendererSettingsRailTrigger,
+  installProvidersHeaderTrigger,
   type RendererSettingsRailTriggerControl,
   installSystemOneModelHeaderControl,
   type SystemOneModelHeaderControl,
@@ -64,6 +65,7 @@ export function installRendererSettingsLifecycle(
   let locale = resolveRendererSettingsLocale(ownerWindow.navigator.languages);
   let shell: RendererSettingsShell | null = null;
   let trigger: RendererSettingsRailTriggerControl | null = null;
+  let providersTrigger: ReturnType<typeof installProvidersHeaderTrigger> | null = null;
   let systemOneModel: SystemOneModelHeaderControl | null = null;
   let updateNotification: ReturnType<typeof installRendererUpdateNotification> | null = null;
   const updates = createRendererUpdateController(
@@ -132,6 +134,14 @@ export function installRendererSettingsLifecycle(
         nextShell.openSettings(button, "updates");
       },
     });
+    providersTrigger = installProvidersHeaderTrigger({
+      ownerDocument: ownerWindow.document,
+      label: messages.pageLabels.providers,
+      onOpen(button) {
+        nextShell.openSettings(button, "providers");
+      },
+    });
+    providersTrigger.refresh();
     systemOneModel = installSystemOneModelHeaderControl({
       getClient: options.getBuddyClient ?? (() => null),
       getLocale: () => (locale === "zh-CN" ? "zh-CN" : "en"),
@@ -152,6 +162,7 @@ export function installRendererSettingsLifecycle(
     trigger?.dispose();
     shell?.dispose();
     systemOneModel?.dispose();
+    providersTrigger?.dispose();
     updateNotification?.dispose();
     trigger = null;
     shell = null;
@@ -202,7 +213,8 @@ export function installRendererSettingsLifecycle(
       const systemOneRefreshed = systemOneModel?.reposition?.() ?? false;
       updates.refreshBinding();
       const updateRefreshed = updateNotification?.refresh() ?? false;
-      return refreshed || systemOneRefreshed || updateRefreshed;
+      const providersRefreshed = providersTrigger?.refresh() ?? false;
+      return refreshed || systemOneRefreshed || updateRefreshed || providersRefreshed;
     },
     dispose() {
       if (disposed) return;
@@ -212,6 +224,7 @@ export function installRendererSettingsLifecycle(
       updates.dispose();
       updateNotification?.dispose();
       systemOneModel?.dispose();
+      providersTrigger?.dispose();
       trigger?.dispose();
       shell?.dispose();
       systemOneModel = null;

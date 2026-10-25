@@ -146,6 +146,26 @@ describe("Hermes inventory process", () => {
       await mkdir(packageDirectory);
       await writeFile(path.join(packageDirectory, "__init__.py"), "");
       await writeFile(
+        path.join(packageDirectory, "providers.py"),
+        `from types import SimpleNamespace
+
+def resolve_provider_full(value, *, user_providers, custom_providers):
+    return SimpleNamespace(id=value)
+`,
+      );
+      await writeFile(
+        path.join(packageDirectory, "models.py"),
+        `def parse_model_input(model, provider):
+    return provider, model
+`,
+      );
+      await writeFile(
+        path.join(packageDirectory, "main.py"),
+        `def _has_any_provider_configured():
+    return True
+`,
+      );
+      await writeFile(
         path.join(packageDirectory, "inventory.py"),
         `class ConfigContext:
     current_provider = "zai"
@@ -177,7 +197,8 @@ exec(${JSON.stringify(hermesInventoryPathsForTests.script)})`;
       const exitCode = await new Promise<number | null>((resolve) => child.on("close", resolve));
       expect(stderr).toBe("");
       expect(exitCode).toBe(0);
-      expect(JSON.parse(stdout)).toEqual({
+      expect(stdout).toMatch(/^codexhost_inventory=/);
+      expect(JSON.parse(stdout.slice("codexhost_inventory=".length))).toEqual({
         models: [
           {
             modelId: "zai:glm-5-turbo",
@@ -188,6 +209,7 @@ exec(${JSON.stringify(hermesInventoryPathsForTests.script)})`;
           },
         ],
         currentModelId: "zai:glm-5-turbo",
+        configured: true,
       });
     } finally {
       await rm(directory, { recursive: true, force: true });

@@ -1410,7 +1410,11 @@ fn main() -> ExitCode {
             if start_menu_launch && !console_opened {
                 show_error_dialog(&message);
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "macos")]
+            if interactive_launch && !console_opened {
+                show_macos_error_dialog(&message);
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             let _ = console_opened;
             ExitCode::FAILURE
         }

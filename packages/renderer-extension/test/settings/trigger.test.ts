@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   inspectRendererSettingsContract,
+  installProvidersHeaderTrigger,
   installRendererSettingsRailTrigger,
   installRendererUpdateRailTrigger,
   mountRendererSettingsTrigger,
@@ -67,7 +68,9 @@ class FakeElement {
     return child;
   }
   matches(selector: string): boolean {
-    const match = /^([a-z]*)\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(selector);
+    const match = /^([a-z]*)\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(
+      selector.replace(/^:scope\s*>\s*/u, ""),
+    );
     if (!match) return false;
     const [, tag, name, value] = match;
     if (tag && tag.toUpperCase() !== this.tagName) return false;
@@ -142,6 +145,27 @@ function createFakeRail(options: { visible?: boolean; destinations?: boolean } =
   return { rail, destinations, home, more, divider, plugins };
 }
 
+function stubSettingsHeaderDocument(): {
+  document: Document;
+  surface: FakeElement;
+  nativeActionGroup: FakeElement;
+} {
+  const header = new FakeElement("HEADER", 44);
+  header.setAttribute("data-pip-obstacle", "app-shell-header");
+  const surface = new FakeElement();
+  surface.setAttribute("data-testid", "app-shell-header-context-menu-surface");
+  const nativeActionGroup = new FakeElement();
+  nativeActionGroup.setAttribute("data-app-shell-header-obstacle", "true");
+  surface.append(nativeActionGroup);
+  header.append(surface);
+  const document = {
+    createElement: (tag: string) => new FakeElement(tag.toUpperCase()),
+    querySelector: (selector: string) =>
+      selector === 'header[data-pip-obstacle="app-shell-header"]' ? header : null,
+  } as unknown as Document;
+  return { document, surface, nativeActionGroup };
+}
+
 function stubRailDocument(current: () => FakeElement): Document {
   const document = {
     createElement: (tag: string) => new FakeElement(tag.toUpperCase()),
@@ -156,6 +180,26 @@ function stubRailDocument(current: () => FakeElement): Document {
 }
 
 describe("Renderer settings navigation rail trigger", () => {
+  it("keeps the providers trigger clickable inside the pointer-events-none header surface", () => {
+    const fixture = stubSettingsHeaderDocument();
+    const opened = vi.fn();
+    const control = installProvidersHeaderTrigger({
+      ownerDocument: fixture.document,
+      label: "多供应商配置",
+      onOpen: opened,
+    });
+    try {
+      expect(control.refresh()).toBe(true);
+      const button = fixture.surface.children[0] as FakeElement;
+      expect(button.style.pointerEvents).toBe("auto");
+      expect(button.nextSibling).toBe(fixture.nativeActionGroup);
+      button.dispatch("click");
+      expect(opened).toHaveBeenCalledWith(button);
+    } finally {
+      control.dispose();
+    }
+  });
+
   it("keeps settings and update icons in stable order across DOM reconciliation", () => {
     const rail = createFakeRail();
     const document = stubRailDocument(() => rail.rail);

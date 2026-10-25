@@ -638,8 +638,10 @@ export function installProvidersHeaderTrigger(options: {
     color: "light-dark(#185bb1, #93c5fd)",
     font: "500 12px system-ui",
     cursor: "pointer",
+    pointerEvents: "auto",
     marginInline: "4px",
   });
+  button.style.setProperty("-webkit-app-region", "no-drag");
   button.addEventListener("click", () => options.onOpen(button));
   let disposed = false;
   return {

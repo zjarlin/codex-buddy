@@ -432,6 +432,11 @@ export class PendingConfirmationsModel {
     return true;
   }
 
+  /**
+   * 同一 Thread 上更新的 Turn 开始后，旧终态不再单独占位：新 Turn 结束时会
+   * 用自己的结果替换它。调用方只能在与用户当前查看的会话一致时调用，否则重连
+   * 或中断恢复自动续跑会把还没看过的提醒顶掉。
+   */
   startTurn(hostId: string, threadId: string, turnId: string): boolean {
     const before = this.#entries.length;
     this.#entries = this.#entries.filter(

@@ -795,7 +795,12 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
               // 也不能对它调用 startTurn，否则会为不可见 Thread 留下待确认状态。
               if (current.ephemeralThreads.has(threadId)) return;
               if (event?.method === "turn/started") {
-                model.startTurn(hostId, threadId, turnId);
+                // 后台也会发 turn/started：中断恢复、重连后的自动续跑、卡片续发都
+                // 会开新回合。只有用户此刻正看着这个会话，新回合才算接管了旧提醒；
+                // 否则未读过的卡片必须留到新回合真正出结果再替换，不能被顶掉。
+                const active = options.activeThread() ?? activeThreadFromDom();
+                if (active?.hostId === hostId && active.threadId === threadId)
+                  model.startTurn(hostId, threadId, turnId);
                 return;
               }
               if (event?.method !== "turn/completed") return;
@@ -939,12 +944,12 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       const threadId = hostId && id ? nativeThreadId(hostId, id) : "";
       if (!hostId || !threadId) continue;
       const key = `${hostId}\u0000${threadId}`;
-      const unread = sidebarThreadNativeStatus(row).unread;
+      const status = sidebarThreadNativeStatus(row);
       const entry = pendingByThread.get(key);
       if (!entry) {
         nativeUnreadSeen.delete(key);
         // 官方已标未读但队列还没有：补进来，保证蓝点与卡片个数一致。
-        if (unread) {
+        if (status.unread) {
           const last = lastReconcileAt.get(hostId) ?? 0;
           const now = performance.now();
           if (now - last >= RECONCILE_RETRY_MS) {
@@ -959,18 +964,23 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
         }
         continue;
       }
-      if (unread) {
+      if (status.unread) {
         nativeUnreadSeen.add(key);
         stillUnread.add(key);
-      } else if (nativeUnreadSeen.has(key)) {
+        continue;
+      }
+      // 回合仍在执行时侧栏的"未读=false"只表示这轮还没出结果。中断恢复、重连
+      // 后的自动续跑都会让刚提醒过的会话立刻进入 loading，把它当成"用户已读"
+      // 会让卡片一闪就没。
+      if (status.running) {
+        if (nativeUnreadSeen.has(key)) stillUnread.add(key);
+        continue;
+      }
+      if (nativeUnreadSeen.has(key)) {
         // 官方未读从有到无：用户已在官方侧读过，队列与蓝点一起确认。
         nativeUnreadSeen.delete(key);
         confirm(entry);
-      } else if (
-        restoredEntries.has(entryKey(entry)) &&
-        sidebarThreadStatusObserved(row) &&
-        !sidebarThreadNativeStatus(row).running
-      ) {
+      } else if (restoredEntries.has(entryKey(entry)) && sidebarThreadStatusObserved(row)) {
         // 上次启动遗留下来、官方早已读过的记录：重启后不能再弹一次。
         confirm(entry);
       }

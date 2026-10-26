@@ -189,11 +189,10 @@ const { outputFiles } = await build({
             for (const callback of callbacks) callback({ method: "thread/started", params: { thread: { id: threadId, ephemeral } } });
           },
           state() { return JSON.parse(localStorage.getItem(PENDING_CONFIRMATIONS_STORAGE_KEY) || "null"); },
-          nativeUnread(threadId, unread) {
+          nativeStatus(threadId, type, unread) {
             for (const row of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
               if (row.dataset.appActionSidebarThreadId !== hostId + ":" + threadId) continue;
-              row.__reactFiber$fixture.memoizedProps.statusState = { type: "idle", unread };
-              row.toggleAttribute("data-fixture-touch", unread);
+              row.__reactFiber$fixture.memoizedProps.statusState = { type, unread };
               let described = row.querySelector("#fixture-unread-" + threadId);
               if (unread && !described) {
                 described = document.createElement("span");
@@ -203,7 +202,20 @@ const { outputFiles } = await build({
               }
               if (!unread) described?.remove();
               row.setAttribute("aria-describedby", unread ? "fixture-unread-" + threadId : "");
+              // 原生行执行中会挂状态槽；它的出现/消失同时是状态缓存失效的信号。
+              const slot = row.querySelector("#fixture-status-" + threadId);
+              if (type === "loading" && !slot) {
+                const status = document.createElement("span");
+                status.id = "fixture-status-" + threadId;
+                status.setAttribute("role", "status");
+                row.append(status);
+              } else if (type !== "loading") {
+                slot?.remove();
+              }
             }
+          },
+          nativeUnread(threadId, unread) {
+            this.nativeStatus(threadId, "idle", unread);
           },
         };
       };
@@ -466,6 +478,76 @@ test("a newer Turn replaces the old pending item and repeated completion stays i
   expect(state[0]).toMatchObject({ turnId: "turn-2", summary: "新结果", state: "pending" });
 });
 
+// 回归：中断恢复、重连自动续跑、"继续"续发都会在后台开新回合并带来新的 turnId。
+// 旧实现一收到 turn/started 就删掉该 Thread 的待确认项，用户看到的卡片就一闪而过。
+test("a background turn start keeps the unread card until the new turn produces a result", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  const entries = () =>
+    page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries);
+
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "第一次结果。"),
+  );
+  await expect(modal).toBeVisible();
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").start("thread-b", "turn-resumed"),
+  );
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText("第一次结果。");
+  expect(await entries()).toMatchObject([{ turnId: "turn-b", state: "pending" }]);
+
+  // 新回合出结果后才替换旧卡片。
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-resumed",
+      "恢复后结果。",
+    ),
+  );
+  await expect(modal).toContainText("恢复后结果。");
+  expect(await entries()).toMatchObject([{ turnId: "turn-resumed", state: "pending" }]);
+});
+
+// 回归：会话重新进入执行态（中断后续跑、重连恢复）时侧栏是"未读=false"，
+// 不能当成用户已读而确认卡片。
+test("a thread that goes back to running is not treated as read", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  const state = () =>
+    page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].state);
+
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "等待确认。"),
+  );
+  await expect(modal).toBeVisible();
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").nativeStatus("thread-b", "idle", true),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").nativeStatus("thread-b", "loading", false),
+  );
+  await expect(modal).toBeVisible();
+  expect(await state()).toBe("pending");
+
+  // 真正回到 idle 且官方未读消失，才视为用户已读。
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").nativeStatus("thread-b", "idle", false),
+  );
+  await expect(modal).toBeHidden();
+  expect(await state()).toBe("confirmed");
+});
+
 test("completion stays silent and the top-right speaker plays audio manually", async ({
   page,
 }, testInfo) => {
@@ -703,7 +785,8 @@ test("labeled title generation output never raises a pending card", async ({ pag
   ).toBeNull();
 });
 
-// 命名完成前侧栏标题是打字机点阵，标题生成的 JSON 也不是用户结果。
+// 命名完成前侧栏标题是打字机点阵，标题生成的 JSON 也不是用户结果：这类 Turn
+// 不入队、不弹卡片，点阵也不能被当成会话标题写进提醒。
 test("naming turns do not replace the conversation title or summary", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
@@ -723,8 +806,13 @@ test("naming turns do not replace the conversation title or summary", async ({ p
     ),
   );
   const modal = page.locator("[data-codexhost-pending-confirmations]");
-  await expect(modal).toBeVisible();
-  await expect(modal).not.toContainText('"description"');
+  await expect(modal).toBeHidden();
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").state()),
+  ).toBeNull();
+  await expect(
+    page.locator('[data-app-action-sidebar-thread-id="local:thread-b"] [data-thread-title]'),
+  ).toHaveText("...");
 });
 
 // 完成提醒会把用户带到已完成的会话；用户常常记不住原本正在看哪一个。

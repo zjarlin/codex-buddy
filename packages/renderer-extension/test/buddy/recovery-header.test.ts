@@ -22,6 +22,7 @@ class ElementStub extends EventTarget {
   dataset: Record<string, string> = {};
   attributes = new Map<string, string>();
   style = { setProperty: vi.fn() };
+  className = "";
   textContent = "";
   title = "";
   disabled = false;

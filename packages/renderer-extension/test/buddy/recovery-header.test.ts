@@ -344,4 +344,50 @@ describe("header interrupted recovery queue", () => {
     await settle();
     expect(f.value.resume).toHaveBeenCalledTimes(1);
   });
+
+  it("opens a queue entry without resuming, archiving or clearing it", async () => {
+    const f = queueFixture("one");
+    const openThread = vi.fn(async () => {});
+    const panel = createInterruptedPanel(() => "zh-CN", f.queue, undefined, openThread);
+    panels.push(panel);
+    panel.update(client(), null, "", "local");
+    const view = descendants(panel.root as unknown as ElementStub).find(
+      (node) => "buddyOpen" in node.dataset,
+    );
+    expect(view?.textContent).toBe("查看会话");
+    view?.click();
+    await settle();
+    expect(openThread).toHaveBeenCalledWith("one", { hostId: "local" });
+    expect(f.value.resume).not.toHaveBeenCalled();
+    expect(f.value.archive).not.toHaveBeenCalled();
+    expect(f.value.list("local")).toHaveLength(1);
+  });
+
+  it("reports an unreadable conversation and keeps it in the queue", async () => {
+    const f = queueFixture("one");
+    const openThread = vi.fn(async () => {
+      throw new Error("sidebar row missing");
+    });
+    const panel = createInterruptedPanel(() => "zh-CN", f.queue, undefined, openThread);
+    panels.push(panel);
+    panel.update(client(), null, "", "local");
+    descendants(panel.root as unknown as ElementStub)
+      .find((node) => "buddyOpen" in node.dataset)
+      ?.click();
+    await settle();
+    const text = descendants(panel.root as unknown as ElementStub)
+      .map((node) => node.textContent)
+      .join("|");
+    expect(text).toContain("打开会话失败");
+    expect(text).toContain("sidebar row missing");
+    expect(f.value.list("local")).toHaveLength(1);
+  });
+
+  it("omits the open action when the connection cannot navigate", () => {
+    const f = queueFixture("one");
+    const panel = mount(f);
+    expect(
+      descendants(panel.root as unknown as ElementStub).some((node) => "buddyOpen" in node.dataset),
+    ).toBe(false);
+  });
 });

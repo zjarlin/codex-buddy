@@ -42,6 +42,7 @@ export function installBuddyControl(
     queue: InterruptedQueue;
     getRecoveryContext?: () => { client: RendererModelClient; hostId: string } | null;
     onResumed?: () => void;
+    openThread?: (threadId: string, options: { hostId: string }) => Promise<void>;
   },
 ): {
   dispose(): void;
@@ -53,7 +54,12 @@ export function installBuddyControl(
   recovery.dataset.buddyRecovery = "";
   const styles = document.createElement("style");
   styles.textContent = style;
-  const interrupted = createInterruptedPanel(getLocale, options.queue, options.onResumed);
+  const interrupted = createInterruptedPanel(
+    getLocale,
+    options.queue,
+    options.onResumed,
+    options.openThread,
+  );
   recovery.append(styles, interrupted.root);
   let client: RendererModelClient | null = null;
   let hostId: string | null = null;

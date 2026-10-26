@@ -982,12 +982,14 @@ export function installRendererBindingProbe(
     },
     () => readRendererSpeechEnabled(window),
   );
+  // 按原生会话 ID 切入会话：完成提醒、中断队列等入口共用同一实现。
+  const openThreadById = (threadId: string, options: { hostId: string }) =>
+    openSidebarThread(hostThreadIdSchema.parse(threadId), { hostId: options.hostId });
   // 完成提醒会把用户带到已完成的会话；记住来源会话以便一键返回。
   const threadReturn = installRendererThreadReturn({
     getLocale: rendererLocale,
     activeThread: viewedThread,
-    openThread: (threadId, options) =>
-      openSidebarThread(hostThreadIdSchema.parse(threadId), { hostId: options.hostId }),
+    openThread: openThreadById,
   });
   const pendingConfirmationPanel = installRendererPendingConfirmations({
     getClient: (hostId) => modelClientForHost(hostId),
@@ -3899,6 +3901,7 @@ export function installRendererBindingProbe(
         return hostId && client ? { hostId, client } : null;
       },
       onResumed: () => sidebarContinuation.refresh(),
+      openThread: openThreadById,
     },
   );
 

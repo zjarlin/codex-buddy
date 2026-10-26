@@ -25,6 +25,10 @@ const messages = {
     resumeWithModel: "以某模型 ID 继续",
     resumeWithModelHint: "复用当前模型选择；指定模型 ID 可避免自动选模导致再次中断。",
     resumeFailed: "恢复失败",
+    view: "查看会话",
+    opening: "正在打开…",
+    viewHint: "在当前窗口打开这条会话的历史。",
+    viewFailed: "打开会话失败",
     unavailable: "当前连接不支持会话恢复。",
     waiting: "连接状态尚未确认，暂时无法恢复会话。",
     unreadable: "条会话历史暂时无法读取",
@@ -47,6 +51,10 @@ const messages = {
     resumeWithModelHint:
       "Reuse current model picker; specifying a model ID avoids repeated interruptions from auto selection.",
     resumeFailed: "Resume failed",
+    view: "Open",
+    opening: "Opening…",
+    viewHint: "Open this conversation in the current window.",
+    viewFailed: "Could not open conversation",
     unavailable: "Conversation recovery is unavailable on this connection.",
     waiting: "Waiting for connection status before allowing conversation recovery.",
     unreadable: "conversation histories could not be read",
@@ -66,6 +74,7 @@ function session(client: RendererModelClient | null, hostId: string | null = nul
     hostId,
     threads: [] as InterruptedThread[],
     pending: new Set<string>(),
+    viewing: new Set<string>(),
     failures: new Map<string, string>(),
     loading: false,
     batch: false,
@@ -83,6 +92,7 @@ export function createInterruptedPanel(
   getLocale: () => "zh-CN" | "en",
   queue: InterruptedQueue,
   onResumed?: () => void,
+  openThread?: (threadId: string, options: { hostId: string }) => Promise<void>,
 ) {
   const chinese = () => getLocale() === "zh-CN";
   const root = document.createElement("div");
@@ -178,6 +188,32 @@ export function createInterruptedPanel(
     }
   }
 
+  // 查看会话只做导航：不改动原生历史、不提交回合，也不把记录移出队列。
+  async function open(target: typeof state, thread: InterruptedThread): Promise<void> {
+    const key = keyFor(thread);
+    if (
+      !current(target) ||
+      !openThread ||
+      target.viewing.has(key) ||
+      target.pending.has(key) ||
+      queue.isPending(thread)
+    ) {
+      return;
+    }
+    target.viewing.add(key);
+    target.failures.delete(key);
+    render();
+    try {
+      await openThread(thread.threadId, { hostId: thread.hostId });
+    } catch (failure) {
+      if (current(target))
+        target.failures.set(key, `${messages[getLocale()].viewFailed}: ${errorMessage(failure)}`);
+    } finally {
+      target.viewing.delete(key);
+      if (current(target)) render();
+    }
+  }
+
   async function resumeAll(modelId?: string): Promise<void> {
     const target = state;
     if (
@@ -251,6 +287,7 @@ export function createInterruptedPanel(
       state.harnessId,
       favoriteIds,
       [...state.pending],
+      [...state.viewing],
       [...state.failures],
       collapsed,
     ]);
@@ -449,6 +486,7 @@ export function createInterruptedPanel(
       copy.append(title, status);
       const failure = state.failures.get(key);
       if (failure) note(failure, true, copy);
+      const target = state;
       const button = document.createElement("button");
       button.type = "button";
       button.textContent =
@@ -462,7 +500,6 @@ export function createInterruptedPanel(
         state.batch ||
         state.pending.has(key) ||
         queue.isPending(thread);
-      const target = state;
       button.addEventListener("click", () => {
         void resume(target, thread, selectedModel() || undefined);
       });
@@ -479,6 +516,18 @@ export function createInterruptedPanel(
       });
       const actions = document.createElement("div");
       actions.className = "buddy-interrupted-actions";
+      if (openThread) {
+        const view = document.createElement("button");
+        view.type = "button";
+        view.dataset.buddyOpen = "";
+        view.textContent = state.viewing.has(key) ? m.opening : m.view;
+        view.title = m.viewHint;
+        view.disabled = state.viewing.has(key) || state.pending.has(key) || queue.isPending(thread);
+        view.addEventListener("click", () => {
+          void open(target, thread);
+        });
+        actions.append(view);
+      }
       actions.append(button, archive);
       item.append(copy, actions);
       list.append(item);

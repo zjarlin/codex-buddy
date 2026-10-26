@@ -8,7 +8,20 @@ import { RendererGitCache } from "../src/renderer-git-cache.js";
 import type { RendererGitClient } from "../src/renderer-git-sidebar.js";
 
 const threadId = hostThreadIdSchema.parse("thread-cache");
-const status = { workspace: "/repo", changes: [] } as unknown as GitWorkspaceStatus;
+// 缓存会把两次状态做内容比对，夹具必须是契约里的完整状态，不能靠断言跳过字段。
+const status: GitWorkspaceStatus = {
+  workspace: "/repo",
+  branch: "main",
+  detached: false,
+  head: null,
+  upstream: null,
+  ahead: 0,
+  behind: 0,
+  operation: null,
+  conflicts: [],
+  submodules: [],
+  changes: [],
+};
 const clientWith = (inspectGitStatus: RendererGitClient["inspectGitStatus"]) =>
   ({ inspectGitStatus }) as RendererGitClient;
 afterEach(() => vi.useRealTimers());

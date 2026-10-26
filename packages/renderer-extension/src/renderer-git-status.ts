@@ -23,8 +23,8 @@ export function gitStatusSignature(status: GitWorkspaceStatus): string {
     status.operation ?? null,
     status.messageRevision ?? null,
     status.warnings ?? [],
-    status.conflicts,
-    status.submodules.map((submodule) => [submodule.path, submodule.status]),
+    status.conflicts ?? [],
+    (status.submodules ?? []).map((submodule) => [submodule.path, submodule.status]),
     status.changes.map((change) => [
       change.path,
       change.originalPath ?? null,
@@ -39,10 +39,8 @@ export function gitStatusSignature(status: GitWorkspaceStatus): string {
   ]);
 }
 
-export function reuseGitStatus(
-  previous: GitWorkspaceStatus | undefined,
-  next: GitWorkspaceStatus,
-): GitWorkspaceStatus {
-  if (!previous) return next;
+// 只在两侧都是完整状态时比对；裁剪过的对象无法证明内容相同，一律采用新值。
+export function reuseGitStatus(previous: unknown, next: GitWorkspaceStatus): GitWorkspaceStatus {
+  if (!isGitWorkspaceStatus(previous)) return next;
   return gitStatusSignature(previous) === gitStatusSignature(next) ? previous : next;
 }

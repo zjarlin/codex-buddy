@@ -2457,6 +2457,88 @@ test("uses favorite model cache and generates only for new content, preserving m
   );
 });
 
+test("periodic refresh keeps repository cards and change rows mounted", async ({
+  page,
+}, testInfo) => {
+  await page.clock.install();
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    fixture.status.messageRevision = "a".repeat(64);
+    fixture.status.submodules[0].status = "modified";
+    const inspect = fixture.client.inspectGitStatus;
+    const pending: (() => void)[] = [];
+    fixture.releaseChildren = () => pending.splice(0).forEach((resolve) => resolve());
+    fixture.client.inspectGitStatus = async (input: { repository?: string }) => {
+      const result = await inspect(input);
+      if (!input.repository) return result;
+      // 子仓库回包由用例控制，便于观察刷新等待期间卡片是否被拆掉。
+      await new Promise<void>((resolve) => pending.push(resolve));
+      return result;
+    };
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const child = root.locator('.codexhost-git-repository-group[data-repository="/repo/vendor/lib"]');
+  // 子仓库读取是异步排队的：反复放行，直到它把状态读完。
+  await expect
+    .poll(async () => {
+      await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").releaseChildren());
+      return child.getByText("child.txt", { exact: true }).count();
+    })
+    .toBeGreaterThan(0);
+  const primaryRow = root.locator(".codexhost-git-primary .codexhost-git-change").first();
+  const childRow = child.locator('.codexhost-git-change[data-path="child.txt"]');
+  await expect(primaryRow).toBeVisible();
+  // 给当前节点打标记：刷新若重建节点，标记会随旧节点一起消失。
+  for (const node of [
+    primaryRow,
+    child.locator(".codexhost-git-repository-header"),
+    childRow,
+    child.locator(".codexhost-git-message"),
+  ])
+    await node.evaluate((element) => element.setAttribute("data-kept", "v1"));
+  await page.clock.fastForward(15_000);
+  // 周期刷新仍在等待子仓库回包：卡片保留分支、文件行与输入框，不退回“读取中…”。
+  // 分支名保留，说明卡片没有退回未读取状态。
+  await expect(child.locator(".codexhost-git-repository-meta")).toHaveText("main*");
+  for (const node of [
+    primaryRow,
+    child.locator(".codexhost-git-repository-header"),
+    childRow,
+    child.locator(".codexhost-git-message"),
+  ])
+    await expect(node).toHaveAttribute("data-kept", "v1");
+  await expect(
+    root.locator(".codexhost-git-repository-meta").filter({ hasText: "读取中…" }),
+  ).toHaveCount(0);
+  await expect(childRow).toBeVisible();
+  // 回包内容与上次相同：刷新结束后仍是同一批节点。
+  await expect
+    .poll(async () => {
+      await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").releaseChildren());
+      return child.getByText("child.txt", { exact: true }).count();
+    })
+    .toBeGreaterThan(0);
+  for (const node of [
+    primaryRow,
+    child.locator(".codexhost-git-repository-header"),
+    childRow,
+    child.locator(".codexhost-git-message"),
+  ])
+    await expect(node).toHaveAttribute("data-kept", "v1");
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+  expect(
+    (calls as [string, { repository?: string }][]).filter(
+      ([method, input]) => method === "status" && !input.repository,
+    ).length,
+  ).toBeGreaterThan(1);
+  await root.screenshot({ path: testInfo.outputPath("periodic-refresh-keeps-nodes.png") });
+});
+
 test("keeps Git responsive and preserves typing while automatic generation waits", async ({
   page,
 }, testInfo) => {

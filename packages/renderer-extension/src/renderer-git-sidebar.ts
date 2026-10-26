@@ -929,18 +929,22 @@ export function installRendererGitSidebar(options: {
     }
   };
 
-  // 期望的分组 = 主仓库 + 各仓库状态里声明的子模块（逐层展开）+ 当前关联清单。
-  // 父仓库不再声明、且已不在关联清单中的分组才移除；尚未读到状态的分组保留。
+  // 期望的分组 = 主仓库 + 各已读状态里声明的子模块（逐层展开）+ 当前关联清单。
+  // 父仓库不再声明、且不在关联清单中的分组才移除；尚未读到状态的分组保留，等它自己结算。
   const reconcileRepositoryGroups = (): void => {
     const expected = new Set<string>();
-    const primaryPath = repositoryGroups.find((group) => group.primary)?.path;
-    const queue: string[] = primaryPath ? [primaryPath] : [];
-    for (const entry of knownRepositories?.repositories ?? []) queue.push(entry.path);
+    const queue = (current?.workspace ? [current.workspace] : []).concat(
+      (knownRepositories?.repositories ?? []).map((entry) => entry.path),
+    );
     while (queue.length > 0) {
       const path = queue.shift() ?? "";
       if (path === "" || expected.has(path)) continue;
       expected.add(path);
-      const status = repositoryGroups.find((group) => group.path === path)?.status;
+      // 分组按自身状态里的真实根目录定位，避免会话项目未选仓库时主条目没有 path。
+      const status =
+        repositoryGroups.find((group) => group.path === path)?.status ??
+        repositoryGroups.find((group) => group.status?.workspace === path)?.status ??
+        null;
       for (const submodule of status?.submodules ?? [])
         queue.push(pathJoin(status?.workspace ?? path, submodule.path));
     }
@@ -949,7 +953,8 @@ export function installRendererGitSidebar(options: {
         group.primary ||
         group.status === null ||
         group.path === undefined ||
-        expected.has(group.path),
+        expected.has(group.path) ||
+        expected.has(group.status.workspace),
     );
     if (next.length !== repositoryGroups.length) repositoryGroups = next;
   };
@@ -1703,8 +1708,7 @@ export function installRendererGitSidebar(options: {
     }
   };
 
-  // force 读取最新主仓库状态；repositories 同时重读各子仓库与关联仓库（显式刷新时）。
-  const load = async (force = false, repositories = force): Promise<void> => {
+  const load = async (force = false): Promise<void> => {
     syncContext();
     if (disposed || view === "devices" || view === "remote-projects" || isBusy()) return;
     const request = context();
@@ -1719,7 +1723,7 @@ export function installRendererGitSidebar(options: {
     const hadWorkspaceError = workspaceError !== null;
     workspaceError = null;
     if (hadWorkspaceError) setNotice("");
-    if (repositories) modelsRead = false;
+    if (force) modelsRead = false;
     current = cache.peekStatus(request.client, request, request.repository) ?? current;
     workspaceRead = current !== null;
     // 周期刷新只更新主仓库条目：已识别的仓库分组保留卡片与输入框，不来回重建。
@@ -1760,9 +1764,9 @@ export function installRendererGitSidebar(options: {
       addSubmodules(status, request.repository, discovered);
       addLinkedRepositories(discovered);
       reconcileRepositoryGroups();
-      // 显式刷新重读各仓库；周期检查只关心主仓库内容，保留已展示的子仓库状态。
-      if (repositories)
-        for (const group of repositoryGroups) if (!group.primary) group.read = false;
+      // 各仓库每轮都重读一次，但保留已展示的状态与卡片节点；内容未变时状态对象不变，
+      // 卡片不会退回“尚未读取”或重建文件列表。
+      for (const group of repositoryGroups) if (!group.primary) group.read = false;
       render();
       scheduleRepositoryReads();
     } catch (error) {
@@ -2269,7 +2273,7 @@ export function installRendererGitSidebar(options: {
       current?.messageRevision !== undefined &&
       !isBusy()
     )
-      void load(true, false);
+      void load(true);
   }, 15_000);
 
   const mount = (): void => {

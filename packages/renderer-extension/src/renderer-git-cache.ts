@@ -145,7 +145,7 @@ export class RendererGitCache {
           ...(repository ? { repository } : {}),
         }),
       // 周期刷新常拿到内容相同的状态；沿用旧对象，界面按引用比较即可跳过重建。
-      (previous, next) => reuseGitStatus(previous as GitWorkspaceStatus, next),
+      (previous, next) => reuseGitStatus(previous, next),
       options.fresh === true,
     );
   }

@@ -109,8 +109,13 @@ export function createProvidersSettingsPage(
       let busy = false;
       let available = false;
       let selectedHost = current;
-      let client =
-        source?.clientForHost?.(current) ?? (current === source?.currentHostId?.() ? source : null);
+      const resolveClient = (hostId: string) => {
+        const exact = source?.clientForHost?.(hostId) ?? null;
+        if (exact?.providerRouting) return exact;
+        if (hostId === source?.currentHostId?.() && source?.providerRouting) return source;
+        return null;
+      };
+      let client = resolveClient(current);
       const button = (label: string, click: () => void) => {
         const control = document.createElement("button");
         control.type = "button";
@@ -267,6 +272,8 @@ export function createProvidersSettingsPage(
         if (busy || context.signal.aborted || (params.action !== "read" && !available)) {
           return;
         }
+        // Host 更新不要求重开设置页；刷新时重新解析，拿到刚发布的 provider RPC。
+        client = resolveClient(selectedHost);
         if (!client?.providerRouting) {
           available = false;
           controls.disabled = true;
@@ -360,7 +367,7 @@ export function createProvidersSettingsPage(
           return;
         }
         selectedHost = host.value;
-        client = source?.clientForHost?.(selectedHost) ?? null;
+        client = resolveClient(selectedHost);
         snapshot = null;
         available = false;
         controls.disabled = true;

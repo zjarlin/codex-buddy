@@ -1,5 +1,6 @@
 import { installRendererDraftPrewarmPolicyDirect } from "@codexhost/desktop-control";
 import {
+  PROVIDER_ROUTING_METHOD,
   encodeHarnessPluginRoute,
   harnessIdSchema,
   hostThreadIdSchema,
@@ -133,6 +134,29 @@ it("keeps local page clients usable while the Composer route is unresolved", asy
     managers.delete("local");
     expect(adapter.localHostClient).toBe(local);
     await expect(local.readUpdateStatus?.()).rejects.toThrow("unavailable");
+  } finally {
+    adapter.dispose();
+  }
+});
+
+it("routes provider settings through the current Host manager", async () => {
+  const { adapter, remote } = await setup(remoteId);
+  const snapshot = {
+    enabled: false,
+    ready: true,
+    providers: [],
+    primaryProviders: [],
+    lastRoute: null,
+  };
+  remote.nativeSend.mockImplementation(async (method) => {
+    if (method === PROVIDER_ROUTING_METHOD) return snapshot;
+    throw new Error(`Unexpected remote method: ${method}`);
+  });
+  try {
+    await expect(adapter.modelControl?.providerRouting?.({ action: "read" })).resolves.toEqual(
+      snapshot,
+    );
+    expect(remote.nativeSend).toHaveBeenCalledWith(PROVIDER_ROUTING_METHOD, { action: "read" });
   } finally {
     adapter.dispose();
   }

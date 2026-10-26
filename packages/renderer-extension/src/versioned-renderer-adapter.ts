@@ -1,4 +1,10 @@
 import type { BuddySettings, BuddyPrivateRequest } from "@codexhost/shared-contracts";
+import {
+  PROVIDER_ROUTING_METHOD,
+  providerRoutingParamsSchema,
+  providerRoutingSnapshotSchema,
+  type ProviderRoutingParams,
+} from "@codexhost/shared-contracts";
 import { startAgentGroupSync } from "./agent-group-sync.js";
 import { isOrbitComposer, orbitComposerKind } from "./renderer-composer-kind.js";
 import { getSharedAgentGroupPreferenceStore } from "./agent-group-preference.js";
@@ -9,6 +15,7 @@ import {
   type RendererHostRouting,
 } from "@codexhost/desktop-control/renderer-bindings";
 import { createRendererHostClients } from "./renderer-host-clients.js";
+import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
 import { installIdleReleasePreferenceSync } from "./renderer-idle-release-preference.js";
 import { installThreadAutoArchivePreferenceSync } from "./renderer-thread-auto-archive-preference.js";
 import {
@@ -959,6 +966,24 @@ export function installCurrentRendererAdapter(): {
     return client;
   };
   const modelControl: RendererModelClient = Object.freeze({
+    // 设置页可能在 Host 升级期间保持挂载，因此每次请求都读取当前路由，不能缓存旧能力结论。
+    providerRouting: async (input: ProviderRoutingParams) => {
+      const route = currentRequestRoute();
+      if (!route) throw new Error("Renderer Model request manager is unavailable");
+      try {
+        return providerRoutingSnapshotSchema.parse(
+          await route.manager.sendRequest(
+            PROVIDER_ROUTING_METHOD,
+            providerRoutingParamsSchema.parse(input),
+          ),
+        );
+      } catch (error) {
+        if ((error as { code?: unknown } | null)?.code === -32601) {
+          throw new RendererMethodUnavailableError(PROVIDER_ROUTING_METHOD, error);
+        }
+        throw error;
+      }
+    },
     listGitRepositories: (
       input: Parameters<NonNullable<RendererModelClient["listGitRepositories"]>>[0],
     ) => {

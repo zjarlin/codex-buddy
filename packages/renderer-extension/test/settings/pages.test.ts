@@ -4137,6 +4137,64 @@ describe("Multiple provider settings", () => {
     expect(visibleText(content)).not.toContain(unavailable);
   });
 
+  it("recovers provider capability on refresh when a Host client appears after upgrade", async () => {
+    const document = new FakeDocument();
+    const content = document.createElement("main");
+    const snapshot: ProviderRoutingSnapshot = {
+      enabled: true,
+      ready: true,
+      providers: [],
+      primaryProviders: [
+        { id: "gateway", name: "Company", baseUrl: "https://primary.invalid/v1", covered: true },
+      ],
+      lastRoute: null,
+    };
+    const providerRouting = vi
+      .fn<(params: ProviderRoutingParams) => Promise<ProviderRoutingSnapshot>>()
+      .mockRejectedValueOnce(
+        new RendererMethodUnavailableError("codexhost/providers/routing", { code: -32601 }),
+      )
+      .mockResolvedValueOnce(snapshot);
+    const source = {
+      currentHostId: () => "remote",
+      knownHostIds: () => ["local", "remote"],
+      clientForHost: (hostId: string) => (hostId === "remote" ? {} : null),
+      providerRouting,
+    };
+    const pages = createDefaultRendererSettingsPages(
+      rendererSettingsMessages("zh-CN"),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => source as unknown as RendererModelClient,
+    );
+    const page = pages.find((entry) => entry.id === "providers");
+    assert(page);
+    const abort = new AbortController();
+    page.mount({
+      content: content as unknown as HTMLElement,
+      signal: abort.signal,
+      runLatest: vi.fn(),
+    });
+    await vi.waitFor(() => expect(providerRouting).toHaveBeenCalledTimes(1));
+    const unavailable = "此 Host 未提供多供应商功能，请先更新对应 Host。";
+    await vi.waitFor(() => expect(visibleText(content)).toContain(unavailable));
+
+    const refresh = descendants(content).find((item) => item.textContent === "刷新状态");
+    assert(refresh);
+    refresh.dispatch("click");
+
+    await vi.waitFor(() => expect(providerRouting).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(visibleText(content)).toContain("Company · 已接入"));
+    expect(visibleText(content)).not.toContain(unavailable);
+  });
+
   it("keeps dirty drafts when Add, another provider or Host changes are cancelled", async () => {
     const { find, local, confirm, form } = await mountProviders("en", {
       providers: [fallback],

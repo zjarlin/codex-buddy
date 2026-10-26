@@ -5,6 +5,7 @@ export const GIT_REPOSITORIES_METHOD = "codexhost/git/repositories";
 export const GIT_REPOSITORY_LINK_METHOD = "codexhost/git/repository/link";
 export const GIT_REPOSITORY_UNLINK_METHOD = "codexhost/git/repository/unlink";
 export const GIT_REPOSITORY_DIRECTORIES_METHOD = "codexhost/git/repository/directories";
+export const GIT_REPOSITORY_CLONE_METHOD = "codexhost/git/repository/clone";
 export const GIT_REPOSITORY_DIRECTORY_LIMIT = 5000;
 
 export const gitRepositoriesParamsSchema = gitWorkspaceTargetSchema;
@@ -29,6 +30,15 @@ export const gitRepositoriesSchema = z
   })
   .strict();
 export type GitRepositories = z.infer<typeof gitRepositoriesSchema>;
+
+export const gitRepositoryCloneParamsSchema = gitRepositoriesParamsSchema
+  .safeExtend({
+    remote: z.string().trim().min(1).max(2048),
+    // 留空时使用会话项目的上一级目录，克隆结果与当前项目平级。
+    parent: z.string().trim().min(1).max(16_384).optional(),
+  })
+  .strict();
+export type GitRepositoryCloneParams = z.infer<typeof gitRepositoryCloneParamsSchema>;
 
 export const gitRepositoryDirectoriesParamsSchema = gitRepositoriesParamsSchema
   .safeExtend({ path: z.string().trim().max(16_384).optional() })

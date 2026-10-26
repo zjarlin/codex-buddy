@@ -145,19 +145,6 @@ export function configureProjectTools(options: {
   }
   hint.after(addCustom);
 
-  const promptGroup = document.createElement("fieldset");
-  const promptLegend = document.createElement("legend");
-  promptLegend.textContent = labels.promptSection;
-  const promptLabel = document.createElement("label");
-  const promptText = document.createElement("span");
-  promptText.textContent = labels.promptField;
-  const prompt = document.createElement("textarea");
-  prompt.value = options.binding?.prompt ?? "";
-  prompt.rows = 4;
-  prompt.spellcheck = false;
-  prompt.placeholder = labels.scriptPromptPreview;
-  promptLabel.append(promptText, prompt);
-
   const metadata = document.createElement("fieldset");
   const metadataLegend = document.createElement("legend");
   metadataLegend.textContent = labels.metadataPath;
@@ -186,10 +173,6 @@ export function configureProjectTools(options: {
     options.projectPath ? `\n${options.projectPath}` : ""
   }`;
   metadata.append(metadataLegend, metadataLabel.label, targetHint);
-  const promptHint = document.createElement("p");
-  promptHint.className = "codexhost-project-tool-hint";
-  promptHint.textContent = labels.promptHint;
-  promptGroup.append(promptLegend, promptLabel, promptHint);
 
   const error = document.createElement("p");
   error.setAttribute("role", "alert");
@@ -214,7 +197,7 @@ export function configureProjectTools(options: {
   save.type = "submit";
   save.textContent = labels.save;
   actions.append(remove, cancel, save);
-  form.append(urlGroup, scriptGroup, promptGroup, metadata, error, actions);
+  form.append(urlGroup, scriptGroup, metadata, error, actions);
   dialog.append(heading, description, form);
   dialog.addEventListener("close", () => {
     dialog.remove();
@@ -238,7 +221,8 @@ export function configureProjectTools(options: {
           name: draft.name.value,
           path: draft.path.value,
         })),
-        prompt: prompt.value,
+        // 表单不再编辑 Prompt；已保存的文本原样带回，保存其他字段时不会被清空。
+        ...(options.binding?.prompt ? { prompt: options.binding.prompt } : {}),
       })
       .then(
         () => dialog.close(),
@@ -252,7 +236,7 @@ export function configureProjectTools(options: {
   const previousFocus = document.activeElement;
   document.body.append(dialog);
   dialog.showModal();
-  prompt.focus();
+  intranet.input.focus();
   dialog.addEventListener(
     "close",
     () => {

@@ -1438,8 +1438,10 @@ async function enableLinkedRepositories(page: Page): Promise<void> {
     frontend.workspace = "/frontend";
     frontend.changes = [frontend.changes[0]];
     frontend.submodules = [];
+    const cloned = structuredClone(frontend);
+    cloned.workspace = "/cloned";
     const selectedStatus = (repository?: string) =>
-      repository === "/frontend" ? frontend : fixture.status;
+      repository === "/frontend" ? frontend : repository === "/cloned" ? cloned : fixture.status;
     const result = () => ({ project: "/repo", repositories: structuredClone(repositories) });
     const client = {
       ...fixture.client,
@@ -1473,6 +1475,15 @@ async function enableLinkedRepositories(page: Page): Promise<void> {
           1,
         );
         return result();
+      },
+      cloneGitRepository: (input: { remote: string; parent?: string }) => {
+        fixture.calls.push(["clone", input]);
+        return new Promise((resolve) => {
+          fixture.resolveClone = () => {
+            repositories.push({ path: "/cloned", primary: false });
+            resolve(result());
+          };
+        });
       },
       inspectGitStatus: async (input: { repository?: string }) =>
         structuredClone(selectedStatus(input.repository)),
@@ -1739,6 +1750,103 @@ test("links a frontend repository and scopes native review, staging, commit and 
   await root.getByRole("button", { name: "解除仓库关联" }).click();
   await expect(selector).toHaveValue("");
   await expect(selector.locator("option")).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test("clones a repository from a Git address into the parent of the session project", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await enableLinkedRepositories(page);
+  // 会话项目在分组目录里：默认落点必须是它的上一级，而不是项目自身。
+  await page.evaluate(() => {
+    const fixture = Reflect.get(globalThis, "gitSidebarFixture");
+    const client = {
+      ...fixture.linkedClient,
+      listGitRepositories: async () => ({
+        project: "/workspace/company/okm-platform",
+        repositories: [{ path: "/workspace/company/okm-platform", primary: true }],
+      }),
+    };
+    fixture.setContext("thread-3", client);
+  });
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  const selector = root.getByRole("combobox", { name: "操作仓库" });
+  await expect(selector).toBeEnabled();
+  await root.getByRole("button", { name: "关联仓库", exact: true }).click();
+  const remote = root.getByRole("textbox", { name: "Git 仓库地址" });
+  const parent = root.getByRole("textbox", { name: "克隆父目录" });
+  await expect(remote).toBeEnabled();
+  await expect(parent).toHaveAttribute("placeholder", "默认：/workspace/company");
+  await expect(root.getByText("默认克隆到 /workspace/company，与当前项目平级。")).toBeVisible();
+  const clone = root.getByRole("button", { name: "克隆并关联" });
+  await expect(clone).toBeDisabled();
+  await remote.fill("https://example.com/team/frontend.git");
+  await expect(clone).toBeEnabled();
+  await clone.evaluate((element) => {
+    if (!(element instanceof HTMLButtonElement)) throw new Error("Expected a clone button");
+    element.click();
+    element.click();
+  });
+  await expect(clone).toBeDisabled();
+  await expect(clone).toHaveText("克隆中…");
+  const calls = await page.evaluate(() =>
+    Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+      ([name]: string[]) => name === "clone",
+    ),
+  );
+  expect(calls).toEqual([
+    ["clone", { threadId: "thread-3", remote: "https://example.com/team/frontend.git" }],
+  ]);
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveClone());
+  await expect(selector).toHaveValue("/cloned");
+  await expect(root.locator("[data-codexhost-git-sidebar-project]")).toHaveAttribute(
+    "title",
+    "/cloned",
+  );
+  expect(errors).toEqual([]);
+});
+
+test("clones into an explicit parent directory when one is provided", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route("http://localhost/git-sidebar-test", (route) =>
+    route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
+  );
+  await setup(page);
+  await enableLinkedRepositories(page);
+  const root = page.locator("[data-codexhost-git-sidebar]");
+  await root.locator("[data-codexhost-git-sidebar-commits]").click();
+  await root.getByRole("button", { name: "关联仓库", exact: true }).click();
+  const remote = root.getByRole("textbox", { name: "Git 仓库地址" });
+  const parent = root.getByRole("textbox", { name: "克隆父目录" });
+  const clone = root.getByRole("button", { name: "克隆并关联" });
+  await remote.fill("git@example.com:team/frontend.git");
+  await parent.fill("/srv/projects");
+  await clone.click();
+  const calls = await page.evaluate(() =>
+    Reflect.get(globalThis, "gitSidebarFixture").calls.filter(
+      ([name]: string[]) => name === "clone",
+    ),
+  );
+  expect(calls).toEqual([
+    [
+      "clone",
+      {
+        threadId: "thread-1",
+        remote: "git@example.com:team/frontend.git",
+        parent: "/srv/projects",
+      },
+    ],
+  ]);
+  await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").resolveClone());
+  await expect(root.getByRole("combobox", { name: "操作仓库" }).locator("option")).toHaveCount(2);
   expect(errors).toEqual([]);
 });
 

@@ -40,15 +40,18 @@ import {
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
   GIT_REPOSITORY_DIRECTORIES_METHOD,
+  GIT_REPOSITORY_CLONE_METHOD,
   gitRepositoriesParamsSchema,
   gitRepositoryDirectoriesParamsSchema,
   gitRepositoryDirectoriesSchema,
   gitWorkflowParamsSchema,
   type GitWorkflowParams,
   gitRepositoryLinkParamsSchema,
+  gitRepositoryCloneParamsSchema,
   gitRepositoriesSchema,
   type GitRepositoriesParams,
   type GitRepositoryLinkParams,
+  type GitRepositoryCloneParams,
   type GitRepositories,
   type GitRepositoryDirectoriesParams,
   type GitRepositoryDirectories,
@@ -575,6 +578,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   ): Promise<GitRepositoryDirectories>;
   linkGitRepository?(input: GitRepositoryLinkParams): Promise<GitRepositories>;
   unlinkGitRepository?(input: GitRepositoryLinkParams): Promise<GitRepositories>;
+  cloneGitRepository?(input: GitRepositoryCloneParams): Promise<GitRepositories>;
   inspectGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
   runGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
   inspectTurnActions?(input: TurnActionsInspectParams): Promise<TurnActionsSnapshot>;
@@ -1113,6 +1117,14 @@ export function createRendererModelClient(
         await manager.sendRequest(
           GIT_REPOSITORY_UNLINK_METHOD,
           gitRepositoryLinkParamsSchema.parse(input),
+        ),
+      );
+    },
+    async cloneGitRepository(input: GitRepositoryCloneParams): Promise<GitRepositories> {
+      return gitRepositoriesSchema.parse(
+        await manager.sendRequest(
+          GIT_REPOSITORY_CLONE_METHOD,
+          gitRepositoryCloneParamsSchema.parse(input),
         ),
       );
     },

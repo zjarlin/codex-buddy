@@ -326,6 +326,7 @@ describe("Renderer fixed Model request client", () => {
       .mockResolvedValueOnce(directories)
       .mockResolvedValueOnce(repositories)
       .mockResolvedValueOnce(repositories)
+      .mockResolvedValueOnce(repositories)
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(written);
     const client = createRendererModelClient([{ sendRequest }]);
@@ -335,6 +336,12 @@ describe("Renderer fixed Model request client", () => {
     ).resolves.toEqual(directories);
     await expect(client?.linkGitRepository?.(target)).resolves.toEqual(repositories);
     await expect(client?.unlinkGitRepository?.(target)).resolves.toEqual(repositories);
+    await expect(
+      client?.cloneGitRepository?.({
+        threadId,
+        remote: "https://example.com/team/frontend.git",
+      }),
+    ).resolves.toEqual(repositories);
     await expect(client?.inspectGitStatus?.(target)).resolves.toMatchObject(status);
     const write = {
       ...target,
@@ -348,6 +355,10 @@ describe("Renderer fixed Model request client", () => {
       ["codexhost/git/repository/directories", { threadId, path: "/srv" }],
       ["codexhost/git/repository/link", target],
       ["codexhost/git/repository/unlink", target],
+      [
+        "codexhost/git/repository/clone",
+        { threadId, remote: "https://example.com/team/frontend.git" },
+      ],
       ["codexhost/git/status", target],
       ["codexhost/workspace/files/write", write],
     ]);
@@ -767,6 +778,7 @@ describe("Renderer fixed Model request client", () => {
       "buddyPrivate",
       "buddyStatus",
       "checkUpdate",
+      "cloneGitRepository",
       "cloneProjectSync",
       "commitGit",
       "configureProjectSyncGit",

@@ -51,6 +51,14 @@ export interface BuddyRouterOptions {
   jev?: TypeSafeClient;
 }
 
+/** 推送工作流的执行模型顺序；只作为偏好，缺失时按实时目录继续选下一个真实模型。 */
+const GIT_WORKFLOW_PREFERRED_MODELS = [
+  "ds",
+  "deepseek-v4-flash",
+  "deepseek-flash",
+  "deepseek-v4.1-flash",
+];
+
 export class BuddyRouter {
   readonly #home: string;
   readonly #threads = new Map<string, ThreadContext>();
@@ -360,6 +368,8 @@ export class BuddyRouter {
       nativeModels,
       signal: new AbortController().signal,
       tier: "standard",
+      // 推送工作流优先 DeepSeek 系列，避免兜底到由上游账号池决定的网关虚拟池。
+      prefer: GIT_WORKFLOW_PREFERRED_MODELS,
     });
     const model = inventory.executor;
     if (!model) throw new Error("没有可用的 Git 执行模型。");

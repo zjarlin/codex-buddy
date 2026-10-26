@@ -22,6 +22,7 @@ export const sshGitMethods = [
   "codexhost/git/repository/link",
   "codexhost/git/repository/unlink",
   "codexhost/git/repository/directories",
+  "codexhost/git/repository/clone",
   "codexhost/git/log",
   "codexhost/git/commit-detail",
   "codexhost/git/commit-diff",

@@ -231,6 +231,16 @@ function renderCard(
   return card;
 }
 
+/**
+ * 网关自选的虚拟模型组：请求模型本身不是具体模型，实际模型只由路由记录公布。
+ * `auto`、`ask`、`free` 都会在发送前就显示等待或状态卡片，不再等第一条记录。
+ */
+export function isGatewayRoutedModel(model: string | undefined): boolean {
+  if (!model) return false;
+  const value = model.trim().toLowerCase();
+  return value === "auto" || value === "ask" || value === "free";
+}
+
 function sameContext(left: Context | null, right: Context | null): boolean {
   return (
     left?.threadId === right?.threadId &&
@@ -317,8 +327,8 @@ export function installAutoRouteCards(options: {
     const latestGroup = groups
       .sort((a, b) => (a.at(-1)?.started_at ?? 0) - (b.at(-1)?.started_at ?? 0))
       .at(-1);
-    // ask 与 auto 一样由网关选路：还没有记录时同样要显示等待/状态卡片。
-    const routedModel = context?.selectedModel === "auto" || context?.selectedModel === "ask";
+    // auto、ask、free 都由网关选路：还没有记录时同样要显示等待/状态卡片。
+    const routedModel = isGatewayRoutedModel(context?.selectedModel);
     if (
       !composer?.isConnected ||
       (!routedModel && !latestGroup?.at(-1)?.operation) ||

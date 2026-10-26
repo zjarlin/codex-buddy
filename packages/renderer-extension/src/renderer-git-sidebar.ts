@@ -819,12 +819,21 @@ export function installRendererGitSidebar(options: {
   const addSubmodules = (
     status: GitWorkspaceStatus,
     parentRepository: string | undefined,
+    discovered = new Set<string>(),
   ): void => {
     const client = context().client;
     for (const submodule of status.submodules) {
       const child = pathJoin(status.workspace, submodule.path);
-      if (child === current?.workspace || repositoryGroups.some((group) => group.path === child))
+      if (discovered.has(child)) continue;
+      discovered.add(child);
+      if (child === current?.workspace) continue;
+      // 已有分组只更新初始化状态与归属，保留卡片内已读取的状态和草稿。
+      const existing = repositoryGroups.find((group) => group.path === child);
+      if (existing) {
+        existing.initialized = submodule.status !== "uninitialized";
+        existing.parentRepository = parentRepository;
         continue;
+      }
       const parentPath = status.submodules
         .map((entry) => entry.path)
         .filter((path) => submodule.path.startsWith(`${path}/`))
@@ -873,11 +882,15 @@ export function installRendererGitSidebar(options: {
       return;
     group.loading = true;
     repositoryReads.add(group);
-    if (force) cache.invalidate(request.client);
     if (force) beginAction(request, "refresh");
     render(true);
     try {
-      const status = await cache.status(request.client, request, group.path);
+      const status = await cache.status(
+        request.client,
+        request,
+        group.path,
+        force ? { fresh: true } : {},
+      );
       if (!isCurrentRequest(request) || !repositoryGroups.includes(group)) return;
       group.status = status;
       group.error = null;
@@ -896,16 +909,14 @@ export function installRendererGitSidebar(options: {
       if (isCurrentRequest(request)) scheduleRepositoryReads();
     }
   };
-  const addLinkedRepositories = (): void => {
+  const addLinkedRepositories = (detected = new Set<string>()): void => {
     const client = context().client;
     for (const entry of knownRepositories?.repositories ?? []) {
       // 会话项目由主仓库区展示，不作为子仓库卡片；下拉框负责在项目与各仓库之间切换。
-      if (
-        entry.primary ||
-        entry.path === current?.workspace ||
-        repositoryGroups.some((group) => group.path === entry.path)
-      )
-        continue;
+      if (entry.primary || detected.has(entry.path) || entry.path === current?.workspace) continue;
+      detected.add(entry.path);
+      const existing = repositoryGroups.find((group) => group.path === entry.path);
+      if (existing) continue;
       if (!collapsedRepositories.has(entry.path)) expandedRepositories.add(entry.path);
       repositoryGroups.push({
         path: entry.path,
@@ -916,6 +927,31 @@ export function installRendererGitSidebar(options: {
         error: null,
       });
     }
+  };
+
+  // 期望的分组 = 主仓库 + 各仓库状态里声明的子模块（逐层展开）+ 当前关联清单。
+  // 父仓库不再声明、且已不在关联清单中的分组才移除；尚未读到状态的分组保留。
+  const reconcileRepositoryGroups = (): void => {
+    const expected = new Set<string>();
+    const primaryPath = repositoryGroups.find((group) => group.primary)?.path;
+    const queue: string[] = primaryPath ? [primaryPath] : [];
+    for (const entry of knownRepositories?.repositories ?? []) queue.push(entry.path);
+    while (queue.length > 0) {
+      const path = queue.shift() ?? "";
+      if (path === "" || expected.has(path)) continue;
+      expected.add(path);
+      const status = repositoryGroups.find((group) => group.path === path)?.status;
+      for (const submodule of status?.submodules ?? [])
+        queue.push(pathJoin(status?.workspace ?? path, submodule.path));
+    }
+    const next = repositoryGroups.filter(
+      (group) =>
+        group.primary ||
+        group.status === null ||
+        group.path === undefined ||
+        expected.has(group.path),
+    );
+    if (next.length !== repositoryGroups.length) repositoryGroups = next;
   };
 
   const repositoryCards = new Map<string, ReturnType<typeof createGitRepositoryCard>>();
@@ -1002,7 +1038,8 @@ export function installRendererGitSidebar(options: {
       const key = repositoryDraftKey(group);
       card.update({
         status: group.status,
-        loading: group.loading,
+        // 已有状态的后台刷新不算首次读取，卡片保持分支与文件行，不闪回“读取中…”。
+        loading: group.loading && group.status === null,
         error: group.error,
         initialized: group.initialized !== false,
         expanded: expandedRepositories.has(repository),
@@ -1666,7 +1703,8 @@ export function installRendererGitSidebar(options: {
     }
   };
 
-  const load = async (force = false): Promise<void> => {
+  // force 读取最新主仓库状态；repositories 同时重读各子仓库与关联仓库（显式刷新时）。
+  const load = async (force = false, repositories = force): Promise<void> => {
     syncContext();
     if (disposed || view === "devices" || view === "remote-projects" || isBusy()) return;
     const request = context();
@@ -1681,34 +1719,50 @@ export function installRendererGitSidebar(options: {
     const hadWorkspaceError = workspaceError !== null;
     workspaceError = null;
     if (hadWorkspaceError) setNotice("");
-    if (force) {
-      cache.invalidate(request.client);
-      modelsRead = false;
-    }
+    if (repositories) modelsRead = false;
     current = cache.peekStatus(request.client, request, request.repository) ?? current;
     workspaceRead = current !== null;
-    repositoryGroups = [
-      {
-        path: request.repository,
-        primary: true,
-        status: current,
-        loading: true,
-        error: null,
-      },
-    ];
+    // 周期刷新只更新主仓库条目：已识别的仓库分组保留卡片与输入框，不来回重建。
+    const primaryGroup: RepositoryGroup = {
+      path: request.repository,
+      primary: true,
+      status: current,
+      loading: true,
+      error: null,
+    };
+    const previousPrimary = repositoryGroups.findIndex((group) => group.primary);
+    if (previousPrimary < 0) repositoryGroups = [primaryGroup, ...repositoryGroups];
+    else repositoryGroups[previousPrimary] = primaryGroup;
     beginAction(request, "refresh");
     render();
     try {
       const client = request.client;
-      const status = await cache.status(client, request, request.repository);
+      const status = await cache.status(
+        client,
+        request,
+        request.repository,
+        force ? { fresh: true } : {},
+      );
       if (!isCurrentRequest(request) || requestGeneration !== generation) return;
       workspaceRead = true;
       current = status;
-      repositoryGroups = [
-        { path: request.repository, primary: true, status, loading: false, error: null },
-      ];
-      addSubmodules(status, request.repository);
-      addLinkedRepositories();
+      const answeredIndex = repositoryGroups.findIndex((group) => group.primary);
+      const answered: RepositoryGroup = {
+        path: request.repository,
+        primary: true,
+        status,
+        loading: false,
+        error: null,
+      };
+      if (answeredIndex < 0) repositoryGroups = [answered, ...repositoryGroups];
+      else repositoryGroups[answeredIndex] = answered;
+      const discovered = new Set<string>();
+      addSubmodules(status, request.repository, discovered);
+      addLinkedRepositories(discovered);
+      reconcileRepositoryGroups();
+      // 显式刷新重读各仓库；周期检查只关心主仓库内容，保留已展示的子仓库状态。
+      if (repositories)
+        for (const group of repositoryGroups) if (!group.primary) group.read = false;
       render();
       scheduleRepositoryReads();
     } catch (error) {
@@ -2215,7 +2269,7 @@ export function installRendererGitSidebar(options: {
       current?.messageRevision !== undefined &&
       !isBusy()
     )
-      void load(true);
+      void load(true, false);
   }, 15_000);
 
   const mount = (): void => {

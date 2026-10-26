@@ -1,6 +1,7 @@
 import type { GitLogResult, GitWorkspaceStatus } from "@codexhost/shared-contracts";
 import type { RendererGitClient } from "./renderer-git-sidebar.js";
 import { gitTargetKey, gitTargetParams, type RendererGitTarget } from "./renderer-git-target.js";
+import { reuseGitStatus } from "./renderer-git-status.js";
 
 const FRESH_MS = 30_000;
 const MAX_ENTRIES = 48;
@@ -81,10 +82,12 @@ export class RendererGitCache {
     target: RendererGitTarget,
     key: string,
     read: () => Promise<T>,
+    reuse?: (previous: unknown, next: T) => T,
+    fresh = false,
   ): Promise<T> {
     let entry = this.#find(client, target, key);
     if (entry?.request) return entry.request as Promise<T>;
-    if (entry?.value !== undefined && entry.expiresAt > Date.now()) {
+    if (!fresh && entry?.value !== undefined && entry.expiresAt > Date.now()) {
       this.#remove(entry);
       this.#entries.push(entry);
       return Promise.resolve(entry.value as T);
@@ -100,6 +103,7 @@ export class RendererGitCache {
       GIT_READ_TIMEOUT_MS,
       "Host 未在 60 秒内返回 Git 结果，请重试。",
     )
+      .then((value) => (reuse && pending.value !== undefined ? reuse(pending.value, value) : value))
       .then((value) => {
         // 已被写操作清理的请求可以完成，但不能重新填回缓存。
         if (this.#entries.includes(pending)) this.#store(pending, value);
@@ -124,16 +128,25 @@ export class RendererGitCache {
     );
   }
 
+  // fresh 只跳过新鲜度判断，仍复用进行中的请求与相同内容的上次结果，供周期刷新读取新状态。
   status(
     client: RendererGitClient,
     target: RendererGitTarget,
     repository?: string,
+    options: { fresh?: boolean } = {},
   ): Promise<GitWorkspaceStatus> {
-    return this.#read(client, target, JSON.stringify([repository, "status"]), () =>
-      client.inspectGitStatus({
-        ...gitTargetParams(target),
-        ...(repository ? { repository } : {}),
-      }),
+    return this.#read(
+      client,
+      target,
+      JSON.stringify([repository, "status"]),
+      () =>
+        client.inspectGitStatus({
+          ...gitTargetParams(target),
+          ...(repository ? { repository } : {}),
+        }),
+      // 周期刷新常拿到内容相同的状态；沿用旧对象，界面按引用比较即可跳过重建。
+      (previous, next) => reuseGitStatus(previous as GitWorkspaceStatus, next),
+      options.fresh === true,
     );
   }
 

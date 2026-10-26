@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile, stat, readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile, stat, readFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,7 +7,12 @@ import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { GitWorkspace, GitWorkspaceError, isMissingGitDirectory } from "../src/git-workspace.js";
+import {
+  GitWorkspace,
+  GitWorkspaceError,
+  describeGitCommandFailure,
+  isMissingGitDirectory,
+} from "../src/git-workspace.js";
 
 const testGitEnvironment = {
   PATH: process.env.PATH,
@@ -221,6 +226,39 @@ describe("GitWorkspace", () => {
       ]),
     );
   });
+
+  it("reports a killed git command as a timeout instead of echoing its command line", () => {
+    expect(describeGitCommandFailure({ killed: true, signal: "SIGTERM", code: null })).toContain(
+      "超过 30 秒",
+    );
+    expect(describeGitCommandFailure({ signal: "SIGTERM" })).toContain(".gitignore");
+    expect(
+      describeGitCommandFailure({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: false }),
+    ).toContain("MiB");
+    expect(describeGitCommandFailure({ code: 1, killed: false })).toBeNull();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not present the execFile command line as the git failure reason",
+    async () => {
+      const directory = await mkdtemp(path.join(tmpdir(), "codexhost-git-silent-"));
+      cleanup.push(directory);
+      const binary = path.join(directory, "git");
+      // 伪造一个只失败、不写 stderr 的 git，复现只剩 `Command failed: <完整命令行>` 的情况。
+      await writeFile(binary, "#!/bin/sh\nexit 1\n");
+      await chmod(binary, 0o700);
+      const workspace = new GitWorkspace({
+        PATH: `${directory}${path.delimiter}${process.env.PATH ?? ""}`,
+      });
+
+      const failure = await workspace
+        .stage(directory, ["a".repeat(200) + ".go"])
+        .catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(GitWorkspaceError);
+      expect((failure as GitWorkspaceError).message).toBe("Git 命令执行失败，没有输出。");
+    },
+  );
 
   it("localizes a missing repository error instead of exposing raw git output", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "codexhost-not-git-"));

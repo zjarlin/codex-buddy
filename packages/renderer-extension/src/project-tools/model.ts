@@ -43,6 +43,7 @@ export interface ProjectToolDraft {
   publicUrl?: string;
   scripts?: ProjectScripts;
   customScripts?: ProjectCustomScriptDraft[];
+  /** 表单不再编辑 Prompt；仅用于把已保存的文本原样带回，避免保存其他字段时被清空。 */
   prompt?: string;
 }
 
@@ -223,8 +224,6 @@ export function projectToolLabels(locale: string): {
   customScriptRemove: string;
   customScriptNamePlaceholder: string;
   prompt: string;
-  promptField: string;
-  promptSection: string;
   promptHint: string;
   promptFilled: string;
   promptSent: string;
@@ -245,7 +244,7 @@ export function projectToolLabels(locale: string): {
     return {
       configure: "Configure project actions",
       title: "Project actions",
-      description: "Bind access URLs, trusted scripts, and an AI task that generates both.",
+      description: "Bind access URLs and trusted scripts.",
       intranet: "Intranet URL",
       public: "Public URL",
       start: "Start",
@@ -265,8 +264,6 @@ export function projectToolLabels(locale: string): {
       customScriptRemove: "Remove script",
       customScriptNamePlaceholder: "Deploy",
       prompt: "Open prompt",
-      promptField: "Script generation prompt",
-      promptSection: "Prompt",
       promptHint:
         "If empty, generates a task from this project's path and metadata location. Opens a new conversation and sends it automatically.",
       promptFilled: "Prompt filled in but not sent. Review the draft before sending.",
@@ -290,7 +287,7 @@ export function projectToolLabels(locale: string): {
   return {
     configure: "配置项目快捷操作",
     title: "项目快捷操作",
-    description: "为项目绑定访问地址、可信脚本，以及生成脚本并回写元数据的 AI 任务。",
+    description: "为项目绑定访问地址与可信脚本。",
     intranet: "内网地址",
     public: "公网地址",
     start: "启动",
@@ -309,8 +306,6 @@ export function projectToolLabels(locale: string): {
     customScriptRemove: "删除脚本",
     customScriptNamePlaceholder: "部署",
     prompt: "打开 Prompt",
-    promptField: "脚本制作 Prompt",
-    promptSection: "Prompt",
     promptHint: "留空时按项目路径和元数据位置动态生成任务；打开新会话后自动发送。",
     promptFilled: "Prompt 已填入但未能发送，请核对草稿后手动发送。",
     promptSent: "脚本制作任务已发送。",

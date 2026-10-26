@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { ProviderFailure } from "@codexhost/shared-contracts";
 import {
   createServer,
@@ -13,17 +13,76 @@ import { createResponsesStreamObserver, type ResponsesStreamFailure } from "./st
 
 export interface ProviderTarget {
   id: string;
+  name?: string;
   baseUrl: string;
   apiKey?: string;
   model?: string;
 }
 
+export interface ProviderRouteEvent {
+  requestId: string;
+  threadId: string;
+  turnId: string;
+  requestKind?: string;
+  providerId: string;
+  providerName: string;
+  baseUrl: string;
+  model?: string;
+  fallback: boolean;
+  state: "responding" | "completed" | "failed";
+  failureKind?: ProviderFailure["kind"];
+  httpStatus?: number;
+  at: number;
+}
+
 interface ProxyOptions {
   targets(provider: string): Promise<ProviderTarget[]>;
   routed(target: ProviderTarget, fallback: boolean): void;
+  observed?(event: ProviderRouteEvent): void;
   firstByteTimeoutMs?: number;
   idleTimeoutMs?: number;
   cooldownMs?: number;
+}
+
+interface TurnRequestMetadata {
+  threadId: string;
+  turnId: string;
+  requestKind?: string;
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function requestTurnMetadata(request: IncomingMessage): TurnRequestMetadata | null {
+  const source = headerValue(request.headers["x-codex-turn-metadata"]);
+  if (!source || source.length > 16 * 1024) return null;
+  try {
+    const value: unknown = JSON.parse(source);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const threadId = Reflect.get(value, "thread_id");
+    const turnId = Reflect.get(value, "turn_id");
+    const requestKind = Reflect.get(value, "request_kind");
+    if (
+      typeof threadId !== "string" ||
+      !threadId.trim() ||
+      threadId.length > 200 ||
+      typeof turnId !== "string" ||
+      !turnId.trim() ||
+      turnId.length > 200
+    ) {
+      return null;
+    }
+    return {
+      threadId,
+      turnId,
+      ...(typeof requestKind === "string" && requestKind.trim() && requestKind.length <= 80
+        ? { requestKind }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 const transientStatuses = new Set([408, 429, 500, 502, 503, 504]);
@@ -204,6 +263,30 @@ export class ProviderFailoverProxy {
       chunks.push(bytes);
     }
     const body = Buffer.concat(chunks);
+    const requestId = randomUUID();
+    const turnMetadata = requestTurnMetadata(request);
+    const observe = (
+      target: ProviderTarget,
+      fallback: boolean,
+      state: ProviderRouteEvent["state"],
+      details: Pick<ProviderRouteEvent, "failureKind" | "httpStatus"> = {},
+    ) => {
+      if (!turnMetadata) return;
+      this.options.observed?.({
+        requestId,
+        threadId: turnMetadata.threadId,
+        turnId: turnMetadata.turnId,
+        ...(turnMetadata.requestKind ? { requestKind: turnMetadata.requestKind } : {}),
+        providerId: target.id,
+        providerName: target.name ?? target.id,
+        baseUrl: target.baseUrl,
+        ...(target.model ? { model: target.model } : {}),
+        fallback,
+        state,
+        ...details,
+        at: Date.now(),
+      });
+    };
     const targets = await this.options.targets(decodeURIComponent(provider));
     const input = targets.length > 1 ? await fallbackInput(request, body) : null;
     // 上游私有响应 ID 不能跨供应商。先排除不兼容候选，再决定是否跳过冷却中的主供应商。
@@ -245,8 +328,13 @@ export class ProviderFailoverProxy {
             fallback,
             controller.signal,
             target !== candidates.at(-1),
+            () => observe(target, fallback, "responding"),
           );
           if (result.failure) {
+            observe(target, fallback, "failed", {
+              failureKind: result.failure.kind,
+              ...(result.failure.status === undefined ? {} : { httpStatus: result.failure.status }),
+            });
             this.#recordFailure(
               target,
               result.failure.kind,
@@ -256,7 +344,12 @@ export class ProviderFailoverProxy {
           } else if (result.status >= 200 && result.status < 300) {
             this.#failures.delete(targetFingerprint(target));
             this.options.routed(target, fallback);
+            observe(target, fallback, "completed", { httpStatus: result.status });
           } else {
+            observe(target, fallback, "failed", {
+              failureKind: "http",
+              httpStatus: result.status,
+            });
             this.#recordFailure(
               target,
               "http",
@@ -266,20 +359,21 @@ export class ProviderFailoverProxy {
           }
           return;
         } catch (error) {
-          if (controller.signal.aborted) {
-            return;
-          }
           const kind =
             error instanceof ProviderAttemptError
               ? error.kind
               : response.headersSent
                 ? "stream"
                 : "network";
-          this.#recordFailure(
-            target,
-            kind,
-            error instanceof ProviderAttemptError ? error.status : undefined,
-          );
+          const status = error instanceof ProviderAttemptError ? error.status : undefined;
+          observe(target, fallback, "failed", {
+            failureKind: kind,
+            ...(status === undefined ? {} : { httpStatus: status }),
+          });
+          if (controller.signal.aborted) {
+            return;
+          }
+          this.#recordFailure(target, kind, status);
           // 已交付的流不能在同一 HTTP 响应里拼接或重放。原生重试将优先使用其他上游。
           if (response.headersSent) {
             response.destroy();
@@ -308,6 +402,7 @@ export class ProviderFailoverProxy {
     fallback: boolean,
     signal: AbortSignal,
     hasFallback: boolean,
+    onFirstByte: () => void,
   ): Promise<{ status: number; failure: ResponsesStreamFailure | null }> {
     const url = new URL(`${target.baseUrl.replace(/\/+$/u, "")}/${route}`);
     if (!fallback) {
@@ -342,12 +437,12 @@ export class ProviderFailoverProxy {
     return new Promise((resolve, reject) => {
       const send = url.protocol === "https:" ? httpsRequest : httpRequest;
       const upstream = send(url, { method: request.method, headers, signal }, (incoming) => {
-        if (hasFallback && transientStatuses.has(incoming.statusCode ?? 502)) {
+        const status = incoming.statusCode ?? 502;
+        if (hasFallback && transientStatuses.has(status)) {
           incoming.destroy();
-          reject(new ProviderAttemptError("http", incoming.statusCode ?? 502));
+          reject(new ProviderAttemptError("http", status));
           return;
         }
-        const status = incoming.statusCode ?? 502;
         const observer =
           status >= 200 && status < 300 ? createResponsesStreamObserver(incoming.headers) : null;
         // 首字节前保留响应头，连接关闭或超时仍可切换；长思考和流式回复用空闲超时。
@@ -361,7 +456,8 @@ export class ProviderFailoverProxy {
               ([name]) => !hopHeaders.has(name) && name !== "set-cookie",
             ),
           );
-          response.writeHead(incoming.statusCode ?? 502, outgoing);
+          response.writeHead(status, outgoing);
+          if (status >= 200 && status < 300) onFirstByte();
         };
         incoming.once("data", commit);
         if (observer) {

@@ -9,6 +9,7 @@ import { SshGitMessageService } from "./ssh-git-message.js";
 import {
   GitWorkspace,
   GitWorkspaceError,
+  describeGitCommandFailure,
   type GitCommandResult,
   type GitWorkspaceRuntime,
 } from "./git-workspace.js";
@@ -36,9 +37,17 @@ const executeSsh: Execute = async (arguments_, environment) => {
     });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
-    const failure = error as Error & { stdout?: string; stderr?: string };
+    const failure = error as Error & {
+      stdout?: string;
+      stderr?: string;
+      killed?: boolean;
+      signal?: NodeJS.Signals | null;
+      code?: string | null;
+    };
+    // 与本地 Git 一致：没有真实输出时不把带完整 ssh 命令行的通用 message 当成原因。
+    const detail = describeGitCommandFailure(failure) ?? (failure.stderr ?? "").trim();
     throw new GitWorkspaceError(
-      `SSH Git：${(failure.stderr || failure.message).trim().slice(0, 20_000)}`,
+      `SSH Git：${(detail || failure.message).trim().slice(0, 20_000)}`,
       failure.stdout ?? "",
       failure.stderr ?? "",
       { cause: error },

@@ -101,6 +101,33 @@ function localizedGitError(detail: string): string {
   return detail;
 }
 
+/**
+ * `execFile` 超时或输出超限时只抛一条带完整命令行的通用 message：直接回显会把上千个
+ * 暂存路径当成错误正文，用户看不到真正原因。这里优先给出可操作的原因。
+ */
+export function describeGitCommandFailure(failure: {
+  killed?: boolean | undefined;
+  signal?: NodeJS.Signals | null | undefined;
+  code?: string | null | undefined;
+}): string | null {
+  if (failure.killed || failure.signal === "SIGTERM") {
+    return `Git 命令超过 ${COMMAND_TIMEOUT_MS / 1000} 秒仍未完成，已被中止。若正在暂存大量文件（例如包含模型权重、发布快照这类本地产物），请分批暂存，或先把它们加入 .gitignore 后重试。`;
+  }
+  if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+    return `Git 输出超过 ${MAX_BUFFER_BYTES / 1024 / 1024} MiB 上限，操作未生效，请分批执行。`;
+  }
+  return null;
+}
+
+// execFile 的 message 形如 `Command failed: <完整命令行>`，没有 stderr 时不能把它当错误正文。
+function gitFailureDetail(failure: { message?: string; stdout?: string; stderr?: string }): string {
+  const output = (failure.stderr || "").trim() || (failure.stdout || "").trim();
+  if (output) return output;
+  const message = (failure.message || "").trim();
+  if (!message) return "git failed";
+  return /^Command failed:/u.test(message) ? "Git 命令执行失败，没有输出。" : message;
+}
+
 export interface GitWorkspaceRuntime {
   messageRevision?(status: GitWorkspaceStatus): Promise<string | null>;
   run(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult>;
@@ -190,8 +217,13 @@ async function runGit(
     });
     return { stdout: result.stdout, stderr: result.stderr };
   } catch (error) {
-    const failure = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
-    const detail = (failure.stderr || failure.stdout || failure.message || "git failed").trim();
+    const failure = error as NodeJS.ErrnoException & {
+      stdout?: string;
+      stderr?: string;
+      killed?: boolean;
+      signal?: NodeJS.Signals | null;
+    };
+    const detail = describeGitCommandFailure(failure) ?? gitFailureDetail(failure);
     throw new GitWorkspaceError(
       localizedGitError(detail).slice(0, 20_000),
       failure.stdout ?? "",
@@ -529,6 +561,35 @@ export class GitWorkspace {
         return null;
       }
       throw error;
+    }
+  }
+
+  // 克隆前先确认父目录可用且目标目录不存在，避免覆盖用户已有文件。
+  // 无终端的 Host 里遇到需要交互凭据的远端直接失败，不挂起请求。
+  async clone(parent: string, remote: string, directory: string): Promise<void> {
+    const base = this.#absoluteWorkspace(parent);
+    const target = this.paths.join(base, directory);
+    const exists = (candidate: string) => (this.runtime?.exists ?? pathExists)(candidate);
+    const directoryExists = this.runtime
+      ? await exists(base)
+      : await stat(base).then(
+          (info) => info.isDirectory(),
+          () => false,
+        );
+    if (!directoryExists) {
+      throw new GitWorkspaceError(`目标目录不存在或不是目录：${parent}`);
+    }
+    if (await exists(target)) {
+      throw new GitWorkspaceError(`目标目录已存在：${target}`);
+    }
+    const arguments_ = ["clone", "--", remote, directory];
+    if (this.runtime) {
+      await this.#run(base, arguments_);
+    } else {
+      await runGit(base, arguments_, { ...this.environment, GIT_TERMINAL_PROMPT: "0" });
+    }
+    if (!(await this.root(target))) {
+      throw new GitWorkspaceError(`克隆完成但无法读取仓库：${target}`);
     }
   }
 

@@ -95,6 +95,62 @@ describe("economic execution pools", () => {
     expect(result.models.find((model) => model.id === "cheap-coder")?.eligible).toBe(false);
   });
 
+  it("ranks gateway virtual pools behind real models", () => {
+    const result = chooseModels(
+      ["auto", "ask", "free", "tier-2", "ds"],
+      { ids: new Set(["auto", "ask", "free", "tier-2", "ds"]), contextWindows: new Map() },
+      {},
+      { policy, tier: "standard" },
+    );
+    expect(result.executor).toBe("ds");
+    expect(result.executors.at(0)?.id).toBe("ds");
+    expect(new Set(result.executors.slice(1).map((model) => model.id))).toEqual(
+      new Set(["auto", "ask", "free", "tier-2"]),
+    );
+  });
+
+  it("falls back to a virtual pool only when no real model is left", () => {
+    const result = chooseModels(
+      ["auto", "free"],
+      { ids: new Set(["auto", "free"]), contextWindows: new Map() },
+      {},
+      { policy, tier: "standard" },
+    );
+    expect(new Set(result.executors.map((model) => model.id))).toEqual(new Set(["auto", "free"]));
+    expect(result.executor).not.toBeNull();
+  });
+
+  it("uses the preferred order when those real models are present", () => {
+    const result = chooseModels(
+      ["free", "other-flash", "ds"],
+      { ids: new Set(["free", "other-flash", "ds"]), contextWindows: new Map() },
+      { order: ["missing-model", "ds", "other-flash"] },
+      { policy, tier: "standard" },
+    );
+    expect(result.executor).toBe("ds");
+  });
+
+  it("falls through the preferred order when the first choice is absent", () => {
+    const result = chooseModels(
+      ["free", "other-flash"],
+      { ids: new Set(["free", "other-flash"]), contextWindows: new Map() },
+      { order: ["ds", "other-flash"] },
+      { policy, tier: "standard" },
+    );
+    expect(result.executor).toBe("other-flash");
+  });
+
+  it("still honors an explicit virtual pool preference", () => {
+    const result = chooseModels(
+      ["auto", "free", "ds"],
+      { ids: new Set(["auto", "free", "ds"]), contextWindows: new Map() },
+      { executor: "free" },
+      { policy, tier: "standard" },
+    );
+    expect(result.executor).toBe("free");
+    expect(result.executors).toHaveLength(3);
+  });
+
   it("keeps models with unknown context windows rather than inventing a limit", () => {
     const result = chooseModels(
       ids,

@@ -167,6 +167,37 @@ afterEach(() => {
 });
 
 describe("Project tools dialog", () => {
+  it("does not render a prompt field and keeps a stored prompt when saving other fields", async () => {
+    const saved: ProjectToolDraft[] = [];
+    const dialog = configureProjectTools({
+      project: { projectKind: "local", projectId: "project", label: "demo" },
+      binding: {
+        target: { projectKind: "local", projectId: "project" },
+        label: "demo",
+        scripts: { start: "/repo/start.sh" },
+        prompt: "legacy prompt kept verbatim",
+      },
+      metadataPath: "/root/.codexhost/project-tools.json",
+      projectPath: "/repo",
+      labels: projectToolLabels("zh-CN"),
+      save: async (draft) => {
+        saved.push(draft);
+      },
+      remove: async () => {},
+      onClose: () => {},
+    }) as unknown as FakeElement;
+
+    expect(findAll(dialog, (element) => element.tagName === "textarea")).toHaveLength(0);
+    expect(findAll(dialog, (element) => element.tagName === "fieldset")).toHaveLength(3);
+
+    const form = requireElement(findAll(dialog, (element) => element.tagName === "form")[0]);
+    for (const handler of form.handlers.get("submit") ?? []) handler({ preventDefault() {} });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(saved[0]?.prompt).toBe("legacy prompt kept verbatim");
+    expect(saved[0]?.scripts).toMatchObject({ start: "/repo/start.sh" });
+  });
+
   it("opens with existing custom scripts and saves added rows", async () => {
     const saved: ProjectToolDraft[] = [];
     const dialog = configureProjectTools({

@@ -1583,6 +1583,24 @@ describe("Project Git workflow execution", () => {
     expect(f.router.activeThreadIds).not.toContain("work");
   });
 
+  it("executes on a real model instead of a gateway virtual pool", async () => {
+    const f = await fixture({ recovery: true, modelIds: ["free", "auto", "ask", "ds"] });
+    const turnId = await f.router.startGitWorkflow(
+      "work",
+      f.home,
+      "项目推送工作流",
+      async () => {},
+    );
+    const turn = f.requested.find((entry) => entry.method === "turn/start");
+    expect(turn?.params).toMatchObject({ model: "ds" });
+    expect(turn?.params).toMatchObject({ collaborationMode: { settings: { model: "ds" } } });
+    expect(turnId).toMatch(/^continued-/u);
+    f.router.observe({
+      method: "turn/completed",
+      params: { threadId: "work", turn: { id: turnId, status: "completed" } },
+    });
+  });
+
   it("rechecks project activity before starting a model turn", async () => {
     const f = await fixture();
     await expect(

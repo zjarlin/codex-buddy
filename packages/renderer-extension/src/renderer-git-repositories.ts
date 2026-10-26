@@ -1,6 +1,7 @@
 import type {
   GitRepositories,
   GitRepositoriesParams,
+  GitRepositoryCloneParams,
   GitRepositoryDirectories,
   GitRepositoryDirectoriesParams,
   GitRepositoryLinkParams,
@@ -18,6 +19,8 @@ import {
 const REPOSITORY_READ_TIMEOUT_MS = 30_000;
 const REPOSITORY_DIRECTORY_TIMEOUT_MS = 30_000;
 const REPOSITORY_LINK_TIMEOUT_MS = 60_000;
+// 克隆可能拉取整个仓库历史，超时上限只结束界面等待，不打断 Host 的克隆。
+const REPOSITORY_CLONE_TIMEOUT_MS = 300_000;
 
 // 超时后仍要消费原请求的结算，避免未处理的 rejection；迟到的结果不再写入界面。
 function withDeadline<T>(work: Promise<T>, timeout: number, message: string): Promise<T> {
@@ -36,6 +39,14 @@ function withDeadline<T>(work: Promise<T>, timeout: number, message: string): Pr
   });
 }
 
+// 会话项目可能来自本机或 SSH 主机，分隔符按路径本身的形状判断，不依赖本机平台。
+function pathParent(value: string): string {
+  const trimmed = value.replace(/[\\/]+$/u, "");
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (index <= 0) return trimmed.startsWith("/") ? "/" : trimmed;
+  return trimmed.slice(0, index);
+}
+
 export interface GitRepositoryClient {
   listGitRepositories(input: GitRepositoriesParams): Promise<GitRepositories>;
   listGitRepositoryDirectories?(
@@ -43,6 +54,7 @@ export interface GitRepositoryClient {
   ): Promise<GitRepositoryDirectories>;
   linkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories>;
   unlinkGitRepository(input: GitRepositoryLinkParams): Promise<GitRepositories>;
+  cloneGitRepository?(input: GitRepositoryCloneParams): Promise<GitRepositories>;
 }
 
 interface Context extends RendererGitTarget {
@@ -68,6 +80,10 @@ export function createGitRepositorySelector(options: {
     .codexhost-git-repositories form { margin-top:6px; }
     .codexhost-git-repositories .picker { display:grid; gap:6px; margin-top:7px; padding-top:7px; border-top:1px solid color-mix(in srgb,currentColor 10%,transparent); }
     .codexhost-git-repositories .picker-path { min-width:0; }
+    .codexhost-git-repositories .picker-clone { display:grid; gap:5px; }
+    .codexhost-git-repositories .picker-clone[hidden] { display:none; }
+    .codexhost-git-repositories .picker-clone-row { display:flex; gap:5px; align-items:center; }
+    .codexhost-git-repositories .picker-clone-hint { color:var(--text-secondary,inherit); }
     .codexhost-git-repositories .picker-list { align-items:stretch; flex-direction:column; max-height:230px; overflow:auto; border:1px solid color-mix(in srgb,currentColor 14%,transparent); border-radius:4px; }
     .codexhost-git-repositories .picker-entry { display:grid; grid-template-columns:16px minmax(0,1fr); align-items:center; gap:5px; width:100%; min-height:27px; padding:3px 6px; color:inherit; text-align:left; background:transparent; border:0; border-bottom:1px solid color-mix(in srgb,currentColor 7%,transparent); border-radius:0; }
     .codexhost-git-repositories .picker-entry:last-child { border-bottom:0; }
@@ -137,11 +153,34 @@ export function createGitRepositorySelector(options: {
   go.type = "button";
   go.textContent = "前往";
   pickerPath.append(pathInput, go);
+  // 从 Git 地址关联：远端地址与落点父目录，父目录留空即取会话项目的上一级。
+  const clone = document.createElement("div");
+  clone.className = "picker-clone";
+  const cloneRemote = document.createElement("input");
+  cloneRemote.setAttribute("aria-label", "Git 仓库地址");
+  cloneRemote.placeholder = "Git 地址（https:// 或 git@）";
+  cloneRemote.spellcheck = false;
+  const cloneParentRow = document.createElement("div");
+  cloneParentRow.className = "picker-clone-row";
+  const cloneParent = document.createElement("input");
+  cloneParent.setAttribute("aria-label", "克隆父目录");
+  cloneParent.placeholder = "落点父目录";
+  cloneParent.spellcheck = false;
+  const cloneSubmit = document.createElement("button");
+  cloneSubmit.type = "button";
+  // 文案在克隆期间切换为“克隆中…”，可访问名保持稳定，避免按钮被重新查询时丢失。
+  cloneSubmit.setAttribute("aria-label", "克隆并关联");
+  cloneSubmit.textContent = "克隆并关联";
+  cloneParentRow.append(cloneParent, cloneSubmit);
+  const cloneHint = document.createElement("span");
+  cloneHint.className = "picker-clone-hint";
+  clone.append(cloneRemote, cloneParentRow, cloneHint);
+
   const pickerList = document.createElement("div");
   pickerList.className = "picker-list";
   pickerList.setAttribute("role", "listbox");
   pickerList.setAttribute("aria-label", "目录列表");
-  picker.append(pickerHead, pickerPath, pickerList);
+  picker.append(pickerHead, pickerPath, clone, pickerList);
 
   const failed = document.createElement("div");
   failed.className = "load-failed";
@@ -166,6 +205,7 @@ export function createGitRepositorySelector(options: {
   let unlinkBusy = false;
   let actionBusy = false;
   let pickerBusy = false;
+  let cloneBusy = false;
   let disposed = false;
 
   const folderIcon = (): SVGSVGElement => {
@@ -247,8 +287,25 @@ export function createGitRepositorySelector(options: {
     refresh.disabled = busy || pickerBusy || actionBusy || !directories;
     go.disabled = busy || pickerBusy || actionBusy || !pathInput.value.trim();
     linkCurrent.disabled = busy || pickerBusy || actionBusy || !directories;
+    const cloneAvailable = Boolean(context.client?.cloneGitRepository) && hasGitTarget(context);
+    const defaultParent = data?.project ? pathParent(data.project) : "";
+    clone.hidden = !cloneAvailable;
+    cloneParent.placeholder = defaultParent ? `默认：${defaultParent}` : "落点父目录";
+    cloneHint.textContent = defaultParent
+      ? `默认克隆到 ${defaultParent}，与当前项目平级。`
+      : "填写落点父目录。";
+    cloneRemote.disabled = busy || pickerBusy || actionBusy || cloneBusy || !cloneAvailable;
+    cloneParent.disabled = cloneRemote.disabled;
+    cloneSubmit.disabled =
+      cloneRemote.disabled ||
+      !cloneRemote.value.trim() ||
+      (!defaultParent && !cloneParent.value.trim());
+    cloneSubmit.setAttribute("aria-busy", String(cloneBusy));
+    cloneSubmit.textContent = cloneBusy ? "克隆中…" : "克隆并关联";
+    root.setAttribute("aria-busy", String(busy || actionBusy || pickerBusy || cloneBusy));
   };
 
+  // 关闭选择器不打断正在进行的克隆：cloneBusy 只由克隆请求自己结束。
   const resetPicker = () => {
     pickerGeneration += 1;
     directories = null;
@@ -274,6 +331,9 @@ export function createGitRepositorySelector(options: {
     loadRequest = null;
     form.hidden = true;
     input.value = "";
+    cloneBusy = false;
+    cloneRemote.value = "";
+    cloneParent.value = "";
     resetPicker();
     const { client } = next;
     const list = client?.listGitRepositories;
@@ -319,7 +379,7 @@ export function createGitRepositorySelector(options: {
   };
 
   const mutate = async (repository: string, version = generation) => {
-    if (busy || actionBusy || pickerBusy) return;
+    if (busy || actionBusy || pickerBusy || cloneBusy) return;
     const request = context;
     const method = request.client?.linkGitRepository;
     if (!hasGitTarget(request) || !method || !repository) return;
@@ -357,7 +417,7 @@ export function createGitRepositorySelector(options: {
   };
 
   const unlink = async () => {
-    if (busy || unlinkBusy || actionBusy || pickerBusy || !selected) return;
+    if (busy || unlinkBusy || actionBusy || pickerBusy || cloneBusy || !selected) return;
     const request = context;
     const method = request.client?.unlinkGitRepository;
     if (!hasGitTarget(request) || !method) return;
@@ -391,8 +451,53 @@ export function createGitRepositorySelector(options: {
     }
   };
 
+  const cloneRepository = async () => {
+    if (busy || pickerBusy || cloneBusy || actionBusy) return;
+    const request = context;
+    const method = request.client?.cloneGitRepository;
+    const remote = cloneRemote.value.trim();
+    if (!hasGitTarget(request) || !method || !remote) return;
+    const previous = new Set(data?.repositories.map((entry) => entry.path));
+    const parent = cloneParent.value.trim();
+    const version = generation;
+    cloneBusy = true;
+    render();
+    try {
+      const value = await withDeadline(
+        method.call(request.client, {
+          ...gitTargetParams(request),
+          remote,
+          ...(parent ? { parent } : {}),
+        }),
+        REPOSITORY_CLONE_TIMEOUT_MS,
+        "克隆仓库超时，请到目标目录确认结果后再重试。",
+      );
+      if (generation !== version) return;
+      data = value;
+      options.onRepositories?.(value);
+      // 新克隆的仓库是清单里唯一新增的项，直接选中它。
+      selected =
+        value.repositories.find((entry) => !entry.primary && !previous.has(entry.path))?.path ??
+        selected;
+      cloneRemote.value = "";
+      cloneParent.value = "";
+      resetPicker();
+      options.onSelect(selected || undefined);
+      options.onNotice("已克隆并关联仓库。");
+    } catch (error) {
+      if (generation === version) {
+        options.onNotice(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (generation === version) {
+        cloneBusy = false;
+        render();
+      }
+    }
+  };
+
   const loadDirectories = async (pathValue?: string) => {
-    if (busy || actionBusy || pickerBusy) return;
+    if (busy || actionBusy || pickerBusy || cloneBusy) return;
     const request = context;
     const method = request.client?.listGitRepositoryDirectories;
     if (!hasGitTarget(request) || !method) {
@@ -466,6 +571,15 @@ export function createGitRepositorySelector(options: {
   });
   linkCurrent.addEventListener("click", () => {
     if (directories) void mutate(directories.path);
+  });
+  cloneSubmit.addEventListener("click", () => void cloneRepository());
+  cloneRemote.addEventListener("input", render);
+  cloneParent.addEventListener("input", render);
+  cloneRemote.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void cloneRepository();
+    }
   });
   close.addEventListener("click", () => {
     resetPicker();

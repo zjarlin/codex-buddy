@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { projectSyncRemoteSchema, type ProjectSyncSnapshot } from "@codexhost/shared-contracts";
+import { normalizeGitRemote, repositoryDirectoryName } from "./git-remote.js";
 
 const execute = promisify(execFile);
 const COMMAND_TIMEOUT = 60_000;
@@ -32,33 +33,10 @@ const emptyState = (): ProjectState => ({
 });
 
 function gitRemote(remote: string, allowLocal = false): string {
-  const value = projectSyncRemoteSchema.parse(remote);
-  if (/\s|[\x00-\x1f]/u.test(value) || value.startsWith("-")) {
-    throw new Error("Invalid Git remote");
-  }
-  if (/^git@[a-z0-9.-]+:[a-z0-9._/-]+(?:\.git)?$/iu.test(value)) {
-    if (value.split(":")[1]?.split("/").includes("..")) throw new Error("Invalid Git remote");
-    return value;
-  }
-  if (allowLocal && path.isAbsolute(value)) return value;
-  const url = new URL(value);
-  if (
-    !["https:", "ssh:"].includes(url.protocol) ||
-    !url.hostname ||
-    (url.protocol === "https:" && url.username !== "") ||
-    (url.protocol === "ssh:" && url.username !== "" && url.username !== "git") ||
-    url.password ||
-    url.search ||
-    url.hash ||
-    !url.pathname ||
-    url.pathname === "/" ||
-    /%(?:2f|5c|2e)/iu.test(url.pathname)
-  ) {
-    throw new Error("Only credential-free HTTPS or SSH Git remotes are supported");
-  }
-  return value;
+  return normalizeGitRemote(projectSyncRemoteSchema.parse(remote), allowLocal);
 }
 
+// 项目身份去掉协议、凭据无关的差异，只保留 host/path，用于跨设备对同一远端去重。
 function identity(remote: string, allowLocal = false): string {
   const value = gitRemote(remote, allowLocal);
   if (path.isAbsolute(value)) return value;
@@ -71,18 +49,6 @@ function identity(remote: string, allowLocal = false): string {
     .replace(/^\/+|\/+$/gu, "")
     .replace(/\.git$/iu, "")
     .toLowerCase()}`;
-}
-
-function projectName(remote: string): string {
-  const name =
-    remote
-      .replace(/\/?\.git$/iu, "")
-      .split(/[/:]/u)
-      .at(-1) ?? "";
-  if (!/^[a-z0-9][a-z0-9._-]{0,99}$/iu.test(name) || name === "." || name === "..") {
-    throw new Error("Remote repository name cannot be used as a local folder");
-  }
-  return name;
 }
 
 function parseEntries(value: unknown, allowLocal = false): ProjectEntry[] {
@@ -333,7 +299,7 @@ export class ProjectSync {
       const directory = path.resolve(parent);
       if (!(await stat(directory)).isDirectory())
         throw new Error("Choose an existing parent directory");
-      const target = path.join(directory, projectName(entry.remote));
+      const target = path.join(directory, repositoryDirectoryName(entry.remote));
       try {
         await lstat(target);
         throw new Error("Destination already exists; bind that repository instead");

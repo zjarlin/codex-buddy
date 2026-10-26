@@ -58,6 +58,15 @@ async function catalogContextWindows(path: string | undefined): Promise<Map<stri
   }
 }
 
+/**
+ * 网关虚拟模型由 Sub2API 的 Auto 中间件解析成真实模型，自身没有可验证的
+ * 账号、上下文与工具能力。自动选模只在没有真实模型时才把它们当兜底，
+ * 避免排序巧合把不稳定的虚拟池当成本轮执行模型。
+ */
+export function isGatewayVirtualModel(id: string): boolean {
+  return /^(?:auto|ask|free|tier-\d+)$/iu.test(id.trim());
+}
+
 export function modelTier(id: string): "夯" | "垃" {
   // 开源权重系列单独归类，不按名称当作旗舰模型。
   if (/(?:^|[/:])gpt-oss(?=[\d._-]|$)/iu.test(id)) return "垃";
@@ -80,7 +89,7 @@ export function chooseConversationModel(models: BuddyModel[]): string | null {
 export function chooseModels(
   ids: string[],
   nativeModels: Pick<NativeModelCatalog, "ids" | "contextWindows">,
-  preferred: { executor?: string | null },
+  preferred: { executor?: string | null; order?: readonly string[] },
   selection?: { policy: SelectionPolicy; tier: "simple" | "standard" | "advanced" },
 ): Pick<ModelInventory, "models" | "executor" | "executors"> {
   const models: BuddyModel[] = [...new Set(ids)].map((id) => ({
@@ -99,6 +108,9 @@ export function chooseModels(
   });
   const ranked: ExecutorCandidate[] = candidates
     .sort((a, b) => {
+      // 真实模型优先于虚拟池：虚拟池的可用性取决于上游账号池，无法在选模时确认。
+      const virtual = Number(isGatewayVirtualModel(a.id)) - Number(isGatewayVirtualModel(b.id));
+      if (virtual) return virtual;
       if (selection?.tier === "advanced") {
         const capability = (model: BuddyModel): number =>
           selection.policy.assessments.get(model.id)?.capability ?? (model.tier === "夯" ? 90 : 0);
@@ -138,7 +150,14 @@ export function chooseModels(
   const executors = ranked.filter(
     (model) => selection?.tier === "simple" || model.level !== "simple",
   );
-  const executor = executors.find((model) => model.id === preferred.executor) ?? executors[0];
+  // 显式偏好（设置固定的执行模型）优先；否则按调用方给出的顺序取第一个在位的真实模型，
+  // 都取不到才用排序第一名，避免把偏好写成硬性绑定导致模型临时不可用时整个入口失败。
+  const preferredOrder = (preferred.order ?? []).flatMap((id) => {
+    const matched = executors.find((model) => model.id === id);
+    return matched ? [matched] : [];
+  });
+  const executor =
+    executors.find((model) => model.id === preferred.executor) ?? preferredOrder[0] ?? executors[0];
   return {
     models,
     executor: executor?.id ?? null,
@@ -153,6 +172,7 @@ export async function discoverModels(input: {
   nativeModels: NativeModelCatalog;
   signal: AbortSignal;
   tier?: "simple" | "standard" | "advanced";
+  prefer?: readonly string[];
 }): Promise<ModelInventory> {
   const connection = await readConnection(
     input.home,
@@ -190,6 +210,7 @@ export async function discoverModels(input: {
     nativeModels,
     {
       executor: input.settings.executorModel,
+      ...(input.prefer ? { order: input.prefer } : {}),
     },
     { policy, tier: input.tier ?? "standard" },
   );

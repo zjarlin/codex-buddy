@@ -1014,6 +1014,15 @@ export function installCurrentRendererAdapter(): {
       if (!client.unlinkGitRepository) throw new Error("Git repository links are unavailable");
       return client.unlinkGitRepository(input);
     },
+    cloneGitRepository: (
+      input: Parameters<NonNullable<RendererModelClient["cloneGitRepository"]>>[0],
+    ) => {
+      const client = currentModelClient();
+      if (!client.cloneGitRepository) {
+        throw new Error("Git repository cloning is unavailable");
+      }
+      return client.cloneGitRepository(input);
+    },
 
     inspectGitStatus: (
       input: Parameters<NonNullable<RendererModelClient["inspectGitStatus"]>>[0],

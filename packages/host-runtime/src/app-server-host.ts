@@ -11,6 +11,7 @@ import { SshGitWorkspaces, type GitWorkspaceServices } from "./ssh-git.js";
 import { discoverChildRepositories } from "./git-child-repositories.js";
 import { GitRepositoryLinks } from "./git-repository-links.js";
 import { listGitRepositoryDirectories } from "./git-repository-directories.js";
+import { cloneGitRepository } from "./git-repository-clone.js";
 import {
   DOUBAO_OPEN_METHOD,
   doubaoOpenParamsSchema,
@@ -24,10 +25,12 @@ import {
   GIT_REPOSITORY_LINK_METHOD,
   GIT_REPOSITORY_UNLINK_METHOD,
   GIT_REPOSITORY_DIRECTORIES_METHOD,
+  GIT_REPOSITORY_CLONE_METHOD,
   gitRepositoriesParamsSchema,
   gitWorkflowParamsSchema,
   gitRepositoryLinkParamsSchema,
   gitRepositoryDirectoriesParamsSchema,
+  gitRepositoryCloneParamsSchema,
 } from "@codexhost/shared-contracts";
 import {
   ProjectGitWorkflow,
@@ -2239,6 +2242,7 @@ export class AppServerHost {
       request.method === GIT_REPOSITORY_LINK_METHOD ||
       request.method === GIT_REPOSITORY_UNLINK_METHOD ||
       request.method === GIT_REPOSITORY_DIRECTORIES_METHOD ||
+      request.method === GIT_REPOSITORY_CLONE_METHOD ||
       request.method === GIT_STATUS_METHOD ||
       request.method === GIT_DIFF_METHOD ||
       request.method === GIT_CONTENT_METHOD ||
@@ -4996,6 +5000,7 @@ export class AppServerHost {
           GIT_REPOSITORY_LINK_METHOD,
           GIT_REPOSITORY_UNLINK_METHOD,
           GIT_REPOSITORY_DIRECTORIES_METHOD,
+          GIT_REPOSITORY_CLONE_METHOD,
         ].includes(request.method)
       ) {
         let result;
@@ -5008,6 +5013,13 @@ export class AppServerHost {
           const params = gitRepositoryDirectoriesParamsSchema.parse(request.params);
           const cwd = await projectWorkspace(params);
           result = await listGitRepositoryDirectories(
+            { ...params, cwd },
+            { git, links, cwd, paths: git.paths },
+          );
+        } else if (request.method === GIT_REPOSITORY_CLONE_METHOD) {
+          const params = gitRepositoryCloneParamsSchema.parse(request.params);
+          const cwd = await projectWorkspace(params);
+          result = await cloneGitRepository(
             { ...params, cwd },
             { git, links, cwd, paths: git.paths },
           );

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hostThreadIdSchema, hostTurnIdSchema } from "./ids.js";
 
 export const PROVIDER_ROUTING_METHOD = "codexhost/providers/routing";
 
@@ -23,8 +24,29 @@ export const fallbackProviderSchema = z.object({
   enabled: z.boolean(),
 });
 
+export const providerRouteObservationSchema = z.object({
+  request_id: z.string().min(1).max(120),
+  thread_id: hostThreadIdSchema,
+  turn_id: hostTurnIdSchema,
+  provider_id: z.string().min(1).max(120),
+  provider_name: z.string().min(1).max(120),
+  base_url: providerEndpointSchema,
+  model: z.string().max(200).optional(),
+  fallback: z.boolean(),
+  state: z.enum(["responding", "completed", "failed"]),
+  failure_kind: z.enum(["network", "timeout", "http", "stream"]).optional(),
+  http_status: z.number().int().min(100).max(599).optional(),
+  request_kind: z.string().min(1).max(80).optional(),
+  started_at: z.number().int().nonnegative(),
+  updated_at: z.number().int().nonnegative(),
+});
+
 export const providerRoutingParamsSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("read") }),
+  z.object({
+    action: z.literal("read"),
+    threadId: hostThreadIdSchema.optional(),
+    runId: hostTurnIdSchema.optional(),
+  }),
   z.object({ action: z.literal("configure"), enabled: z.boolean() }),
   z.object({
     action: z.literal("save"),
@@ -54,9 +76,11 @@ export const providerRoutingSnapshotSchema = z.object({
       }),
     )
     .optional(),
+  routes: z.array(providerRouteObservationSchema).max(512).optional(),
 });
 
 export type ProviderRoutingParams = z.infer<typeof providerRoutingParamsSchema>;
 export type ProviderRoutingSnapshot = z.infer<typeof providerRoutingSnapshotSchema>;
 export type FallbackProvider = z.infer<typeof fallbackProviderSchema>;
 export type ProviderFailure = NonNullable<ProviderRoutingSnapshot["failures"]>[number];
+export type ProviderRouteObservation = z.infer<typeof providerRouteObservationSchema>;

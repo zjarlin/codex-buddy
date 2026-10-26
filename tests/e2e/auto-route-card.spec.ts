@@ -92,7 +92,7 @@ async function setup(page: Page, config: Record<string, unknown> = {}, dark = fa
     <section data-turn-key="${config.tail ? "history-content:tail:0:local:tail-id" : "history-content:turn:turn-1"}"><div data-content-search-turn-key="turn-1" style="display:contents">${config.noResponse ? "" : `<div data-response-annotation-conversation="${threadId}"><div class="answer">已检查候选模型和工具调用配置。当前请求已完成模型回退，下面是检查结果。</div></div>`}</div></section>
     ${config.multipleTurns ? `<section data-content-search-turn-key="turn-2"><div data-response-annotation-conversation="${threadId}">Latest answer</div></section>` : ""}
     <section data-turn-key="unrelated"><div data-response-annotation-conversation="other-thread">另一条消息</div></section>
-    <div id="composer"><label>Model <select id="model"><option value="auto">auto</option><option value="fixed">fixed</option></select></label><textarea aria-label="Message"></textarea></div>
+    <div id="composer"><label>Model <select id="model"><option value="auto">auto</option><option value="free">free</option><option value="fixed">fixed</option></select></label><textarea aria-label="Message"></textarea></div>
     <nav><button id="switch">Switch Host</button><button id="late">Deliver late result</button><button id="complete">Complete</button><button id="failure">Provider offline</button><button id="remount">Remount turn</button><button id="response">Show reply</button><button id="dispose">Dispose</button></nav></main></body></html>`);
   await page.evaluate((value) => Reflect.set(globalThis, "fixtureConfig", value), {
     threadId,
@@ -339,6 +339,22 @@ test("looks up native turn IDs and preserves older tool-loop records outside the
   await expect(oldCard).toContainText("2 次请求");
   await expect(oldCard.locator("ol")).toBeVisible();
   await expect(latestCard).toContainText("latest-answer-model");
+});
+
+test("free selection shows the same route card as auto", async ({ page }) => {
+  await setup(page, { mode: "late-observation", selectedModel: "free", requestedModel: "free" });
+  const status = page.getByRole("status", { name: "Auto 选模" });
+  await expect(status).toContainText("等待网关返回实际选中的模型");
+  await expect(page.locator("[data-codexhost-auto-route]")).toHaveCount(0);
+  await page.getByRole("button", { name: "Complete", exact: true }).click();
+  const card = page.locator('[data-codexhost-auto-route="turn-1"]');
+  await expect(card).toContainText("gpt-5.6");
+  await expect(card).toContainText("已完成");
+  await expect(status).toHaveCount(0);
+  // 回合内的卡片属于历史记录，切到固定模型后仍保留。
+  await page.getByRole("combobox", { name: "Model" }).selectOption("fixed");
+  await expect(card).toBeVisible();
+  await expect(page.locator("[data-codexhost-auto-route-status]")).toHaveCount(0);
 });
 
 test("discards a pending turn lookup when its Host retires", async ({ page }) => {

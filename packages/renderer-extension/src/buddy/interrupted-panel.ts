@@ -101,8 +101,8 @@ export function createInterruptedPanel(
   let disposed = false;
   let epoch = 0;
   let fingerprint = "";
-  // 标题行可折叠：默认展开，收起后隐藏模型 ID 行和列表。
-  let collapsed = false;
+  // 默认收起：中断队列常驻在输入区上方，展开会挤占聊天记录，只在需要时点开。
+  let collapsed = true;
   let focusToggle = false;
   let selectedModelId = "";
   let customModelId = "";
@@ -251,6 +251,8 @@ export function createInterruptedPanel(
 
   function render(): void {
     const m = messages[getLocale()];
+    // 补录或批量恢复期间自动展开，让用户看到进度；结束后回到用户选择的状态。
+    const expanded = !collapsed || state.batch || state.loading;
     header.update({
       available: Boolean(state.hostId && state.client?.buddyContinue),
       busy:
@@ -301,11 +303,11 @@ export function createInterruptedPanel(
     toggle.type = "button";
     toggle.dataset.buddyInterruptedToggle = "";
     toggle.className = "buddy-interrupted-heading";
-    toggle.setAttribute("aria-expanded", String(!collapsed));
-    toggle.title = collapsed ? m.expand : m.collapse;
-    toggle.setAttribute("aria-label", collapsed ? m.expand : m.collapse);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.title = expanded ? m.collapse : m.expand;
+    toggle.setAttribute("aria-label", expanded ? m.collapse : m.expand);
     toggle.append(
-      createElement(collapsed ? ChevronRight : ChevronDown, {
+      createElement(expanded ? ChevronDown : ChevronRight, {
         width: 14,
         height: 14,
         "aria-hidden": "true",
@@ -314,7 +316,7 @@ export function createInterruptedPanel(
     const heading = document.createElement("b");
     heading.textContent = m.heading;
     toggle.append(heading);
-    if (collapsed && state.threads.length > 0) {
+    if (!expanded && state.threads.length > 0) {
       const count = document.createElement("span");
       count.className = "buddy-interrupted-count";
       count.textContent = String(state.threads.length);
@@ -352,7 +354,7 @@ export function createInterruptedPanel(
     const queueError = state.hostId ? queue.problem(state.hostId) : "";
     if (queueError) note(queueError, true);
     if (state.unreadable > 0) note(`${state.unreadable} ${m.unreadable}`);
-    if (!collapsed && !state.loading && state.threads.length === 0 && !state.error) note(m.empty);
+    if (expanded && !state.loading && state.threads.length === 0 && !state.error) note(m.empty);
     const reload = document.createElement("button");
     reload.type = "button";
     reload.title = m.refresh;
@@ -380,7 +382,7 @@ export function createInterruptedPanel(
     });
     toolbar.append(reload, all);
     // 收起后只保留标题行、刷新、批量入口和已知提示；模型 ID 行和列表留给展开状态。
-    if (collapsed) {
+    if (!expanded) {
       finish();
       return;
     }

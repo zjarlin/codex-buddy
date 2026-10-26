@@ -17,7 +17,7 @@ const style = `
 [data-buddy-recovery] button:disabled{opacity:.55;cursor:default}
 [data-buddy-recovery] :is(button,select,input):focus-visible{outline:2px solid #4385ff;outline-offset:2px}
 [data-buddy-recovery] .buddy-interrupted-note{font-size:11px;opacity:.65}
-[data-buddy-recovery] .buddy-interrupted-list{display:flex;flex-direction:column;gap:4px;min-width:0}
+[data-buddy-recovery] .buddy-interrupted-list{display:flex;flex-direction:column;gap:4px;min-width:0;max-height:min(38vh,300px);overflow-y:auto;overscroll-behavior:contain}
 [data-buddy-recovery] .buddy-interrupted-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0;border:1px solid color-mix(in srgb,currentColor 18%,transparent);border-radius:7px;padding:6px 7px}
 [data-buddy-recovery] .buddy-interrupted-actions{display:flex;gap:6px}
 [data-buddy-recovery] .buddy-interrupted-copy{min-width:0}

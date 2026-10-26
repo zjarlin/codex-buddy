@@ -73,6 +73,9 @@ class ElementStub extends EventTarget {
   click() {
     if (!this.disabled) this.dispatchEvent(new Event("click", { cancelable: true }));
   }
+  focus() {
+    // 折叠按钮在重画后重新获得焦点；桩只需要可调用。
+  }
 }
 
 const panels: { dispose(): void }[] = [];
@@ -140,6 +143,12 @@ function mount(fixture: ReturnType<typeof queueFixture>, onResumed?: () => void)
   panel.update(client(), null, "", "local");
   panel.repositionHeader();
   return panel;
+}
+// 中断队列默认收起，只有点开标题行才渲染模型行与记录。
+function expand(panel: ReturnType<typeof createInterruptedPanel>): void {
+  descendants(panel.root as unknown as ElementStub)
+    .find((node) => "buddyInterruptedToggle" in node.dataset)
+    ?.click();
 }
 function descendants(root: ElementStub): ElementStub[] {
   return root.children.flatMap((child) => [child, ...descendants(child)]);
@@ -255,6 +264,7 @@ describe("header interrupted recovery queue", () => {
   it("archives a queue row and preserves a failed archive for retry", async () => {
     const f = queueFixture("one");
     const panel = mount(f);
+    expand(panel);
     const archive = () => {
       const button = descendants(panel.root as unknown as ElementStub).find(
         (node) => "buddyArchive" in node.dataset,
@@ -281,6 +291,7 @@ describe("header interrupted recovery queue", () => {
       const f = queueFixture("one");
       const panel = mount(f);
       panel.update(client(), null, "", "local");
+      expand(panel);
       const button = descendants(panel.root as unknown as ElementStub).find((node) =>
         action === "archive"
           ? "buddyArchive" in node.dataset
@@ -314,6 +325,7 @@ describe("header interrupted recovery queue", () => {
     f.value.importHistory.mockRejectedValueOnce(new Error("history unavailable"));
     await panel.refresh();
     panel.update(asClient({ requestThreadProjection: vi.fn() }), null, "", "local");
+    expand(panel);
     const archive = descendants(panel.root as unknown as ElementStub).find(
       (node) => "buddyArchive" in node.dataset,
     );
@@ -351,6 +363,7 @@ describe("header interrupted recovery queue", () => {
     const panel = createInterruptedPanel(() => "zh-CN", f.queue, undefined, openThread);
     panels.push(panel);
     panel.update(client(), null, "", "local");
+    expand(panel);
     const view = descendants(panel.root as unknown as ElementStub).find(
       (node) => "buddyOpen" in node.dataset,
     );
@@ -371,6 +384,7 @@ describe("header interrupted recovery queue", () => {
     const panel = createInterruptedPanel(() => "zh-CN", f.queue, undefined, openThread);
     panels.push(panel);
     panel.update(client(), null, "", "local");
+    expand(panel);
     descendants(panel.root as unknown as ElementStub)
       .find((node) => "buddyOpen" in node.dataset)
       ?.click();
@@ -383,9 +397,63 @@ describe("header interrupted recovery queue", () => {
     expect(f.value.list("local")).toHaveLength(1);
   });
 
+  it("starts collapsed so the queue does not cover the transcript", () => {
+    const f = queueFixture("one", "two");
+    const panel = mount(f);
+    const nodes = descendants(panel.root as unknown as ElementStub);
+    expect(nodes.some((node) => node.className === "buddy-interrupted-list")).toBe(false);
+    expect(nodes.some((node) => node.className === "buddy-interrupted-model-resume")).toBe(false);
+    const toggle = nodes.find((node) => "buddyInterruptedToggle" in node.dataset);
+    expect(toggle?.attributes.get("aria-expanded")).toBe("false");
+    // 收起时仍能看到待处理数量。
+    expect(nodes.some((node) => node.className === "buddy-interrupted-count")).toBe(true);
+  });
+
+  it("expands on demand and collapses again", () => {
+    const f = queueFixture("one");
+    const panel = mount(f);
+    const list = () =>
+      descendants(panel.root as unknown as ElementStub).some(
+        (node) => node.className === "buddy-interrupted-list",
+      );
+    const toggle = () =>
+      descendants(panel.root as unknown as ElementStub).find(
+        (node) => "buddyInterruptedToggle" in node.dataset,
+      );
+    expect(list()).toBe(false);
+    toggle()?.click();
+    expect(list()).toBe(true);
+    expect(toggle()?.attributes.get("aria-expanded")).toBe("true");
+    toggle()?.click();
+    expect(list()).toBe(false);
+    expect(toggle()?.attributes.get("aria-expanded")).toBe("false");
+  });
+
+  it("auto-expands while resuming all and folds back afterwards", async () => {
+    const f = queueFixture("one");
+    const first = deferred<undefined>();
+    f.value.resume.mockImplementationOnce(async (entry) => {
+      await first.promise;
+      f.remove(entry);
+    });
+    const panel = mount(f);
+    const list = () =>
+      descendants(panel.root as unknown as ElementStub).some(
+        (node) => node.className === "buddy-interrupted-list",
+      );
+    expect(list()).toBe(false);
+    header().button.click();
+    await settle();
+    expect(list()).toBe(true);
+    first.resolve(undefined);
+    await settle();
+    expect(list()).toBe(false);
+  });
+
   it("omits the open action when the connection cannot navigate", () => {
     const f = queueFixture("one");
     const panel = mount(f);
+    expand(panel);
     expect(
       descendants(panel.root as unknown as ElementStub).some((node) => "buddyOpen" in node.dataset),
     ).toBe(false);

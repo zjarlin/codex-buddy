@@ -235,7 +235,8 @@ describe("GitWorkspace", () => {
     expect(
       describeGitCommandFailure({ code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER", killed: false }),
     ).toContain("MiB");
-    expect(describeGitCommandFailure({ code: 1, killed: false })).toBeNull();
+    // 普通失败（未被信号中止、也没有特殊 code）不接管错误正文。
+    expect(describeGitCommandFailure({ code: null, killed: false })).toBeNull();
   });
 
   it.skipIf(process.platform === "win32")(

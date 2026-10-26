@@ -62,7 +62,9 @@ test("clones a Git address into the parent of the session project and links it",
     { path: project, primary: true },
     { path: await realpath(target), primary: false },
   ]);
-  expect(await readFile(path.join(target, "app.txt"), "utf8")).toBe("cloned\n");
+  // Windows 检出会按 core.autocrlf 换成 CRLF，比较内容而不是行尾。
+  const cloned = await readFile(path.join(target, "app.txt"), "utf8");
+  expect(cloned.replaceAll("\r\n", "\n")).toBe("cloned\n");
   // 克隆结果与当前项目平级，而不是落在项目目录内部。
   expect(path.dirname(target)).toBe(group);
 }, 60_000);

@@ -31,6 +31,12 @@ const status: GitWorkspaceStatus = {
 };
 const clientWith = (inspectGitStatus: RendererGitClient["inspectGitStatus"]) =>
   ({ inspectGitStatus }) as RendererGitClient;
+// 夹具只有一条变更；取不到就直接失败，避免非空断言。
+const firstChange = (next: GitWorkspaceStatus) => {
+  const [change] = next.changes;
+  if (!change) throw new Error("夹具缺少变更条目");
+  return change;
+};
 
 test("reuses the previous status when a refresh returns the same content", () => {
   const next = structuredClone(status);
@@ -40,10 +46,10 @@ test("reuses the previous status when a refresh returns the same content", () =>
   const changed = { ...structuredClone(status), workTree: undefined, branch: "dev" };
   expect(reuseGitStatus(status, changed as GitWorkspaceStatus)).toBe(changed);
   const edited = structuredClone(status);
-  edited.changes[0]!.workTreeStatus = "A";
+  firstChange(edited).workTreeStatus = "A";
   expect(reuseGitStatus(status, edited)).toBe(edited);
   const staged = structuredClone(status);
-  staged.changes[0]!.staged = true;
+  firstChange(staged).staged = true;
   expect(reuseGitStatus(status, staged)).toBe(staged);
 });
 

@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { InterruptedQueue, InterruptedQueueEntry } from "../../src/buddy/interrupted-queue.js";
+import {
+  InterruptedEntryGoneError,
+  type InterruptedQueue,
+  type InterruptedQueueEntry,
+} from "../../src/buddy/interrupted-queue.js";
 import type { RendererModelClient } from "../../src/renderer-model-client.js";
 
 const headerPoint = vi.hoisted(() => vi.fn());
@@ -308,6 +312,27 @@ describe("header interrupted recovery queue", () => {
       expect(f.value.list("local")).toEqual([]);
     },
   );
+
+  it("clears entries the Host reports as gone and reports how many were removed", async () => {
+    const f = queueFixture("gone", "live");
+    f.value.resume.mockImplementation(async (entry) => {
+      if (entry.threadId === "gone") {
+        f.remove(entry);
+        throw new InterruptedEntryGoneError(entry.threadId);
+      }
+      throw new Error("downstream offline");
+    });
+    mount(f);
+    header().button.click();
+    await settle();
+    expect(f.value.list("local").map((entry) => entry.threadId)).toEqual(["live"]);
+    expect(header().status.textContent).toContain("已清理 1 条已不存在的会话");
+    expect(header().button.textContent).toBe("一键恢复中断会话 (1)");
+    // 会话已消失既不算提交成功，也不算失败，只计入清理数量。
+    expect(header().status.textContent).toContain("已提交恢复 0，失败 1");
+    expect(header().status.textContent).toContain("downstream offline");
+    expect(header().status.textContent).not.toContain("已不存在，已移出");
+  });
 
   it("only imports historical interruptions when explicitly requested and exposes failures", async () => {
     const f = queueFixture("one");

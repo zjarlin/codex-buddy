@@ -7,7 +7,11 @@ import type { RendererModelClient } from "../renderer-model-client.js";
 import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
 import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "../renderer-model-favorites.js";
 import { createRecoveryHeader } from "./recovery-header.js";
-import type { InterruptedQueue, InterruptedQueueEntry } from "./interrupted-queue.js";
+import {
+  InterruptedEntryGoneError,
+  type InterruptedQueue,
+  type InterruptedQueueEntry,
+} from "./interrupted-queue.js";
 
 type InterruptedThread = InterruptedQueueEntry;
 const messages = {
@@ -82,6 +86,8 @@ function session(client: RendererModelClient | null, hostId: string | null = nul
     completed: 0,
     succeeded: 0,
     unreadable: 0,
+    vanished: 0,
+    gone: new Set<string>(),
     error: "",
     modelView: null as ModelShortcutView | null,
     harnessId: "",
@@ -168,6 +174,7 @@ export function createInterruptedPanel(
     }
     target.pending.add(key);
     target.failures.delete(key);
+    target.error = "";
     render();
     try {
       if (action === "archive") {
@@ -178,10 +185,17 @@ export function createInterruptedPanel(
       target.threads = target.hostId ? queue.list(target.hostId) : [];
       if (current(target) && !target.batch) onResumed?.();
     } catch (failure) {
-      target.failures.set(
-        key,
-        `${action === "archive" ? (chinese() ? "归档失败" : "Archive failed") : messages[getLocale()].resumeFailed}: ${errorMessage(failure)}`,
-      );
+      // 会话已不存在时队列会就地移出该条；此处只提示原因，不再留下逐条失败信息。
+      if (failure instanceof InterruptedEntryGoneError) {
+        target.failures.delete(key);
+        target.gone.add(key);
+        target.vanished = target.gone.size;
+      } else {
+        target.failures.set(
+          key,
+          `${action === "archive" ? (chinese() ? "归档失败" : "Archive failed") : messages[getLocale()].resumeFailed}: ${errorMessage(failure)}`,
+        );
+      }
     } finally {
       target.pending.delete(key);
       if (current(target)) render();
@@ -230,6 +244,8 @@ export function createInterruptedPanel(
     target.total = candidates.length;
     target.completed = 0;
     target.succeeded = 0;
+    target.gone.clear();
+    target.vanished = 0;
     render();
     try {
       // 只处理点击时的列表；逐条提交，切换连接或卸载后停止剩余请求。
@@ -237,12 +253,15 @@ export function createInterruptedPanel(
         if (!current(target) || epoch !== startedAtEpoch) break;
         await resume(target, thread, modelId);
         target.completed += 1;
-        if (!target.failures.has(keyFor(thread))) target.succeeded += 1;
+        // 已不存在的会话既没有提交恢复，也不算失败。
+        if (!target.gone.has(keyFor(thread)) && !target.failures.has(keyFor(thread)))
+          target.succeeded += 1;
         if (current(target)) render();
       }
     } finally {
       target.batch = false;
       if (current(target)) {
+        target.threads = target.hostId ? queue.list(target.hostId) : [];
         render();
         if (target.succeeded > 0) onResumed?.();
       }
@@ -267,6 +286,7 @@ export function createInterruptedPanel(
       completed: state.completed,
       succeeded: state.succeeded,
       unreadable: state.unreadable,
+      vanished: state.vanished,
       error:
         state.error ||
         [...state.failures.values()].join("; ") ||
@@ -283,6 +303,7 @@ export function createInterruptedPanel(
       state.batch,
       state.error,
       state.unreadable,
+      state.vanished,
       state.hostId ? queue.problem(state.hostId) : "",
       state.threads.map((entry) => queue.isPending(entry)),
       state.modelView,

@@ -277,6 +277,65 @@ describe("interrupted event queue", () => {
     expect(f.projection.mock.calls.some(([method]) => method === "thread/archive")).toBe(false);
   });
 
+  it.each(["no rollout found for thread id one", "thread not loaded: one", "Thread not found"])(
+    "drops an entry whose Thread is gone from the Host (%s)",
+    async (reason) => {
+      const f = fixture();
+      f.projection.mockRejectedValueOnce(
+        Object.assign(new Error(reason), { code: -32600, data: { threadId: "one" } }),
+      );
+      f.emit("turn/completed");
+      await settle();
+      expect(f.queue.list("local")).toEqual([]);
+      expect(f.queue.problem("local")).toContain("已不存在");
+      // 墓碑持久化，重启和补录都不会把它重新入队。
+      f.client.buddyInterrupted.mockResolvedValueOnce({
+        threads: [
+          {
+            threadId: "one",
+            turnId: "one-turn",
+            title: "one",
+            owner: "codex",
+            status: "interrupted",
+          },
+        ],
+        runningThreadIds: [],
+        unreadable: 0,
+      });
+      await f.queue.importHistory("local");
+      expect(f.queue.list("local")).toEqual([]);
+      const restored = fixture(f.storage);
+      expect(restored.queue.list("local")).toEqual([]);
+    },
+  );
+
+  it.each(["resume", "archive"] as const)(
+    "removes a queued entry when %s finds the Thread already gone",
+    async (action) => {
+      const f = fixture();
+      f.emit("turn/completed");
+      await settle();
+      f.projection.mockRejectedValueOnce(
+        Object.assign(new Error("no rollout found for thread id one"), { code: -32600 }),
+      );
+      await expect(f.queue[action](f.first())).rejects.toThrow("已不存在");
+      expect(f.queue.list("local")).toEqual([]);
+      expect(f.projection.mock.calls.some(([method]) => method === "thread/archive")).toBe(false);
+      expect(f.client.buddyContinue).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps the entry and allows retry when a read is merely unavailable", async () => {
+    const f = fixture();
+    f.emit("turn/completed");
+    await settle();
+    f.projection.mockRejectedValueOnce(new Error("502 bad gateway"));
+    await expect(f.queue.archive(f.first())).rejects.toThrow("502");
+    expect(f.queue.list("local")).toHaveLength(1);
+    await f.queue.archive(f.first());
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
   it("retains events when enrichment fails and exposes persistence failures", async () => {
     const f = fixture();
     f.projection.mockRejectedValueOnce(new Error("offline"));

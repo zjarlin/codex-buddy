@@ -15,6 +15,7 @@ export interface RecoveryHeaderState {
   succeeded: number;
   error: string;
   unreadable: number;
+  vanished: number;
 }
 
 // 顶部与输入区共用同一个恢复会话状态；此模块只负责展示和定位。
@@ -94,7 +95,7 @@ export function createRecoveryHeader(
       if (!state.available) {
         result = zh ? "当前连接无法恢复" : "Recovery unavailable on this connection";
       } else if (!state.busy && state.total !== null) {
-        const failed = state.completed - state.succeeded;
+        const failed = Math.max(0, state.completed - state.succeeded - state.vanished);
         result =
           state.total === 0
             ? zh
@@ -103,6 +104,13 @@ export function createRecoveryHeader(
             : zh
               ? `已提交恢复 ${state.succeeded}，失败 ${failed}`
               : `Resume submitted: ${state.succeeded}; failed: ${failed}`;
+      }
+      if (state.vanished > 0) {
+        result += `${result ? " · " : ""}${
+          zh
+            ? `已清理 ${state.vanished} 条已不存在的会话`
+            : `removed ${state.vanished} missing chats`
+        }`;
       }
       if (state.unreadable > 0) {
         result += `${result ? " · " : ""}${state.unreadable} ${zh ? "条历史无法读取" : "unreadable histories"}`;

@@ -1,8 +1,19 @@
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
-import type { RendererModelClient } from "../renderer-model-client.js";
-import { assertNativeCodexThread } from "../renderer-native-thread.js";
+import type { RendererModelClient, RendererThreadTurnState } from "../renderer-model-client.js";
+import { assertNativeCodexThread, isMissingNativeThreadError } from "../renderer-native-thread.js";
 
 export const INTERRUPTED_QUEUE_STORAGE_KEY = "codexhost.interrupted-queue.v1";
+
+/** 会话在 Host 上已不存在（被删除或 rollout 丢失），既不能恢复也不能归档。 */
+export class InterruptedEntryGoneError extends Error {
+  readonly threadId: string;
+
+  constructor(threadId: string) {
+    super("会话已不存在，已移出中断队列。");
+    this.name = "InterruptedEntryGoneError";
+    this.threadId = threadId;
+  }
+}
 type Status = BuddyInterrupted["threads"][number]["status"];
 export interface InterruptedQueueEntry {
   hostId: string;
@@ -11,8 +22,9 @@ export interface InterruptedQueueEntry {
   title: string;
   status: Status;
 }
+type SettledStatus = "active" | "completed" | "archived" | "vanished";
 interface QueueRecord extends Omit<InterruptedQueueEntry, "status"> {
-  status: Status | "active" | "completed" | "archived";
+  status: Status | SettledStatus;
   updatedAt: number;
   previousTurnIds?: string[];
 }
@@ -73,7 +85,7 @@ export function createInterruptedQueue(options: {
           !Number.isFinite(entry.updatedAt) ||
           !(
             interrupted(entry.status) ||
-            ["active", "completed", "archived"].includes(text(entry.status))
+            ["active", "completed", "archived", "vanished"].includes(text(entry.status))
           )
         )
           continue;
@@ -123,14 +135,41 @@ export function createInterruptedQueue(options: {
     emit();
     return next;
   }
-  const same = (entry: InterruptedQueueEntry) => {
+  const same = (entry: InterruptedQueueEntry | QueueRecord) => {
     readStorage();
     const current = entries.get(keyFor(entry.hostId, entry.threadId));
     return current?.turnId === entry.turnId && interrupted(current.status);
   };
-  const remove = (entry: InterruptedQueueEntry, status: "active" | "completed" | "archived") => {
+  const remove = (entry: InterruptedQueueEntry | QueueRecord, status: SettledStatus) => {
     if (same(entry)) put({ ...entry, status });
   };
+  // 会话已被删除或 rollout 丢失时无法再恢复或归档；保留墓碑，避免迟到通知重新入队。
+  // 用户主动操作时由面板展示清理结果，后台核对时在这里留下原因。
+  function vanished(
+    entry: InterruptedQueueEntry | QueueRecord,
+    report = false,
+  ): InterruptedEntryGoneError {
+    remove(entry, "vanished");
+    if (report) errors.set(entry.hostId, `会话已不存在，已移出中断队列：${entry.title}`);
+    emit();
+    return new InterruptedEntryGoneError(entry.title || entry.threadId);
+  }
+  // 恢复与归档都不能无限等待：连接卡住时让用户看到失败并可重试。
+  async function bounded<T>(operation: Promise<T>, timeoutMs: number, timeout: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(timeout)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+  const readMetadata = <T>(operation: Promise<T>) =>
+    bounded(operation, 20_000, "会话读取超时，请检查连接后重试。");
 
   async function enrich(entry: QueueRecord, manager: NotificationManager): Promise<void> {
     const client = options.getClient(entry.hostId);
@@ -138,10 +177,12 @@ export function createInterruptedQueue(options: {
     const key = keyFor(entry.hostId, entry.threadId);
     try {
       const value = record(
-        await client.requestThreadProjection("thread/read", {
-          threadId: entry.threadId,
-          includeTurns: false,
-        }),
+        await readMetadata(
+          client.requestThreadProjection("thread/read", {
+            threadId: entry.threadId,
+            includeTurns: false,
+          }),
+        ),
       );
       readStorage();
       if (
@@ -177,8 +218,12 @@ export function createInterruptedQueue(options: {
         options.getManager(entry.hostId) === manager &&
         options.getClient(entry.hostId) === client
       ) {
-        errors.set(entry.hostId, `会话信息暂不可读：${message(failure)}`);
-        emit();
+        // 只有确定不存在才移出队列；超时、断连等读取失败仍保留供重试。
+        if (isMissingNativeThreadError(failure)) vanished(entry, true);
+        else {
+          errors.set(entry.hostId, `会话信息暂不可读：${message(failure)}`);
+          emit();
+        }
       }
     }
   }
@@ -292,28 +337,49 @@ export function createInterruptedQueue(options: {
       if (disposed || options.getClient(entry.hostId) !== client || !same(entry))
         throw new Error("连接或会话状态已改变。");
     };
+    // 用户重新发起操作时，之前那次读取或清理的提示不再有意义。
+    errors.delete(entry.hostId);
     pending.add(key);
     emit();
     try {
-      const value = record(
-        await client.requestThreadProjection("thread/read", {
-          threadId: entry.threadId,
-          includeTurns: false,
-        }),
-      );
-      ensureCurrent();
-      assertNativeCodexThread(value.thread, entry.threadId);
-      const state = await client.readThreadTurnState(entry.threadId);
+      let value: Record<string, unknown>;
+      let state: RendererThreadTurnState;
+      try {
+        value = record(
+          await readMetadata(
+            client.requestThreadProjection("thread/read", {
+              threadId: entry.threadId,
+              includeTurns: false,
+            }),
+          ),
+        );
+        ensureCurrent();
+        assertNativeCodexThread(value.thread, entry.threadId);
+        state = await readMetadata(client.readThreadTurnState(entry.threadId));
+      } catch (failure) {
+        if (isMissingNativeThreadError(failure)) throw vanished(entry);
+        throw failure;
+      }
       ensureCurrent();
       if (state.running || state.turnId !== entry.turnId || !interrupted(state.status)) {
         remove(entry, "completed");
         throw new Error("会话已运行或最新回合已改变，已移出中断队列。");
       }
+      // 提交步骤超时只代表结果未知：保留条目，由用户查看会话后决定是否重试。
+      const submit = (operation: Promise<void>) =>
+        bounded(operation, 60_000, "提交结果未知，请先查看该会话状态后再重试。");
       if (action === "archive") {
-        await client.requestThreadProjection("thread/archive", { threadId: entry.threadId });
+        await submit(
+          Promise.resolve(
+            client.requestThreadProjection("thread/archive", { threadId: entry.threadId }),
+          ).then(() => undefined),
+        );
       } else {
-        if (model) await client.buddyContinue?.(entry.threadId, entry.turnId, model);
-        else await client.buddyContinue?.(entry.threadId, entry.turnId);
+        await submit(
+          model
+            ? (client.buddyContinue?.(entry.threadId, entry.turnId, model) ?? Promise.resolve())
+            : (client.buddyContinue?.(entry.threadId, entry.turnId) ?? Promise.resolve()),
+        );
       }
       if (!disposed && options.getClient(entry.hostId) === client)
         remove(entry, action === "archive" ? "archived" : "completed");
@@ -369,6 +435,7 @@ export function createInterruptedQueue(options: {
         const previous = entries.get(key);
         if (
           previous?.status === "archived" ||
+          previous?.status === "vanished" ||
           previous?.previousTurnIds?.includes(entry.turnId) ||
           (previous?.turnId === entry.turnId && previous.status === "completed")
         )

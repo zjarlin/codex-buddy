@@ -261,7 +261,9 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     card.close.title = copy.close;
     card.close.setAttribute("aria-label", copy.close);
     const due = model.due();
-    const entry = due[0] ?? null;
+    // 用户可以从计数按钮切到后面几条；目标不再到期时回落到最早一条。
+    const selected = visible ? due.find((candidate) => candidate.id === visible?.id) : undefined;
+    const entry = selected ?? due[0] ?? null;
     visible = entry;
     if (!entry || document.hidden || !document.hasFocus() || (dialog !== null && dialog.open)) {
       card.modal.hidden = true;
@@ -509,6 +511,13 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     scheduleNext();
   };
   const onDismiss = (): void => onCardClose();
+  const onNext = (): void => {
+    const due = model.due();
+    if (due.length < 2) return;
+    const index = visible ? due.findIndex((candidate) => candidate.id === visible?.id) : -1;
+    visible = due[(index + 1) % due.length] ?? due[0] ?? null;
+    render();
+  };
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || card.modal.hidden) return;
     event.preventDefault();
@@ -516,6 +525,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
   };
 
   card.close.addEventListener("click", onCardClose);
+  card.queue.addEventListener("click", onNext);
   open.addEventListener("click", onOpen);
   snooze.addEventListener("click", onSnooze);
   dismiss.addEventListener("click", onDismiss);

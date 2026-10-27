@@ -253,3 +253,49 @@ test("lists and deletes existing reminders of a conversation", async ({ page }) 
   const state = await page.evaluate(() => Reflect.get(globalThis, "reminders").state());
   expect(state.entries).toEqual([]);
 });
+
+test("rotates between several due reminders from the queue counter", async ({ page }) => {
+  await page.evaluate(() => Reflect.get(globalThis, "setupReminders")());
+  await page.evaluate(() => {
+    const clock = Reflect.get(globalThis, "reminders").clock;
+    const entry = (id, message, offset) => ({
+      id,
+      hostId: "local",
+      threadId: "thread-a",
+      title: "clouddev 迁 macmini 做了嘛",
+      project: "clouddev",
+      message,
+      schedule: { kind: "once", at: clock.now + offset },
+      enabled: true,
+      createdAt: clock.now,
+      firedAt: null,
+    });
+    localStorage.setItem(
+      "codexhost.thread-reminders.v1",
+      JSON.stringify({
+        version: 1,
+        entries: [
+          entry("reminder-1", "第一条提醒", 60_000),
+          entry("reminder-2", "第二条提醒", 120_000),
+        ],
+      }),
+    );
+  });
+  await page.reload();
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => Reflect.get(globalThis, "setupReminders")(true));
+  await page.evaluate(() => Reflect.get(globalThis, "reminders").tick(2 * 60_000));
+
+  const card = page.locator("[data-codexhost-reminder]");
+  await expect(card).toContainText("第一条提醒");
+  const counter = card.locator("[data-codexhost-reminder-queue]");
+  await expect(counter).toBeVisible();
+  await expect(counter).toHaveText("还有 1 个提醒");
+
+  await counter.click();
+  await expect(card).toContainText("第二条提醒");
+  // 处理当前这条后回落到剩下的一条。
+  await card.getByRole("button", { name: "知道了", exact: true }).click();
+  await expect(card).toContainText("第一条提醒");
+  await expect(counter).toBeHidden();
+});

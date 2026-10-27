@@ -9,7 +9,7 @@
 
 ## 2. 界面与调度
 
-- [x] 2.1 实现 `renderer-reminders.ts`：提醒对话框（方式/时间/间隔/内容/已有列表）、到点卡片、稍后提醒、`Esc` 与关闭按钮语义、前台与可见性判定、最长 60 秒的计时器重算。验证：`tests/e2e/renderer-reminders.spec.ts` 覆盖建立一次性提醒后到期弹卡片、关闭即停用、周期提醒稍后 10 分钟不改间隔、打开会话、列表删除。
+- [x] 2.1 实现 `renderer-reminders.ts`：提醒对话框（方式/时间/间隔/内容/已有列表）、到点卡片、稍后提醒、`Esc` 与关闭按钮语义、前台与可见性判定、最长 60 秒的计时器重算。验证：`tests/e2e/renderer-reminders.spec.ts` 覆盖建立一次性提醒后到期弹卡片、关闭即停用、周期提醒稍后 10 分钟不改间隔、打开会话、列表删除，以及多条同时到点时用计数按钮轮换。
 - [x] 2.2 把提醒入口接入会话行操作菜单与绑定装配：`renderer-thread-actions.ts` 增加菜单扩展点，`renderer-binding-probe.ts` 负责安装、刷新与释放。验证：`renderer-binding-probe-host-catalog.test.ts` 38 项与 `tests/e2e/renderer-thread-folders.spec.ts` 3 项全绿，文件夹入口与提醒入口共存。
 
 ## 3. 文档

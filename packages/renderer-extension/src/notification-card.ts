@@ -30,6 +30,7 @@ const style = `
 [data-codexhost-card] header h2{min-width:0;margin:0;font-size:15px;line-height:22px}
 [data-codexhost-card] header > div{min-width:0;flex:1}
 [data-codexhost-card-queue]{display:inline-flex;align-items:center;min-height:24px;margin-top:2px;padding:2px 7px;border:0;border-radius:999px;background:color-mix(in srgb, Highlight 14%, transparent);color:CanvasText;font:12px/18px inherit;cursor:pointer}
+[data-codexhost-card-queue][hidden]{display:none}
 [data-codexhost-card] button:focus-visible{outline:2px solid Highlight;outline-offset:1px}
 [data-codexhost-card] .codexhost-card-icon{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:CanvasText;cursor:pointer}
 [data-codexhost-card] .codexhost-card-icon:hover:not(:disabled){background:color-mix(in srgb,CanvasText 10%,transparent)}

@@ -1,8 +1,9 @@
-import type {
-  UpdateCheckResult,
-  UpdateStartResult,
-  UpdateStatus,
-  UpdateStatusResult,
+import {
+  UPDATE_CHECK_NETWORK_TIMEOUT_MS,
+  type UpdateCheckResult,
+  type UpdateStartResult,
+  type UpdateStatus,
+  type UpdateStatusResult,
 } from "@codexhost/shared-contracts";
 import {
   acquireUpdateOperationLock,
@@ -81,7 +82,7 @@ export function createHostUpdateCoordinator(
   const fetchLatest: (signal?: AbortSignal) => Promise<CodexhostLatestRelease> =
     options.fetchLatest ??
     (async (signal?: AbortSignal) => {
-      const timeoutSignal = AbortSignal.timeout(15_000);
+      const timeoutSignal = AbortSignal.timeout(UPDATE_CHECK_NETWORK_TIMEOUT_MS);
       const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
       const authenticated = await fetchLatestGitHubReleaseWithGitHubCli({
         ...(options.environment ? { environment: options.environment } : {}),

@@ -7,12 +7,13 @@ import {
 import { consoleMessages } from "../console/messages.js";
 import { createRemoteConnectionsPage } from "./remote-connections-page.js";
 import type { RemoteConnectionsControl } from "../remote-connections-control.js";
-import type {
-  UpdateCheckResult,
-  UpdateInstallation,
-  UpdateStartResult,
-  UpdateStatus,
-  UpdateStatusResult,
+import {
+  UPDATE_CHECK_REQUEST_TIMEOUT_MS,
+  type UpdateCheckResult,
+  type UpdateInstallation,
+  type UpdateStartResult,
+  type UpdateStatus,
+  type UpdateStatusResult,
 } from "@codexhost/shared-contracts";
 
 import {
@@ -740,6 +741,9 @@ function updatesPage(
             const result = await runBoundedRendererUpdateRequest(
               () => client.checkUpdate(),
               signal,
+              // A check that reaches the Host's own network budget must still be
+              // able to report its result instead of timing out here first.
+              UPDATE_CHECK_REQUEST_TIMEOUT_MS,
             );
             checkCompleted = true;
             return result;

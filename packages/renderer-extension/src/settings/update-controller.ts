@@ -1,8 +1,9 @@
-import type {
-  UpdateCheckResult,
-  UpdateStartResult,
-  UpdateStatus,
-  UpdateStatusResult,
+import {
+  UPDATE_CHECK_REQUEST_TIMEOUT_MS,
+  type UpdateCheckResult,
+  type UpdateStartResult,
+  type UpdateStatus,
+  type UpdateStatusResult,
 } from "@codexhost/shared-contracts";
 import type { RendererUpdateClient } from "./pages.js";
 import {
@@ -117,7 +118,11 @@ export function createRendererUpdateController(
     if (checkRequest) return checkRequest;
     const current = requireClient();
     const signal = scope.signal;
-    const request = runBoundedRendererUpdateRequest(() => current.checkUpdate(), signal, 5_000)
+    const request = runBoundedRendererUpdateRequest(
+      () => current.checkUpdate(),
+      signal,
+      UPDATE_CHECK_REQUEST_TIMEOUT_MS,
+    )
       .then((result) => {
         if (!result) {
           if (!signal.aborted) publish({ check: null, status: null, error: null });

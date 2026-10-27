@@ -487,6 +487,8 @@ export type {
   NativeTurnRefV1,
 } from "./native-refs.js";
 export {
+  UPDATE_CHECK_NETWORK_TIMEOUT_MS,
+  UPDATE_CHECK_REQUEST_TIMEOUT_MS,
   UPDATE_ERROR_MAX_LENGTH,
   UPDATE_SEMVER_PATTERN,
   updateCheckResultSchema,

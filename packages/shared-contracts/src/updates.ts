@@ -1,6 +1,17 @@
 import { z } from "zod";
 
 export const UPDATE_ERROR_MAX_LENGTH = 500;
+
+/**
+ * How long the Host may wait for one fastest-Release lookup, including the GitHub
+ * CLI attempt. Renderer budgets must stay above this so a slow but successful
+ * lookup still reaches the page.
+ */
+export const UPDATE_CHECK_NETWORK_TIMEOUT_MS = 15_000;
+
+/** Renderer budget for one update check; deliberately wider than the Host's. */
+export const UPDATE_CHECK_REQUEST_TIMEOUT_MS = UPDATE_CHECK_NETWORK_TIMEOUT_MS + 5_000;
+
 export const UPDATE_SEMVER_PATTERN =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 

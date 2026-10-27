@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UpdateCheckResult, UpdateStatus } from "@codexhost/shared-contracts";
+import {
+  UPDATE_CHECK_NETWORK_TIMEOUT_MS,
+  UPDATE_CHECK_REQUEST_TIMEOUT_MS,
+  type UpdateCheckResult,
+  type UpdateStatus,
+} from "@codexhost/shared-contracts";
 import { createRendererUpdateController } from "../../src/settings/update-controller.js";
 import type { RendererUpdateClient } from "../../src/settings/pages.js";
 
@@ -129,6 +134,29 @@ describe("shared update controller", () => {
     old.resolve(check());
     await Promise.resolve();
     expect(controller.snapshot.check?.latestVersion).toBe("2.0.0");
+    controller.dispose();
+  });
+
+  it("keeps a check running past the Host network budget", async () => {
+    // The Host may legitimately spend its whole network budget on the lookup, so
+    // the renderer budget must stay above it; otherwise a slow but successful
+    // check is reported as "the update service did not respond".
+    expect(UPDATE_CHECK_REQUEST_TIMEOUT_MS).toBeGreaterThan(UPDATE_CHECK_NETWORK_TIMEOUT_MS);
+    vi.useFakeTimers();
+    const slow = Promise.withResolvers<UpdateCheckResult | null>();
+    const client = {
+      checkUpdate: vi.fn(() => slow.promise),
+      startUpdate: vi.fn(),
+      readUpdateStatus: vi.fn(),
+    };
+    const controller = createRendererUpdateController(() => client, ownerWindow());
+    controller.refreshBinding();
+    const request = controller.checkUpdate();
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_NETWORK_TIMEOUT_MS);
+    expect(controller.snapshot.error).toBeNull();
+    slow.resolve(check());
+    await expect(request).resolves.toMatchObject({ latestVersion: "1.2.3" });
+    expect(controller.snapshot.error).toBeNull();
     controller.dispose();
   });
 

@@ -4,8 +4,10 @@ import { parse } from "smol-toml";
 import {
   type ProviderRoutingParams,
   type ProviderRoutingSnapshot,
+  type ProviderSyncResult,
 } from "@codexhost/shared-contracts";
 import { ProviderRoutingStore } from "./store.js";
+import { mergeProviderModels, syncProviderModels } from "./models.js";
 import { ProviderFailoverProxy, type ProviderTarget } from "./proxy.js";
 
 interface PrimaryProvider {
@@ -72,6 +74,7 @@ export class ProviderRouting {
   }
 
   async configure(input: ProviderRoutingParams): Promise<ProviderRoutingSnapshot> {
+    const syncResults = input.action === "sync" ? await this.#sync(input.id) : undefined;
     const config = await this.store.update(input);
     const primaries = await this.#readPrimaries();
     return {
@@ -80,6 +83,8 @@ export class ProviderRouting {
         ...provider,
         keyConfigured: Boolean(apiKey),
       })),
+      modelCatalog: mergeProviderModels(config.providers),
+      ...(syncResults ? { syncResults } : {}),
       primaryProviders: primaries.map((provider) => ({
         ...provider,
         covered:
@@ -99,6 +104,32 @@ export class ProviderRouting {
         ...config.providers,
       ]),
     };
+  }
+
+  // 直接从各网关的 `/v1/models` 拉取模型目录：只同步已保存密钥的网关，
+  // 省略 id 时同步全部已启用的网关。失败按网关独立记录，不整体失败。
+  async #sync(id: string | undefined): Promise<ProviderSyncResult[]> {
+    if (!this.#ready) {
+      throw new Error("Provider routing is not ready");
+    }
+    const config = await this.store.read();
+    const targets = config.providers.filter(
+      (provider) => (id ? provider.id === id : provider.enabled) && Boolean(provider.apiKey),
+    );
+    const results = await Promise.all(targets.map((provider) => syncProviderModels(provider)));
+    const syncedAt = Date.now();
+    await this.store.recordModelSync(
+      results.flatMap((result) =>
+        result.error === undefined
+          ? [{ id: result.provider, models: result.models ?? [], syncedAt }]
+          : [{ id: result.provider }],
+      ),
+    );
+    return results.map(({ provider, models, error }) => ({
+      provider,
+      modelCount: models?.length ?? 0,
+      ...(error ? { error } : {}),
+    }));
   }
 
   async close(): Promise<void> {

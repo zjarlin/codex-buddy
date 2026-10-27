@@ -54,8 +54,12 @@ export function createProvidersSettingsPage(
       toggle.append(enabled, m.enabled);
       const primaries = createPreferenceGroup(document, m.primary);
       const backups = createPreferenceGroup(document, m.backups);
+      const catalog = createPreferenceGroup(document, m.catalog);
       const latest = document.createElement("p");
       latest.className = "text-xs text-settings-muted";
+      const syncStatus = document.createElement("p");
+      syncStatus.className = "text-xs text-settings-muted";
+      syncStatus.setAttribute("role", "status");
       const form = document.createElement("form");
       form.className =
         "mt-4 grid gap-3 rounded-lg border border-settings-border bg-settings-panel p-4";
@@ -184,6 +188,44 @@ export function createProvidersSettingsPage(
         detail.textContent = `${m.failure}: ${m.failureKinds[failure.kind]}${failure.status === undefined ? "" : ` (${failure.status})`} · ${formatTime(failure.at)}${cooldown}`;
         row.append(detail);
       };
+      // 多个网关的模型目录在这里合并展示：同名模型只出现一行，并列出提供它的网关。
+      const renderCatalog = (value: ProviderRoutingSnapshot) => {
+        catalog.card.replaceChildren();
+        const entries = value.modelCatalog ?? [];
+        if (!entries.length) {
+          catalog.card.textContent = value.providers.length ? m.catalogEmpty : m.empty;
+          return;
+        }
+        const summary = document.createElement("p");
+        summary.className = "px-4 py-2 text-xs text-settings-muted";
+        summary.textContent = `${entries.length} ${m.modelsUnit}`;
+        catalog.card.append(summary);
+        for (const entry of entries) {
+          const row = document.createElement("div");
+          row.className =
+            "flex flex-wrap items-baseline gap-2 border-b border-settings-divider px-4 py-2 text-sm text-settings-text last:border-b-0";
+          const model = document.createElement("strong");
+          model.className = "break-all";
+          model.textContent = entry.model;
+          const providers = document.createElement("span");
+          providers.className = "text-xs text-settings-muted";
+          providers.textContent = entry.providers.join(", ");
+          row.append(model, providers);
+          catalog.card.append(row);
+        }
+      };
+      const renderSyncResults = (value: ProviderRoutingSnapshot) => {
+        const results = value.syncResults ?? [];
+        if (!results.length) {
+          syncStatus.textContent = "";
+          return;
+        }
+        const failures = results.filter((result) => result.error);
+        syncStatus.textContent =
+          failures.length === 0
+            ? `${m.synced}: ${results.map((result) => `${result.provider} ${result.modelCount} ${m.modelsUnit}`).join(" · ")}`
+            : `${m.syncFailed}: ${failures.map((result) => `${result.provider} (${result.error})`).join("; ")}`;
+      };
       const render = (value: ProviderRoutingSnapshot) => {
         snapshot = value;
         available = true;
@@ -231,7 +273,10 @@ export function createProvidersSettingsPage(
           title.textContent = `${index + 1}. ${provider.name}${provider.enabled ? "" : ` · ${m.inactive}`}`;
           const detail = document.createElement("div");
           detail.className = "break-all text-xs text-settings-muted";
-          detail.textContent = `${provider.baseUrl} · ${provider.model || m.originalModel} · ${provider.keyConfigured ? m.keySaved : m.keyMissing}`;
+          const synced = provider.modelsSyncedAt
+            ? `${provider.models.length} ${m.modelsUnit} · ${formatTime(provider.modelsSyncedAt)}`
+            : m.notSynced;
+          detail.textContent = `${provider.baseUrl} · ${provider.model || m.originalModel} · ${provider.keyConfigured ? m.keySaved : m.keyMissing} · ${synced}`;
           copy.append(title, detail);
           appendFailure(copy, value, provider.id);
           const up = button(m.up, () => {
@@ -242,6 +287,24 @@ export function createProvidersSettingsPage(
           });
           up.disabled = index === 0;
           down.disabled = index === value.providers.length - 1;
+          const syncButton = button(m.sync, () => {
+            void run({ action: "sync", id: provider.id });
+          });
+          syncButton.disabled = !provider.keyConfigured;
+          // 启停与删除是两种不同后果：停用只让它不参与接续，配置和密钥都保留。
+          const toggleButton = button(provider.enabled ? m.disable : m.enable, () => {
+            if (busy || !available) return;
+            void run({
+              action: "save",
+              provider: {
+                id: provider.id,
+                name: provider.name,
+                baseUrl: provider.baseUrl,
+                model: provider.model,
+                enabled: !provider.enabled,
+              },
+            });
+          });
           const editButton = button(m.edit, () => edit(provider));
           const remove = button(m.remove, () => {
             if (busy || !available) return;
@@ -249,15 +312,17 @@ export function createProvidersSettingsPage(
               void run({ action: "remove", id: provider.id });
             }
           });
-          for (const control of [up, down, editButton, remove]) {
+          for (const control of [up, down, toggleButton, syncButton, editButton, remove]) {
             control.setAttribute("aria-label", `${control.textContent}: ${provider.name}`);
           }
-          row.append(copy, up, down, editButton, remove);
+          row.append(copy, up, down, toggleButton, syncButton, editButton, remove);
           backups.card.append(row);
         }
         if (!value.providers.length) {
           backups.card.textContent = m.empty;
         }
+        renderCatalog(value);
+        renderSyncResults(value);
         const last = value.lastRoute;
         const target = last
           ? ((last.fallback
@@ -286,7 +351,8 @@ export function createProvidersSettingsPage(
         host.disabled = true;
         refresh.disabled = true;
         root.setAttribute("aria-busy", "true");
-        status.textContent = params.action === "read" ? m.loading : m.saving;
+        status.textContent =
+          params.action === "read" ? m.loading : params.action === "sync" ? m.syncing : m.saving;
         status.setAttribute("role", "status");
         let editorClosed = false;
         try {
@@ -375,15 +441,17 @@ export function createProvidersSettingsPage(
         closeEditor();
         primaries.card.replaceChildren();
         backups.card.replaceChildren();
+        catalog.card.replaceChildren();
         latest.textContent = "";
+        syncStatus.textContent = "";
         void run({ action: "read" });
       });
       const add = button(m.add, () => edit());
       const refresh = button(m.refresh, () => {
         void run({ action: "read" });
       });
-      controls.append(toggle, primaries.group, backups.group, add, form, latest);
-      root.append(heading, hostLabel, status, controls, refresh);
+      controls.append(toggle, primaries.group, backups.group, catalog.group, add, form, latest);
+      root.append(heading, hostLabel, status, controls, syncStatus, refresh);
       context.content.append(root);
       void run({ action: "read" });
       return () => {

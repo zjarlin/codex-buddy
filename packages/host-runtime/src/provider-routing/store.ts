@@ -4,11 +4,21 @@ import { join } from "node:path";
 import { z } from "zod";
 import {
   fallbackProviderSchema,
+  providerModelsSchema,
   providerRoutingParamsSchema,
   type ProviderRoutingParams,
 } from "@codexhost/shared-contracts";
 
-const storedProvider = fallbackProviderSchema.extend({ apiKey: z.string().min(1) });
+const storedProvider = fallbackProviderSchema
+  .extend({ apiKey: z.string().min(1) })
+  .extend(providerModelsSchema.shape);
+
+// 仅由网关拉取结果写入，与用户表单字段分开，避免编辑名称/模型时抹掉已同步目录。
+export interface ProviderModelSync {
+  id: string;
+  models?: string[];
+  syncedAt?: number;
+}
 const fileSchema = z.object({ enabled: z.boolean(), providers: z.array(storedProvider).max(20) });
 export type RoutingConfiguration = z.infer<typeof fileSchema>;
 
@@ -53,13 +63,30 @@ export class ProviderRoutingStore {
     }
   }
 
+  /** 写入网关拉取到的模型目录；拉取失败（无 models）的网关保留原有目录。 */
+  recordModelSync(results: readonly ProviderModelSync[]): Promise<RoutingConfiguration> {
+    return this.#mutate((config) => {
+      for (const result of results) {
+        const provider = config.providers.find((value) => value.id === result.id);
+        if (!provider || !result.models) {
+          continue;
+        }
+        provider.models = [...new Set(result.models)].sort((left, right) =>
+          left.localeCompare(right),
+        );
+        provider.modelsSyncedAt = result.syncedAt ?? Date.now();
+      }
+    });
+  }
+
   update(input: ProviderRoutingParams): Promise<RoutingConfiguration> {
-    const operation = this.#queue.then(async () => {
-      const params = providerRoutingParamsSchema.parse(input);
-      const config = await this.read();
+    const params = providerRoutingParamsSchema.parse(input);
+    if (params.action === "read" || params.action === "sync") {
+      // 读与拉取不写文件：拉取结果由 recordModelSync 收敛，避免两处各自落盘。
+      return this.read();
+    }
+    return this.#mutate((config) => {
       switch (params.action) {
-        case "read":
-          return config;
         case "configure":
           config.enabled = params.enabled;
           break;
@@ -75,7 +102,14 @@ export class ProviderRoutingStore {
           if (!apiKey) {
             throw new Error("An API key is required for a new endpoint");
           }
-          const provider = storedProvider.parse({ ...params.provider, apiKey });
+          // 表单不携带模型目录：端点未变时保留上一次拉取结果，端点变了旧目录已失效。
+          const sameEndpoint = previous?.baseUrl === params.provider.baseUrl;
+          const provider = storedProvider.parse({
+            ...params.provider,
+            apiKey,
+            models: sameEndpoint ? (previous?.models ?? []) : [],
+            modelsSyncedAt: sameEndpoint ? (previous?.modelsSyncedAt ?? null) : null,
+          });
           if (index < 0) {
             config.providers.push(provider);
           } else {
@@ -98,6 +132,14 @@ export class ProviderRoutingStore {
           break;
         }
       }
+    });
+  }
+
+  // 所有写操作共用一条队列：读-改-写之间不会被并发的保存/拉取插入。
+  #mutate(change: (config: RoutingConfiguration) => void | Promise<void>) {
+    const operation = this.#queue.then(async () => {
+      const config = await this.read();
+      await change(config);
       const next = fileSchema.parse(config);
       await mkdir(this.home, { recursive: true });
       const file = join(this.home, "provider-routing.json");

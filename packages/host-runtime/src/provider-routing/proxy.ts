@@ -98,6 +98,19 @@ const hopHeaders = new Set([
   "trailer",
 ]);
 const fallbackHeaders = new Set(["content-type", "accept", "user-agent"]);
+// 会话标识属于「同一段对话」而不是某个上游的私有状态：换供应商时必须一起带过去。
+// OpenCode Go 从 2026-09 起要求每次上游调用带 x-opencode-session，缺了直接回
+// 400 MissingSessionID；丢掉其余会话头则会让备用上游退化成每轮新会话、丢失
+// prompt cache。这里只放行稳定的会话/缓存键，轮换型 ID 不在其中。
+const fallbackSessionHeaders = new Set([
+  "x-opencode-session",
+  "x-session-id",
+  "x-session-affinity",
+  "x-conversation-id",
+  "session-id",
+  "session_id",
+  "conversation_id",
+]);
 const decompress = {
   gzip: promisify(gunzip),
   br: promisify(brotliDecompress),
@@ -424,7 +437,7 @@ export class ProviderFailoverProxy {
       ) {
         continue;
       }
-      if (!fallback || fallbackHeaders.has(name)) {
+      if (!fallback || fallbackHeaders.has(name) || fallbackSessionHeaders.has(name)) {
         headers[name] = value;
       }
     }

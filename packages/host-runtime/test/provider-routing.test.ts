@@ -363,6 +363,44 @@ describe("multi-provider failover transport", () => {
     },
   );
 
+  it("carries the conversation session headers across gateways", async () => {
+    const primary = await upstream((_request, response) => response.writeHead(503).end());
+    let received: Record<string, unknown> = {};
+    const backup = await upstream(async (request, response) => {
+      // 备用网关需要读完请求体后才会响应，与真实网关一致；顺带确认请求体没被改写。
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      received = { ...request.headers };
+      response.end(`session-preserved:${JSON.parse(Buffer.concat(chunks).toString()).model}`);
+    });
+    const route = await proxy([
+      { id: "primary", baseUrl: primary },
+      { id: "backup", baseUrl: backup, apiKey: "backup-key" },
+    ]);
+    const session = {
+      "X-OpenCode-Session": "conversation-abc",
+      session_id: "session-abc",
+      conversation_id: "conversation-abc",
+      "X-Session-Affinity": "affinity-abc",
+    };
+    expect(
+      await (
+        await fetch(route.url + "/responses", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...session },
+          body: JSON.stringify({ model: "ds", input: "hi" }),
+        })
+      ).text(),
+    ).toBe("session-preserved:ds");
+    expect(received).toMatchObject({
+      "x-opencode-session": "conversation-abc",
+      session_id: "session-abc",
+      conversation_id: "conversation-abc",
+      "x-session-affinity": "affinity-abc",
+      authorization: "Bearer backup-key",
+    });
+  });
+
   it.each([400, 401, 403, 422])("surfaces HTTP %s without switching providers", async (status) => {
     const primary = await upstream((_request, response) =>
       response.writeHead(status).end("rejected"),
@@ -554,6 +592,135 @@ describe("routing configuration and runtime ownership", () => {
     });
     await store.update({ action: "move", id: "two", direction: "up" });
     expect((await store.read()).providers.map((value) => value.id)).toEqual(["two", "one"]);
+  });
+
+  it("pulls each gateway model catalog and merges duplicate models once", async () => {
+    const home = await temporaryHome();
+    const gatewayA = await upstream((request, response) => {
+      expect(request.url).toBe("/v1/models");
+      expect(request.headers.authorization).toBe("Bearer key-a");
+      response
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({ data: [{ id: "ds" }, { id: "glm-5.3" }] }));
+    });
+    const gatewayB = await upstream((request, response) => {
+      expect(request.url).toBe("/v1/models");
+      response
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify({ data: [{ id: "glm-5.3" }, { id: "gpt-6-astra" }] }));
+    });
+    const routing = new ProviderRouting(home);
+    await routing.start();
+    cleanup.push(() => routing.close());
+    for (const [id, baseUrl] of [
+      ["gateway-a", gatewayA],
+      ["gateway-b", `${gatewayB}/v1`],
+    ] as const) {
+      await routing.configure({
+        action: "save",
+        provider: { id, name: id, baseUrl, enabled: true, model: "" },
+        apiKey: `key-${id.slice(-1)}`,
+      });
+    }
+    const synced = await routing.configure({ action: "sync" });
+    expect(synced.syncResults).toEqual([
+      { provider: "gateway-a", modelCount: 2 },
+      { provider: "gateway-b", modelCount: 2 },
+    ]);
+    expect(synced.modelCatalog).toEqual([
+      { model: "ds", providers: ["gateway-a"] },
+      { model: "glm-5.3", providers: ["gateway-a", "gateway-b"] },
+      { model: "gpt-6-astra", providers: ["gateway-b"] },
+    ]);
+    expect(synced.providers.map((provider) => provider.models)).toEqual([
+      ["ds", "glm-5.3"],
+      ["glm-5.3", "gpt-6-astra"],
+    ]);
+    // 同步结果落盘：重新读取仍保留目录，且不包含密钥。
+    const stored = await routing.configure({ action: "read" });
+    expect(stored.modelCatalog).toHaveLength(3);
+    expect(JSON.stringify(stored)).not.toContain("key-a");
+  });
+
+  it("keeps a gateway disabled instead of deleting it, and skips it while syncing", async () => {
+    const home = await temporaryHome();
+    const hit = vi.fn();
+    const gateway = await upstream((_request, response) => {
+      hit();
+      response.writeHead(200, { "content-type": "application/json" }).end('{"data":[{"id":"ds"}]}');
+    });
+    const routing = new ProviderRouting(home);
+    await routing.start();
+    cleanup.push(() => routing.close());
+    const provider = {
+      id: "gateway",
+      name: "Gateway",
+      baseUrl: gateway,
+      model: "",
+      enabled: true,
+    };
+    await routing.configure({ action: "save", provider, apiKey: "gateway-key" });
+    await routing.configure({ action: "sync", id: "gateway" });
+    expect(hit).toHaveBeenCalledTimes(1);
+
+    const disabled = await routing.configure({
+      action: "save",
+      provider: { ...provider, enabled: false },
+    });
+    expect(disabled.providers).toHaveLength(1);
+    expect(disabled.providers[0]).toMatchObject({
+      id: "gateway",
+      enabled: false,
+      keyConfigured: true,
+    });
+    // 停用不清空已拉取的模型目录。
+    expect(disabled.providers[0]?.models).toEqual(["ds"]);
+
+    // 停用后不在「同步全部」范围内，但仍可显式同步。
+    await routing.configure({ action: "sync" });
+    expect(hit).toHaveBeenCalledTimes(1);
+    await routing.configure({ action: "sync", id: "gateway" });
+    expect(hit).toHaveBeenCalledTimes(2);
+
+    // 停用的供应商不参与接续，但配置仍在。
+    expect((await routing.configure({ action: "read" })).providers).toHaveLength(1);
+  });
+
+  it("reports a gateway model pull failure without dropping its previous catalog", async () => {
+    const home = await temporaryHome();
+    const gateway = await upstream((_request, response) => response.writeHead(500).end());
+    const routing = new ProviderRouting(home);
+    await routing.start();
+    cleanup.push(() => routing.close());
+    await routing.configure({
+      action: "save",
+      provider: { id: "gateway", name: "Gateway", baseUrl: gateway, model: "", enabled: true },
+      apiKey: "key",
+    });
+    await writeFile(
+      join(home, "provider-routing.json"),
+      JSON.stringify({
+        enabled: false,
+        providers: [
+          {
+            id: "gateway",
+            name: "Gateway",
+            baseUrl: gateway,
+            model: "",
+            enabled: true,
+            apiKey: "key",
+            models: ["ds"],
+            modelsSyncedAt: 1,
+          },
+        ],
+      }),
+    );
+    const snapshot = await routing.configure({ action: "sync" });
+    expect(snapshot.syncResults).toEqual([
+      { provider: "gateway", modelCount: 0, error: "HTTP 500" },
+    ]);
+    expect(snapshot.providers[0]?.models).toEqual(["ds"]);
+    expect(snapshot.providers[0]?.modelsSyncedAt).toBe(1);
   });
 
   it("covers every configured custom Responses provider and enables fallbacks without restarting", async () => {

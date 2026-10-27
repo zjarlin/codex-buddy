@@ -24,6 +24,25 @@ export const fallbackProviderSchema = z.object({
   enabled: z.boolean(),
 });
 
+// 网关模型目录由「拉取」写入，不属于用户表单字段：保存名称/顺序/开关时不会覆盖它。
+export const providerModelsSchema = z.object({
+  // 上一次从该网关 `/v1/models` 拉取到的模型；空表示尚未拉取或拉取失败。
+  models: z.array(z.string().trim().min(1).max(200)).max(2000).default([]),
+  modelsSyncedAt: z.number().int().nonnegative().nullable().default(null),
+});
+
+// 多个网关合并后的模型目录：同一个模型只出现一次，providers 记录提供该模型的网关名称。
+export const providerModelCatalogEntrySchema = z.object({
+  model: z.string().min(1).max(200),
+  providers: z.array(z.string().min(1).max(80)).min(1),
+});
+
+export const providerSyncResultSchema = z.object({
+  provider: z.string().min(1).max(80),
+  modelCount: z.number().int().nonnegative(),
+  error: z.string().max(400).optional(),
+});
+
 export const providerRouteObservationSchema = z.object({
   request_id: z.string().min(1).max(120),
   thread_id: hostThreadIdSchema,
@@ -54,12 +73,20 @@ export const providerRoutingParamsSchema = z.discriminatedUnion("action", [
     apiKey: z.string().trim().min(1).max(8192).optional(),
   }),
   z.object({ action: z.literal("remove"), id: z.string() }),
+  // 从网关的 `/v1/models` 直接拉取模型目录；省略 id 时同步全部已启用且已保存密钥的网关。
+  z.object({ action: z.literal("sync"), id: z.string().optional() }),
   z.object({ action: z.literal("move"), id: z.string(), direction: z.enum(["up", "down"]) }),
 ]);
 
 export const providerRoutingSnapshotSchema = z.object({
   enabled: z.boolean(),
-  providers: z.array(fallbackProviderSchema.extend({ keyConfigured: z.boolean() })),
+  providers: z.array(
+    fallbackProviderSchema
+      .extend(providerModelsSchema.shape)
+      .extend({ keyConfigured: z.boolean() }),
+  ),
+  modelCatalog: z.array(providerModelCatalogEntrySchema).optional(),
+  syncResults: z.array(providerSyncResultSchema).optional(),
   primaryProviders: z.array(
     z.object({ id: z.string(), name: z.string(), baseUrl: z.string(), covered: z.boolean() }),
   ),
@@ -82,5 +109,8 @@ export const providerRoutingSnapshotSchema = z.object({
 export type ProviderRoutingParams = z.infer<typeof providerRoutingParamsSchema>;
 export type ProviderRoutingSnapshot = z.infer<typeof providerRoutingSnapshotSchema>;
 export type FallbackProvider = z.infer<typeof fallbackProviderSchema>;
+export type ProviderModels = z.infer<typeof providerModelsSchema>;
+export type ProviderModelCatalogEntry = z.infer<typeof providerModelCatalogEntrySchema>;
+export type ProviderSyncResult = z.infer<typeof providerSyncResultSchema>;
 export type ProviderFailure = NonNullable<ProviderRoutingSnapshot["failures"]>[number];
 export type ProviderRouteObservation = z.infer<typeof providerRouteObservationSchema>;

@@ -4000,6 +4000,8 @@ describe("Multiple provider settings", () => {
     model: "",
     enabled: true,
     keyConfigured: true,
+    models: [],
+    modelsSyncedAt: null,
   };
 
   async function mountProviders(
@@ -4223,6 +4225,58 @@ describe("Multiple provider settings", () => {
     find("Provider name").value = "Changed";
     find("Add provider").dispatch("click");
     expect(find("Provider name").value).toBe("");
+  });
+
+  it("disables a provider in place instead of deleting it and can pull its models", async () => {
+    const { find, remote, snapshot, content } = await mountProviders("en", {
+      providers: [fallback],
+      modelCatalog: [
+        { model: "ds", providers: ["Backup"] },
+        { model: "glm-5.3", providers: ["Backup", "Company"] },
+      ],
+    });
+    // 合并后的目录里同名模型只有一行，并列出提供它的网关。
+    expect(visibleText(content)).toContain("glm-5.3 Backup, Company");
+    expect(visibleText(content).match(/\bds\b/gu)).toHaveLength(1);
+
+    remote.providerRouting.mockImplementation(async (params) =>
+      params.action === "save" && !params.provider.enabled
+        ? { ...snapshot, providers: [{ ...fallback, enabled: false }] }
+        : snapshot,
+    );
+    find("Disable: Backup").dispatch("click");
+    await vi.waitFor(() =>
+      expect(remote.providerRouting).toHaveBeenCalledWith({
+        action: "save",
+        provider: {
+          id: "backup",
+          name: "Backup",
+          baseUrl: "https://backup.invalid/v1",
+          model: "",
+          enabled: false,
+        },
+      }),
+    );
+    await vi.waitFor(() => expect(find("Enable: Backup")).toBeDefined());
+
+    find("Pull models: Backup").dispatch("click");
+    await vi.waitFor(() =>
+      expect(remote.providerRouting).toHaveBeenCalledWith({ action: "sync", id: "backup" }),
+    );
+    // 停用只让它退出接续顺序，配置、密钥与目录都还在。
+    expect(visibleText(content)).toContain("Backup");
+    expect(visibleText(content)).toContain("Key saved");
+  });
+
+  it("reports per-gateway model pull failures without hiding the merged catalog", async () => {
+    const { snapshot, content } = await mountProviders("en", {
+      providers: [fallback],
+      modelCatalog: [{ model: "ds", providers: ["Backup"] }],
+      syncResults: [{ provider: "backup", modelCount: 0, error: "HTTP 500" }],
+    });
+    expect(snapshot.providers).toHaveLength(1);
+    expect(visibleText(content)).toContain("Some gateways failed: backup (HTTP 500)");
+    expect(visibleText(content)).toContain("ds");
   });
 
   it("does not recreate a deleted provider from its open editor", async () => {

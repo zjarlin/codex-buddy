@@ -130,7 +130,7 @@
 | [`architecture/renderer-settings-styling.md`](architecture/renderer-settings-styling.md) | 设置页 Tailwind CSS 使用边界、构建方式与编写规则；新增或改版设置页界面时阅读。 |
 | [`operations/codex-desktop-upgrade-diagnosis-playbook.md`](operations/codex-desktop-upgrade-diagnosis-playbook.md) | Desktop 更新后 Renderer、Bridge、Agent 和 Model 异常，以及输入性能的诊断流程；兼容性与交互性能回归时阅读。 |
 | [`product/buddy-private-chat.md`](product/buddy-private-chat.md) | 普通 q3 模型选择与旧隐私配置迁移；不再限制原生执行入口。 |
-| [`product/emergency-provider.md`](product/emergency-provider.md) | 本地与远程 Host 的多供应商配置、即时生效、自动故障接续与流式重试边界。 |
+| [`product/emergency-provider.md`](product/emergency-provider.md) | 本地与远程 Host 的多网关配置、网关模型目录合并去重、启停与删除的区别、自动故障接续与流式重试边界。 |
 | [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 单模型路由与设置表单、模型目录热更新、持久 Pin、Auto routed 卡片和 System One 回合动作。 |
 | [`product/translate-cards.md`](product/translate-cards.md) | 模型回答及进度消息的自动翻译展示、网关接口与 SSH 会话兼容。 |
 | [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |

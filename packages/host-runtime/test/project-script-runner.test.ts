@@ -37,9 +37,24 @@ describe("Project script runner", () => {
       "start",
     );
 
-    expect(result).toMatchObject({ action: "start", state: "completed", exitCode: 0 });
-    expect(result.output).toContain("started start");
-    await expect(readFile(result.logPath, "utf8")).resolves.toContain(`script: ${scriptPath}`);
+    // Windows 上 bash.exe 的启动本身可能超过 500ms 的早退观察窗口，
+    // 此时 runner 如实返回 running；重跑一次即可拿到「已完成」这条路径。
+    let settled = result;
+    for (let attempt = 0; attempt < 4 && settled.state === "running"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      settled = await new ProjectScriptRunner({ CODEXHOST_DATA_DIR: directory }).run(
+        {
+          target: { projectKind: "local", projectId: "project" },
+          label: "Project",
+          scripts: { start: scriptPath },
+        },
+        "start",
+      );
+    }
+
+    expect(settled).toMatchObject({ action: "start", state: "completed", exitCode: 0 });
+    expect(settled.output).toContain("started start");
+    await expect(readFile(settled.logPath, "utf8")).resolves.toContain(`script: ${scriptPath}`);
   });
 
   it("runs a bound custom script by id", async () => {

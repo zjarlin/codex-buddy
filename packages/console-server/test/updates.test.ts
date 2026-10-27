@@ -10,10 +10,19 @@ import { createConsoleUpdates, type ConsoleUpdateTarget } from "../src/updates.j
 
 // 线上 Updater 与 BackgroundUpdateManager 都用「临时文件 + 原子替换」写状态；
 // 测试若用普通 writeFile，读取方会扫到被截断的空文件（Windows 上必现）。
+// Windows 上替换目标瞬间被读取方打开会返回 EPERM，重试即可，语义仍是原子替换。
 async function writeStatusAtomic(statusPath: string, value: unknown): Promise<void> {
   const temporary = `${statusPath}.${process.pid}.test.tmp`;
   await writeFile(temporary, JSON.stringify(value));
-  await rename(temporary, statusPath);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(temporary, statusPath);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM" || attempt >= 50) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
 }
 
 let root: string;

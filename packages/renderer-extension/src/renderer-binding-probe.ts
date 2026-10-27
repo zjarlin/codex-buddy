@@ -130,6 +130,7 @@ import { installRendererSidebarThreadAlign } from "./renderer-sidebar-thread-ali
 import { installRendererThreadReturn } from "./renderer-thread-return.js";
 import { installRendererTitlebarProjectName } from "./renderer-titlebar-project-name.js";
 import { installRendererThreadActions } from "./renderer-thread-actions.js";
+import { installRendererReminders } from "./renderer-reminders.js";
 import {
   installRendererQueuedTransfer,
   isQueuedTransferManager,
@@ -1214,10 +1215,16 @@ export function installRendererBindingProbe(
     getLocale: () => settingsLifecycle.locale,
     getClient: () => modelClientForHost("local"),
   });
+  const reminders = installRendererReminders({
+    getLocale: rendererLocale,
+    openThread: (threadId, options) =>
+      openSidebarThread(hostThreadIdSchema.parse(threadId), options),
+  });
   const threadActions = installRendererThreadActions({
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: rendererLocale,
     threadFolders: threadFolders.threadMenu,
+    threadReminders: reminders,
   });
   let adapterStatus: RendererAdapterStatus = {
     state: "installing",
@@ -3672,6 +3679,7 @@ export function installRendererBindingProbe(
     threadReturn.refresh();
     threadActions.refresh();
     threadFolders.refresh();
+    reminders.refresh();
     queuedTransfer.refresh();
     projectActions.refresh();
     projectTabs.refresh();
@@ -4155,6 +4163,7 @@ export function installRendererBindingProbe(
       threadReturn.dispose();
       threadActions.dispose();
       threadFolders.dispose();
+      reminders.dispose();
       queuedTransfer.dispose();
       projectActions.dispose();
       projectTabs.dispose();

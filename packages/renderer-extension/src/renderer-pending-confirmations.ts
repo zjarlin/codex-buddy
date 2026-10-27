@@ -4,7 +4,6 @@ import Check from "lucide/dist/esm/icons/check.mjs";
 import Eye from "lucide/dist/esm/icons/eye.mjs";
 import ArrowUp from "lucide/dist/esm/icons/arrow-up.mjs";
 import Volume2 from "lucide/dist/esm/icons/volume-2.mjs";
-import X from "lucide/dist/esm/icons/x.mjs";
 
 import { hostThreadIdSchema, type HostThreadId } from "@codexhost/shared-contracts";
 
@@ -26,6 +25,7 @@ import {
   sidebarThreadStatusObserved,
 } from "./renderer-sidebar-thread-status.js";
 import { appendMarkdownBlocks } from "./markdown-renderer.js";
+import { createNotificationCard } from "./notification-card.js";
 import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "./renderer-model-favorites.js";
 
 type Locale = "zh-CN" | "en";
@@ -256,20 +256,21 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const model = options.model ?? new PendingConfirmationsModel(window.localStorage);
   const hosts = new Map<string, HostSubscription>();
   const style = document.createElement("style");
-  const modal = document.createElement("div");
-  const panel = document.createElement("section");
-  const heading = document.createElement("header");
-  const headingText = document.createElement("div");
-  const title = document.createElement("h2");
-  const queue = document.createElement("button");
-  const body = document.createElement("div");
+  // 外壳构建时就要求关闭按钮文案；语言必须在它之前可用。
+  let locale: Locale = options.getLocale();
+  const card = createNotificationCard({
+    attribute: MODAL,
+    panelAttribute: PANEL,
+    queueAttribute: QUEUE,
+    closeLabel: () => messages(locale).close,
+  });
+  const { modal, heading, title, queue, close, body, notice, actions } = card;
   const kind = document.createElement("span");
   const conversation = document.createElement("h3");
   const summary = document.createElement("div");
   const project = document.createElement("div");
   project.className = "codexhost-pending-project";
   const time = document.createElement("time");
-  const actions = document.createElement("footer");
   const finishActions = document.createElement("div");
   const followUpActions = document.createElement("div");
   const view = document.createElement("button");
@@ -277,12 +278,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const read = document.createElement("button");
   const archive = document.createElement("button");
   const replay = document.createElement("button");
-  const close = document.createElement("button");
   const composer = document.createElement("div");
   const modelSelect = document.createElement("select");
   const input = document.createElement("textarea");
   const send = document.createElement("button");
-  const notice = document.createElement("p");
   let disposed = false;
   let renderedKey = "";
   let expanded = true;
@@ -302,21 +301,8 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   const modelRequests = new Set<string>();
   let reading: { hostId: string; threadId: string; turnId: string; since: number } | null = null;
   let readTimer: number | null = null;
-  let locale: Locale = options.getLocale();
 
   style.textContent = `
-[${MODAL}]{position:fixed;inset:0;z-index:2147483000;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:24px;background:color-mix(in srgb, CanvasText 14%, transparent);pointer-events:none;font:13px/1.5 system-ui,sans-serif}
-[${MODAL}][hidden]{display:none}
-[${PANEL}]{display:flex;flex-direction:column;box-sizing:border-box;width:min(880px,calc(100vw - 48px));max-height:min(820px,calc(100vh - 64px));overflow:hidden;border:1px solid color-mix(in srgb, CanvasText 18%, transparent);border-radius:10px;background:Canvas;color:CanvasText;box-shadow:0 18px 60px rgb(0 0 0 / 24%);pointer-events:auto}
-[${MODAL}] header{display:flex;align-items:center;gap:10px;padding:14px 16px 10px;border-bottom:1px solid color-mix(in srgb, CanvasText 12%, transparent)}
-[${MODAL}] header h2{min-width:0;margin:0;font-size:15px;line-height:22px}
-[${MODAL}] header > div{min-width:0;flex:1}
-[${QUEUE}]{display:inline-flex;align-items:center;min-height:24px;margin-top:2px;padding:2px 7px;border:0;border-radius:999px;background:color-mix(in srgb, Highlight 14%, transparent);color:CanvasText;font:12px/18px inherit;cursor:pointer}
-[${QUEUE}]:focus-visible,[${MODAL}] button:focus-visible{outline:2px solid Highlight;outline-offset:1px}
-[${MODAL}] .codexhost-pending-close,[${MODAL}] .codexhost-pending-replay{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:none;padding:0;border:0;border-radius:6px;background:transparent;color:CanvasText;cursor:pointer}
-[${MODAL}] .codexhost-pending-close:hover,[${MODAL}] .codexhost-pending-replay:hover{background:color-mix(in srgb,CanvasText 10%,transparent)}
-[${MODAL}] .codexhost-pending-replay:disabled{opacity:.55;cursor:wait}
-[${MODAL}] .codexhost-pending-body{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:18px 20px}
 [${MODAL}] .codexhost-pending-kind{display:inline-flex;padding:2px 7px;border-radius:999px;background:color-mix(in srgb,CanvasText 9%,transparent);font-size:12px}
 [${MODAL}] .codexhost-pending-body h3{margin:10px 0 6px;font-size:17px;line-height:24px;overflow-wrap:anywhere}
 [${MODAL}] .codexhost-pending-summary{flex:1 1 auto;min-height:0;margin:0;overflow:auto;overflow-wrap:anywhere;color:color-mix(in srgb,CanvasText 84%,transparent);font-size:13px;line-height:20px}
@@ -344,36 +330,23 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
 [${MODAL}] .codexhost-pending-summary hr{border:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);margin:8px 0}
 [${MODAL}] .codexhost-pending-project{font-size:12px;color:GrayText;overflow-wrap:anywhere;margin-bottom:6px}
 [${MODAL}] .codexhost-pending-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
-[${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;flex:none;margin-top:12px}
-[${MODAL}] .codexhost-pending-composer{flex-wrap:wrap}
+[${MODAL}] .codexhost-pending-composer{display:flex;align-items:flex-end;gap:8px;flex:none;margin-top:12px;flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-model{flex:0 1 180px;min-width:130px;max-width:100%;box-sizing:border-box;min-height:36px;padding:6px 8px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit}
 [${MODAL}] .codexhost-pending-input{flex:1;min-height:36px;max-height:120px;box-sizing:border-box;padding:8px 10px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:Canvas;color:CanvasText;font:inherit;resize:vertical}
 [${MODAL}] .codexhost-pending-input:focus-visible{outline:2px solid Highlight;outline-offset:1px}
 [${MODAL}] .codexhost-pending-send{display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--spacing-token-button-composer,28px);height:var(--spacing-token-button-composer,28px);margin-bottom:4px;padding:0;border:0;border-radius:50%;background:var(--color-background-composer-primary,var(--color-token-text-primary,light-dark(#0d0d0d,#f3f3f3)));color:var(--color-text-composer-primary,var(--color-token-main-surface-primary,light-dark(#fff,#0d0d0d)));cursor:pointer;transition:opacity .15s}
 [${MODAL}] .codexhost-pending-send:hover:not(:disabled){opacity:.85}
 [${MODAL}] .codexhost-pending-send:disabled{opacity:.55;cursor:wait}
-[${MODAL}] .codexhost-pending-actions{display:flex;align-items:center;justify-content:space-between;gap:16px 24px;padding:12px 16px;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);flex-wrap:wrap}
 [${MODAL}] .codexhost-pending-action-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
 [${MODAL}] .codexhost-pending-followup{margin-left:auto;padding-left:24px;border-left:1px solid color-mix(in srgb,CanvasText 12%,transparent)}
-[${MODAL}] .codexhost-pending-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 11px;border:1px solid color-mix(in srgb,CanvasText 18%,transparent);border-radius:6px;background:transparent;color:CanvasText;font:inherit;cursor:pointer}
-[${MODAL}] .codexhost-pending-actions button:hover:not(:disabled){background:color-mix(in srgb,CanvasText 8%,transparent)}
-[${MODAL}] .codexhost-pending-actions button[data-primary="true"]{border-color:Highlight;background:Highlight;color:HighlightText}
-[${MODAL}] .codexhost-pending-actions button[data-primary="true"]:hover:not(:disabled){background:Highlight}
 [${MODAL}] .codexhost-pending-followup button{border-color:color-mix(in srgb,Highlight 55%,transparent);color:Highlight}
 [${MODAL}] .codexhost-pending-followup button:hover:not(:disabled){background:color-mix(in srgb,Highlight 12%,transparent)}
-[${MODAL}] .codexhost-pending-actions button:disabled{opacity:.55;cursor:wait}
-[${MODAL}] .codexhost-pending-notice{min-height:18px;margin:-6px 16px 0;color:#c2410c;font-size:12px;overflow-wrap:anywhere}
-[${MODAL}] .codexhost-pending-notice:empty{visibility:hidden}
-@media (max-width:520px){[${MODAL}]{padding:8px}[${PANEL}]{width:calc(100vw - 16px);max-height:calc(100vh - 16px)}[${MODAL}] .codexhost-pending-body{padding:14px}[${MODAL}] .codexhost-pending-actions{flex-direction:column;align-items:stretch;gap:10px}[${MODAL}] .codexhost-pending-action-group{flex:1 1 auto}[${MODAL}] .codexhost-pending-followup{margin-left:0;padding-left:0;border-left:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);padding-top:10px}[${MODAL}] .codexhost-pending-actions button{flex:1 1 auto}}
+@media (max-width:520px){[${MODAL}] .codexhost-pending-body{padding:14px}[${MODAL}] .codexhost-pending-action-group{flex:1 1 auto}[${MODAL}] .codexhost-pending-followup{margin-left:0;padding-left:0;border-left:0;border-top:1px solid color-mix(in srgb,CanvasText 12%,transparent);padding-top:10px}}
 `;
   title.textContent = "";
-  queue.type = "button";
-  queue.hidden = true;
-  headingText.append(title, queue);
-  close.type = "button";
-  close.className = "codexhost-pending-close";
-  close.append(createElement(X, { width: 17, height: 17, "aria-hidden": "true" }));
-  heading.append(headingText, replay, close);
+  // 语音重播与关闭并列放在标题行尾部；外壳只预热了关闭按钮。
+  replay.className = "codexhost-card-icon";
+  heading.insertBefore(replay, close);
   body.className = "codexhost-pending-body";
   kind.className = "codexhost-pending-kind";
   conversation.className = "codexhost-pending-conversation";
@@ -396,9 +369,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   view.append(createElement(Eye, { width: 15, height: 15, "aria-hidden": "true" }));
   read.append(createElement(Check, { width: 15, height: 15, "aria-hidden": "true" }));
   archive.append(createElement(Archive, { width: 15, height: 15, "aria-hidden": "true" }));
-  replay.className = "codexhost-pending-replay";
   replay.append(createElement(Volume2, { width: 15, height: 15, "aria-hidden": "true" }));
-  actions.className = "codexhost-pending-actions";
   finishActions.className = "codexhost-pending-action-group";
   followUpActions.className = "codexhost-pending-action-group codexhost-pending-followup";
   // “继续”会立刻向会话发送消息；“标为已读”“归档”只处理提醒本身。两者分组并
@@ -406,16 +377,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
   finishActions.append(view, read, archive);
   followUpActions.append(continueButton);
   actions.append(finishActions, followUpActions);
-  notice.className = "codexhost-pending-notice";
-  notice.setAttribute("role", "alert");
-  panel.append(heading, body, notice, actions);
-  modal.setAttribute(MODAL, "");
-  panel.setAttribute(PANEL, "");
-  modal.setAttribute("role", "dialog");
-  modal.setAttribute("aria-modal", "false");
-  modal.append(panel);
   document.head.append(style);
-  document.body.append(modal);
 
   const clearReadTimer = (): void => {
     if (readTimer !== null) window.clearTimeout(readTimer);

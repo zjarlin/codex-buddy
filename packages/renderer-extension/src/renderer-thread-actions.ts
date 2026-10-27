@@ -139,6 +139,8 @@ export function installRendererThreadActions(options: {
   getLocale(): Locale;
   terminalPreference?: ThreadTerminalPreferenceStore;
   threadFolders?: ThreadFolderThreadMenu;
+  /** 会话提醒入口与文件夹入口共用同一扩展点，菜单由行操作统一构建。 */
+  threadReminders?: ThreadFolderThreadMenu;
 }): { refresh(): void; dispose(): void } {
   const styles = document.createElement("style");
   styles.textContent = style;
@@ -453,6 +455,7 @@ export function installRendererThreadActions(options: {
     menu.append(copy);
     if (options.getClient(hostId)?.archiveCompletedThreads) menu.append(archive);
     options.threadFolders?.decorate(menu, row, hostId, threadId, closeMenu);
+    options.threadReminders?.decorate(menu, row, hostId, threadId, closeMenu);
     menu.append(error);
     return menu;
   };

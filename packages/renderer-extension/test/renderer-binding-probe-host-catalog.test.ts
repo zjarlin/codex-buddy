@@ -69,6 +69,13 @@ vi.mock("../src/renderer-pending-confirmations.js", () => ({
   },
 }));
 
+vi.mock("../src/renderer-reminders.js", () => ({
+  installRendererReminders: (options: { getLocale(): "zh-CN" | "en" }) => {
+    testState.localeReads.push(options.getLocale());
+    return { refresh: vi.fn(), dispose: vi.fn(), decorate: vi.fn() };
+  },
+}));
+
 vi.mock("../src/renderer-titlebar-project-name.js", () => ({
   installRendererTitlebarProjectName: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
@@ -495,7 +502,7 @@ it("reads locale before settings lifecycle initialization", async () => {
 
   const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
 
-  expect(testState.localeReads).toHaveLength(13);
+  expect(testState.localeReads).toHaveLength(14);
   expect(testState.localeReads.slice(0, 9)).toEqual(Array.from({ length: 9 }, () => "zh-CN"));
   probe.dispose();
 });

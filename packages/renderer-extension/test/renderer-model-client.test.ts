@@ -886,6 +886,7 @@ describe("Renderer fixed Model request client", () => {
       "threadOpenTarget",
       "translate",
       "translateBatch",
+      "translateImage",
       "unlinkGitRepository",
       "unstageGitPaths",
       "updateGitSubmodule",

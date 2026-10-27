@@ -79,3 +79,41 @@ export type BuddyTranslateBatchItem = z.infer<typeof buddyTranslateBatchItemSche
 export type BuddyTranslateBatchRequest = z.infer<typeof buddyTranslateBatchRequestSchema>;
 export type BuddyTranslateBatchItemResult = z.infer<typeof buddyTranslateBatchItemResultSchema>;
 export type BuddyTranslateBatchResult = z.infer<typeof buddyTranslateBatchResultSchema>;
+
+/**
+ * 图片翻译：把一张图交给便宜的原生视觉模型直接出目标语言译文。
+ * 图片不进离线 MT，也不做“先转写再翻译”的两跳——图片 token 在第一跳就已经付过，
+ * 两跳只会多一次延迟和一次信息损失。
+ */
+export const BUDDY_TRANSLATE_IMAGE_METHOD = "codexhost/buddy/translate/image";
+
+/** data URL 的 base64 上限（字符数），超过时渲染层跳过该图，避免把 IPC 撑爆。 */
+export const BUDDY_TRANSLATE_IMAGE_MAX_CHARS = 12 * 1024 * 1024;
+
+/** 只接受 base64 data URL 或 https 图片地址；本地路径、file: 和 http 一律拒绝。 */
+export function isBuddyTranslateImageSource(value: string): boolean {
+  return /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/iu.test(value)
+    ? true
+    : /^https:\/\/[^\s]+$/iu.test(value);
+}
+
+export const buddyTranslateImageRequestSchema = z
+  .object({
+    image: z
+      .string()
+      .min(1)
+      .max(BUDDY_TRANSLATE_IMAGE_MAX_CHARS)
+      .refine(isBuddyTranslateImageSource, "image must be a base64 data URL or an https URL"),
+    targetLocale: z.string().min(2).max(10),
+  })
+  .strict();
+
+export type BuddyTranslateImageRequest = z.infer<typeof buddyTranslateImageRequestSchema>;
+
+export const buddyTranslateImageResultSchema = z.object({
+  translated: z.string(),
+  model: z.string(),
+  latencyMs: z.number().int().nonnegative(),
+});
+
+export type BuddyTranslateImageResult = z.infer<typeof buddyTranslateImageResultSchema>;

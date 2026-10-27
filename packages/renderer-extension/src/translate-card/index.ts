@@ -1,6 +1,10 @@
 import Languages from "lucide/dist/esm/icons/languages.mjs";
 import createElement from "lucide/dist/esm/createElement.mjs";
-import { detectBuddyTranslateSourceLanguage } from "@codexhost/shared-contracts";
+import {
+  BUDDY_TRANSLATE_IMAGE_MAX_CHARS,
+  detectBuddyTranslateSourceLanguage,
+  isBuddyTranslateImageSource,
+} from "@codexhost/shared-contracts";
 import { injectTranslateStyle } from "./style.js";
 import { translateMessages } from "./messages.js";
 type Messages = ReturnType<typeof translateMessages>;
@@ -72,10 +76,58 @@ function findMessages(root: HTMLElement, threadId: string): Map<string, HTMLElem
   return map;
 }
 
+interface ImageEntry {
+  id: string;
+  anchor: HTMLElement;
+  src: string;
+}
+
+/**
+ * 收集助手消息里可直接翻译的图片（base64 或 https）。
+ * 只认原生 markdown 正文里的 img，不碰附件缩略图、头像和我们自己的卡片。
+ * 本地文件路径、file: 和 http 一律跳过：它们要么不该出网，要么 Host 拿不到。
+ */
+function findImages(root: HTMLElement, threadId: string): Map<string, ImageEntry> {
+  const map = new Map<string, ImageEntry>();
+  for (const response of root.querySelectorAll<HTMLElement>(
+    "[data-response-annotation-conversation]",
+  )) {
+    if (response.getAttribute("data-response-annotation-conversation") !== threadId) continue;
+    if (!response.getClientRects().length) continue;
+    const turn = response.closest("[data-content-search-turn-key], [data-turn-key]");
+    if (!turn) continue;
+    const turnId =
+      turn.getAttribute("data-content-search-turn-key") ?? turn.getAttribute("data-turn-key");
+    if (!turnId) continue;
+    const content =
+      response.querySelector('[data-markdown-text-style="assistant-message"]') ?? response;
+    const messageId = response.getAttribute("data-response-annotation-target") ?? "";
+    let index = 0;
+    for (const img of content.querySelectorAll<HTMLImageElement>("img")) {
+      if (img.closest("[data-codexhost-translate]")) continue;
+      const src = img.currentSrc || img.getAttribute("src") || "";
+      if (!src || src.length > BUDDY_TRANSLATE_IMAGE_MAX_CHARS) continue;
+      if (!isBuddyTranslateImageSource(src)) continue;
+      const id = `img:${threadId}:${turnId}:${messageId}:${index}`;
+      index += 1;
+      if (map.has(id)) continue;
+      map.set(id, { id, anchor: response, src });
+    }
+  }
+  return map;
+}
+
+/** 图片没有可靠的语言线索：只要 UI 不是英文就尝试翻译，英文界面默认不额外花钱。 */
+function needsImageTranslation(locale: string): boolean {
+  return !locale.startsWith("en");
+}
+
 export function installTranslateCards(options: Options) {
   let disposed = false;
   const style = injectTranslateStyle();
   const cache = new Map<string, { translated: string; model: string; latencyMs: number }>();
+  // 图片按 base64 原文做键，单条体积大，因此条目上限比文本更小。
+  const imageCache = new Map<string, { translated: string; model: string; latencyMs: number }>();
   // 每个会话的状态：完成卡片、运行中排队条目、以及并发控制字段。
   const threads = new Map<string, ThreadState>();
 
@@ -88,7 +140,9 @@ export function installTranslateCards(options: Options) {
     checkedAt: number;
     cards: Map<string, TranslationState>;
     pending: Map<string, { text: string; anchor: HTMLElement }>;
+    pendingImages: Map<string, { src: string; anchor: HTMLElement }>;
     batching: boolean;
+    imageBatching: boolean;
     completed: boolean;
     subscribed?: boolean;
     unsubscribe?: () => void;
@@ -104,7 +158,9 @@ export function installTranslateCards(options: Options) {
         checkedAt: 0,
         cards: new Map(),
         pending: new Map(),
+        pendingImages: new Map(),
         batching: false,
+        imageBatching: false,
         completed: false,
       };
       threads.set(threadId, state);
@@ -116,10 +172,29 @@ export function installTranslateCards(options: Options) {
   const BATCH_CHUNK = 8;
   /** 分片并发数：保持请求量很小，同时避免长会话等待过久。 */
   const BATCH_CONCURRENCY = 2;
+  /** 图片并发：视觉模型有账号级并发上限，两张同时足够覆盖常见截图。 */
+  const IMAGE_CONCURRENCY = 2;
 
   /** 卡片签名只取决于文本与语言，渲染与轮询必须使用同一个字符串。 */
   function signatureOf(text: string, locale: string): string {
     return JSON.stringify([text, locale]);
+  }
+
+  /**
+   * 图片签名与缓存键都用 32 位 FNV-1a，而不是把十几 MB 的 base64 原文留作键：
+   * 卡片状态和缓存会活到会话结束，直接存原文等于把图片再复制一份到 JS 堆里。
+   */
+  function hashSource(source: string): string {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < source.length; index += 1) {
+      hash ^= source.charCodeAt(index);
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return `${source.length.toString(36)}-${hash.toString(36)}`;
+  }
+
+  function imageSignature(source: string, locale: string): string {
+    return JSON.stringify(["image", hashSource(source), locale]);
   }
 
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string) {
@@ -166,6 +241,7 @@ export function installTranslateCards(options: Options) {
     latencyMs: number,
     locale: string,
     signature: string,
+    label?: string,
   ) {
     const state = thread(threadId);
     const msgs = translateMessages(locale);
@@ -175,6 +251,7 @@ export function installTranslateCards(options: Options) {
     }
     card.dataset.state = "completed";
     card.innerHTML = "";
+    if (label) card.append(el("div", "codexhost-translate-label", label));
     const header = el("div", "codexhost-translate-header");
     header.append(
       createElement(Languages, { width: 14, height: 14, "aria-hidden": "true" }),
@@ -183,6 +260,11 @@ export function installTranslateCards(options: Options) {
     card.append(header);
     const content = el("div", "codexhost-translate-content", translated);
     card.append(content);
+    // 图片卡没有可切换的原文正文，不放大一个无意义的开关。
+    if (label) {
+      state.cards.set(id, { node: card, signature });
+      return;
+    }
     const toggle = el("button", "codexhost-translate-toggle", msgs.showOriginal);
     let showTrans = true;
     toggle.addEventListener("click", () => {
@@ -364,6 +446,84 @@ export function installTranslateCards(options: Options) {
     }
   }
 
+  /** 单张图片：一次视觉模型调用直接出译文，失败可按图重试。 */
+  async function translateImageEntry(
+    threadId: string,
+    id: string,
+    src: string,
+    anchor: HTMLElement,
+    locale: string,
+  ) {
+    const state = thread(threadId);
+    const client = state.client;
+    if (!client?.translateImage) return;
+    const msgs = translateMessages(locale);
+    const card = cardShell(state, id, anchor, msgs);
+    card.dataset.kind = "image";
+    const signature = imageSignature(src, locale);
+    state.cards.set(id, { node: card, signature });
+    try {
+      const ck = `${locale}:${hashSource(src)}`;
+      let result = imageCache.get(ck);
+      if (!result) {
+        result = await client.translateImage({ image: src, targetLocale: locale });
+        if (imageCache.size >= 32) imageCache.clear();
+        imageCache.set(ck, result);
+      }
+      if (disposed || card.dataset.state !== "loading") return;
+      renderResult(
+        threadId,
+        id,
+        result.translated || msgs.noText,
+        result.model,
+        result.latencyMs,
+        locale,
+        signature,
+        msgs.imageLabel,
+      );
+    } catch (error) {
+      if (disposed || card.dataset.state !== "loading") return;
+      renderFailure(
+        threadId,
+        id,
+        error,
+        locale,
+        () => void translateImageEntry(threadId, id, src, anchor, locale),
+      );
+    }
+  }
+
+  /** 一回合内的图片有界并发翻译：视觉模型一次只处理一张，避免同时吃掉并发额度。 */
+  async function runImages(threadId: string, locale: string) {
+    const state = threads.get(threadId);
+    if (!state || state.imageBatching) return;
+    if (!state.client?.translateImage) return;
+    const entries = [...state.pendingImages.entries()].filter(
+      ([, entry]) => entry.anchor.isConnected,
+    );
+    state.pendingImages.clear();
+    if (!entries.length) return;
+
+    state.imageBatching = true;
+    try {
+      let cursor = 0;
+      const workers = Array.from(
+        { length: Math.min(IMAGE_CONCURRENCY, entries.length) },
+        async () => {
+          while (!disposed) {
+            const entry = entries[cursor++];
+            if (!entry) return;
+            const [id, { src, anchor }] = entry;
+            await translateImageEntry(threadId, id, src, anchor, locale);
+          }
+        },
+      );
+      await Promise.all(workers);
+    } finally {
+      state.imageBatching = false;
+    }
+  }
+
   function readActivity(state: ThreadState, threadId: string) {
     if (!options.readActivity || state.activityPending) return;
     state.activityPending = true;
@@ -397,6 +557,7 @@ export function installTranslateCards(options: Options) {
       for (const state of threads.values()) {
         state.unsubscribe?.();
         state.pending.clear();
+        state.pendingImages.clear();
         for (const card of state.cards.values()) {
           card.abortController?.abort();
           card.node.remove();
@@ -410,6 +571,7 @@ export function installTranslateCards(options: Options) {
       if (key === threadId) continue;
       other.unsubscribe?.();
       other.pending.clear();
+      other.pendingImages.clear();
       for (const card of other.cards.values()) {
         card.abortController?.abort();
         card.node.remove();
@@ -433,12 +595,16 @@ export function installTranslateCards(options: Options) {
     }
 
     const messages = findMessages(root, threadId);
+    const images = state.client?.translateImage
+      ? findImages(root, threadId)
+      : new Map<string, ImageEntry>();
     for (const [id, card] of state.cards) {
-      if (!card.node.isConnected || !messages.has(id)) {
+      if (!card.node.isConnected || (!messages.has(id) && !images.has(id))) {
         card.abortController?.abort();
         card.node.remove();
         state.cards.delete(id);
         state.pending.delete(id);
+        state.pendingImages.delete(id);
       }
     }
 
@@ -476,9 +642,35 @@ export function installTranslateCards(options: Options) {
       queue(threadId, id, node, text, locale);
     }
 
+    if (needsImageTranslation(locale)) {
+      for (const [id, entry] of images) {
+        const signature = imageSignature(entry.src, locale);
+        if (state.cards.get(id)?.signature === signature) continue;
+        const stale = state.cards.get(id);
+        stale?.abortController?.abort();
+        stale?.node.remove();
+        state.cards.delete(id);
+        state.pendingImages.set(id, { src: entry.src, anchor: entry.anchor });
+        // 先占位，避免同一张图在下一 tick 被重复入队；真正请求等回合结束后发出。
+        const card = cardShell(state, id, entry.anchor, translateMessages(locale));
+        card.dataset.kind = "image";
+        state.cards.set(id, { node: card, signature });
+      }
+    } else {
+      for (const [id] of images) {
+        const card = state.cards.get(id);
+        card?.node.remove();
+        state.cards.delete(id);
+        state.pendingImages.delete(id);
+      }
+    }
+
     // 回合不在运行时就立刻批量翻译；运行中则等回合结束（readActivity/thread-usage）后触发。
     if (!running && state.pending.size > 0 && !state.batching) {
       void runBatch(threadId, locale);
+    }
+    if (!running && state.pendingImages.size > 0 && !state.imageBatching) {
+      void runImages(threadId, locale);
     }
   }
 
@@ -501,6 +693,7 @@ export function installTranslateCards(options: Options) {
       for (const state of threads.values()) {
         state.unsubscribe?.();
         state.pending.clear();
+        state.pendingImages.clear();
         for (const card of state.cards.values()) {
           card.abortController?.abort();
           card.node.remove();

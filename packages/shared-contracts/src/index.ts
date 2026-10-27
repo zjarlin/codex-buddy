@@ -681,13 +681,18 @@ export {
   BUDDY_TRANSLATE_METHOD,
   BUDDY_TRANSLATE_BATCH_METHOD,
   BUDDY_TRANSLATE_BATCH_MAX_ITEMS,
+  BUDDY_TRANSLATE_IMAGE_METHOD,
+  BUDDY_TRANSLATE_IMAGE_MAX_CHARS,
   detectBuddyTranslateSourceLanguage,
+  isBuddyTranslateImageSource,
   buddyTranslateRequestSchema,
   buddyTranslateResultSchema,
   buddyTranslateBatchItemSchema,
   buddyTranslateBatchRequestSchema,
   buddyTranslateBatchItemResultSchema,
   buddyTranslateBatchResultSchema,
+  buddyTranslateImageRequestSchema,
+  buddyTranslateImageResultSchema,
 } from "./buddy-translate.js";
 export type {
   BuddyTranslateRequest,
@@ -696,6 +701,8 @@ export type {
   BuddyTranslateBatchRequest,
   BuddyTranslateBatchItemResult,
   BuddyTranslateBatchResult,
+  BuddyTranslateImageRequest,
+  BuddyTranslateImageResult,
 } from "./buddy-translate.js";
 export {
   BUDDY_SPEECH_METHOD,

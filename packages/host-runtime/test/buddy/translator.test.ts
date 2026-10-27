@@ -39,7 +39,7 @@ async function fixture(respond: (body: Record<string, unknown>, res: ServerRespo
     await new Promise<void>((resolve) => instance.close(() => resolve()));
     await rm(home, { recursive: true, force: true });
   });
-  return { translator: new BuddyTranslator({ CODEX_HOME: home }), requests };
+  return { translator: new BuddyTranslator({ CODEX_HOME: home }), requests, home };
 }
 
 describe("gateway translation", () => {
@@ -366,4 +366,103 @@ it("preserves gateway provider failure details", async () => {
   await expect(
     f.translator.translate({ text: "Please translate this message.", targetLocale: "zh-CN" }),
   ).rejects.toThrow("hymt · failed · upstream timeout\nbaidu · cooldown");
+});
+
+describe("gateway image translation", () => {
+  const png = `data:image/png;base64,${"iVBORw0KGgo=".repeat(4)}`;
+
+  function responsesText(text: string): string {
+    return JSON.stringify({
+      id: "resp_fixture",
+      object: "response",
+      status: "completed",
+      model: "fixture-vision",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
+    });
+  }
+
+  it("asks the vision model for the translation only, with image bytes inline", async () => {
+    const f = await fixture((_body, res) => res.end(responsesText("构建失败：健康检查超时")));
+
+    const result = await f.translator.translateImage({ image: png, targetLocale: "zh-CN" });
+
+    expect(result.translated).toBe("构建失败：健康检查超时");
+    expect(result.model).toBe("cn:glm-5v-turbo");
+    expect(f.requests).toHaveLength(1);
+    const body = f.requests[0] as {
+      model: string;
+      store: boolean;
+      input: { role: string; content: Record<string, unknown>[] }[];
+    };
+    expect(body.model).toBe("cn:glm-5v-turbo");
+    expect(body.store).toBe(false);
+    const content = body.input[0]?.content ?? [];
+    const prompt = content.find((part) => part.type === "input_text");
+    const image = content.find((part) => part.type === "input_image");
+    expect(String(prompt?.text)).toContain("简体中文");
+    expect(String(prompt?.text)).toContain("Output only the translation");
+    expect(image?.image_url).toBe(png);
+  });
+
+  it("honours the configured vision model", async () => {
+    const f = await fixture((_body, res) => res.end(responsesText("done")));
+    const translator = new BuddyTranslator({
+      CODEX_HOME: f.home,
+      CODEXHOST_TRANSLATE_VISION_MODEL: "cn:qwen-vl-max",
+    });
+    await expect(
+      translator.translateImage({ image: png, targetLocale: "en" }),
+    ).resolves.toMatchObject({ model: "cn:qwen-vl-max" });
+    expect((f.requests[0] as { model: string }).model).toBe("cn:qwen-vl-max");
+  });
+
+  it("returns an empty translation when the image has no readable text", async () => {
+    const f = await fixture((_body, res) => res.end(responsesText("")));
+    await expect(
+      f.translator.translateImage({ image: png, targetLocale: "zh-CN" }),
+    ).resolves.toEqual({ translated: "", model: "cn:glm-5v-turbo", latencyMs: expect.any(Number) });
+  });
+
+  it("serves repeat requests from the image cache", async () => {
+    const f = await fixture((_body, res) => res.end(responsesText("缓存")));
+    await f.translator.translateImage({ image: png, targetLocale: "zh-CN" });
+    await f.translator.translateImage({ image: png, targetLocale: "zh-CN" });
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it.each(["http://example.com/a.png", "file:///tmp/a.png", "/tmp/a.png", "not-an-image"])(
+    "rejects %s before touching the gateway",
+    async (image) => {
+      const f = await fixture((_body, res) => res.end(responsesText("unused")));
+      await expect(f.translator.translateImage({ image, targetLocale: "zh-CN" })).rejects.toThrow(
+        "图片翻译请求无效",
+      );
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+
+  it("reports gateway errors with the upstream reason and request id", async () => {
+    const f = await fixture((_body, res) => {
+      res.writeHead(429, { "x-request-id": "vision-fixture-1" });
+      res.end(JSON.stringify({ error: { message: "Concurrency limit exceeded for account" } }));
+    });
+    await expect(
+      f.translator.translateImage({ image: png, targetLocale: "zh-CN" }),
+    ).rejects.toThrow(
+      "图片翻译服务返回 HTTP 429：Concurrency limit exceeded for account（请求 ID：vision-fixture-1）",
+    );
+  });
+
+  it("surfaces an in-body error instead of returning an empty translation", async () => {
+    const f = await fixture((_body, res) =>
+      res.end(
+        JSON.stringify({
+          error: { message: "No image assistance capacity is currently available" },
+        }),
+      ),
+    );
+    await expect(
+      f.translator.translateImage({ image: png, targetLocale: "zh-CN" }),
+    ).rejects.toThrow("No image assistance capacity is currently available");
+  });
 });

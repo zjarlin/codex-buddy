@@ -9,6 +9,7 @@ import {
   AUTO_MODEL_ROUTES_METHOD,
   BUDDY_TRANSLATE_METHOD,
   BUDDY_TRANSLATE_BATCH_METHOD,
+  BUDDY_TRANSLATE_IMAGE_METHOD,
   BUDDY_SPEECH_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
@@ -180,6 +181,7 @@ export function createRendererHostClients(
         if (
           method === BUDDY_TRANSLATE_METHOD ||
           method === BUDDY_TRANSLATE_BATCH_METHOD ||
+          method === BUDDY_TRANSLATE_IMAGE_METHOD ||
           method === BUDDY_SPEECH_METHOD
         ) {
           return gatewayRequest(method, params, options);

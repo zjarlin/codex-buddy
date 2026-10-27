@@ -30,6 +30,13 @@ export function injectTranslateStyle(): HTMLStyleElement {
   height: 14px;
 }
 
+.codexhost-translate-label {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #555);
+}
+
 .codexhost-translate-content {
   white-space: pre-wrap;
   word-break: break-word;

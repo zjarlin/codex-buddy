@@ -8,6 +8,8 @@ const en = {
   showOriginal: "Show original",
   showTranslation: "Show translation",
   modelSelect: "Select model",
+  imageLabel: "Image text",
+  noText: "No readable text in this image.",
 };
 
 const zh: typeof en = {
@@ -20,6 +22,8 @@ const zh: typeof en = {
   showOriginal: "显示原文",
   showTranslation: "显示译文",
   modelSelect: "选择模型",
+  imageLabel: "图片文字",
+  noText: "这张图里没有可识别的文字。",
 };
 
 export function translateMessages(locale: string) {

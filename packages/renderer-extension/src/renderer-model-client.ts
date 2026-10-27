@@ -234,6 +234,7 @@ import {
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
   BUDDY_TRANSLATE_BATCH_METHOD,
+  BUDDY_TRANSLATE_IMAGE_METHOD,
   BUDDY_SPEECH_METHOD,
   buddyPrivateRequestSchema,
   buddyPrivateSnapshotSchema,
@@ -241,7 +242,10 @@ import {
   buddyTranslateResultSchema,
   buddyTranslateBatchRequestSchema,
   buddyTranslateBatchResultSchema,
+  buddyTranslateImageRequestSchema,
+  buddyTranslateImageResultSchema,
   type BuddyTranslateBatchResult,
+  type BuddyTranslateImageResult,
   buddySpeechRequestSchema,
   buddySpeechResultSchema,
   type BuddySpeechResult,
@@ -646,6 +650,11 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     items: { id: string; text: string }[];
     targetLocale: string;
   }): Promise<BuddyTranslateBatchResult>;
+  /** 让 Host 用便宜的原生视觉模型直接出图片译文；不需要图片经过离线 MT。 */
+  translateImage?(input: {
+    image: string;
+    targetLocale: string;
+  }): Promise<BuddyTranslateImageResult>;
   /** 让 Host 用当前网关的曼波配音合成该文本，返回可直接播放的 base64 音频。
    * 只在整个回合结束时按用户开关触发，不进入原生历史或工具链。 */
   synthesizeSpeech?(input: { text: string; locale?: string }): Promise<BuddySpeechResult>;
@@ -1429,6 +1438,15 @@ export function createRendererModelClient(
       }
       return buddyTranslateBatchResultSchema.parse(
         await manager.sendRequest(BUDDY_TRANSLATE_BATCH_METHOD, params.data),
+      );
+    },
+    translateImage: async (input: { image: string; targetLocale: string }) => {
+      const params = buddyTranslateImageRequestSchema.safeParse(input);
+      if (!params.success) {
+        throw new Error("Invalid image translate request");
+      }
+      return buddyTranslateImageResultSchema.parse(
+        await manager.sendRequest(BUDDY_TRANSLATE_IMAGE_METHOD, params.data),
       );
     },
     synthesizeSpeech: async (input: { text: string; locale?: string }) => {

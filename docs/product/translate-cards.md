@@ -24,6 +24,18 @@ SSH 会话优先使用远程 Buddy Host。官方 SSH app-server 明确不支持 
 
 翻译失败时，卡片默认折叠错误详情，点击“查看失败原因”可展开或收起，并提供手动重试，不自动重放失败请求。Host 明确区分 15 秒超时、网关 HTTP 错误（含有界 JSON 错误原因和可用的请求 ID）、无效响应及结果缺失；详情保留网关返回的候选服务商、状态和脱敏失败原因；仅选取响应中的错误消息，不展示请求正文、认证头或 HTML 错误页。
 
+## 图片翻译
+
+助手消息里的图片走独立的 `codexhost/buddy/translate/image`：Host 把图片连同一条只要求译文的提示词发给便宜的原生视觉模型（默认 `cn:glm-5v-turbo`，可用 `CODEXHOST_TRANSLATE_VISION_MODEL` 覆盖），拿回目标语言正文后挂一张「图片文字」卡片。一次调用直接出译文，**不**拆成“视觉模型转写 + 离线 MT 两跳”。
+
+两跳在这里不省钱：图片 token 在第一跳就已经付过，第二跳只省下几百个输出 token（实测约 20%），却要多一次往返（HyMT 单批 3–16 秒）、多一次信息损失，并且 OCR 会丢空格与行序。真正的成本杠杆是视觉模型的档位，而不是跳数。
+
+只接受 base64 data URL 和 `https` 图片地址。本地文件路径、`file:` 和 `http` 一律拒绝：前两类 Host 读不到，`http` 会把图片明文发到未加密链路上。单张上限 12M 字符（约 9MB 图片），超过时渲染层直接跳过。
+
+UI 为英文时不自动翻译图片；图片没有可靠的语言线索，避免给英文界面凭空加成本。图片来源只认原生 markdown 正文里的 `img`，不碰附件缩略图、头像和翻译卡片自身。图片按最多 2 张并发翻译，与文本批量一样等回合结束再发请求。Host 侧按 `模型 + 目标语言 + 图片原文` 做 SHA-256 缓存（24 小时、上限 32 条）；Renderer 侧同一生命周期内复用相同图片的结果。
+
+Host 直接读 Responses 的 `output_text`；网关返回 `error` 或结构里没有任何文本块时按失败上报，不把空结果当成功。图片卡没有“显示原文”开关，因为卡片本身就是原图下方的译文。
+
 ## 缓存
 
 Host 内存缓存有效期 24 小时，上限 500 条，超限淘汰最早插入的记录。缓存键包含完整正文和目标语言；共享文本前缀的不同消息分别翻译。Renderer 在当前生命周期内复用相同正文的译文。
@@ -35,6 +47,6 @@ Sub2API 的 `/api/v1/translate` 用 `{code,message,data}` 包一层，`host-runt
 ## 架构
 
 - `shared-contracts/buddy-translate.ts`: 单条/批量 RPC schema + method name + 共享正文语言判断
-- `host-runtime/buddy/translator.ts`: 网关翻译接口 + 批量 + 缓存
+- `host-runtime/buddy/translator.ts`: 网关翻译接口 + 批量 + 图片（视觉模型直译）+ 缓存
 - `renderer-extension/renderer-host-clients.ts`: SSH 翻译方法（含批量）兼容与本机回退
-- `renderer-extension/translate-card/`: DOM 挂载 + UI + 回合结束分片批量触发（8 段/片，2 路并发）
+- `renderer-extension/translate-card/`: DOM 挂载 + UI + 回合结束分片批量触发（8 段/片，2 路并发）+ 图片卡片（2 路并发）

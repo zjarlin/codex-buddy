@@ -257,8 +257,9 @@ test("lists and deletes existing reminders of a conversation", async ({ page }) 
 test("rotates between several due reminders from the queue counter", async ({ page }) => {
   await page.evaluate(() => Reflect.get(globalThis, "setupReminders")());
   await page.evaluate(() => {
-    const clock = Reflect.get(globalThis, "reminders").clock;
-    const entry = (id, message, offset) => ({
+    const reminders = Reflect.get(globalThis, "reminders") as { clock: { now: number } };
+    const clock = reminders.clock;
+    const entry = (id: string, message: string, offset: number) => ({
       id,
       hostId: "local",
       threadId: "thread-a",

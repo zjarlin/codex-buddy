@@ -1211,6 +1211,8 @@ export function installRendererBindingProbe(
     getLocale: rendererLocale,
     getClient: () => modelClientForHost("local"),
   });
+  // 项目快捷操作与打开 Prompt 只出现在原生“…”菜单里，避免侧栏误触。
+  projectActions.registerContribution(projectTools.menuContribution());
   const threadFolders = installThreadFolders({
     getLocale: () => settingsLifecycle.locale,
     getClient: () => modelClientForHost("local"),

@@ -96,6 +96,13 @@ export function configureProjectTools(options: {
   const customList = document.createElement("div");
   customList.className = "codexhost-project-tool-custom-list";
   customList.setAttribute("data-codexhost-project-tool-custom-scripts", "");
+  const customLegend = document.createElement("legend");
+  customLegend.textContent = labels.customScripts;
+  const syncCustomVisibility = (): void => {
+    const empty = customDrafts.length === 0;
+    customLegend.hidden = empty;
+    customList.hidden = empty;
+  };
   const addCustom = document.createElement("button");
   addCustom.type = "button";
   addCustom.className = "codexhost-project-tool-add-script";
@@ -127,9 +134,11 @@ export function configureProjectTools(options: {
       const index = customDrafts.indexOf(entry);
       if (index >= 0) customDrafts.splice(index, 1);
       row.remove();
+      syncCustomVisibility();
     });
     row.append(name.label, scriptPath.label, remove);
     customList.append(row);
+    syncCustomVisibility();
     name.input.focus();
   };
   addCustom.addEventListener("click", () => appendCustom());
@@ -137,13 +146,18 @@ export function configureProjectTools(options: {
     appendCustom({ id: script.id, name: script.name, path: script.path });
   }
 
-  scriptGroup.append(scriptLegend, start.label, restart.label, stop.label, hint);
-  if (customDrafts.length > 0) {
-    const customLegend = document.createElement("legend");
-    customLegend.textContent = labels.customScripts;
-    hint.before(customLegend, customList);
-  }
+  // 列表始终挂在表单里：新增行要立刻可见，空列表时只收起标题与容器。
+  scriptGroup.append(
+    scriptLegend,
+    start.label,
+    restart.label,
+    stop.label,
+    customLegend,
+    customList,
+    hint,
+  );
   hint.after(addCustom);
+  syncCustomVisibility();
 
   const metadata = document.createElement("fieldset");
   const metadataLegend = document.createElement("legend");

@@ -6,8 +6,8 @@ import MessageSquarePlus from "lucide/dist/esm/icons/message-square-plus.mjs";
 import Network from "lucide/dist/esm/icons/network.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
 import RotateCw from "lucide/dist/esm/icons/rotate-cw.mjs";
-import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import Settings2 from "lucide/dist/esm/icons/settings-2.mjs";
+import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import Square from "lucide/dist/esm/icons/square.mjs";
 import type {
   ProjectScriptAction,
@@ -26,6 +26,10 @@ import { insertNativeTextAtSelection } from "../renderer-native-composer-control
 import { nativeProjectStart } from "../renderer-native-project-start.js";
 import { sessionDraftText } from "../renderer-session-targets.js";
 import { findComposerModelTarget } from "../versioned-renderer-adapter.js";
+import type {
+  ProjectMenuContribution,
+  ProjectMenuContributionItem,
+} from "../renderer-project-actions.js";
 import { configureProjectTools } from "./dialog.js";
 import {
   bindingForProject,
@@ -79,6 +83,11 @@ interface Picker {
 
 export interface RendererProjectToolsControl {
   refresh(): void;
+  /**
+   * 侧栏“…”菜单里的项目快捷操作与打开 Prompt。两者都会直接改配置或自动发送
+   * 任务，因此不再以图标形式直接摆在项目行与标题栏上。
+   */
+  menuContribution(): ProjectMenuContribution;
   dispose(): void;
 }
 
@@ -133,16 +142,24 @@ export function installProjectTools(options: {
     }
   };
 
+  // 每个底层 client 只包装一次：refresh 用包装对象身份判断是否需要重新拉取配置，
+  // 每次新建包装会让判断永远成立，退化成不停重取。
+  let persistenceSource: RendererModelClient | null = null;
+  let persistence: Required<ProjectToolsPersistenceClient> | null = null;
   const persistenceClient = (): Required<ProjectToolsPersistenceClient> | null => {
-    const client = options.getClient?.();
+    const client = options.getClient?.() ?? null;
+    if (client === persistenceSource) return persistence;
+    persistenceSource = client;
     const { getProjectTools, setProjectTools, runProjectScript } = client ?? {};
-    return getProjectTools && setProjectTools && runProjectScript
-      ? {
-          getProjectTools: () => getProjectTools.call(client),
-          setProjectTools: (config) => setProjectTools.call(client, config),
-          runProjectScript: (params) => runProjectScript.call(client, params),
-        }
-      : null;
+    persistence =
+      client && getProjectTools && setProjectTools && runProjectScript
+        ? {
+            getProjectTools: () => getProjectTools.call(client),
+            setProjectTools: (config) => setProjectTools.call(client, config),
+            runProjectScript: (params) => runProjectScript.call(client, params),
+          }
+        : null;
+    return persistence;
   };
 
   const showToast = (message: string, state: "ok" | "failed" = "ok"): void => {
@@ -508,6 +525,15 @@ export function installProjectTools(options: {
     refresh();
   };
 
+  // 项目行上的原生绝对路径；远程项目同样由 Desktop 提供。
+  const nativeProjectPath = (project: SidebarProject): string | null => {
+    const row = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)].find(
+      (candidate) => projectToolKey(rowProject(candidate) ?? project) === projectToolKey(project),
+    );
+    const native = row ? (rowProject(row) as (SidebarProject & { path?: string }) | null) : null;
+    return typeof native?.path === "string" && native.path ? native.path : null;
+  };
+
   const openDialog = async (project: SidebarProject): Promise<void> => {
     // 立即打开表单：配置已在 refresh 中预取并镜像到本地；Host 读取稍后补齐元数据路径。
     if (disposed || dialog || openingDialog) return;
@@ -522,13 +548,7 @@ export function installProjectTools(options: {
     if (disposed || dialog) return;
     const labels = projectToolLabels(options.getLocale());
     const binding = bindingForProject(config, project);
-    const row = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)].find(
-      (candidate) => projectToolKey(rowProject(candidate) ?? project) === projectToolKey(project),
-    );
-    const nativeProject = row
-      ? (rowProject(row) as (SidebarProject & { path?: string }) | null)
-      : null;
-    const projectPath = typeof nativeProject?.path === "string" ? nativeProject.path : null;
+    const projectPath = nativeProjectPath(project);
     if (!projectPath) throw new Error("项目绝对路径尚未就绪，请刷新项目列表后重试。");
     const dialogElement = configureProjectTools({
       project,
@@ -639,51 +659,6 @@ export function installProjectTools(options: {
     mounted?.wrapper.remove();
     const wrapper = document.createElement("span");
     wrapper.setAttribute("data-codexhost-project-tools", "");
-    const configure = document.createElement("button");
-    configure.type = "button";
-    configure.setAttribute("data-codexhost-project-tool-configure", "");
-    configure.setAttribute("aria-haspopup", "dialog");
-    configure.setAttribute("aria-label", `${labels.configure}: ${project.label}`);
-    configure.title = `${labels.configure} · ${project.label}\n${labels.description}`;
-    configure.append(createElement(Settings2, { width: 14, height: 14, "aria-hidden": "true" }));
-    configure.addEventListener("pointerdown", (event) => event.stopPropagation());
-    configure.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void openDialog(project);
-    });
-    wrapper.append(configure);
-    const row = header.closest<HTMLElement>(PROJECT_ROW_SELECTOR);
-    const projectPath = row
-      ? (rowProject(row) as (SidebarProject & { path?: string }) | null)?.path
-      : undefined;
-    const canSendPrompt =
-      Boolean(binding?.prompt) || (typeof projectPath === "string" && projectPath.length > 0);
-    if (canSendPrompt) {
-      const promptPreview =
-        binding?.prompt && binding.prompt.length > 240
-          ? `${binding.prompt.slice(0, 240)}…`
-          : binding?.prompt || labels.scriptPromptPreview;
-      wrapper.append(
-        iconButton(
-          project,
-          definition(
-            "prompt",
-            labels.prompt,
-            `${labels.promptHint}
-${promptPreview}`,
-            MessageSquarePlus,
-            "data-codexhost-project-tool-prompt",
-            null,
-            () => {
-              void openPrompt(project).catch((error) => {
-                showToast(error instanceof Error ? error.message : String(error), "failed");
-              });
-            },
-          ),
-        ),
-      );
-    }
     const tools: ToolDefinition[] = [];
     if (binding?.intranetUrl || binding?.publicUrl) {
       tools.push(
@@ -707,9 +682,16 @@ ${promptPreview}`,
       tools.push(scriptDefinition(project, entry));
     }
     for (const tool of tools) {
-      const button = iconButton(project, tool, active === tool.action);
-      if (active === tool.action) button.setAttribute("aria-busy", "true");
+      // 只有正在执行的脚本动作进入忙碌态；访问地址这类无动作的按钮不能被禁用。
+      const busyHere = active !== null && active === tool.action;
+      const button = iconButton(project, tool, busyHere);
+      if (busyHere) button.setAttribute("aria-busy", "true");
       wrapper.append(button);
+    }
+    if (tools.length === 0) {
+      mounted?.wrapper.remove();
+      headers.delete(header);
+      return;
     }
     const label =
       header.querySelector<HTMLElement>(LABEL_SELECTOR) ??
@@ -767,6 +749,11 @@ ${promptPreview}`,
       return;
     }
     titlebarWrapper?.remove();
+    if (tools.length === 0) {
+      titlebarWrapper = null;
+      titlebarSignature = signature;
+      return;
+    }
     const wrapper = document.createElement("span");
     wrapper.setAttribute("data-codexhost-project-titlebar-tools", "");
     wrapper.setAttribute("role", "toolbar");
@@ -774,45 +761,14 @@ ${promptPreview}`,
     wrapper.addEventListener("pointerdown", (event) => event.stopPropagation());
     wrapper.addEventListener("click", (event) => event.stopPropagation());
     for (const tool of tools) {
-      const button = iconButton(project, tool, active === tool.action);
-      if (active === tool.action) button.setAttribute("aria-busy", "true");
+      // 只有正在执行的脚本动作进入忙碌态；访问地址这类无动作的按钮不能被禁用。
+      const busyHere = active !== null && active === tool.action;
+      const button = iconButton(project, tool, busyHere);
+      if (busyHere) button.setAttribute("aria-busy", "true");
       wrapper.append(button);
     }
-    if (binding?.prompt) {
-      wrapper.append(
-        iconButton(
-          project,
-          definition(
-            "prompt",
-            labels.prompt,
-            labels.promptHint,
-            MessageSquarePlus,
-            "data-codexhost-project-tool-prompt",
-            null,
-            () => {
-              void openPrompt(project).catch((error) => {
-                showToast(error instanceof Error ? error.message : String(error), "failed");
-              });
-            },
-          ),
-        ),
-      );
-    }
-    wrapper.append(
-      iconButton(
-        project,
-        definition(
-          "configure",
-          labels.configure,
-          labels.description,
-          Settings2,
-          "data-codexhost-project-tool-configure",
-          null,
-          () => void openDialog(project),
-        ),
-      ),
-    );
-    content.append(wrapper);
+    if (tools.length > 0) content.append(wrapper);
+    else wrapper.remove();
     titlebarWrapper = wrapper;
     titlebarSignature = signature;
   };
@@ -879,8 +835,45 @@ ${promptPreview}`,
   });
   refresh();
 
+  const menuContribution = (): ProjectMenuContribution => ({
+    id: "project-tools",
+    signature: () => JSON.stringify([projectToolLabels(options.getLocale()), config]),
+    resolve: ({ project, close }) => {
+      const labels = projectToolLabels(options.getLocale());
+      const binding = bindingForProject(config, project);
+      const items: ProjectMenuContributionItem[] = [
+        {
+          attribute: "data-codexhost-project-tool-configure",
+          label: labels.configure,
+          icon: Settings2,
+          onSelect: () => {
+            close();
+            void openDialog(project).catch((error) => {
+              showToast(error instanceof Error ? error.message : String(error), "failed");
+            });
+          },
+        },
+      ];
+      if (binding?.prompt || nativeProjectPath(project)) {
+        items.push({
+          attribute: "data-codexhost-project-tool-prompt",
+          label: labels.prompt,
+          icon: MessageSquarePlus,
+          onSelect: () => {
+            close();
+            void openPrompt(project).catch((error) => {
+              showToast(error instanceof Error ? error.message : String(error), "failed");
+            });
+          },
+        });
+      }
+      return items;
+    },
+  });
+
   return {
     refresh,
+    menuContribution,
     dispose() {
       if (disposed) return;
       disposed = true;

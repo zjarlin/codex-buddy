@@ -24,7 +24,7 @@ async function fixture() {
     params: { threadId },
     environment: { CODEX_HOME: home, TEST_KEY: "fixture-secret" },
     privateMode: vi.fn(async () => false),
-    readThread: vi.fn(async () => ({
+    readThread: vi.fn(async (): Promise<unknown> => ({
       result: { thread: { id: threadId, modelProvider: "gateway" } },
     })),
   };

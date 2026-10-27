@@ -87,14 +87,17 @@ const IMAGE_RESPONSE_LIMIT_BYTES = 1_048_576;
 const IMAGE_CACHE_LIMIT = 32;
 
 /**
- * 只有“这个模型暂时用不了”的错误才值得换下一个模型：限流、无容量、上游 5xx、超时。
- * 400（图片格式不对）、401/403（凭据问题）换模型也一样失败，立刻上报。
+ * 只有“这个模型用不了”的错误才值得换下一个模型：限流、无容量、上游 5xx、超时，
+ * 以及网关目录里根本没有这个模型（404）。400（图片格式不对）、401/403（凭据问题）
+ * 换模型也一样失败，立刻上报。
  */
 function isVisionCapacityFailure(error: unknown): boolean {
   if (error instanceof GatewayHttpError) {
     const status = Number(/^HTTP (\d{3})/u.exec(error.message)?.[1] ?? 0);
     if (status === 408 || status === 429 || status >= 500) return true;
-    return /capacity|rate limit|no available|overloaded/iu.test(error.message);
+    // 404 是“这个网关目录里没有这个模型”：换下一个模型正好能救回来。
+    if (status === 404) return true;
+    return /capacity|rate limit|no available|not supported|overloaded/iu.test(error.message);
   }
   const message = error instanceof Error ? error.message : "";
   return /capacity|rate limit|no image assistance|超时|overloaded/iu.test(message);

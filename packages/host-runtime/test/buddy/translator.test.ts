@@ -443,6 +443,25 @@ describe("gateway image translation", () => {
     ]);
   });
 
+  it("falls back when the gateway directory has no such model", async () => {
+    const f = await fixture((body, res) => {
+      const model = body.model as string;
+      if (model === "cn:glm-5v-turbo") {
+        res.writeHead(404);
+        res.end(
+          JSON.stringify({
+            error: { message: `Model "${model}" is not supported by any account` },
+          }),
+        );
+        return;
+      }
+      res.end(responsesText("另一个模型的译文"));
+    });
+    await expect(
+      f.translator.translateImage({ image: png, targetLocale: "zh-CN" }),
+    ).resolves.toMatchObject({ translated: "另一个模型的译文", model: "gpt-6.1-sol" });
+  });
+
   it("does not fall back on a request the model rejects outright", async () => {
     const f = await fixture((_body, res) => {
       res.writeHead(400);

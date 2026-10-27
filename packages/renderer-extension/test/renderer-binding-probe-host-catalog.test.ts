@@ -132,7 +132,10 @@ vi.mock("../src/project-tools/index.js", () => ({
     testState.localeReads.push(options.getLocale());
     return {
       refresh: vi.fn(),
-      openConfigure: vi.fn(),
+      menuContribution: vi.fn(() => ({
+        id: "project-tools",
+        resolve: () => [],
+      })),
       dispose: vi.fn(),
     };
   },
@@ -162,7 +165,7 @@ vi.mock("../src/renderer-thread-actions.js", () => ({
 vi.mock("../src/renderer-project-actions.js", () => ({
   installRendererProjectActions: (options: { getLocale(): "zh-CN" | "en" }) => {
     testState.localeReads.push(options.getLocale());
-    return { refresh: vi.fn(), dispose: vi.fn() };
+    return { refresh: vi.fn(), registerContribution: vi.fn(), dispose: vi.fn() };
   },
 }));
 

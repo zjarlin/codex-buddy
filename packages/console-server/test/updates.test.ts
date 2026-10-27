@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
@@ -7,6 +7,14 @@ import { createBackgroundUpdateManager } from "@codexhost/update-manager";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createConsoleUpdates, type ConsoleUpdateTarget } from "../src/updates.js";
+
+// 线上 Updater 与 BackgroundUpdateManager 都用「临时文件 + 原子替换」写状态；
+// 测试若用普通 writeFile，读取方会扫到被截断的空文件（Windows 上必现）。
+async function writeStatusAtomic(statusPath: string, value: unknown): Promise<void> {
+  const temporary = `${statusPath}.${process.pid}.test.tmp`;
+  await writeFile(temporary, JSON.stringify(value));
+  await rename(temporary, statusPath);
+}
 
 let root: string;
 
@@ -168,10 +176,7 @@ describe("console updates", () => {
     if (!call) throw new Error("Updater was not spawned");
     const spawnedRequest = JSON.parse(await readFile(call[1], "utf8"));
     const status = JSON.parse(await readFile(spawnedRequest.status_path, "utf8"));
-    await writeFile(
-      spawnedRequest.status_path,
-      JSON.stringify({ ...status, phase: "waiting-for-exit" }),
-    );
+    await writeStatusAtomic(spawnedRequest.status_path, { ...status, phase: "waiting-for-exit" });
     const result = await starting;
 
     expect(result.status.phase).toBe("waiting-for-exit");
@@ -215,7 +220,7 @@ describe("console updates", () => {
     if (!call) throw new Error("Updater was not spawned");
     const request = JSON.parse(await readFile(call[1], "utf8"));
     const status = JSON.parse(await readFile(request.status_path, "utf8"));
-    await writeFile(request.status_path, JSON.stringify({ ...status, phase: "waiting-for-exit" }));
+    await writeStatusAtomic(request.status_path, { ...status, phase: "waiting-for-exit" });
     await expect(retry).resolves.toMatchObject({ status: { phase: "waiting-for-exit" } });
     await expect(updates.status()).resolves.toMatchObject({
       status: { phase: "waiting-for-exit", error: null },

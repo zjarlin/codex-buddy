@@ -23,6 +23,8 @@ const style = `
 [data-buddy-recovery] .buddy-interrupted-copy{min-width:0}
 [data-buddy-recovery] .buddy-interrupted-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 [data-buddy-recovery] .buddy-interrupted-status{display:block;margin-top:2px;font-size:10px;opacity:.65}
+[data-buddy-recovery] .buddy-interrupted-accounts{display:block;margin-top:1px;font-size:10px;opacity:.55;overflow-wrap:anywhere}
+[data-buddy-recovery] .buddy-interrupted-tally{font-size:10px;opacity:.7;overflow-wrap:anywhere}
 [data-buddy-recovery] .buddy-interrupted-error{color:#d65f55;overflow-wrap:anywhere}
 [data-buddy-recovery] option{background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:inherit}
 `;

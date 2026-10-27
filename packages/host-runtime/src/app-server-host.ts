@@ -63,6 +63,7 @@ import { BuddyTranslator } from "./buddy/translator.js";
 import { BuddySpeech } from "./buddy/speech.js";
 import {
   AUTO_MODEL_ROUTES_METHOD,
+  TURN_ACCOUNTS_METHOD,
   SSH_AUTO_MODEL_ROUTES_METHOD,
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
@@ -72,6 +73,7 @@ import {
   REMOTE_PROJECTS_SYNC_METHOD,
 } from "@codexhost/shared-contracts";
 import { readAutoModelRoutes } from "./auto-model-routes.js";
+import { readTurnAccounts } from "./turn-accounts.js";
 import { readSshAutoModelRoutes } from "./ssh-auto-model-routes.js";
 import { inspectSshRemoteProjects, syncSshRemoteProjects } from "./ssh-remote-projects.js";
 import {
@@ -2005,6 +2007,23 @@ export class AppServerHost {
       this.#dispatchDesktopRequest(async () => {
         try {
           const result = await readAutoModelRoutes({
+            params: request.params,
+            environment: this.#options.environment ?? process.env,
+            privateMode: async () => this.#buddy?.privateMode(),
+            readThread: (threadId) =>
+              this.#requestOfficial("thread/read", { threadId, includeTurns: false }),
+          });
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
+      return;
+    }
+    if (request.method === TURN_ACCOUNTS_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const result = await readTurnAccounts({
             params: request.params,
             environment: this.#options.environment ?? process.env,
             privateMode: async () => this.#buddy?.privateMode(),

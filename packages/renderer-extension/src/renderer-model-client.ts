@@ -23,6 +23,10 @@ import {
   autoModelRoutesParamsSchema,
   autoModelRoutesResultSchema,
   type AutoModelRoutesResult,
+  TURN_ACCOUNTS_METHOD,
+  turnAccountsParamsSchema,
+  turnAccountsResultSchema,
+  type TurnAccountsResult,
   DOUBAO_OPEN_METHOD,
   doubaoOpenResultSchema,
   type DoubaoOpenResult,
@@ -624,6 +628,13 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   readThreadActivity?(threadId: string): Promise<boolean>;
   readThreadTurnState?(threadId: string): Promise<RendererThreadTurnState>;
   readAutoModelRoutes?(threadId: string, runId?: string): Promise<AutoModelRoutesResult>;
+  /** 读取该回合落到的调度账号；Host 不可用时返回 unsupported，不抛出。 */
+  readTurnAccounts?(input: {
+    threadId: string;
+    runId?: string;
+    since?: number;
+    until?: number;
+  }): Promise<TurnAccountsResult>;
   buddyContinue?(threadId: string, turnId: string, model?: string): Promise<void>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
@@ -1458,6 +1469,34 @@ export function createRendererModelClient(
       } catch (error) {
         if (error instanceof RendererMethodUnavailableError) {
           return { supported: false, routes: [], unavailableReason: "host" };
+        }
+        throw error;
+      }
+    },
+    readTurnAccounts: async (input: {
+      threadId: string;
+      runId?: string;
+      since?: number;
+      until?: number;
+    }): Promise<TurnAccountsResult> => {
+      const params = turnAccountsParamsSchema.parse({
+        threadId: input.threadId,
+        ...(input.runId ? { runId: input.runId } : {}),
+        ...(input.since !== undefined ? { since: input.since } : {}),
+        ...(input.until !== undefined ? { until: input.until } : {}),
+      });
+      try {
+        return turnAccountsResultSchema.parse(
+          await manager.sendRequest(TURN_ACCOUNTS_METHOD, params),
+        );
+      } catch (error) {
+        if (error instanceof RendererMethodUnavailableError) {
+          return {
+            supported: false,
+            accounts: [],
+            attribution: "unknown" as const,
+            unavailableReason: "host" as const,
+          };
         }
         throw error;
       }

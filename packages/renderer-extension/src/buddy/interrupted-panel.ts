@@ -39,6 +39,15 @@ const messages = {
     failed: "失败",
     interrupted: "已中断",
     cancelled: "已取消",
+    accountsLoading: "正在读取调度账号…",
+    accountsLabel: "调度账号",
+    accountsUnavailable: "调度账号不可用",
+    accountsHint:
+      "按「会话 + 回合时间窗」从网关用量记录回查，同一回合内重试/降级会列出多个账号；最近一次在最前。",
+    accountsApprox: "按会话最近请求推断",
+    accountTally: (label: string, count: number) => `账号统计：${label} ×${count}`,
+    accountTallyHint:
+      "按每条中断回合最后落到的账号汇总；数字越大，说明这个账号把回合干断的次数越多。",
   },
   en: {
     heading: "Interrupted queue",
@@ -65,10 +74,27 @@ const messages = {
     failed: "Failed",
     interrupted: "Interrupted",
     cancelled: "Cancelled",
+    accountsLoading: "Reading dispatch accounts…",
+    accountsLabel: "Dispatch account",
+    accountsUnavailable: "Dispatch accounts unavailable",
+    accountsHint:
+      "Resolved from gateway usage records by conversation and turn window; retries or fallbacks in one turn list several accounts, most recent first.",
+    accountsApprox: "approximate: latest request in this conversation",
+    accountTally: (label: string, count: number) => `Account tally: ${label} ×${count}`,
+    accountTallyHint:
+      "Counted by the account each interrupted turn ended on; a larger number means that account broke more turns.",
   },
 };
 
 const keyFor = (thread: InterruptedThread) => JSON.stringify([thread.threadId, thread.turnId]);
+
+interface TurnAccountsView {
+  loading: boolean;
+  accounts: { id: number; name: string; model: string }[];
+  supported: boolean;
+  attribution: "window" | "unknown";
+  failure: string;
+}
 const errorMessage = (failure: unknown) =>
   failure instanceof Error ? failure.message : String(failure);
 
@@ -91,6 +117,7 @@ function session(client: RendererModelClient | null, hostId: string | null = nul
     error: "",
     modelView: null as ModelShortcutView | null,
     harnessId: "",
+    accounts: new Map<string, TurnAccountsView>(),
   };
 }
 
@@ -199,6 +226,74 @@ export function createInterruptedPanel(
     } finally {
       target.pending.delete(key);
       if (current(target)) render();
+    }
+  }
+
+  // 调度账号按「会话 + 回合」缓存；展开列表时按需回查网关，不阻塞恢复操作。
+  const accountQueue: { target: typeof state; thread: InterruptedThread }[] = [];
+  let accountRunning = 0;
+  function requestAccounts(target: typeof state, thread: InterruptedThread): boolean {
+    const key = keyFor(thread);
+    if (target.accounts.has(key) || !target.client?.readTurnAccounts) return false;
+    if (accountQueue.some((queued) => queued.target === target && keyFor(queued.thread) === key))
+      return false;
+    target.accounts.set(key, {
+      loading: true,
+      accounts: [],
+      supported: true,
+      attribution: "unknown",
+      failure: "",
+    });
+    accountQueue.push({ target, thread });
+    pumpAccounts();
+    return true;
+  }
+
+  function pumpAccounts(): void {
+    while (accountRunning < 2 && accountQueue.length > 0) {
+      const next = accountQueue.shift();
+      if (!next) return;
+      const { target, thread } = next;
+      const key = keyFor(thread);
+      const client = target.client;
+      if (!client?.readTurnAccounts || !current(target)) continue;
+      accountRunning += 1;
+      void client
+        .readTurnAccounts({ threadId: thread.threadId, runId: thread.turnId })
+        .then((result) => {
+          if (!current(target) || target.client !== client) return;
+          target.accounts.set(key, {
+            loading: false,
+            supported: result.supported,
+            attribution: result.attribution,
+            failure: "",
+            accounts: result.accounts.map((account) => ({
+              id: account.account_id,
+              name: account.account_name || `#${account.account_id}`,
+              model: account.model,
+            })),
+          });
+          // 缓存只服务于当前连接；超出上限时丢掉最早的记录。
+          if (target.accounts.size > 200) {
+            const oldest = target.accounts.keys().next();
+            if (!oldest.done && oldest.value !== key) target.accounts.delete(oldest.value);
+          }
+        })
+        .catch((failure) => {
+          if (!current(target) || target.client !== client) return;
+          target.accounts.set(key, {
+            loading: false,
+            accounts: [],
+            supported: true,
+            attribution: "unknown",
+            failure: errorMessage(failure),
+          });
+        })
+        .finally(() => {
+          accountRunning -= 1;
+          if (current(target)) render();
+          pumpAccounts();
+        });
     }
   }
 
@@ -312,6 +407,7 @@ export function createInterruptedPanel(
       [...state.pending],
       [...state.viewing],
       [...state.failures],
+      [...state.accounts],
       collapsed,
     ]);
     if (fingerprint === signature) return;
@@ -493,6 +589,7 @@ export function createInterruptedPanel(
     toolbar.append(modelResume);
     const list = document.createElement("div");
     list.className = "buddy-interrupted-list";
+    let accountsRequested = false;
     for (const thread of state.threads) {
       const key = keyFor(thread);
       const item = document.createElement("div");
@@ -507,6 +604,37 @@ export function createInterruptedPanel(
       status.className = "buddy-interrupted-status";
       status.textContent = m[thread.status];
       copy.append(title, status);
+      if (requestAccounts(state, thread)) accountsRequested = true;
+      const accounts = state.accounts.get(key);
+      if (state.client.readTurnAccounts && accounts) {
+        const line = document.createElement("small");
+        line.className = "buddy-interrupted-accounts";
+        line.dataset.buddyInterruptedAccounts = "";
+        line.title = m.accountsHint;
+        if (accounts.loading) {
+          line.textContent = m.accountsLoading;
+        } else if (accounts.failure) {
+          line.textContent = `${m.accountsUnavailable}: ${accounts.failure}`;
+        } else if (!accounts.supported) {
+          line.textContent = m.accountsUnavailable;
+        } else if (accounts.accounts.length === 0) {
+          line.textContent = `${m.accountsLabel}: -`;
+        } else {
+          const shown = accounts.accounts.slice(0, 3);
+          const rest = accounts.accounts.length - shown.length;
+          line.textContent =
+            `${m.accountsLabel}: ` +
+            [
+              ...shown.map((account) =>
+                account.model ? `${account.name} (${account.model})` : account.name,
+              ),
+              ...(rest > 0 ? [`+${rest}`] : []),
+              // 网关没有 turn_id 列；没有回合时间窗时如实标注为「会话最近请求」。
+              ...(accounts.attribution === "window" ? [] : [`（${m.accountsApprox}）`]),
+            ].join(" · ");
+        }
+        copy.append(line);
+      }
       const failure = state.failures.get(key);
       if (failure) note(failure, true, copy);
       const target = state;
@@ -555,8 +683,29 @@ export function createInterruptedPanel(
       item.append(copy, actions);
       list.append(item);
     }
+    // 汇总「每条中断回合最后落到的账号」，用来直接指出反复干断回合的账号。
+    const tally = new Map<string, number>();
+    for (const thread of state.threads) {
+      const entry = state.accounts.get(keyFor(thread));
+      const last = entry?.supported && !entry.failure ? entry.accounts[0] : undefined;
+      const label = last ? (last.model ? `${last.name} (${last.model})` : last.name) : "";
+      if (label) tally.set(label, (tally.get(label) ?? 0) + 1);
+    }
+    if (tally.size > 0) {
+      const ranked = [...tally.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+      const summary = document.createElement("div");
+      summary.className = "buddy-interrupted-tally";
+      summary.dataset.buddyAccountTally = "";
+      summary.title = m.accountTallyHint;
+      summary.textContent = ranked
+        .map(([label, count]) => m.accountTally(label, count))
+        .join(" · ");
+      wrapper.append(summary);
+    }
     wrapper.append(list);
     finish();
+    // 首次展开时才发起回查；补一次渲染把「正在读取」显示出来。
+    if (accountsRequested) queueMicrotask(() => current(state) && render());
   }
 
   return {

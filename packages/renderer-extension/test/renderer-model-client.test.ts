@@ -849,6 +849,7 @@ describe("Renderer fixed Model request client", () => {
       "readDelegationThread",
       "readThreadActivity",
       "readThreadTurnState",
+      "readTurnAccounts",
       "readUpdateStatus",
       "readWorkspaceFile",
       "refreshCodexAccounts",

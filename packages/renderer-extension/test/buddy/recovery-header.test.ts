@@ -476,6 +476,121 @@ describe("header interrupted recovery queue", () => {
     expect(list()).toBe(false);
   });
 
+  it("shows the dispatch account resolved for each interrupted turn", async () => {
+    const f = queueFixture("one");
+    const readTurnAccounts = vi.fn(async () => ({
+      supported: true,
+      attribution: "window" as const,
+      accounts: [
+        { account_id: 832, account_name: "acct-832", model: "ds" },
+        { account_id: 844, model: "ds" },
+      ],
+    }));
+    const panel = createInterruptedPanel(() => "zh-CN", f.queue);
+    panels.push(panel);
+    panel.update(
+      asClient({ buddyInterrupted: vi.fn(), buddyContinue: vi.fn(), readTurnAccounts }),
+      null,
+      "",
+      "local",
+    );
+    expand(panel);
+    await settle();
+    expect(readTurnAccounts).toHaveBeenCalledWith({ threadId: "one", runId: "one-turn" });
+    const line = descendants(panel.root as unknown as ElementStub).find(
+      (node) => "buddyInterruptedAccounts" in node.dataset,
+    );
+    expect(line?.textContent).toBe("调度账号: acct-832 (ds) · #844 (ds)");
+  });
+
+  it("marks the account as approximate when no turn window could be resolved", async () => {
+    const f = queueFixture("one");
+    const readTurnAccounts = vi.fn(async () => ({
+      supported: true,
+      attribution: "unknown" as const,
+      accounts: [{ account_id: 832, account_name: "acct-832", model: "ds" }],
+    }));
+    const panel = createInterruptedPanel(() => "zh-CN", f.queue);
+    panels.push(panel);
+    panel.update(
+      asClient({ buddyInterrupted: vi.fn(), buddyContinue: vi.fn(), readTurnAccounts }),
+      null,
+      "",
+      "local",
+    );
+    expand(panel);
+    await settle();
+    expect(
+      descendants(panel.root as unknown as ElementStub).find(
+        (node) => "buddyInterruptedAccounts" in node.dataset,
+      )?.textContent,
+    ).toBe("调度账号: acct-832 (ds) · （按会话最近请求推断）");
+  });
+
+  it("reports unavailable dispatch accounts without breaking the row", async () => {
+    const f = queueFixture("one");
+    const readTurnAccounts = vi.fn(async () => ({
+      supported: false,
+      attribution: "unknown" as const,
+      accounts: [],
+      unavailableReason: "host" as const,
+    }));
+    const panel = createInterruptedPanel(() => "zh-CN", f.queue);
+    panels.push(panel);
+    panel.update(
+      asClient({ buddyInterrupted: vi.fn(), buddyContinue: vi.fn(), readTurnAccounts }),
+      null,
+      "",
+      "local",
+    );
+    expand(panel);
+    await settle();
+    const nodes = descendants(panel.root as unknown as ElementStub);
+    expect(nodes.find((node) => "buddyInterruptedAccounts" in node.dataset)?.textContent).toBe(
+      "调度账号不可用",
+    );
+    // 恢复按钮仍然可用，账号缺失不阻塞恢复。
+    expect(nodes.some((node) => node.textContent === "恢复" && !node.disabled)).toBe(true);
+  });
+
+  it("ranks the accounts that kept ending interrupted turns", async () => {
+    const f = queueFixture("one", "two", "three");
+    const readTurnAccounts = vi.fn(async ({ threadId }: { threadId: string }) => ({
+      supported: true,
+      attribution: "window" as const,
+      accounts:
+        threadId === "three"
+          ? [{ account_id: 913, account_name: "acct-913", model: "ds" }]
+          : [{ account_id: 832, account_name: "acct-832", model: "ds" }],
+    }));
+    const panel = createInterruptedPanel(() => "zh-CN", f.queue);
+    panels.push(panel);
+    panel.update(
+      asClient({ buddyInterrupted: vi.fn(), buddyContinue: vi.fn(), readTurnAccounts }),
+      null,
+      "",
+      "local",
+    );
+    expand(panel);
+    await settle();
+    const tally = descendants(panel.root as unknown as ElementStub).find(
+      (node) => "buddyAccountTally" in node.dataset,
+    );
+    // 832 干断两条，排在前面；913 一条。
+    expect(tally?.textContent).toBe("账号统计：acct-832 (ds) ×2 · 账号统计：acct-913 (ds) ×1");
+  });
+
+  it("omits the account line on connections without the capability", () => {
+    const f = queueFixture("one");
+    const panel = mount(f);
+    expand(panel);
+    expect(
+      descendants(panel.root as unknown as ElementStub).some(
+        (node) => "buddyInterruptedAccounts" in node.dataset,
+      ),
+    ).toBe(false);
+  });
+
   it("omits the open action when the connection cannot navigate", () => {
     const f = queueFixture("one");
     const panel = mount(f);

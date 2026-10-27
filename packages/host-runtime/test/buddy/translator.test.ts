@@ -423,6 +423,57 @@ describe("gateway image translation", () => {
     ).resolves.toEqual({ translated: "", model: "cn:glm-5v-turbo", latencyMs: expect.any(Number) });
   });
 
+  it("falls back to the next vision model when the primary has no capacity", async () => {
+    const f = await fixture((body, res) => {
+      const model = body.model as string;
+      if (model === "cn:glm-5v-turbo") {
+        res.writeHead(503);
+        res.end(JSON.stringify({ error: { message: "No image assistance capacity" } }));
+        return;
+      }
+      res.end(responsesText("降级后的译文"));
+    });
+
+    const result = await f.translator.translateImage({ image: png, targetLocale: "zh-CN" });
+
+    expect(result).toMatchObject({ translated: "降级后的译文", model: "gpt-6.1-sol" });
+    expect(f.requests.map((body) => (body as { model: string }).model)).toEqual([
+      "cn:glm-5v-turbo",
+      "gpt-6.1-sol",
+    ]);
+  });
+
+  it("does not fall back on a request the model rejects outright", async () => {
+    const f = await fixture((_body, res) => {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: { message: "Invalid 'input[0].content[1].image_url'" } }));
+    });
+    await expect(
+      f.translator.translateImage({ image: png, targetLocale: "zh-CN" }),
+    ).rejects.toThrow("HTTP 400");
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it("reuses a fallback result for the same image instead of paying twice", async () => {
+    let calls = 0;
+    const f = await fixture((body, res) => {
+      calls += 1;
+      const model = body.model as string;
+      if (model === "cn:glm-5v-turbo") {
+        res.writeHead(429);
+        res.end(JSON.stringify({ error: { message: "rate limit" } }));
+        return;
+      }
+      res.end(responsesText("降级缓存"));
+    });
+    await f.translator.translateImage({ image: png, targetLocale: "zh-CN" });
+    const before = calls;
+    await expect(
+      f.translator.translateImage({ image: png, targetLocale: "zh-CN" }),
+    ).resolves.toMatchObject({ translated: "降级缓存" });
+    expect(calls).toBe(before);
+  });
+
   it("serves repeat requests from the image cache", async () => {
     const f = await fixture((_body, res) => res.end(responsesText("缓存")));
     await f.translator.translateImage({ image: png, targetLocale: "zh-CN" });

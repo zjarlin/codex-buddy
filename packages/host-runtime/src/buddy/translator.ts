@@ -74,12 +74,42 @@ function imageTranslatePrompt(language: string): string {
   ].join(" ");
 }
 
-/** 网关目录里的默认视觉模型：便宜、走内网额度、实测中文排版稳定。 */
+/**
+ * 图片翻译的视觉模型降级链。头一个是便宜的原生视觉模型（走内网额度、中文排版稳定），
+ * 后面是同目录里更贵的原生视觉模型：主模型限流或没有容量时整条功能不能直接不可用。
+ * 顺序即优先级，`CODEXHOST_TRANSLATE_VISION_MODEL` 只覆盖链头。
+ */
 const DEFAULT_VISION_MODEL = "cn:glm-5v-turbo";
+const VISION_FALLBACK_MODELS = ["gpt-6.1-sol", "gpt-6-astra"];
 const IMAGE_REQUEST_TIMEOUT_MS = 60_000;
 /** 图片响应按 base64 体量放宽上限，但仍有硬顶，避免异常响应撑爆内存。 */
 const IMAGE_RESPONSE_LIMIT_BYTES = 1_048_576;
 const IMAGE_CACHE_LIMIT = 32;
+
+/**
+ * 只有“这个模型暂时用不了”的错误才值得换下一个模型：限流、无容量、上游 5xx、超时。
+ * 400（图片格式不对）、401/403（凭据问题）换模型也一样失败，立刻上报。
+ */
+function isVisionCapacityFailure(error: unknown): boolean {
+  if (error instanceof GatewayHttpError) {
+    const status = Number(/^HTTP (\d{3})/u.exec(error.message)?.[1] ?? 0);
+    if (status === 408 || status === 429 || status >= 500) return true;
+    return /capacity|rate limit|no available|overloaded/iu.test(error.message);
+  }
+  const message = error instanceof Error ? error.message : "";
+  return /capacity|rate limit|no image assistance|超时|overloaded/iu.test(message);
+}
+
+/** 降级链：显式配置覆盖链头（并允许写成逗号分隔的多级），之后接内置后备模型。 */
+function visionModelChain(environment: NodeJS.ProcessEnv): string[] {
+  const configured = (environment.CODEXHOST_TRANSLATE_VISION_MODEL ?? "")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  const chain = configured.length > 0 ? configured : [DEFAULT_VISION_MODEL];
+  for (const model of VISION_FALLBACK_MODELS) if (!chain.includes(model)) chain.push(model);
+  return chain;
+}
 
 type TranslateResponse = {
   translations?: Array<{ text?: string; detected_language?: string }>;
@@ -324,8 +354,9 @@ export class BuddyTranslator {
   }
 
   /**
-   * 图片翻译：一次调用让便宜的原生视觉模型直接出目标语言译文。
+   * 图片翻译：一次调用让原生视觉模型直接出目标语言译文，不在 Host 里做第二跳。
    * 不拆成“先转写再离线 MT”的两跳——图片 token 已在第一跳付过，两跳只多延迟和失真。
+   * 主模型限流/无容量时按 `visionModelChain()` 降级，避免整条功能不可用。
    */
   async translateImage(value: unknown): Promise<BuddyTranslateImageResult> {
     const parsed = buddyTranslateImageRequestSchema.safeParse(value);
@@ -334,10 +365,11 @@ export class BuddyTranslator {
 
     const target = LOCALE_TO_ISO[req.targetLocale] ?? req.targetLocale.slice(0, 2);
     const language = LOCALE_TO_LANGUAGE_NAME[req.targetLocale] ?? req.targetLocale;
-    const model = this.environment.CODEXHOST_TRANSLATE_VISION_MODEL?.trim() || DEFAULT_VISION_MODEL;
 
+    // 缓存键只含目标语言与图片：换模型是可用性问题，不是内容差异，
+    // 命中过一次的降级结果要能被后续请求复用，不能按模型再付一次钱。
     const ck = createHash("sha256")
-      .update(`${model}:${target}:`)
+      .update(`${target}:`)
       .update(req.image)
       .digest("hex")
       .slice(0, 16);
@@ -348,53 +380,70 @@ export class BuddyTranslator {
     if (!config) throw new Error("未配置网关");
 
     const startedAt = Date.now();
-    const signal = AbortSignal.timeout(IMAGE_REQUEST_TIMEOUT_MS);
-    let payload: unknown;
-    try {
-      payload = await gatewayJsonRequest(
-        config.url,
-        config.headers,
-        {
-          model,
-          store: false,
-          input: [
-            {
-              role: "user",
-              content: [
-                { type: "input_text", text: imageTranslatePrompt(language) },
-                { type: "input_image", image_url: req.image },
-              ],
-            },
-          ],
-        },
-        signal,
-        IMAGE_RESPONSE_LIMIT_BYTES,
-      );
-    } catch (error) {
-      if (signal.aborted) {
-        throw new Error("图片翻译请求超时（60 秒），网关未及时返回结果");
+    const chain = visionModelChain(this.environment);
+    let lastError: unknown = null;
+    for (const [index, model] of chain.entries()) {
+      const isLast = index === chain.length - 1;
+      let payload: unknown;
+      const signal = AbortSignal.timeout(IMAGE_REQUEST_TIMEOUT_MS);
+      try {
+        payload = await gatewayJsonRequest(
+          config.url,
+          config.headers,
+          {
+            model,
+            store: false,
+            input: [
+              {
+                role: "user",
+                content: [
+                  { type: "input_text", text: imageTranslatePrompt(language) },
+                  { type: "input_image", image_url: req.image },
+                ],
+              },
+            ],
+          },
+          signal,
+          IMAGE_RESPONSE_LIMIT_BYTES,
+        );
+      } catch (error) {
+        const failure = this.#imageFailure(error, signal);
+        // 只有“模型暂时用不了”才换下一个；格式/凭据错误换模型也是同样的结果。
+        if (!isLast && isVisionCapacityFailure(error)) {
+          lastError = failure;
+          continue;
+        }
+        throw failure;
       }
-      if (error instanceof GatewayHttpError) {
-        throw new Error(`图片翻译服务返回 ${error.message}`);
-      }
-      const reason = error instanceof Error ? error.message : "未知错误";
-      const messages: Record<string, string> = {
-        "Read failed": "读取图片翻译服务响应失败",
-        "Invalid JSON": "图片翻译服务返回了无效的 JSON 响应",
-        "Too large": "图片翻译服务响应超过大小限制",
-      };
-      throw new Error(messages[reason] ?? `图片翻译请求失败：${reason.slice(0, 300)}`);
-    }
 
-    const translated = readResponsesText(payload);
-    if (translated === null) throw new Error("图片翻译服务未返回结果");
-    const result = buddyTranslateImageResultSchema.parse({
-      translated,
-      model,
-      latencyMs: Date.now() - startedAt,
-    });
-    this.#rememberImage(ck, result);
-    return result;
+      const translated = readResponsesText(payload);
+      if (translated === null) throw new Error("图片翻译服务未返回结果");
+      const result = buddyTranslateImageResultSchema.parse({
+        translated,
+        model,
+        latencyMs: Date.now() - startedAt,
+      });
+      this.#rememberImage(ck, result);
+      return result;
+    }
+    throw lastError instanceof Error ? lastError : new Error("图片翻译服务未返回结果");
+  }
+
+  /** 把传输层错误翻译成中文提示，并保留网关给出的原因与请求 ID。 */
+  #imageFailure(error: unknown, signal: AbortSignal): Error {
+    if (signal.aborted) {
+      return new Error("图片翻译请求超时（60 秒），网关未及时返回结果");
+    }
+    if (error instanceof GatewayHttpError) {
+      return new Error(`图片翻译服务返回 ${error.message}`);
+    }
+    const reason = error instanceof Error ? error.message : "未知错误";
+    const messages: Record<string, string> = {
+      "Read failed": "读取图片翻译服务响应失败",
+      "Invalid JSON": "图片翻译服务返回了无效的 JSON 响应",
+      "Too large": "图片翻译服务响应超过大小限制",
+    };
+    return new Error(messages[reason] ?? `图片翻译请求失败：${reason.slice(0, 300)}`);
   }
 
   #rememberImage(ck: string, result: BuddyTranslateImageResult): void {

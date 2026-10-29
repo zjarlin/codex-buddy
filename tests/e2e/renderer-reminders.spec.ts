@@ -12,6 +12,7 @@ const { outputFiles } = await build({
     contents: `
       import { ThreadRemindersModel, THREAD_REMINDERS_STORAGE_KEY } from "./packages/renderer-extension/src/thread-reminders-state.ts";
       import { installRendererReminders } from "./packages/renderer-extension/src/renderer-reminders.ts";
+      import { createNotificationCard } from "./packages/renderer-extension/src/notification-card.ts";
       import { installRendererThreadActions } from "./packages/renderer-extension/src/renderer-thread-actions.ts";
 
       const HOUR = 60 * 60 * 1000;
@@ -63,8 +64,16 @@ const { outputFiles } = await build({
         });
         control.refresh();
         actions.refresh();
+        // 另一套队列的卡片（完成提醒用的也是这个外壳），用来验证“正前方”仲裁。
+        const otherCard = createNotificationCard({
+          attribute: "data-codexhost-test-card",
+          panelAttribute: "data-codexhost-test-card-panel",
+          queueAttribute: "data-codexhost-test-card-queue",
+          closeLabel: () => "关闭",
+        });
         globalThis.reminders = {
           control,
+          otherCard,
           actions,
           clock,
           opened,
@@ -78,6 +87,7 @@ const { outputFiles } = await build({
           },
           dispose() {
             actions.dispose();
+            otherCard.dispose();
             control.dispose();
           },
         };
@@ -163,6 +173,60 @@ test("creates a one-time reminder from the row menu and fires the shared card", 
   const dismissed = await page.evaluate(() => Reflect.get(globalThis, "reminders").state());
   expect(dismissed.entries[0]).toMatchObject({ enabled: false });
   expect(errors).toEqual([]);
+});
+
+// 回归：用户还在读完成提醒时，到点提醒不能把它盖掉。两个模块共用同一块屏幕，
+// 旧实现各自直接改 hidden，后到的那张总会赢。
+test("a due reminder waits while another card is in front", async ({ page }) => {
+  await page.evaluate(() => Reflect.get(globalThis, "setupReminders")());
+  await page.evaluate(() => {
+    const reminders = Reflect.get(globalThis, "reminders");
+    const entry = (id: string, message: string, offset: number) => ({
+      id,
+      hostId: "local",
+      threadId: "thread-a",
+      title: "clouddev 迁 macmini 做了嘛",
+      project: "clouddev",
+      message,
+      schedule: { kind: "once", at: reminders.clock.now + offset },
+      enabled: true,
+      createdAt: reminders.clock.now,
+      firedAt: null,
+    });
+    localStorage.setItem(
+      "codexhost.thread-reminders.v1",
+      JSON.stringify({
+        version: 1,
+        entries: [entry("reminder-1", "到点提醒的正文", 60_000)],
+      }),
+    );
+  });
+  await page.reload();
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => Reflect.get(globalThis, "setupReminders")(true));
+
+  // 另一张卡片先占住正前方（模拟用户正在读的完成提醒）。
+  const other = page.locator("[data-codexhost-test-card]");
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "reminders").otherCard.show();
+  });
+  await expect(other).toBeVisible();
+
+  await page.evaluate(() => Reflect.get(globalThis, "reminders").tick(2 * 60_000));
+  const card = page.locator("[data-codexhost-reminder]");
+  // 到期状态照常推进，但卡片不显示，也不把前一张挤掉。
+  await expect(card).toBeHidden();
+  await expect(other).toBeVisible();
+  // 卡片没显示出来，就不能算“已处理”：提醒仍是启用且未触发，让位后照常补弹一次。
+  const due = await page.evaluate(() => Reflect.get(globalThis, "reminders").state().entries[0]);
+  expect(due).toMatchObject({ enabled: true, firedAt: null });
+
+  // 前一张让位后，排队的提醒才出现。
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "reminders").otherCard.hide();
+  });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("到点提醒的正文");
 });
 
 test("snoozes an interval reminder without changing its period", async ({ page }) => {

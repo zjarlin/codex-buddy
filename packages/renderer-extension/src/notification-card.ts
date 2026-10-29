@@ -17,7 +17,29 @@ export interface NotificationCard {
   body: HTMLElement;
   notice: HTMLParagraphElement;
   actions: HTMLElement;
+  /**
+   * 占用正前方。另一张卡片正在显示时返回 false 并保持隐藏：后来的提醒排队等待，
+   * 不能把用户还在看的卡片直接盖掉。
+   */
+  show(): boolean;
+  /** 让位：隐藏本卡片；若它正占据正前方，则通知排队的卡片重新尝试显示。 */
+  hide(): void;
+  /** 正前方的卡片让位时回调，模块在这里重新 render 自己的卡片。 */
+  onAvailable(listener: () => void): () => void;
   dispose(): void;
+}
+
+// 完成提醒与定时提醒是两套独立队列，但物理上只有一块屏幕。这里只仲裁“谁在正前方”，
+// 不合并两边的语义：被挡住的卡片保持隐藏，自己的队列与计数照常推进。
+let foreground: NotificationCard | null = null;
+const availableListeners = new Set<() => void>();
+
+function notifyAvailable(): void {
+  // 放到微任务里通知，避免在别人的 render 过程中同步递归进入下一次 render。
+  queueMicrotask(() => {
+    if (foreground) return;
+    for (const listener of [...availableListeners]) listener();
+  });
 }
 
 const SHELL_STYLE_ATTRIBUTE = "data-codexhost-notification-card-style";
@@ -99,7 +121,7 @@ export function createNotificationCard(options: {
   modal.append(panel);
   document.body.append(modal);
 
-  return {
+  const card: NotificationCard = {
     modal,
     panel,
     heading,
@@ -110,8 +132,31 @@ export function createNotificationCard(options: {
     body,
     notice,
     actions,
+    show() {
+      if (foreground !== card) {
+        if (foreground) {
+          modal.hidden = true;
+          return false;
+        }
+        foreground = card;
+      }
+      modal.hidden = false;
+      return true;
+    },
+    hide() {
+      modal.hidden = true;
+      if (foreground !== card) return;
+      foreground = null;
+      notifyAvailable();
+    },
+    onAvailable(listener) {
+      availableListeners.add(listener);
+      return () => availableListeners.delete(listener);
+    },
     dispose() {
+      card.hide();
       modal.remove();
     },
   };
+  return card;
 }

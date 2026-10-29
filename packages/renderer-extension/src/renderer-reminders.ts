@@ -266,7 +266,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     const entry = selected ?? due[0] ?? null;
     visible = entry;
     if (!entry || document.hidden || !document.hasFocus() || (dialog !== null && dialog.open)) {
-      card.modal.hidden = true;
+      card.hide();
       return;
     }
     const projectLabel =
@@ -289,7 +289,9 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     open.textContent = copy.open;
     snooze.textContent = copy.snooze;
     dismiss.textContent = copy.dismiss;
-    card.modal.hidden = false;
+    // 完成提醒卡片正在正前方时先排队：到期状态、计数与已触发语义照常推进，
+    // 等那张卡片让位后由 onAvailable 重新渲染，绝不把它盖掉。
+    card.show();
   };
 
   const openEntry = async (entry: ThreadReminderRecord): Promise<void> => {
@@ -494,6 +496,11 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     if (event.key && !event.key.startsWith("codexhost.thread-reminders")) return;
     model.reload();
   };
+  // 正前方的卡片（可能是完成提醒）让位后，到点提醒才重新渲染出来。
+  const unsubscribeForeground = card.onAvailable(() => {
+    render();
+    scheduleNext();
+  });
   const onCardClose = (): void => {
     if (!visible) return;
     markFired(visible);
@@ -583,6 +590,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
       if (timer !== null) clearTimeout(timer);
       timer = null;
       unsubscribe();
+      unsubscribeForeground();
       dialog?.close();
       dialog = null;
       document.removeEventListener("keydown", onKeyDown, true);

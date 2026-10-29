@@ -422,17 +422,19 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       });
   };
 
-  const confirm = (entry: PendingConfirmationRecord): boolean => {
+  /**
+   * 确认一条提醒。被确认的正是当前展开的卡片时，默认接着展开下一条：否则
+   * “还有 N 个待确认会话”会随卡片一起消失，用户只能等下一次新提醒才能再看到。
+   * 关闭卡片（用户主动收起）不走这条接续，保持“收起就收起”。
+   */
+  const confirm = (entry: PendingConfirmationRecord, options?: { advance?: boolean }): boolean => {
     clearReadTimer();
     const changed = model.confirm(entry);
     restoredEntries.delete(entryKey(entry));
-    if (
-      changed &&
-      visibleEntry?.turnId === entry.turnId &&
-      visibleEntry.threadId === entry.threadId
-    ) {
-      visibleEntry = null;
-      expanded = false;
+    if (changed && visibleEntry && sameEntry(visibleEntry, entry)) {
+      const next = options?.advance === false ? null : (model.pending()[0] ?? null);
+      visibleEntry = next;
+      expanded = next !== null;
     }
     render();
     return changed;
@@ -447,7 +449,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     expanded = false;
     visibleEntry = null;
     clearReadTimer();
-    if (target) confirm(target);
+    if (target) confirm(target, { advance: false });
     else render();
   };
 
@@ -489,24 +491,24 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     locale = options.getLocale();
     const copy = messages(locale);
     const entries = model.pending();
-    const latest = entries[0] ?? null;
     const active = options.activeThread() ?? activeThreadFromDom();
-    const visible = visibleEntry;
-    if (visible && !entries.some((entry) => sameEntry(entry, visible))) {
+    const expandedEntry = visibleEntry;
+    if (expandedEntry && !entries.some((candidate) => sameEntry(candidate, expandedEntry))) {
       visibleEntry = null;
     }
+    // 正在展开的那条优先：新完成的会话只增加计数，不能把用户还没看完的卡片顶掉。
+    const entry = visibleEntry ?? entries[0] ?? null;
     if (
       !expanded ||
-      !latest ||
+      !entry ||
       !document.hasFocus() ||
       document.hidden ||
-      (active?.hostId === latest.hostId && active.threadId === latest.threadId)
+      (active?.hostId === entry.hostId && active.threadId === entry.threadId)
     ) {
       renderedKey = "";
-      modal.hidden = true;
+      card.hide();
       return;
     }
-    const entry = visibleEntry ?? latest;
     visibleEntry = entry;
     const modelKey = modelThreadKey(entry);
     ensureModelChoices(entry);
@@ -612,7 +614,9 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     send.disabled = sending;
     notice.textContent = noticeMessage;
     view.disabled = read.disabled = archive.disabled = false;
-    modal.hidden = false;
+    // 另一张提醒卡片（例如定时提醒）正在正前方时保持隐藏：本卡片留在队列里，
+    // 等它让位后由 onAvailable 重新渲染。不能把用户还在看的卡片直接盖掉。
+    card.show();
   };
 
   /**
@@ -786,7 +790,17 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
               if (entry) {
                 // 当前可见会话完成时卡片由 render 的 active 判定自动隐藏，无需额外静默集合。
                 expanded = true;
-                visibleEntry = entry;
+                // 用户可能正读到一半：新完成的会话先进队列与计数，等当前这张被读过
+                // （或用户自己点“还有 N 个”）才轮到它，不能直接把正在看的卡片顶掉。
+                // 判据是“这张卡片真的在屏幕上”，而不是“内存里记着哪一条”：当前会话
+                // 完成、窗口失焦或另一张卡片占着正前方时都没有可读的内容，新提醒直接
+                // 顶上；只有用户正看着一张卡片时才让它继续展开。
+                const shown = visibleEntry;
+                const cardOnScreen =
+                  shown !== null &&
+                  !modal.hidden &&
+                  model.pending().some((candidate) => sameEntry(candidate, shown));
+                if (!cardOnScreen) visibleEntry = entry;
                 // 语音播报与弹窗同一触发点：真正属于用户的回合完成通知。
                 options.speech?.announce(entry);
                 // 标题生成刚结束时侧栏按钮仍是打字机点阵，卡片先用“未命名会话”；
@@ -860,8 +874,10 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       visibleEntry = null;
       expanded = false;
       clearReadTimer();
-      // 点“查看结果”就是去读这条结果，立即确认，避免重启后又弹回。
-      confirm(entry);
+      // 点“查看结果”就是去读这条结果，立即确认，避免重启后又弹回。这里不接续
+      // 展开下一条：用户正要读刚打开的会话，不能让另一张卡片立刻盖上去；剩下的
+      // 项仍在队列与侧栏里，点侧栏的待确认视图即可。
+      confirm(entry, { advance: false });
     } catch {
       noticeMessage = messages(locale).openFailed;
       render();
@@ -938,13 +954,15 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
         if (nativeUnreadSeen.has(key)) stillUnread.add(key);
         continue;
       }
+      // 这两条都是后台确认（用户在官方侧读过、或重启遗留），不是用户在卡片上操作：
+      // 收起即可，不接着展开队列里的下一条，避免凭空弹出一张用户没点过的卡片。
       if (nativeUnreadSeen.has(key)) {
         // 官方未读从有到无：用户已在官方侧读过，队列与蓝点一起确认。
         nativeUnreadSeen.delete(key);
-        confirm(entry);
+        confirm(entry, { advance: false });
       } else if (restoredEntries.has(entryKey(entry)) && sidebarThreadStatusObserved(row)) {
         // 上次启动遗留下来、官方早已读过的记录：重启后不能再弹一次。
-        confirm(entry);
+        confirm(entry, { advance: false });
       }
     }
     for (const key of [...nativeUnreadSeen]) {
@@ -1086,6 +1104,11 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
     renderedKey = "";
     render();
   });
+  // 正前方的卡片（可能是定时提醒）让位后，被挡住的完成提醒才重新渲染出来。
+  const unsubscribeForeground = card.onAvailable(() => {
+    renderedKey = "";
+    render();
+  });
   const unsubscribeHosts = options.subscribeHosts?.(refresh) ?? (() => undefined);
   const observer = new MutationObserver(() => {
     syncNativeRead();
@@ -1109,6 +1132,7 @@ export function installRendererPendingConfirmations(options: PendingConfirmation
       observer.disconnect();
       unsubscribeModel();
       unsubscribeHosts();
+      unsubscribeForeground();
       for (const state of hosts.values()) state.dispose?.();
       hosts.clear();
       document.removeEventListener("keydown", onKeyDown, true);

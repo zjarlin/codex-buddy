@@ -515,6 +515,99 @@ test("a background turn start keeps the unread card until the new turn produces 
   expect(await entries()).toMatchObject([{ turnId: "turn-resumed", state: "pending" }]);
 });
 
+// 回归：用户还没看完第一张卡片时，另一个会话结束不能把它顶掉。
+// 旧实现每次都把 visibleEntry 设成最新完成的条目，读完一半的结果直接消失，
+// 只剩一个「还有 N 个」的计数，回头也无从复原。
+test("a new completion queues behind the card the user is still reading", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  // 取消侧栏的当前会话标记：否则“停留 3 秒即已读”的计时会在断言期间自动确认队列项。
+  await page.evaluate(() => {
+    for (const row of document.querySelectorAll<HTMLElement>(
+      "[data-app-action-sidebar-thread-row]",
+    )) {
+      row.dataset.appActionSidebarThreadActive = "false";
+    }
+  });
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  const counter = modal.locator("[data-codexhost-pending-confirmations-queue]");
+
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-b",
+      "turn-b",
+      "正在读的结果。",
+    ),
+  );
+  await expect(modal).toContainText("正在读的结果。");
+  await expect(counter).toBeHidden();
+
+  // 另一个会话完成：卡片保持在原内容上，只把计数变成 1。
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete(
+      "thread-a",
+      "turn-a",
+      "新完成的结果。",
+    ),
+  );
+  await expect(modal).toContainText("正在读的结果。");
+  await expect(modal).not.toContainText("新完成的结果。");
+  await expect(counter).toBeVisible();
+  await expect(counter).toHaveText("还有 1 个待确认会话");
+
+  // 点计数可以自己切过去看新结果。
+  await counter.click();
+  await expect(modal).toContainText("新完成的结果。");
+
+  // 切回第一条并标为已读：确认后自动展开剩下的那条，而不是连计数一起消失。
+  await counter.click();
+  await expect(modal).toContainText("正在读的结果。");
+  await modal.getByRole("button", { name: "标为已读", exact: true }).click();
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText("新完成的结果。");
+  await expect(counter).toBeHidden();
+
+  // 最后一条读完，卡片收起。
+  await modal.getByRole("button", { name: "标为已读", exact: true }).click();
+  await expect(modal).toBeHidden();
+});
+
+// 回归：主动收起卡片（关闭按钮 / Esc）是“我现在不想看”，不能顺手把剩下那条也弹出来。
+test("closing the card does not pop the next queued completion", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => Reflect.get(globalThis, "setupPendingConfirmations")());
+  // 同上：不保留当前会话标记，避免“停留即已读”的计时干扰断言。
+  await page.evaluate(() => {
+    for (const row of document.querySelectorAll<HTMLElement>(
+      "[data-app-action-sidebar-thread-row]",
+    )) {
+      row.dataset.appActionSidebarThreadActive = "false";
+    }
+  });
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-b", "turn-b", "第一条结果。"),
+  );
+  await page.evaluate(() =>
+    Reflect.get(globalThis, "pendingConfirmations").complete("thread-a", "turn-a", "第二条结果。"),
+  );
+  await expect(modal).toContainText("第一条结果。");
+  await page.getByRole("button", { name: "关闭" }).click();
+  await expect(modal).toBeHidden();
+  const entries = await page.evaluate(
+    () => Reflect.get(globalThis, "pendingConfirmations").state().entries,
+  );
+  // 只有当前展开的那条被确认，排队的那条仍是待确认，可以从侧栏再打开。
+  expect(entries.filter((entry: { state: string }) => entry.state === "pending")).toHaveLength(1);
+});
+
 // 回归：会话重新进入执行态（中断后续跑、重连恢复）时侧栏是"未读=false"，
 // 不能当成用户已读而确认卡片。
 test("a thread that goes back to running is not treated as read", async ({ page }) => {

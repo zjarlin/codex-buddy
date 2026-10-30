@@ -14,8 +14,15 @@ const ENGLISH = {
   missing: "Codex Desktop was not found",
   stopped: "codexhost is not running",
   stoppedDetail: "Start codexhost to use Codex Desktop with your Harnesses.",
+  stoppedDetailUnmanaged:
+    "Codex Desktop is running outside codexhost, so starting codexhost asks to quit that instance first.",
   start: "Start codexhost",
   starting: "Starting…",
+  replaceDesktopTitle: "Codex Desktop is already running",
+  replaceDesktopBody:
+    "Codex Desktop is running outside codexhost, so codexhost cannot take it over. Starting codexhost quits that instance; unsaved input in it is lost. Quit it manually instead if you want to decide when.",
+  replaceDesktopConfirm: "Quit Codex Desktop and start codexhost",
+  cancel: "Cancel",
   startingTitle: "codexhost is starting",
   startingDetail: "Preparing Codex Desktop. Please wait; there is no need to start it again.",
   startupInterrupted: "This startup did not finish. Check the current status above.",
@@ -210,8 +217,15 @@ const CHINESE: ConsoleMessages = {
   missing: "未找到 Codex Desktop",
   stopped: "codexhost 未运行",
   stoppedDetail: "启动 codexhost 后即可在 Codex Desktop 中使用各个 Harness。",
+  stoppedDetailUnmanaged:
+    "当前 Codex Desktop 在 codexhost 之外运行；启动 codexhost 时会先确认是否退出该实例。",
   start: "启动 codexhost",
   starting: "正在启动…",
+  replaceDesktopTitle: "Codex Desktop 已在运行",
+  replaceDesktopBody:
+    "当前有 codexhost 之外的 Codex Desktop 在运行，codexhost 无法接管它。启动 codexhost 会退出该实例，其中未保存的输入会丢失；想自己决定退出时机，请先手动关闭它。",
+  replaceDesktopConfirm: "退出 Codex Desktop 并启动 codexhost",
+  cancel: "取消",
   startingTitle: "codexhost 正在启动",
   startingDetail: "正在准备 Codex Desktop，请稍候，无需重复启动。",
   startupInterrupted: "本次启动未完成，请查看上方当前状态。",

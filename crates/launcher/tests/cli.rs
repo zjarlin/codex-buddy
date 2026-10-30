@@ -32,7 +32,8 @@ fn production_launcher_uses_the_three_state_running_desktop_flow() {
     assert!(source.contains("StartupState::CleanLaunch"));
     assert!(source.contains("StartupState::Attach"));
     assert!(source.contains("acquire_launcher_ownership"));
-    assert!(source.contains("completely quit it before starting codexhost"));
+    assert!(source.contains("confirm quitting it before starting codexhost"));
+    assert!(source.contains("--replace-running-desktop"));
     assert!(!source.contains("attach_unmanaged_desktop"));
 }
 

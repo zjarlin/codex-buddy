@@ -106,21 +106,40 @@ pub(super) fn endpoint_ready(port: u16, timeout: Duration) -> bool {
     .is_ok()
 }
 
+/// Why waiting for the Shim/Host chain stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HostChainOutcome {
+    Ready,
+    /// The Desktop this Launcher started exited first, so its Shim/Host chain
+    /// can never appear.
+    DesktopExited,
+    TimedOut,
+}
+
+/// Wait for the Shim and Node descendants of the Desktop this Launcher started.
+/// `desktop_alive` reports whether that Desktop is still running; the wait ends
+/// as soon as it exits instead of polling for the full timeout, because a
+/// Desktop that restarted itself (for example after an account or workspace
+/// change) no longer carries the managed environment.
 pub(super) fn wait_for_host_chain(
     desktop_pid: u32,
     options: &ResolvedLaunchOptions,
     timeout: Duration,
-) -> Result<bool, Box<dyn Error>> {
+    mut desktop_alive: impl FnMut() -> bool,
+) -> Result<HostChainOutcome, Box<dyn Error>> {
     let started = Instant::now();
     while started.elapsed() < timeout {
         if descendant_executable_exists(desktop_pid, &options.shim)?
             && descendant_executable_exists(desktop_pid, &options.node)?
         {
-            return Ok(true);
+            return Ok(HostChainOutcome::Ready);
+        }
+        if !desktop_alive() {
+            return Ok(HostChainOutcome::DesktopExited);
         }
         thread::sleep(Duration::from_millis(100));
     }
-    Ok(false)
+    Ok(HostChainOutcome::TimedOut)
 }
 
 pub(super) fn publish_runtime_descriptor(

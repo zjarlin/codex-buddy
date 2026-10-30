@@ -57,7 +57,7 @@ describe("console installation", () => {
       }),
     ).toEqual({
       command: path.resolve("/usr/bin/node"),
-      args: [path.resolve("/lib/cli/bin/codexhost.js")],
+      args: [path.resolve("/lib/cli/bin/codexhost.js"), "launch"],
     });
     expect(launchCommand(installation, {})).toBeNull();
     expect(launchCommand({ ...installation, distribution: null }, {})).toEqual({
@@ -82,6 +82,22 @@ describe("console installation", () => {
       ).toEqual({ command: launcher, args: ["launch"] });
     },
   );
+
+  it("passes a confirmed Desktop replacement to the Launcher", () => {
+    const installation: ConsoleInstallation = {
+      appDirectory: "/pkg/app",
+      distribution: null,
+      launcherExecutable: "/pkg/bin/codexhost",
+    };
+    expect(launchCommand(installation, {}, { replaceRunningDesktop: true })).toEqual({
+      command: "/pkg/bin/codexhost",
+      args: ["launch", "--replace-running-desktop"],
+    });
+    expect(launchCommand(installation, {}, { replaceRunningDesktop: false })).toEqual({
+      command: "/pkg/bin/codexhost",
+      args: ["launch"],
+    });
+  });
 
   it("rejects inspect output from an unknown schema", () => {
     expect(() => parseInspectDocument({ schemaVersion: 2, runtime: {} })).toThrow("schema");

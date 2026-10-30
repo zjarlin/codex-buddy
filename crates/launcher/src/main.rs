@@ -17,7 +17,6 @@ mod system_proxy_environment;
 use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::fmt::{self, Display, Formatter};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -51,8 +50,9 @@ use codexhost_platform::{
 };
 use compatibility::{MAX_CONTROLLER_READINESS_LINE_BYTES, parse_controller_readiness_line};
 use desktop_attachment::{
-    LauncherOwnership, RuntimeControl, acquire_launcher_ownership, allocate_runtime_control,
-    endpoint_ready, publish_runtime_descriptor, stop_stale_launcher, wait_for_host_chain,
+    HostChainOutcome, LauncherOwnership, RuntimeControl, acquire_launcher_ownership,
+    allocate_runtime_control, endpoint_ready, publish_runtime_descriptor, stop_stale_launcher,
+    wait_for_host_chain,
 };
 use installation_layout::InstalledResources;
 use native_harness_broker::run_native_harness_broker_cli;
@@ -96,8 +96,22 @@ const STARTUP_TRACE_ENV: &str = "CODEXHOST_STARTUP_TRACE";
 const CONTROLLER_STOP_GRACE: Duration = Duration::from_secs(1);
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 const DESKTOP_TREE_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
-#[cfg(any(target_os = "windows", target_os = "linux"))]
-const UNMANAGED_DESKTOP_MESSAGE: &str = "Codex Desktop is already running outside codexhost; completely quit it before starting codexhost";
+const UNMANAGED_DESKTOP_MESSAGE: &str = "Codex Desktop is already running outside codexhost; confirm quitting it before starting codexhost";
+
+/// Errors a failed Host-chain wait reports. A Desktop that exited on its own is
+/// named as such, so the console can ask the user to quit the new instance
+/// instead of showing a generic timeout.
+fn host_chain_error(outcome: HostChainOutcome) -> Box<dyn Error> {
+    match outcome {
+        HostChainOutcome::Ready => unreachable!("a ready Host chain is not an error"),
+        HostChainOutcome::DesktopExited => {
+            "Codex Desktop exited before the codexhost Host chain was ready, most likely because it restarted itself (for example after an account or workspace change); quit the running Codex Desktop completely, then start codexhost again".into()
+        }
+        HostChainOutcome::TimedOut => {
+            "Codex Desktop did not start the codexhost Host chain before timeout".into()
+        }
+    }
+}
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn desktop_tree_refresh_due(last_refresh: Instant, now: Instant) -> bool {
@@ -115,23 +129,20 @@ fn managed_desktop_data_directory(
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 #[derive(Debug)]
 struct UnmanagedDesktopConflict;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 impl Display for UnmanagedDesktopConflict {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         formatter.write_str(UNMANAGED_DESKTOP_MESSAGE)
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 impl Error for UnmanagedDesktopConflict {}
 
 fn usage() {
     eprintln!(
-        "usage:\n  codexhost\n  codexhost inspect [--json] [--custom-install <absolute-directory>]\n  codexhost console\n  codexhost update\n  codexhost launch [--shim <absolute-file>] [--node <absolute-file>] [--host-runtime <absolute-file>] [--desktop-controller <absolute-file>] [--renderer <absolute-file>] [--pi <absolute-file>] [--custom-install <absolute-directory>]\n  codexhost broker install|status|stop|uninstall\n  codexhost delegate --help\n  codexhost harness inspect ...\n  codexhost delegate start ...\n  codexhost thread send|cancel|read|wait|list ..."
+        "usage:\n  codexhost\n  codexhost inspect [--json] [--custom-install <absolute-directory>]\n  codexhost console\n  codexhost update\n  codexhost launch [--shim <absolute-file>] [--node <absolute-file>] [--host-runtime <absolute-file>] [--desktop-controller <absolute-file>] [--renderer <absolute-file>] [--pi <absolute-file>] [--custom-install <absolute-directory>] [--replace-running-desktop]\n  codexhost broker install|status|stop|uninstall\n  codexhost delegate --help\n  codexhost harness inspect ...\n  codexhost delegate start ...\n  codexhost thread send|cancel|read|wait|list ..."
     );
 }
 
@@ -335,6 +346,9 @@ struct LaunchOptions {
     renderer_extension: Option<PathBuf>,
     pi: Option<PathBuf>,
     custom_install_root: Option<PathBuf>,
+    /// Quit a Desktop that is running outside codexhost before launching.
+    /// Only the user-visible confirmation in the console sets this.
+    replace_running_desktop: bool,
 }
 
 #[derive(Debug)]
@@ -346,6 +360,7 @@ struct ResolvedLaunchOptions {
     renderer_extension: PathBuf,
     pi: Option<PathBuf>,
     custom_install_root: Option<PathBuf>,
+    replace_running_desktop: bool,
 }
 
 fn required_path(arguments: &[String], index: &mut usize, option: &str) -> Result<PathBuf, String> {
@@ -364,6 +379,7 @@ fn parse_launch_options(arguments: &[String]) -> Result<LaunchOptions, String> {
     let mut renderer_extension = None;
     let mut pi = None;
     let mut custom_install_root = None;
+    let mut replace_running_desktop = false;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -387,6 +403,7 @@ fn parse_launch_options(arguments: &[String]) -> Result<LaunchOptions, String> {
                 custom_install_root =
                     Some(required_path(arguments, &mut index, "--custom-install")?)
             }
+            "--replace-running-desktop" => replace_running_desktop = true,
             unknown => return Err(format!("unknown launch option: {unknown}")),
         }
         index += 1;
@@ -399,6 +416,7 @@ fn parse_launch_options(arguments: &[String]) -> Result<LaunchOptions, String> {
         renderer_extension,
         pi,
         custom_install_root,
+        replace_running_desktop,
     })
 }
 
@@ -493,6 +511,7 @@ impl LaunchOptions {
                 .custom_install_root
                 .map(|path| absolute_directory(&path, "--custom-install"))
                 .transpose()?,
+            replace_running_desktop: self.replace_running_desktop,
         })
     }
 }
@@ -759,10 +778,13 @@ fn supervise_desktop(
     let mut controller = start_desktop_controller(options, control, environment)?;
     let desktop_pid = desktop.root_snapshot().id;
     startup_trace("waiting for Host chain");
-    if !wait_for_host_chain(desktop_pid, options, Duration::from_secs(30))? {
+    let outcome = wait_for_host_chain(desktop_pid, options, Duration::from_secs(30), || {
+        desktop.is_running().unwrap_or(false)
+    })?;
+    if outcome != HostChainOutcome::Ready {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.shutdown(Duration::from_secs(2));
-        return Err("Codex Desktop did not start the codexhost Host chain before timeout".into());
+        return Err(host_chain_error(outcome));
     }
     startup_trace("Host chain ready");
     let _runtime = publish_runtime_descriptor(descriptor_path, control)?;
@@ -849,11 +871,14 @@ fn supervise_desktop(
         }
     };
     startup_trace("waiting for Host chain");
-    if !wait_for_host_chain(desktop_pid, options, Duration::from_secs(30))? {
+    let outcome = wait_for_host_chain(desktop_pid, options, Duration::from_secs(30), || {
+        matches!(desktop.try_wait(), Ok(None))
+    })?;
+    if outcome != HostChainOutcome::Ready {
         let _ = stop_desktop_controller(&mut controller);
         let _ = desktop.kill();
         let _ = desktop.wait();
-        return Err("Codex Desktop did not start the codexhost Host chain before timeout".into());
+        return Err(host_chain_error(outcome));
     }
     startup_trace("Host chain ready");
     let _runtime = match publish_runtime_descriptor(descriptor_path, control) {
@@ -1084,9 +1109,9 @@ fn launch(
         }
     };
 
-    // Windows uses this loop to restart or retry after interactive Desktop conflicts.
-    // On macOS every branch returns, so Clippy's never_loop lint is a platform-specific false positive.
-    #[cfg_attr(target_os = "macos", allow(clippy::never_loop))]
+    // Each platform may loop once to restart after a confirmed Desktop conflict.
+    // A Desktop that comes back after being quit is reported instead of quit again.
+    let mut replaced_unmanaged_desktop = false;
     loop {
         let roots = desktop_root_process_ids_for_installation(&installation)?;
         let descriptor_path = default_descriptor_path()?;
@@ -1111,37 +1136,45 @@ fn launch(
                 }
             }
             StartupState::Attach => {
-                #[cfg(target_os = "macos")]
-                {
+                // A Desktop is running without a live codexhost owner: either an
+                // independently started official instance or one whose Launcher is
+                // gone. Never terminate it on our own. Quitting it needs an explicit
+                // confirmation, which the console collects and passes as
+                // `--replace-running-desktop`; the Windows interactive prompt is that
+                // same confirmation.
+                #[cfg(target_os = "windows")]
+                let confirmed = if options.replace_running_desktop {
+                    true
+                } else if _interactive_running_desktop {
+                    match prompt_running_desktop() {
+                        RunningDesktopChoice::Restart => true,
+                        RunningDesktopChoice::Retry => continue,
+                        RunningDesktopChoice::Cancel => return Ok(()),
+                    }
+                } else {
+                    false
+                };
+                #[cfg(not(target_os = "windows"))]
+                let confirmed = options.replace_running_desktop;
+
+                if !confirmed {
+                    return Err(Box::new(UnmanagedDesktopConflict));
+                }
+                if replaced_unmanaged_desktop {
                     return Err(
-                        "official ChatGPT is already running; Codex Buddy will not interrupt it. Quit the official instance before starting Codex Buddy"
+                        "Codex Desktop is running again after it was quit; quit it completely, then start codexhost again"
                             .into(),
                     );
                 }
-                #[cfg(target_os = "windows")]
-                {
-                    if _interactive_running_desktop {
-                        match prompt_running_desktop() {
-                            RunningDesktopChoice::Restart => {
-                                force_stop_external_desktop(
-                                    &installation,
-                                    Duration::from_secs(10),
-                                )?;
-                                continue;
-                            }
-                            RunningDesktopChoice::Retry => continue,
-                            RunningDesktopChoice::Cancel => return Ok(()),
-                        }
-                    }
-                    // A Desktop is running without a live codexhost owner (an official
-                    // instance or a controlled instance whose Launcher exited). Drop the
-                    // stale runtime descriptor, force-stop the Desktop, and relaunch.
-                    if let Some(descriptor) = &descriptor {
-                        let _ = remove_matching_descriptor(&descriptor_path, descriptor);
-                    }
-                    force_stop_external_desktop(&installation, Duration::from_secs(10))?;
-                    continue;
+                replaced_unmanaged_desktop = true;
+                if let Some(descriptor) = &descriptor {
+                    let _ = remove_matching_descriptor(&descriptor_path, descriptor);
                 }
+                #[cfg(target_os = "windows")]
+                force_stop_external_desktop(&installation, Duration::from_secs(10))?;
+                #[cfg(target_os = "macos")]
+                codexhost_platform::force_stop_desktop(&installation, Duration::from_secs(10))?;
+                continue;
             }
             StartupState::CleanLaunch => {
                 if descriptor_present && control_endpoint_ready {
@@ -1228,6 +1261,12 @@ fn launch(
 
     let roots = desktop_root_process_ids_for_installation(&installation)?;
     if !roots.is_empty() {
+        if options.replace_running_desktop {
+            return Err(
+                "codexhost cannot quit a Codex Desktop it did not start on Linux; quit it manually, then start codexhost again"
+                    .into(),
+            );
+        }
         return Err(Box::new(UnmanagedDesktopConflict));
     }
     let descriptor_path = default_descriptor_path()?;
@@ -1331,6 +1370,7 @@ fn default_launch_options() -> LaunchOptions {
         renderer_extension: None,
         pi: None,
         custom_install_root: None,
+        replace_running_desktop: false,
     }
 }
 
@@ -1703,6 +1743,7 @@ mod tests {
             renderer_extension: PathBuf::from("/opt/renderer-extension.js"),
             pi: None,
             custom_install_root: None,
+            replace_running_desktop: false,
         }
     }
 

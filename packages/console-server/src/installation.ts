@@ -114,6 +114,17 @@ export interface LaunchCommand {
   args: string[];
 }
 
+export interface LaunchOptions {
+  /**
+   * Quit a Codex Desktop that is running outside codexhost before launching.
+   * Only an explicit user confirmation sets this; the Launcher refuses to
+   * terminate that Desktop otherwise.
+   */
+  replaceRunningDesktop?: boolean;
+}
+
+const REPLACE_RUNNING_DESKTOP_ARGUMENT = "--replace-running-desktop";
+
 /**
  * npm installations must start through the npm wrapper, which supplies the
  * packaged resources to the Launcher; other installations use explicit `launch`
@@ -122,16 +133,18 @@ export interface LaunchCommand {
 export function launchCommand(
   installation: ConsoleInstallation,
   environment: NodeJS.ProcessEnv = process.env,
+  options: LaunchOptions = {},
 ): LaunchCommand | null {
+  const extra = options.replaceRunningDesktop ? [REPLACE_RUNNING_DESKTOP_ARGUMENT] : [];
   if (installation.distribution?.distribution === "npm") {
     const node = environment.CODEXHOST_NPM_NODE_PATH;
     const wrapper = environment.CODEXHOST_NPM_LAUNCHER_PATH;
     if (node && wrapper && path.isAbsolute(node) && path.isAbsolute(wrapper)) {
-      return { command: node, args: [wrapper] };
+      return { command: node, args: [wrapper, "launch", ...extra] };
     }
     return null;
   }
   return installation.launcherExecutable
-    ? { command: installation.launcherExecutable, args: ["launch"] }
+    ? { command: installation.launcherExecutable, args: ["launch", ...extra] }
     : null;
 }

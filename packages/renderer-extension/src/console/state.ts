@@ -37,6 +37,8 @@ export interface ConsoleOverview {
     };
   } | null;
   launchAvailable: boolean;
+  /** A Desktop runs outside codexhost, so starting requires confirming a quit. */
+  runningDesktopOutsideCodexhost: boolean;
   summary: {
     state:
       | "starting"

@@ -1,6 +1,7 @@
-import { consolePost } from "../api.js";
+import { requestLaunch } from "../api.js";
 import { button, h } from "../dom.js";
 import type { ConsoleMessages } from "../messages.js";
+import { confirmReplaceDesktop } from "../replace-desktop-dialog.js";
 import type { ConsoleState } from "../state.js";
 import { createRendererSettingsIcon } from "../../settings/icons.js";
 import type {
@@ -10,17 +11,27 @@ import type {
 
 function hostRequiredView(
   document: Document,
+  overlay: HTMLElement,
+  signal: AbortSignal,
   messages: ConsoleMessages,
   state: ConsoleState,
 ): HTMLElement {
+  const settle = (): void => {
+    start.disabled = true;
+    window.setTimeout(() => void state.refresh(), 4_000);
+  };
   const start = button(
     document,
     [createRendererSettingsIcon("play", 14), messages.start],
     () => {
-      start.disabled = true;
-      void consolePost("/api/launch")
-        .catch(() => undefined)
-        .finally(() => window.setTimeout(() => void state.refresh(), 4_000));
+      const begin = (choice: { replaceRunningDesktop?: boolean }): void => {
+        void requestLaunch(choice).finally(settle);
+      };
+      if (state.overview?.runningDesktopOutsideCodexhost) {
+        confirmReplaceDesktop(document, overlay, messages, begin, signal);
+        return;
+      }
+      begin({});
     },
     "primary",
   );
@@ -78,6 +89,10 @@ export function hostPage(
     icon: definition.icon,
     mount(context: RendererSettingsPageMountContext) {
       const document = context.content.ownerDocument;
+      // The console renders inside a shadow root, and the page content is
+      // replaced on every refresh. The page container outlives both, so dialogs
+      // mount there and still resolve the shadow styles.
+      const overlay = context.content.parentElement ?? context.content;
       let mountedFor: string | null = null;
       let cleanup: (() => void) | undefined;
       const unmount = (): void => {
@@ -109,7 +124,7 @@ export function hostPage(
         } else {
           context.content.append(
             h(document, "h1", { className: "settings-section-label" }, definition.label),
-            hostRequiredView(document, messages, state),
+            hostRequiredView(document, overlay, context.signal, messages, state),
           );
         }
       };

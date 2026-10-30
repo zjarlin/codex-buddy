@@ -174,6 +174,7 @@ async function setup(page: Page, surface: "console" | "desktop" = "console") {
         controller: null,
         summary: { state: "running", detail: null },
         launchAvailable: false,
+        runningDesktopOutsideCodexhost: false,
         issueUrl: "",
         hostAvailable: true,
       };

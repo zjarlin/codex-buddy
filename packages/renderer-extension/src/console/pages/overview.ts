@@ -1,6 +1,7 @@
-import { consolePost } from "../api.js";
+import { requestLaunch } from "../api.js";
 import { button, h } from "../dom.js";
 import type { ConsoleMessages } from "../messages.js";
+import { confirmReplaceDesktop } from "../replace-desktop-dialog.js";
 import type { ConsoleOverview, ConsoleState } from "../state.js";
 import { createRendererSettingsIcon, type RendererSettingsIconName } from "../../settings/icons.js";
 import type {
@@ -42,7 +43,14 @@ function summaryView(
   if (state === "desktop-missing") {
     return { tone: "bad", icon: "unavailable", title: messages.missing, detail: detail ?? "" };
   }
-  return { tone: "info", icon: "play", title: messages.stopped, detail: messages.stoppedDetail };
+  return {
+    tone: "info",
+    icon: "play",
+    title: messages.stopped,
+    detail: overview.runningDesktopOutsideCodexhost
+      ? messages.stoppedDetailUnmanaged
+      : messages.stoppedDetail,
+  };
 }
 
 export function createOverviewPage(
@@ -57,6 +65,9 @@ export function createOverviewPage(
     icon: "dashboard" as const,
     mount(context: RendererSettingsPageMountContext) {
       const document = context.content.ownerDocument;
+      // Refreshes replace the page content; dialogs live on the page container
+      // so they keep the shadow styles and survive a re-render.
+      const overlay = context.content.parentElement ?? context.content;
       let launching = false;
       const render = (): void => {
         const overview = state.overview;
@@ -76,16 +87,21 @@ export function createOverviewPage(
               launching ? messages.starting : messages.start,
             ],
             () => {
-              launching = true;
-              render();
-              void consolePost("/api/launch")
-                .catch(() => undefined)
-                .finally(() => {
+              const begin = (choice: { replaceRunningDesktop?: boolean }): void => {
+                launching = true;
+                render();
+                void requestLaunch(choice).finally(() => {
                   window.setTimeout(() => {
                     launching = false;
                     void state.refresh();
                   }, 4_000);
                 });
+              };
+              if (overview.runningDesktopOutsideCodexhost) {
+                confirmReplaceDesktop(document, overlay, messages, begin, context.signal);
+                return;
+              }
+              begin({});
             },
             summaryState === "stopped" ? "primary" : "secondary",
           );

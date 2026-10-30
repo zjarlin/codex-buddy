@@ -17,7 +17,12 @@ The production Launcher SHALL distinguish stale-launcher recovery, clean Desktop
 #### Scenario: Independently started official Desktop is running
 - **WHEN** a target Codex Desktop root exists without a live codexhost owner and authenticated Controller
 - **THEN** Launcher MUST instruct the user to fully quit Codex before starting codexhost
-- **AND** it MUST NOT inject, restart, or terminate that Desktop
+- **AND** it MUST NOT inject, restart, or terminate that Desktop unless the user explicitly confirmed quitting it
+
+#### Scenario: Starting Desktop exits before the Host chain is ready
+- **WHEN** the Desktop this Launcher started exits before the Shim and Host appearance is confirmed
+- **THEN** Launcher MUST stop waiting immediately and report that the Desktop exited before the Host chain was ready
+- **AND** it MUST NOT report the wait as an unexplained timeout
 
 ### Requirement: Controlled Desktop attachment reuses the owning Controller
 A second Launcher for an existing codexhost-controlled Desktop SHALL rely on the per-user ownership lock and a nonce-authenticated Controller handshake. It MUST NOT repeat Inspector, Desktop PID, or Shim/Host process-tree validation already completed before the owning Launcher published its descriptor, and it MUST NOT install a competing Controller.
@@ -34,9 +39,14 @@ A second Launcher for an existing codexhost-controlled Desktop SHALL rely on the
 Launcher SHALL NOT attempt second-activation Inspector/CDP bootstrap or app-server rebinding for an independently started official Desktop on any platform.
 
 #### Scenario: Official Desktop blocks clean launch
-- **WHEN** the official Desktop is already running outside codexhost
+- **WHEN** the official Desktop is already running outside codexhost and the user has not confirmed quitting it
 - **THEN** Launcher MUST return a concrete full-quit instruction immediately
 - **AND** it MUST leave the existing Desktop and its app-server unchanged
+
+#### Scenario: User confirms quitting the unmanaged Desktop
+- **WHEN** the user confirms quitting the Desktop that runs outside codexhost, and the platform can stop that process tree
+- **THEN** Launcher MAY stop that Desktop and continue with a clean controlled launch
+- **AND** without that confirmation it MUST NOT stop the Desktop, on any platform
 
 ### Requirement: Runtime attachment state is minimal and recoverable
 Launcher SHALL persist only the minimum per-user runtime descriptor needed to validate a controlled instance, using atomic replacement and restrictive local access where supported. Runtime state MUST NOT contain Prompt, Transcript, credentials, Thread IDs, project paths, or arbitrary environment data.

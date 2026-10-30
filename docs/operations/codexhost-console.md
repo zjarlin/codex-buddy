@@ -49,6 +49,10 @@ Launcher 在打开控制台之前先写入 `starting` 启动记录（`finishedAt
 
 从已打开的 Web 控制台点击“启动”时，安装版调用 Launcher 的显式 `launch` 命令，npm 版通过 npm 包装脚本启动；两者都不再打开浏览器标签页。原页面通过状态轮询展示启动结果。
 
+已有 Codex Desktop 在 codexhost 之外运行时（例如手动打开的官方实例，或 Launcher 已退出的受管实例），启动先弹出确认：只有用户确认后才以 `launch --replace-running-desktop` 退出该实例并重新拉起，取消则不发送启动请求。Launcher 自身也只在收到该参数（Windows 另允许原有的交互式确认）时退出外部实例，其余情况返回错误提示用户先完全退出 Codex Desktop；macOS 与 Windows 走各自的进程树停止，Linux 不支持从 Launcher 退出外部实例，需用户手动关闭。这是有意为之：退出外部实例会丢失其中未保存的输入，不能作为默认行为。
+
+等待 Host chain 时，如果本次拉起的 Desktop 提前退出（典型情况是它因账号或工作区变化自行重启，新实例不再继承 codexhost 环境），Launcher 立即以“Desktop 已退出、请完全退出后重新启动”失败，不再空等到超时。
+
 设置 `CODEXHOST_CONSOLE=0` 可关闭以上行为。其他打开方式：
 
 | 方式 | 说明 |

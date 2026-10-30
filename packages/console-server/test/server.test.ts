@@ -158,6 +158,7 @@ describe("console server", () => {
         "startup",
         "controller",
         "launchAvailable",
+        "runningDesktopOutsideCodexhost",
         "summary",
         "issueUrl",
         "hostAvailable",
@@ -219,6 +220,25 @@ describe("console server", () => {
     expect(launch).not.toHaveBeenCalled();
     expect((await post({ origin: base, ...CHANGE })).status).toBe(202);
     expect(launch).toHaveBeenCalledWith("/opt/codexhost/bin/codexhost", ["launch"]);
+  });
+
+  it("quits an unmanaged Desktop only for a confirmed launch", async () => {
+    const launch = vi.fn();
+    const { base } = await start({ launch });
+    const post = (body: object) =>
+      fetch(`${base}/api/launch`, {
+        method: "POST",
+        headers: { origin: base, ...CHANGE },
+        body: JSON.stringify(body),
+      });
+
+    expect((await post({ replaceRunningDesktop: "yes" })).status).toBe(202);
+    expect(launch).toHaveBeenLastCalledWith("/opt/codexhost/bin/codexhost", ["launch"]);
+    expect((await post({ replaceRunningDesktop: true })).status).toBe(202);
+    expect(launch).toHaveBeenLastCalledWith("/opt/codexhost/bin/codexhost", [
+      "launch",
+      "--replace-running-desktop",
+    ]);
   });
 
   it("refuses an update while codexhost is running", async () => {

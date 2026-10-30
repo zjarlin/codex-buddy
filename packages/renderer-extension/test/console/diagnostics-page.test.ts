@@ -38,6 +38,7 @@ function overview(): ConsoleOverview {
     ],
     controller: null,
     launchAvailable: true,
+    runningDesktopOutsideCodexhost: false,
     summary: { state: "running", detail: null },
     issueUrl: "",
     hostAvailable: false,

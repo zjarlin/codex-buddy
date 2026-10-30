@@ -213,6 +213,11 @@ export function startConsoleServer(options: ConsoleServerOptions): Promise<Runni
       startup,
       controller,
       launchAvailable: launchCommand(options.installation, environment) !== null,
+      // A Desktop is running but codexhost does not own it. Starting codexhost
+      // then requires the user to confirm quitting that Desktop.
+      runningDesktopOutsideCodexhost:
+        (inspectDocument?.desktop?.processIds.length ?? 0) > 0 &&
+        !(inspectDocument?.runtime.running ?? false),
       summary,
       issueUrl: reportIssueUrl,
       hostAvailable: await options.host.available(),
@@ -413,7 +418,11 @@ export function startConsoleServer(options: ConsoleServerOptions): Promise<Runni
       return;
     }
     if (route === "POST /api/launch") {
-      const command = launchCommand(options.installation, environment);
+      // Quitting a Desktop that is running outside codexhost is destructive: only
+      // the explicit boolean the user confirmed in the console enables it.
+      const command = launchCommand(options.installation, environment, {
+        replaceRunningDesktop: body.replaceRunningDesktop === true,
+      });
       if (!command) {
         sendJson(response, 409, { error: "This installation cannot be started from the console" });
         return;

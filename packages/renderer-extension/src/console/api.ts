@@ -45,6 +45,23 @@ export async function consoleGet<T>(path: string, signal?: AbortSignal): Promise
   return payload as T;
 }
 
+export interface LaunchRequest {
+  /**
+   * Quit a Codex Desktop that runs outside codexhost before launching. Set only
+   * from the user's confirmation; the Launcher refuses it otherwise.
+   */
+  replaceRunningDesktop?: boolean;
+}
+
+/**
+ * Start codexhost from the console, optionally replacing an unmanaged Desktop.
+ * A failed request leaves the console showing the refreshed status, so callers
+ * do not need their own error surface here.
+ */
+export async function requestLaunch(request: LaunchRequest = {}): Promise<void> {
+  await consolePost("/api/launch", request).catch(() => undefined);
+}
+
 export async function consolePost<T>(
   path: string,
   body: unknown = {},

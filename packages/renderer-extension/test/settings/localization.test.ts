@@ -67,7 +67,7 @@ describe("Renderer settings localization", () => {
     expect(chinese.sessionImportAvailabilityNote).toContain("先在原生客户端关闭该会话再导入");
     expect(chinese.sessionImportAvailabilityNote).toContain("避免同时写入");
     expect(english.sessionImportAvailabilityNote).toContain(
-      "Available Harnesses come from the current Host",
+      "Available Harnesses come from the selected Host",
     );
     expect(english.sessionImportAvailabilityNote).toContain(
       "close the session in its native client before importing",

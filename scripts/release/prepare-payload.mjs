@@ -92,6 +92,12 @@ const runtimeLicenses = [
     source: "LICENSE",
     output: "QoderCN-Agent-SDK-LICENSE.txt",
   },
+  {
+    packageName: "@qwen-code/sdk",
+    license: "Apache-2.0",
+    source: "scripts/release/licenses/qwen-code-sdk-0.1.26-Apache-2.0.txt",
+    output: "Qwen-Code-SDK-LICENSE.txt",
+  },
   { packageName: "diff", license: "BSD-3-Clause", source: "LICENSE", output: "diff-LICENSE.txt" },
   {
     packageName: "smol-toml",
@@ -315,6 +321,7 @@ export function expectedPayloadPaths(target) {
     "licenses/Qoder-Agent-SDK-LICENSE.txt",
     "licenses/QoderCN-Agent-SDK-LICENSE.txt",
     "licenses/codex-buddy-LICENSE.txt",
+    "licenses/Qwen-Code-SDK-LICENSE.txt",
     "licenses/Cordis-LICENSE.txt",
     "licenses/Cosmokit-LICENSE.txt",
     "licenses/diff-LICENSE.txt",

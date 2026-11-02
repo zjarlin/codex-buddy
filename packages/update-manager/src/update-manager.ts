@@ -105,6 +105,7 @@ interface InternalRequest {
         node_path: string;
         npm_cli_path: string;
         npm_launcher_path: string;
+        npm_package_root: string;
       }
     | {
         kind: "windows-installer";
@@ -450,6 +451,7 @@ export function createBackgroundUpdateManager(
             options.npmLauncherPath,
             "npm codexhost launcher",
           ),
+          npm_package_root: requireAbsolutePath(options.packageRoot, "npm platform package root"),
         });
       } catch (error) {
         await writeFailedStatus(common.statusPath, common.version, "npm", error);

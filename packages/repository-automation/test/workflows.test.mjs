@@ -114,7 +114,7 @@ describe("workflow and form contracts", () => {
 
   it("keeps installer release CI to Apple Silicon macOS and Windows installers", async () => {
     const workflow = await read(".github/workflows/release-packages.yml");
-    expect(workflow).toContain("- target: macos-arm64\n            runner: macos-14");
+    expect(workflow).toContain("- target: macos-arm64\n            runner: macos-15");
     expect(workflow).toContain("- target: windows-x64\n            runner: windows-latest");
     expect(workflow).toContain("- target: windows-arm64\n            runner: windows-latest");
     expect(workflow).not.toContain("macos-x64");

@@ -3,12 +3,20 @@ import { committedReactAncestors } from "./renderer-react-ownership.js";
 import { retainRendererHostResponses } from "./renderer-host-response-ownership.js";
 import { buddyTurnStartOptions } from "./buddy-turn-start-policy.js";
 import { createDraftPrewarmPolicyBridge } from "./renderer-draft-prewarm-runtime.js";
+import { isolateRendererPrewarmConsumption } from "./renderer-prewarm-consumption.js";
 import {
   discoverRendererHosts,
   requestManagerFromHookState,
   resolveRendererHostManager,
 } from "./renderer-host-discovery.js";
 import { installRendererHostRouting } from "./renderer-host-routing.js";
+import {
+  findRendererAppScopeStore,
+  findRendererHostRpcFamily,
+  rendererHostRpcHostIds,
+  resolveRendererHostRpc,
+} from "./renderer-host-rpc-discovery.js";
+import { installRendererHostRpcRouting } from "./renderer-host-rpc-routing.js";
 
 export { requestManagerFromHookState } from "./renderer-host-discovery.js";
 
@@ -33,20 +41,53 @@ function directRendererInstaller(): string {
     const retainRendererHostResponses = ${retainRendererHostResponses.toString()};
     const buddyTurnStartOptions = ${buddyTurnStartOptions.toString()};
     const createDraftPrewarmPolicyBridge = ${createDraftPrewarmPolicyBridge.toString()};
-    const routing = (${installRendererHostRouting.toString()})(
-      document, window,
-      (root) => discoverRendererHosts(root, committedReactAncestors, requestManagerFromHookState),
+    const isolateRendererPrewarmConsumption = ${isolateRendererPrewarmConsumption.toString()};
+    const discover = (root) =>
+      discoverRendererHosts(root, committedReactAncestors, requestManagerFromHookState);
+    const installNative = () => (${installRendererHostRouting.toString()})(
+      document, window, discover,
       (discovery, hostId) => resolveRendererHostManager(discovery, hostId, requestManagerFromHookState),
       (manager, bridge, hostId, target, prewarmed, isCurrent) => createDraftPrewarmPolicyBridge(
-        manager, bridge, hostId, target, prewarmed, isCurrent, retainRendererHostResponses, buddyTurnStartOptions,
+        manager, bridge, hostId, target, prewarmed, isCurrent, retainRendererHostResponses,
+        buddyTurnStartOptions, isolateRendererPrewarmConsumption,
       ),
     );
+    const installRpc = () => typeof MessagePort !== 'function' ? null : (${installRendererHostRpcRouting.toString()})(document, window, {
+      findStore: ${findRendererAppScopeStore.toString()},
+      findFamily: ${findRendererHostRpcFamily.toString()},
+      resolve: ${resolveRendererHostRpc.toString()},
+      hostIds: ${rendererHostRpcHostIds.toString()},
+      composerHostIds: (composer) => {
+        const source = composer?.matches?.('[data-codex-composer], [contenteditable="true"][role="textbox"]')
+          ? { querySelectorAll: () => [composer] }
+          : (composer ?? document);
+        return discover(source);
+      },
+      portPrototype: MessagePort.prototype,
+    });
+    const connected = (routing) => routing.forComposer() !== null ||
+      ['local', ...(routing.knownHostIds?.() ?? [])].some((hostId) => routing.forHost(hostId) !== null);
+    let nativeReady = false;
+    // A legacy registry can remain mounted without a usable native manager.
+    // Prefer a ready native route, then try the identified main-process RPC store.
+    const routing = (() => {
+      if (window.__codexhostHostRoutingV1) return window.__codexhostHostRoutingV1;
+      const native = discover(document);
+      if (native.managers.length || native.registries.length) {
+        const routing = installNative();
+        if (connected(routing)) {
+          nativeReady = true;
+          return routing;
+        }
+        routing.dispose();
+      }
+      const rpc = installRpc();
+      if (rpc) return rpc;
+      throw new Error('Renderer Host request manager is unavailable');
+    })();
     // Publish a default draft policy only when its Host is unambiguous. Host
     // connections can be ready even when multiple Composers coexist.
-    const composerRoute = routing.forComposer();
-    const connected = composerRoute !== null ||
-      ['local', ...(routing.knownHostIds?.() ?? [])].some((hostId) => routing.forHost(hostId) !== null);
-    if (!connected) throw new Error('Renderer Host request manager is unavailable');
+    if (!nativeReady && !connected(routing)) throw new Error('Renderer Host request manager is unavailable');
     return { state: 'ready', reason: 'owned-request-bridge' };
   })()`;
 }

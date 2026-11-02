@@ -3,6 +3,7 @@ import type { RendererUsageStatisticsHostsProvider } from "./console/usage/usage
 import type { RemoteConnectionsControl } from "./remote-connections-control.js";
 import type { LoadedSessionsClient } from "./settings/loaded-sessions-table.js";
 import type { EmergencyProviderClient } from "./renderer-model-client.js";
+import type { HarnessSchedulesPageOptions } from "./settings/harness-schedules-page.js";
 import { readCodexLocaleSettings, type CodexLocaleSettings } from "./codex-locale-adapter.js";
 import {
   rendererSettingsMessages,
@@ -34,10 +35,11 @@ import { createRendererUpdateController } from "./settings/update-controller.js"
 import { installRendererUpdateNotification } from "./settings/update-notification.js";
 
 export interface RendererSettingsLifecycleOptions {
+  harnessSchedules?: HarnessSchedulesPageOptions;
   getUpdateClient?(): RendererUpdateClient | null;
   getConnectionDiagnostics?(): RendererConnectionDiagnostics | null;
   getAccountClient?(): RendererCodexAccountClient | null;
-  getSessionImportClient?(): RendererSessionImportClient | null;
+  getSessionImportClient?(hostId?: string): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
   getEmergencyProviderClient?(): EmergencyProviderClient | null;
@@ -81,6 +83,7 @@ export function installRendererSettingsLifecycle(
     trigger: RendererSettingsRailTriggerControl;
   } => {
     const messages = rendererSettingsMessages(locale);
+    const schedules = options.harnessSchedules;
     const definitions = createDefaultRendererSettingsPages(
       messages,
       () => (updates.available ? updates : null),
@@ -91,8 +94,7 @@ export function installRendererSettingsLifecycle(
         if (!options.openImportedThread) {
           throw new Error("Imported Thread navigation is unavailable");
         }
-        if (hostId) await options.openImportedThread(threadId, signal, hostId);
-        else await options.openImportedThread(threadId, signal);
+        await options.openImportedThread(threadId, signal, hostId);
         if (!disposed && !signal.aborted) shell?.close();
       },
       options.getLoadedSessionsClient ?? (() => null),
@@ -103,6 +105,14 @@ export function installRendererSettingsLifecycle(
       options.getRemoteConnections ?? (() => null),
       options.requestUsageStatistics,
       options.usageStatisticsHosts,
+      schedules
+        ? {
+            openSchedules: async (signal) => {
+              await schedules.openSchedules(signal);
+              if (!disposed && !signal.aborted) shell?.close();
+            },
+          }
+        : undefined,
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document, {
       onOpenChange(open) {

@@ -257,6 +257,10 @@ export function createHostUpdateCoordinator(
                       onPrepared,
                     });
             }
+            // The Launcher starts the Updater on macOS and Windows; deferring the
+            // start lets the user confirm the restart first. On Windows the Host
+            // Runtime runs in the Shim's kill-on-close Job, so an Updater it
+            // started would be killed together with the Desktop it waits for.
             return prepared;
           } catch (error) {
             await lock.release();
@@ -286,7 +290,10 @@ export function createHostUpdateCoordinator(
         }
         const prepared = await preparation;
         await manager.confirmRestart(prepared);
-        if (platform !== "darwin") await manager.start(prepared);
+        // The Launcher starts the Updater on macOS and Windows. On Windows the
+        // Host Runtime runs in the Shim's kill-on-close Job, so an Updater it
+        // started would be killed together with the Desktop it waits for.
+        if (platform !== "darwin" && platform !== "win32") await manager.start(prepared);
         const confirmed = await manager.readStatus(prepared.statusPath);
         if (!confirmed) throw new Error("Confirmed update status is missing");
         return { status: publicStatus(confirmed) };

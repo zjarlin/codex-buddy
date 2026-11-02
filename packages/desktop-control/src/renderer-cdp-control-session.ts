@@ -11,6 +11,11 @@ import {
   type RendererDraftPrewarmPolicyStatus,
 } from "./renderer-draft-prewarm-policy.js";
 
+import {
+  installRendererLoadedModules,
+  type RendererModuleCdpClient,
+} from "./renderer-loaded-modules.js";
+
 export interface ProductionRendererStatus {
   version: 2;
   enabledAgents: string[];
@@ -26,8 +31,7 @@ export interface RendererCdpControlSnapshot {
   binding: ProductionRendererStatus;
 }
 
-interface RendererCdpClient {
-  command(method: string, params?: Record<string, unknown>): Promise<unknown>;
+interface RendererCdpClient extends RendererModuleCdpClient {
   evaluate<T>(expression: string): Promise<T>;
   close(): void;
 }
@@ -256,10 +260,15 @@ async function installTarget(
   timeoutMs: number,
   pollIntervalMs: number,
   operations: RendererCdpControlOperations,
-): Promise<{ renderer: RendererCdpClient; snapshot: RendererCdpControlSnapshot }> {
+): Promise<{
+  renderer: RendererCdpClient;
+  snapshot: RendererCdpControlSnapshot;
+  disposeModules(): void;
+}> {
   const renderer = await operations.connect(target.webSocketDebuggerUrl);
+  let disposeModules: (() => void) | undefined;
   try {
-    await renderer.command("Runtime.enable");
+    disposeModules = await installRendererLoadedModules(renderer);
     await renderer.command("Page.enable");
     // Install the current document before registering the next-document hook.
     // Registering a multi-megabyte bundle while Electron is still committing its
@@ -268,8 +277,9 @@ async function installTarget(
     await renderer.command("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
     const draftPrewarmPolicy = await operations.installDraftPrewarmPolicy(renderer);
     const binding = await waitForBinding(renderer, enabledAgents, timeoutMs, pollIntervalMs);
-    return { renderer, snapshot: { target, draftPrewarmPolicy, binding } };
+    return { renderer, snapshot: { target, draftPrewarmPolicy, binding }, disposeModules };
   } catch (error) {
+    disposeModules?.();
     renderer.close();
     throw error;
   }
@@ -287,6 +297,7 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
     private readonly pollIntervalMs: number,
     private readonly operations: RendererCdpControlOperations,
     private currentSnapshot: RendererCdpControlSnapshot,
+    private disposeModules: () => void,
   ) {}
 
   get snapshot(): RendererCdpControlSnapshot {
@@ -311,8 +322,10 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
         this.pollIntervalMs,
         this.operations,
       );
+      this.disposeModules();
       this.renderer.close();
       this.renderer = replacement.renderer;
+      this.disposeModules = replacement.disposeModules;
       this.currentSnapshot = replacement.snapshot;
       return this.currentSnapshot;
     }
@@ -340,8 +353,10 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
         this.pollIntervalMs,
         this.operations,
       );
+      this.disposeModules();
       this.renderer.close();
       this.renderer = replacement.renderer;
+      this.disposeModules = replacement.disposeModules;
       this.currentSnapshot = replacement.snapshot;
       return this.currentSnapshot;
     }
@@ -361,6 +376,7 @@ class InstalledRendererCdpControlSession implements RendererCdpControlSession {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.disposeModules();
     this.renderer.close();
   }
 }
@@ -403,6 +419,7 @@ export async function createRendererCdpControlSession(
     pollIntervalMs,
     operations,
     installed.snapshot,
+    installed.disposeModules,
   );
 }
 

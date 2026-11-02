@@ -45,6 +45,10 @@ import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
 import { createProjectSyncPage, type ProjectSyncClient } from "./project-sync-page.js";
 import { type EmergencyProviderClient } from "../renderer-model-client.js";
+import {
+  createHarnessSchedulesPage,
+  type HarnessSchedulesPageOptions,
+} from "./harness-schedules-page.js";
 
 export type {
   RendererConnectionAgentSnapshot,
@@ -422,9 +426,9 @@ function updatesPage(
       const setManualFallback = (fallback: boolean): void => {
         // While automatic update works, manual download is a one-line escape hatch;
         // once it fails, the section returns at full weight.
-        controls.className = !fallback
-          ? "settings-update-controls is-quiet"
-          : "settings-update-controls";
+        controls.className = fallback
+          ? "settings-update-controls"
+          : "settings-update-controls is-quiet";
         manualNpmDescription.textContent = fallback
           ? messages.updateManualFallbackDescription
           : messages.updateManualNpmDescription;
@@ -782,7 +786,7 @@ export function createDefaultRendererSettingsPages(
   getUpdateClient: () => RendererUpdateClient | null = () => null,
   getDiagnostics: () => RendererConnectionDiagnostics | null = () => null,
   getAccountClient: () => RendererCodexAccountClient | null = () => null,
-  getSessionImportClient: () => RendererSessionImportClient | null = () => null,
+  getSessionImportClient: (hostId?: string) => RendererSessionImportClient | null = () => null,
   openImportedThread: RendererImportedThreadOpener | null = () =>
     Promise.reject(new Error("Imported Thread navigation is unavailable")),
   getLoadedSessionsClient: () => LoadedSessionsClient | null = () => null,
@@ -794,6 +798,7 @@ export function createDefaultRendererSettingsPages(
   requestUsageStatistics: RendererUsageStatisticsRequest = () =>
     Promise.reject(new Error("Local Host connection is unavailable")),
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider,
+  harnessSchedules?: HarnessSchedulesPageOptions,
 ): readonly RendererSettingsPageDefinition[] {
   // 保留既有调用方的参数位置；旧应急入口合并到多供应商页面。
   void getEmergencyProviderClient;
@@ -804,6 +809,7 @@ export function createDefaultRendererSettingsPages(
     createAccountsSettingsPage(messages, getAccountClient),
     createRoutingSettingsPage(messages, getBuddyClient),
     createProjectSyncPage(messages, getProjectSyncClient),
+    ...(harnessSchedules ? [createHarnessSchedulesPage(messages, harnessSchedules)] : []),
     createSessionImportSettingsPage(
       messages,
       getSessionImportClient,
@@ -827,7 +833,7 @@ export function createDefaultRendererSettingsRegistry(
   getUpdateClient: () => RendererUpdateClient | null = () => null,
   getDiagnostics: () => RendererConnectionDiagnostics | null = () => null,
   getAccountClient: () => RendererCodexAccountClient | null = () => null,
-  getSessionImportClient: () => RendererSessionImportClient | null = () => null,
+  getSessionImportClient: (hostId?: string) => RendererSessionImportClient | null = () => null,
   openImportedThread?: RendererImportedThreadOpener,
   requestUsageStatistics?: RendererUsageStatisticsRequest,
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider,

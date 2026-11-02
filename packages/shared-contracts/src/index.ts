@@ -53,6 +53,7 @@ export * from "./account-credits-presentation.js";
 export * from "./model-price-overrides.js";
 export * from "./usage-statistics.js";
 export * from "./thread-prewarm.js";
+export * from "./thread-questions.js";
 export {
   CONSOLE_HOST_METHODS,
   CONSOLE_OPEN_METHOD,
@@ -742,6 +743,7 @@ export * from "./remote-projects.js";
 
 export * from "./turn-actions.js";
 export * from "./turn-accounts.js";
+export { desktopImageAttachmentPaths } from "./desktop-attachments.js";
 export {
   REMOTE_SSH_SETUP_METHOD,
   remoteSshSetupParamsSchema,

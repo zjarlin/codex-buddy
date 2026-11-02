@@ -56,6 +56,9 @@ import {
   rendererUsageTriggerMaxWidth,
 } from "../src/renderer-usage-control.js";
 
+// Layout-only doubles represent chat Composers with no native request surface.
+const noNativeRequest = { closest: () => null, querySelector: () => null };
+
 describe("Renderer connection diagnostics", () => {
   it.each(["kiro-cli", "codebuddy", "workbuddy"] as const)(
     "round trips %s effort without reviving a choice cleared by the native model",
@@ -488,6 +491,7 @@ describe("Renderer Composer DOM behavior", () => {
     replacement.setAttribute("data-codex-intelligence-trigger", "true");
     replacement.setAttribute("data-composer-navigation-target", "reasoning");
     const composer = {
+      ...noNativeRequest,
       querySelectorAll: (selector: string) =>
         selector === 'button[aria-haspopup="menu"]' ? [replacement] : [],
     } as unknown as Element;
@@ -525,6 +529,7 @@ describe("Renderer Composer DOM behavior", () => {
   describe("stale send button after Codex re-renders the trailing actions", () => {
     const button = (connected: boolean, disabled = false) =>
       ({
+        closest: () => null,
         type: "submit",
         disabled,
         isConnected: connected,
@@ -532,6 +537,7 @@ describe("Renderer Composer DOM behavior", () => {
       }) as unknown as HTMLButtonElement;
     const fakeControl = (sendButton: HTMLButtonElement, liveButtons: HTMLButtonElement[]) => {
       const composer = {
+        ...noNativeRequest,
         contains: (node: unknown) =>
           node === composer ||
           liveButtons.includes(node as HTMLButtonElement) ||
@@ -593,6 +599,7 @@ describe("Renderer Composer DOM behavior", () => {
     it("keeps the mount-time last-button fallback for unlabelled action buttons", () => {
       const stale = { ...button(false), type: "button" } as unknown as HTMLButtonElement;
       const owned = {
+        closest: () => null,
         type: "button",
         disabled: false,
         isConnected: true,
@@ -600,6 +607,7 @@ describe("Renderer Composer DOM behavior", () => {
         parentElement: null,
       } as unknown as HTMLButtonElement;
       const action = {
+        closest: () => null,
         type: "button",
         disabled: false,
         isConnected: true,
@@ -616,6 +624,7 @@ describe("Renderer Composer DOM behavior", () => {
     it("does not mistake a Stop button for send once a labelled send button is replaced", () => {
       const stale = button(false);
       const stop = {
+        closest: () => null,
         type: "button",
         disabled: false,
         isConnected: true,
@@ -723,6 +732,7 @@ describe("Renderer Composer DOM behavior", () => {
     const usageRoot = { remove: vi.fn() };
     const control = {
       composer: {
+        ...noNativeRequest,
         querySelectorAll: (selector: string) =>
           selector.includes("[aria-label]") ? [nativeContext] : [],
       },
@@ -756,7 +766,7 @@ describe("Renderer Composer DOM behavior", () => {
     const placeCredits = vi.fn();
     const usageRoot = { remove: vi.fn() };
     const control = {
-      composer: { querySelectorAll: () => [] },
+      composer: { ...noNativeRequest, querySelectorAll: () => [] },
       modelPicker: { root: modelRoot, trigger: {} },
       nativeModelControl: null,
       nativePermissionModeControl: null,
@@ -805,7 +815,7 @@ describe("Renderer Composer DOM behavior", () => {
     const placeCredits = vi.fn();
     const removeCredits = vi.fn();
     const control = {
-      composer: { querySelectorAll: () => [] },
+      composer: { ...noNativeRequest, querySelectorAll: () => [] },
       modelPicker: { root: {}, trigger: {} },
       nativeModelControl: null,
       nativePermissionModeControl: null,
@@ -1071,6 +1081,7 @@ describe("Renderer Composer DOM behavior", () => {
       },
     } as unknown as ComposerAgentControl;
 
+    Object.assign(control.composer, noNativeRequest);
     reconcileComposerNativeControls(control, true, false);
 
     expect(insertBefore).toHaveBeenCalledWith(modelRoot, voice);
@@ -1124,6 +1135,7 @@ describe("Renderer Composer DOM behavior", () => {
       },
     } as unknown as ComposerAgentControl;
 
+    Object.assign(control.composer, noNativeRequest);
     reconcileComposerNativeControls(control, true, false);
 
     expect(insertBefore).toHaveBeenCalledWith(modelRoot, pause);

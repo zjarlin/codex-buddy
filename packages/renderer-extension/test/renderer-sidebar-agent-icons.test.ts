@@ -28,7 +28,7 @@ const FUTURE_HARNESS_ID = harnessIdSchema.parse("future-agent");
 
 class FakeRow implements SidebarAgentIconRow {
   connected = true;
-  agent: Exclude<RendererAgent, "codex"> | null = null;
+  agent: RendererAgent | null = null;
   renders = 0;
   clears = 0;
   plugin: HarnessPluginDescriptor | undefined;
@@ -55,7 +55,7 @@ class FakeRow implements SidebarAgentIconRow {
     return this.draft;
   }
 
-  render(agent: Exclude<RendererAgent, "codex">, plugin?: HarnessPluginDescriptor): void {
+  render(agent: RendererAgent, plugin?: HarnessPluginDescriptor): void {
     this.agent = agent;
     this.plugin = plugin;
     this.renders += 1;
@@ -290,7 +290,7 @@ describe("Renderer sidebar Agent ownership", () => {
       { threadIds: ["codex-thread", "pi-thread", "claude-thread", "unknown-thread"] },
       { priority: "background" },
     );
-    expect(rows.map((row) => row.agent)).toEqual([null, "pi", "claude-code", "future-agent"]);
+    expect(rows.map((row) => row.agent)).toEqual(["codex", "pi", "claude-code", "future-agent"]);
     control.dispose();
   });
 
@@ -851,6 +851,74 @@ describe("Renderer sidebar Agent ownership", () => {
       first.resolve({ threads: [] });
       control.dispose();
     }
+  });
+
+  it("keeps Codex decoration while a reconnected ownership client revalidates it", async () => {
+    vi.useFakeTimers();
+    const row = new FakeRow("codex-thread");
+    const reply = Promise.withResolvers<ThreadOwnershipListResult>();
+    const lookup = vi
+      .fn<(input: ThreadOwnershipListParams) => Promise<ThreadOwnershipListResult>>()
+      .mockResolvedValueOnce({
+        threads: [{ threadId: "codex-thread" as HostThreadId, owner: "codex" }],
+      })
+      .mockReturnValueOnce(reply.promise);
+    let client = clientWith(lookup);
+    const control = installRendererSidebarAgentIcons({
+      getClient: () => client,
+      ownershipClient: () => client,
+      dom: new FakeDom([row]),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(32);
+      expect(row.agent).toBe("codex");
+      const clears = row.clears;
+      // An in-place refresh() on the same connection must not re-request.
+      control.refresh();
+      await vi.advanceTimersByTimeAsync(32);
+      expect(lookup).toHaveBeenCalledTimes(1);
+      expect(row.agent).toBe("codex");
+      expect(row.clears).toBe(clears);
+      // A new ownership connection revalidates but keeps the known icon pending.
+      client = clientWith(lookup);
+      control.refresh();
+      await vi.advanceTimersByTimeAsync(32);
+      expect(lookup).toHaveBeenCalledTimes(2);
+      expect(row.agent).toBe("codex");
+      expect(row.clears).toBe(clears);
+      reply.resolve({
+        threads: [
+          {
+            threadId: "codex-thread" as HostThreadId,
+            owner: "external",
+            harnessId: PI_HARNESS_ID,
+          },
+        ],
+      });
+      await vi.advanceTimersByTimeAsync(32);
+      expect(row.agent).toBe("pi");
+      expect(row.clears).toBe(clears);
+    } finally {
+      control.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders confirmed Codex ownership without requesting plugin artwork", async () => {
+    const row = new FakeRow("codex-thread");
+    const client = clientWith(async ({ threadIds }) => ({
+      threads: threadIds.map((threadId) => ({ threadId, owner: "codex" as const })),
+    }));
+    const getPlugins = vi.fn();
+    const control = installRendererSidebarAgentIcons({
+      getClient: () => client,
+      getPlugins,
+      dom: new FakeDom([row]),
+    });
+    await settle();
+    expect(row.agent).toBe("codex");
+    expect(getPlugins).not.toHaveBeenCalled();
+    control.dispose();
   });
 
   it("maps external Harness ownership without a static identity list", () => {

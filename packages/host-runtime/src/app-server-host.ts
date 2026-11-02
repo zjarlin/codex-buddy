@@ -1064,6 +1064,10 @@ export class AppServerHost {
     );
     const providerRouting =
       options.officialRuntimeScope?.providerRouting ?? new ProviderRouting(permanentHome);
+    providerRouting.setProjectRepositoryResolver(async (threadId) => {
+      const cwd = await this.#gitWorkspaceForThread(threadId);
+      return this.#gitWorkspace.origin(cwd);
+    });
     this.#ownsOfficialRuntimeScope = options.officialRuntimeScope === undefined;
     this.#officialRuntimeScope =
       options.officialRuntimeScope ??

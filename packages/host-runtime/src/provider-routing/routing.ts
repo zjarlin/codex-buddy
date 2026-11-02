@@ -6,6 +6,7 @@ import {
   type ProviderRoutingSnapshot,
   type ProviderSyncResult,
 } from "@codexhost/shared-contracts";
+import { GatewayProjectAttribution } from "./project-attribution.js";
 import { ProviderRoutingStore } from "./store.js";
 import { mergeProviderModels, syncProviderModels } from "./models.js";
 import { ProviderFailoverProxy, type ProviderTarget } from "./proxy.js";
@@ -19,6 +20,7 @@ interface PrimaryProvider {
 export class ProviderRouting {
   readonly store: ProviderRoutingStore;
   readonly #proxy: ProviderFailoverProxy;
+  readonly #projects = new GatewayProjectAttribution();
   #primaries: PrimaryProvider[] = [];
   #starting: Promise<void> | undefined;
   #ready = false;
@@ -29,10 +31,16 @@ export class ProviderRouting {
     this.store = new ProviderRoutingStore(home);
     this.#proxy = new ProviderFailoverProxy({
       targets: (provider) => this.#targets(provider),
+      projectCode: (baseUrl, authorization, threadId) =>
+        this.#projects.project(baseUrl, authorization, threadId),
       routed: (target, fallback) => {
         this.#lastRoute = { provider: target.id, fallback, at: Date.now() };
       },
     });
+  }
+
+  setProjectRepositoryResolver(resolve: (threadId: string) => Promise<string | null>): void {
+    this.#projects.setRepositoryResolver(resolve);
   }
 
   start(): Promise<void> {

@@ -543,6 +543,27 @@ export class GitWorkspace {
     return this.#serial(() => this.#statusUnlocked(cwd));
   }
 
+  // 仅供网关项目归属读取仓库标识，复用现有本机／SSH 命令边界。
+  async origin(cwd: string): Promise<string | null> {
+    const workspace = this.#absoluteWorkspace(cwd);
+    try {
+      const result = await this.#run(workspace, [
+        "config",
+        "--local",
+        "--get",
+        "remote.origin.url",
+      ]);
+      return result.stdout.trim() || null;
+    } catch (error) {
+      if (
+        isMissingGitRepository(error) ||
+        (error instanceof GitWorkspaceError && !error.stdout && !error.stderr)
+      )
+        return null;
+      throw error;
+    }
+  }
+
   async root(cwd: string): Promise<string | null> {
     const workspace = this.#absoluteWorkspace(cwd);
     // 本机先确认目录类型，避免 Windows Git 将普通文件报告为含糊的 Invalid argument。

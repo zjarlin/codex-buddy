@@ -39,6 +39,11 @@ interface ProxyOptions {
   targets(provider: string): Promise<ProviderTarget[]>;
   routed(target: ProviderTarget, fallback: boolean): void;
   observed?(event: ProviderRouteEvent): void;
+  projectCode?(
+    baseUrl: string,
+    authorization: string | undefined,
+    threadId: string,
+  ): Promise<string | null>;
   firstByteTimeoutMs?: number;
   idleTimeoutMs?: number;
   cooldownMs?: number;
@@ -405,7 +410,7 @@ export class ProviderFailoverProxy {
     }
   }
 
-  #send(
+  async #send(
     target: ProviderTarget,
     route: string,
     search: string,
@@ -443,6 +448,15 @@ export class ProviderFailoverProxy {
     }
     if (fallback) {
       headers.authorization = `Bearer ${target.apiKey}`;
+    }
+    const metadata = requestTurnMetadata(request);
+    if (metadata && !headers["x-sub2api-project"] && this.options.projectCode) {
+      const project = await this.options.projectCode(
+        target.baseUrl,
+        headerValue(headers.authorization),
+        metadata.threadId,
+      );
+      if (project) headers["x-sub2api-project"] = project;
     }
     if (body.length) {
       headers["content-length"] = String(body.length);

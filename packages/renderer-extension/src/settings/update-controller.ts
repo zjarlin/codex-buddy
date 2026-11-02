@@ -13,6 +13,8 @@ import {
 
 const CHECK_RETRY_DELAYS = [1_000, 3_000, 10_000, 30_000] as const;
 const STATUS_POLL_LIMIT = 1_200;
+const AUTO_CHECK_INTERVAL_MS = 60 * 60 * 1_000;
+const RESUME_CHECK_THROTTLE_MS = 5 * 60 * 1_000;
 
 export interface RendererUpdateSnapshot {
   check: UpdateCheckResult | null;
@@ -51,6 +53,7 @@ export function createRendererUpdateController(
   let retryTimer: number | undefined;
   let retryAttempt = 0;
   let pollAttempts = 0;
+  let lastCheckAt = -Infinity;
   const listeners = new Set<(snapshot: RendererUpdateSnapshot) => void>();
   const statusListeners = new Set<(result: UpdateStatusResult) => void>();
 
@@ -118,6 +121,7 @@ export function createRendererUpdateController(
     if (checkRequest) return checkRequest;
     const current = requireClient();
     const signal = scope.signal;
+    lastCheckAt = Date.now();
     const request = runBoundedRendererUpdateRequest(
       () => current.checkUpdate(),
       signal,
@@ -153,7 +157,17 @@ export function createRendererUpdateController(
     return request;
   };
 
+  const canCheckAutomatically = (): boolean =>
+    !disposed &&
+    client !== null &&
+    command === null &&
+    !isPollingUpdateStatus(snapshot.status) &&
+    snapshot.status?.phase !== "ready-to-restart";
+
   const checkWithRetry = (): void => {
+    if (!canCheckAutomatically()) {
+      return;
+    }
     const signal = scope.signal;
     const retry = (error: unknown): void => {
       if (signal.aborted) return;
@@ -213,6 +227,29 @@ export function createRendererUpdateController(
     return request;
   };
 
+  // 定时与恢复事件共用节流，手动检查和有限重试也计入最近检查时间。
+  const checkAutomatically = (): void => {
+    if (
+      !canCheckAutomatically() ||
+      checkRequest ||
+      retryTimer !== undefined ||
+      Date.now() - lastCheckAt < RESUME_CHECK_THROTTLE_MS
+    ) {
+      return;
+    }
+    retryAttempt = 0;
+    checkWithRetry();
+  };
+  const onVisibilityChange = (): void => {
+    if (ownerWindow.document.visibilityState === "visible") {
+      checkAutomatically();
+    }
+  };
+  const autoCheckTimer = ownerWindow.setInterval(checkAutomatically, AUTO_CHECK_INTERVAL_MS);
+  ownerWindow.addEventListener("focus", checkAutomatically);
+  ownerWindow.addEventListener("online", checkAutomatically);
+  ownerWindow.document.addEventListener("visibilitychange", onVisibilityChange);
+
   return {
     get available() {
       return client !== null;
@@ -260,6 +297,10 @@ export function createRendererUpdateController(
       scope.abort();
       clearPoll();
       ownerWindow.clearTimeout(retryTimer);
+      ownerWindow.clearInterval(autoCheckTimer);
+      ownerWindow.removeEventListener("focus", checkAutomatically);
+      ownerWindow.removeEventListener("online", checkAutomatically);
+      ownerWindow.document.removeEventListener("visibilitychange", onVisibilityChange);
       listeners.clear();
       statusListeners.clear();
     },

@@ -91,9 +91,13 @@ describe("Renderer Settings lifecycle", () => {
     const onLocaleChange = vi.fn();
     const ownerWindow = {
       navigator: { languages: ["zh-CN"] },
-      document: {},
+      document: new EventTarget(),
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     } as unknown as Window;
 
     const lifecycle = installRendererSettingsLifecycle(ownerWindow, { onLocaleChange });
@@ -120,9 +124,13 @@ describe("Renderer Settings lifecycle", () => {
     };
     const ownerWindow = {
       navigator: { languages: ["en"] },
-      document: {},
+      document: new EventTarget(),
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     } as unknown as Window;
 
     const lifecycle = installRendererSettingsLifecycle(ownerWindow, {
@@ -148,9 +156,13 @@ describe("Renderer Settings lifecycle", () => {
   function installWithClients(clients: { current: UpdateClientStub }) {
     const ownerWindow = {
       navigator: { languages: ["en"] },
-      document: {},
+      document: new EventTarget(),
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     } as unknown as Window;
     return installRendererSettingsLifecycle(ownerWindow, {
       getUpdateClient: () => clients.current,
@@ -213,9 +225,13 @@ describe("Renderer Settings lifecycle", () => {
     const usageStatisticsHosts = vi.fn(async () => []);
     const ownerWindow = {
       navigator: { languages: ["en"] },
-      document: {},
+      document: new EventTarget(),
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     } as unknown as Window;
     const lifecycle = installRendererSettingsLifecycle(ownerWindow, {
       requestUsageStatistics,
@@ -244,9 +260,13 @@ describe("Renderer Settings lifecycle", () => {
     shellClose.mockImplementation(() => events.push("closed"));
     const ownerWindow = {
       navigator: { languages: ["en"] },
-      document: {},
+      document: new EventTarget(),
       setTimeout,
       clearTimeout,
+      setInterval,
+      clearInterval,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     } as unknown as Window;
     const lifecycle = installRendererSettingsLifecycle(ownerWindow, {
       getSessionImportClient: () => client,
@@ -281,9 +301,13 @@ describe("Renderer Settings lifecycle", () => {
     const lifecycle = installRendererSettingsLifecycle(
       {
         navigator: { languages: ["en"] },
-        document: {},
+        document: new EventTarget(),
         setTimeout,
         clearTimeout,
+        setInterval,
+        clearInterval,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
       } as unknown as Window,
       {
         openImportedThread,

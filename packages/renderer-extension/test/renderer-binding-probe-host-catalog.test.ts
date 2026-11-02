@@ -502,6 +502,7 @@ afterEach(() => {
     }
   ).__codexhostRendererBindingProbeV1;
   api?.dispose();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -1054,6 +1055,107 @@ describe("Renderer binding Host-scoped Claude catalogs", () => {
     }
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(host.subscribeThreadUsage).toHaveBeenCalledTimes(2);
+  });
+
+  it("automatically recovers ownership after a transient inspection failure without focus", async () => {
+    vi.useFakeTimers();
+    installFakeBrowser();
+    let unavailable = true;
+    const inspectThread = vi.fn(async () => {
+      if (unavailable) throw new Error("Host connection is reconnecting");
+      return { owner: "codex", locked: true };
+    });
+    const host = {
+      listHarnessPlugins: async () => ({ plugins: [] }),
+      inspectThread,
+      inspectThreadCommands: async () => ({ commands: [] }),
+      inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+    };
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      { currentHostId: () => "local", clientForHost: () => host } as never,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(testState.renderedOwnershipErrors.at(-1)).toBe(true);
+    const attempts = inspectThread.mock.calls.length;
+    unavailable = false;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(inspectThread).toHaveBeenCalledTimes(attempts + 1);
+    expect(testState.renderedOwnershipErrors.at(-1)).toBe(false);
+    expect(
+      testState.sidebarOptions?.getLocalAgent?.({
+        hostId: "local",
+        threadId: "thread-a",
+        draftId: null,
+      }),
+    ).toBe("codex");
+    probe.dispose();
+    vi.useRealTimers();
+  });
+
+  it.each([
+    "host",
+    "connection",
+    "thread",
+    "unmount",
+    "dispose",
+    "exhausted",
+    "invalid",
+    "unsupported",
+  ])("bounds ownership retry and cancels stale work: %s", async (change) => {
+    vi.useFakeTimers();
+    installFakeBrowser();
+    const error = Object.assign(new Error("Host temporarily unavailable"), {
+      code: change === "invalid" ? -32602 : change === "unsupported" ? -32601 : undefined,
+    });
+    const inspectThread = vi.fn(async () => {
+      throw error;
+    });
+    const host = {
+      listHarnessPlugins: async () => ({ plugins: [] }),
+      inspectThread,
+      inspectThreadCommands: async () => ({ commands: [] }),
+      inspectThreadUsage: async () => ({ threadId: "thread-a", usage: null }),
+    };
+    let hostId = "local";
+    let client = host;
+    const { installRendererBindingProbe } = await import("../src/renderer-binding-probe.js");
+    const probe = installRendererBindingProbe({ enabledAgents: ["codex"], defaultAgent: "codex" });
+    probe.setAdapter(
+      { state: "ready", reason: "ready", modelUpdates: 0, hook: "request-bridge" },
+      undefined,
+      undefined,
+      { currentHostId: () => hostId, clientForHost: () => client } as never,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(testState.renderedOwnershipErrors.at(-1)).toBe(true);
+    const attempts = inspectThread.mock.calls.length;
+    switch (change) {
+      case "host":
+        hostId = "remote-host";
+        break;
+      case "connection":
+        client = { ...host };
+        break;
+      case "thread":
+        testState.modelTarget = ["conversation", "thread-b"];
+        break;
+      case "unmount":
+        Object.assign(testState.composer, { isConnected: false });
+        break;
+      case "dispose":
+        probe.dispose();
+        break;
+    }
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(inspectThread).toHaveBeenCalledTimes(attempts + (change === "exhausted" ? 3 : 0));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(inspectThread).toHaveBeenCalledTimes(attempts + (change === "exhausted" ? 3 : 0));
+    probe.dispose();
   });
 
   it.each([

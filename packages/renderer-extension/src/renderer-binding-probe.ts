@@ -1,3 +1,4 @@
+import { createOwnershipRetry, ownershipFailureKind } from "./renderer-ownership-retry.js";
 import { installTurnActionCards } from "./turn-action-card/index.js";
 import { createSessionRouting } from "./renderer-session-routing.js";
 import { sessionDraftText } from "./renderer-session-targets.js";
@@ -1331,6 +1332,7 @@ export function installRendererBindingProbe(
 
   // Re-read requests that settle while a retained root cannot be classified.
   const ownershipRecovery = new WeakMap<MountedComposer, number>();
+  const ownershipRetry = createOwnershipRetry<MountedComposer>(window);
   const ownershipClients = new WeakMap<MountedComposer, RendererModelClient | null>();
   const modelRecovery = new WeakMap<MountedComposer, number>();
   const isRetainedComposer = (mounted: MountedComposer): boolean =>
@@ -1777,8 +1779,9 @@ export function installRendererBindingProbe(
     );
   };
 
-  const loadThreadOwnership = async (mounted: MountedComposer): Promise<void> => {
+  const loadThreadOwnership = async (mounted: MountedComposer, retry = false): Promise<void> => {
     if (!isMountedComposer(mounted.composer)) return;
+    if (!retry) ownershipRetry.clear(mounted);
     ownershipRecovery.delete(mounted);
     modelRecovery.delete(mounted);
     const threadId = threadIdFromComposerModelTarget(mounted.modelTarget);
@@ -1827,6 +1830,7 @@ export function installRendererBindingProbe(
         throw new Error("Thread owner could not be applied to the Composer");
       }
       mounted.ownershipStatus = "ready";
+      ownershipRetry.clear(mounted);
       if (agent !== "codex") {
         if (inspection.owner !== "external") {
           throw new Error("External Thread inspection did not include configuration");
@@ -1854,9 +1858,26 @@ export function installRendererBindingProbe(
         mounted.modelView = { status: "idle" };
         mounted.permissionModeView = { status: "idle" };
       }
-    } catch {
+    } catch (error) {
       if (!isCurrentOwnershipRequest(mounted, generation) || !isCurrentConnection()) return;
       mounted.ownershipStatus = "error";
+      const failure = ownershipFailureKind(error);
+      const retryScheduled =
+        failure === "transient" &&
+        ownershipRetry.schedule(
+          mounted,
+          () =>
+            !disposed &&
+            isCurrentOwnershipRequest(mounted, generation) &&
+            threadIdFromComposerModelTarget(mounted.modelTarget) === threadId &&
+            threadIdFromComposerModelTarget(findComposerModelTarget(mounted.composer)) ===
+              threadId &&
+            isCurrentConnection(),
+          () => {
+            void loadThreadOwnership(mounted, true);
+          },
+        );
+      console.warn("codexhost Thread ownership inspection failed", { failure, retryScheduled });
     } finally {
       if (isCurrentOwnershipRequest(mounted, generation)) {
         renderMounted(mounted);
@@ -3539,6 +3560,7 @@ export function installRendererBindingProbe(
         mounted.codexUsageGate.dispose();
         disposeComposerAgentControl(mounted.control);
         ownershipRecovery.delete(mounted);
+        ownershipRetry.clear(mounted);
         modelRecovery.delete(mounted);
         mountedByComposer.delete(composer);
         controller.detach(composer, transferredComposers.has(composer));
@@ -4292,6 +4314,7 @@ export function installRendererBindingProbe(
       }
     },
     dispose() {
+      ownershipRetry.dispose();
       if (disposed) return;
       disposed = true;
       buddyControl?.dispose();

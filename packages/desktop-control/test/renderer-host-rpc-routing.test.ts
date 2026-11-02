@@ -5,6 +5,7 @@ import {
   harnessPluginRouteSchema,
 } from "@codexhost/shared-contracts";
 import { expect, it, vi } from "vitest";
+import { installRendererWindowHostRouting } from "../src/renderer-bindings.js";
 import { installRendererDraftPrewarmPolicyDirect } from "../src/renderer-draft-prewarm-policy.js";
 import type { RendererHostRouting as Routing } from "../src/renderer-host-routing.js";
 
@@ -90,7 +91,9 @@ function setup(
         : null,
     return: null,
   };
-  const editors = [{ __reactFiber$app: composerFiber, parentElement: null }];
+  const editors = [
+    { __reactFiber$app: composerFiber, parentElement: null, querySelectorAll: () => [] },
+  ];
   const sent: unknown[] = [];
   class MessagePort {
     postMessage(message: unknown): void {
@@ -98,13 +101,14 @@ function setup(
     }
   }
   const target: Record<string, unknown> = {};
+  const document = {
+    querySelectorAll: () => editors,
+    getElementById: (id: string) => (id === "root" ? container : null),
+  };
   const renderer = {
     async evaluate<T>(expression: string): Promise<T> {
       return await runInNewContext(expression, {
-        document: {
-          querySelectorAll: () => editors,
-          getElementById: (id: string) => (id === "root" ? container : null),
-        },
+        document,
         window: target,
         MessagePort,
         crypto: globalThis.crypto,
@@ -121,7 +125,7 @@ function setup(
       new MessagePort(),
       message,
     );
-  return { renderer, target, rpc, connections, sent, post, MessagePort };
+  return { renderer, target, rpc, connections, sent, post, MessagePort, document };
 }
 
 function policyOf(route: ReturnType<Routing["forHost"]>) {
@@ -152,6 +156,41 @@ function creation(method: string, model: string, options: Record<string, unknown
     ],
   ];
 }
+
+it("replaces an unavailable routing installed by the Renderer entry before the Controller", async () => {
+  const fixture = setup({ unavailableNativeRegistry: true, hosts: ["local", "remote"] });
+  const native = installRendererWindowHostRouting(fixture.document, fixture.target);
+  expect(native.knownHostIds?.()).toEqual(["local"]);
+  expect(native.forHost("local")).toBeNull();
+  vi.useFakeTimers();
+  try {
+    const pending = install(fixture);
+    const result = expect(pending).resolves.not.toBe(native);
+    await Promise.all([result, vi.runAllTimersAsync()]);
+    const routing = await pending;
+    expect(routing.forHost("local")?.manager).toMatchObject({ kind: "main-process-rpc" });
+    await routing.forHost("remote")?.manager.sendRequest("codexhost/thread/ownership", {});
+    expect(fixture.rpc.sendRequest).toHaveBeenCalledWith("codexhost/thread/ownership", {});
+    routing.dispose();
+  } finally {
+    native.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("preserves a connected routing installed before the Controller", async () => {
+  const fixture = setup({ nativeManager: true });
+  const native = installRendererWindowHostRouting(fixture.document, fixture.target);
+  const route = native.forHost("local");
+  try {
+    expect(route).not.toBeNull();
+    const routing = await install(fixture);
+    expect(routing).toBe(native);
+    expect(routing.forHost("local")).toBe(route);
+  } finally {
+    native.dispose();
+  }
+});
 
 it("routes Host requests through the main-process RPC client without native internals", async () => {
   const fixture = setup();

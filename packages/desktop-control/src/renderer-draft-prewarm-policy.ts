@@ -71,7 +71,12 @@ function directRendererInstaller(): string {
     // A legacy registry can remain mounted without a usable native manager.
     // Prefer a ready native route, then try the identified main-process RPC store.
     const routing = (() => {
-      if (window.__codexhostHostRoutingV1) return window.__codexhostHostRoutingV1;
+      const existing = window.__codexhostHostRoutingV1;
+      if (existing) {
+        if (connected(existing)) return existing;
+        // 扩展入口可能先安装没有可用连接的原生路由；释放后才能发现主进程 RPC。
+        existing.dispose();
+      }
       const native = discover(document);
       if (native.managers.length || native.registries.length) {
         const routing = installNative();

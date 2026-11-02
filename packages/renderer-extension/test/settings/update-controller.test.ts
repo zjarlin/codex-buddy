@@ -26,7 +26,14 @@ const check = (value: UpdateStatus | null = null): UpdateCheckResult => ({
   status: value,
   error: null,
 });
-const ownerWindow = () => ({ setTimeout, clearTimeout }) as unknown as Window;
+const ownerWindow = () =>
+  Object.assign(new EventTarget(), {
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    document: Object.assign(new EventTarget(), { visibilityState: "visible" }),
+  }) as unknown as Window;
 function fixture(initial: UpdateStatus | null = null) {
   const client = {
     checkUpdate: vi.fn(async () => check(initial)),
@@ -43,6 +50,133 @@ afterEach(() => {
 });
 
 describe("shared update controller", () => {
+  it("discovers newer releases hourly without rebinding", async () => {
+    vi.useFakeTimers();
+    const { controller, client } = fixture();
+    await controller.checkUpdate();
+    client.checkUpdate.mockResolvedValue({ ...check(), latestVersion: "2.0.0" });
+    await vi.advanceTimersByTimeAsync(3_599_999);
+    expect(client.checkUpdate).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(2);
+    expect(controller.snapshot.check?.latestVersion).toBe("2.0.0");
+    controller.dispose();
+  });
+
+  it("throttles foreground and network recovery and deduplicates manual checks", async () => {
+    vi.useFakeTimers();
+    const window = ownerWindow();
+    const pending = Promise.withResolvers<UpdateCheckResult>();
+    const client = {
+      checkUpdate: vi.fn(async () => check()),
+      startUpdate: vi.fn(),
+      readUpdateStatus: vi.fn(),
+    };
+    const controller = createRendererUpdateController(() => client, window);
+    controller.refreshBinding();
+    await controller.checkUpdate();
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("online"));
+    expect(client.checkUpdate).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(300_000);
+    Object.defineProperty(window.document, "visibilityState", {
+      value: "hidden",
+      configurable: true,
+    });
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    expect(client.checkUpdate).toHaveBeenCalledOnce();
+    Object.defineProperty(window.document, "visibilityState", { value: "visible" });
+    client.checkUpdate.mockImplementationOnce(() => pending.promise);
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("online"));
+    const manual = controller.checkUpdate();
+    expect(client.checkUpdate).toHaveBeenCalledTimes(2);
+    pending.resolve(check());
+    await manual;
+    await vi.advanceTimersByTimeAsync(300_000);
+    window.dispatchEvent(new Event("online"));
+    await controller.checkUpdate();
+    expect(client.checkUpdate).toHaveBeenCalledTimes(3);
+    controller.dispose();
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("online"));
+    window.document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("limits each automatic retry cycle and starts a fresh cycle next hour", async () => {
+    vi.useFakeTimers();
+    const { controller, client } = fixture();
+    await controller.checkUpdate();
+    client.checkUpdate.mockResolvedValue({ ...check(), error: "offline" });
+    await vi.advanceTimersByTimeAsync(3_600_000 + 44_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(6);
+    await vi.advanceTimersByTimeAsync(3_600_000 - 44_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(11);
+    controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["downloading", "ready-to-restart"] as const)(
+    "skips automatic checks while %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      const { controller, client } = fixture();
+      await controller.checkUpdate();
+      client.readUpdateStatus.mockResolvedValue({ status: status(phase) });
+      await controller.readUpdateStatus();
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(client.checkUpdate).toHaveBeenCalledOnce();
+      expect(controller.snapshot.status?.phase).toBe(phase);
+      controller.dispose();
+    },
+  );
+
+  it("cancels pending retry checks when a download starts", async () => {
+    vi.useFakeTimers();
+    const { controller, client } = fixture();
+    await controller.checkUpdate();
+    client.checkUpdate.mockResolvedValue({ ...check(), error: "offline" });
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(2);
+    await controller.startUpdate();
+    await vi.advanceTimersByTimeAsync(44_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
+  it("does not check after unbinding or disposing a pending retry", async () => {
+    vi.useFakeTimers();
+    const window = ownerWindow();
+    const client = {
+      checkUpdate: vi.fn(async () => ({ ...check(), error: "offline" })),
+      startUpdate: vi.fn(),
+      readUpdateStatus: vi.fn(),
+    };
+    let binding: RendererUpdateClient | null = client;
+    const controller = createRendererUpdateController(() => binding, window);
+    controller.refreshBinding();
+    await vi.advanceTimersByTimeAsync(0);
+    binding = null;
+    controller.refreshBinding();
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(client.checkUpdate).toHaveBeenCalledOnce();
+    binding = client;
+    controller.refreshBinding();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(2);
+    controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(client.checkUpdate).toHaveBeenCalledTimes(2);
+  });
+
   it("checks once per binding and backs off failures despite DOM scans", async () => {
     vi.useFakeTimers();
     const client = {

@@ -1747,6 +1747,7 @@ mod tests {
                 renderer_extension: Some(executable.clone()),
                 pi: None,
                 custom_install_root: None,
+                replace_running_desktop: false,
             };
             let resolved = options.resolve(Some(&root)).unwrap();
             assert_eq!(resolved.node, expected.canonicalize().unwrap());

@@ -41,6 +41,8 @@ export interface RendererHostRoute {
   readonly hostId: string;
   readonly manager: RendererNativeRequestManager | RendererHostRpcManager;
   readonly policy: RendererHostRoutePolicy;
+  /** Set only on connections where codexhost Host RPC is known to be available. */
+  readonly supportsHostExtensions?: boolean;
 }
 
 interface RendererNativeHostRoute extends RendererHostRoute {
@@ -152,7 +154,7 @@ export function installRendererHostRouting(
         manager.requestClient === bridge &&
         manager.prewarmedThreadManager === prewarmed,
     );
-    const route = { hostId, manager, policy };
+    const route = { hostId, manager, policy, supportsHostExtensions: true };
     routes.set(hostId, { route, bridge, prewarmed });
     return route;
   };

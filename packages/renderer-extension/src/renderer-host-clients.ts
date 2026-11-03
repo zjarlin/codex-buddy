@@ -11,6 +11,8 @@ import {
   BUDDY_TRANSLATE_BATCH_METHOD,
   BUDDY_TRANSLATE_IMAGE_METHOD,
   BUDDY_SPEECH_METHOD,
+  GIT_WORKFLOW_RUN_METHOD,
+  GIT_WORKFLOW_STATUS_METHOD,
   REMOTE_PROJECTS_INSPECT_METHOD,
   REMOTE_PROJECTS_SYNC_METHOD,
   sshGitMethods,
@@ -178,6 +180,11 @@ export function createRendererHostClients(
       };
       const gitMethods = new Set<string>(sshGitMethods);
       send = (method, params, options) => {
+        if (route.supportsHostExtensions !== true) {
+          if (method === GIT_WORKFLOW_STATUS_METHOD || method === GIT_WORKFLOW_RUN_METHOD)
+            throw new RendererMethodUnavailableError(method, { code: -32601 });
+          if (gitMethods.has(method)) return git(method, params, options);
+        }
         if (
           method === BUDDY_TRANSLATE_METHOD ||
           method === BUDDY_TRANSLATE_BATCH_METHOD ||

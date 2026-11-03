@@ -27,7 +27,7 @@ function errorMessage(error: unknown): string {
  */
 export async function createRemoteOfficialAppServerConnection(
   endpoint: string,
-  options: { capabilityToken?: string } = {},
+  options: { capabilityToken?: string; handshakeTimeoutMs?: number } = {},
 ): Promise<OfficialAppServerConnection> {
   const describeError = options.capabilityToken
     ? (): string => "Private official connection failed"
@@ -134,16 +134,32 @@ export async function createRemoteOfficialAppServerConnection(
   });
 
   const opened = new Promise<void>((resolve, reject) => {
-    const onOpen = (): void => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      socket.off("open", onOpen);
       socket.off("error", onInitialError);
+      socket.off("close", onInitialClose);
+    };
+    const onOpen = (): void => {
+      cleanup();
       resolve();
     };
     const onInitialError = (error: Error): void => {
-      socket.off("open", onOpen);
+      cleanup();
       reject(error);
     };
+    const onInitialClose = (): void => {
+      onInitialError(
+        new Error("Official app-server closed before the WebSocket handshake completed"),
+      );
+    };
+    // 自定义 Unix socket 不保证触发 HTTP 请求超时，握手等待必须自行设限。
+    const timer = setTimeout(() => {
+      onInitialError(new Error("Opening handshake has timed out"));
+    }, options.handshakeTimeoutMs ?? 10_000);
     socket.once("open", onOpen);
     socket.once("error", onInitialError);
+    socket.once("close", onInitialClose);
   });
 
   socket.on("message", (data, isBinary) => {

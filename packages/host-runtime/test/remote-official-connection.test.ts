@@ -1,3 +1,4 @@
+import net from "node:net";
 import { createServer } from "node:http";
 import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
@@ -32,6 +33,71 @@ async function readFrame(stream: Readable): Promise<string> {
 }
 
 describe("remote official app-server connection", () => {
+  it.each(["unix", "tcp"])(
+    "times out a silent %s handshake and permits reconnect",
+    async (transport) => {
+      const socketPath = testSocketPath();
+      const sockets = new Set<net.Socket>();
+      const stalled = net.createServer((socket) => {
+        sockets.add(socket);
+        socket.on("data", () => undefined);
+        socket.once("close", () => sockets.delete(socket));
+      });
+      const healthy = createServer();
+      const webSockets = new WebSocketServer({ server: healthy });
+      let connection:
+        Awaited<ReturnType<typeof createRemoteOfficialAppServerConnection>> | undefined;
+      try {
+        if (transport === "unix" && process.platform !== "win32") {
+          await mkdir(path.dirname(socketPath), { recursive: true });
+        }
+        await new Promise<void>((resolve) => {
+          if (transport === "unix") {
+            stalled.listen(socketPath, resolve);
+          } else {
+            stalled.listen(0, "127.0.0.1", resolve);
+          }
+        });
+        const address = stalled.address();
+        if (!address) {
+          throw new Error("Missing test listener");
+        }
+        const endpoint = typeof address === "string" ? address : `ws://127.0.0.1:${address.port}`;
+        await expect(
+          createRemoteOfficialAppServerConnection(endpoint, { handshakeTimeoutMs: 50 }),
+        ).rejects.toThrow("Opening handshake has timed out");
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve) => stalled.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          if (typeof address === "string") {
+            healthy.listen(address, resolve);
+          } else {
+            healthy.listen(address.port, "127.0.0.1", resolve);
+          }
+        });
+        connection = await createRemoteOfficialAppServerConnection(endpoint);
+        expect(webSockets.clients.size).toBe(1);
+      } finally {
+        connection?.close();
+        await connection?.closed;
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        for (const socket of webSockets.clients) {
+          socket.terminate();
+        }
+        await new Promise<void>((resolve) => stalled.close(() => resolve()));
+        await new Promise<void>((resolve) => webSockets.close(() => resolve()));
+        await new Promise<void>((resolve) => healthy.close(() => resolve()));
+        if (transport === "unix" && process.platform !== "win32") {
+          await rm(path.dirname(socketPath), { recursive: true, force: true });
+        }
+      }
+    },
+  );
+
   it("preserves history responses larger than 128 MiB and keeps the connection usable", async () => {
     const server = createServer();
     const webSockets = new WebSocketServer({ server });

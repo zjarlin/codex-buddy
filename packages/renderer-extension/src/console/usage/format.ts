@@ -167,9 +167,34 @@ export function niceCeiling(value: number): number {
   return 10 * power;
 }
 
-/** The last segment of a directory, Windows or POSIX. */
+function remoteProject(directory: string): URL | undefined {
+  if (!directory.startsWith("ssh://")) {
+    return undefined;
+  }
+  try {
+    return new URL(directory);
+  } catch {
+    return undefined;
+  }
+}
+
+function projectPath(directory: string): string {
+  const remote = remoteProject(directory);
+  if (!remote) {
+    return directory;
+  }
+  try {
+    return decodeURIComponent(remote.pathname);
+  } catch {
+    return remote.pathname;
+  }
+}
+
+/** 项目路径末段，兼容 Windows、POSIX 和远端 SSH URI。 */
 export function baseName(directory: string): string {
-  const parts = directory.split(/[\\/]+/u).filter(Boolean);
+  const parts = projectPath(directory)
+    .split(/[\\/]+/u)
+    .filter(Boolean);
   return parts.at(-1) ?? directory;
 }
 
@@ -191,8 +216,13 @@ export function projectNames(projects: Iterable<string>): Map<string, string> {
         names.set(project, base);
         continue;
       }
-      const parts = project.split(/[\\/]+/u).filter(Boolean);
-      names.set(project, parts.slice(-2).join("/") || base);
+      const remote = remoteProject(project);
+      const parts = projectPath(project)
+        .split(/[\\/]+/u)
+        .filter(Boolean);
+      const label = parts.slice(-2).join("/") || base;
+      const authority = remote && `${remote.username ? `${remote.username}@` : ""}${remote.host}`;
+      names.set(project, authority ? `${label} (${authority})` : label);
     }
   }
   return names;

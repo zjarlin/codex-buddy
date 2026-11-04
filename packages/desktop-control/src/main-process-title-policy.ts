@@ -22,6 +22,7 @@ export interface MainProcessTitlePolicyStatus {
 
 export interface MainProcessTitlePolicyCounters {
   codexTitleCalls: number;
+  nativeTitleSkips: number;
   piTitleSkips: number;
   externalTitleSkips: number;
   ambiguousTitleSkips: number;
@@ -113,6 +114,7 @@ const INSTALL_POLICY_FUNCTION = `async function (rendererWebContentsId) {
   }
   const counters = {
     codexTitleCalls: 0,
+    nativeTitleSkips: 0,
     piTitleSkips: 0,
     externalTitleSkips: 0,
     ambiguousTitleSkips: 0,
@@ -150,6 +152,14 @@ const INSTALL_POLICY_FUNCTION = `async function (rendererWebContentsId) {
     } catch {}
     if (selection?.phase !== 'locked') {
       counters.ambiguousTitleSkips += 1;
+      return null;
+    }
+    if (
+      params?.refreshFrom != null ||
+      (typeof params?.prompt === 'string' &&
+        params.prompt.includes('You are a helpful assistant. You will be presented with a user prompt'))
+    ) {
+      counters.nativeTitleSkips += 1;
       return null;
     }
     if (selection.agent === 'pi') {

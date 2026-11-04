@@ -2,6 +2,8 @@
 
 [zjarlin/codex-buddy](https://github.com/zjarlin/codex-buddy) 是 [BytePioneer-AI/codex-host](https://github.com/BytePioneer-AI/codex-host) 的 fork（随上游使用 LGPL-3.0-only；Buddy engine 保留自身 MIT 许可），增加 Codex Buddy 的 **Auto Router、Git 智能体、IO 操作智能体和无模型命令旁路**。保留上游的多 Harness 功能。
 
+> **版本线与 Host 归属**：本 fork 保留上游完整的 Host 进程实现，包括 Rust 的 launcher、shim、updater、platform，以及 `packages/host-runtime` 和远程 Host 生命周期，不是只增加 Renderer 插件。CodexBuddy 与上游 codexhost 使用独立发行版本线，不能拿上游 tag 或 npm `@codexhost/cli` 的最新版本推断 Buddy 是否支持某项能力，也不能直接比较两边版本号。本机 Buddy 与 SSH 远端 Host 必须来自同一份 CodexBuddy 构建；Host 专属 RPC（例如 `codexhost/providers/routing`）只在匹配版本的 Host Runtime 中存在，旧 Host 会返回 `unknown variant`。升级后要确认远端“运行中版本”已经变化并完成重启/重连；只有安装文件更新而旧进程未退出时仍会使用旧能力。
+
 默认由 **单个模型直接处理当前任务**，不再创建额外规划线程、生成执行任务包或自动分派子线程：
 
 | 请求 | 默认执行方式 |

@@ -16,6 +16,7 @@ import {
 
 import type { ModernJournalEvent } from "./journal.js";
 import { deepSeekUsageRecord } from "./usage-metering.js";
+import { readDshUsageProjects, type DshUsageProjects } from "./usage-projects.js";
 
 const SESSION_FILE = /^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/u;
 const ZSTD_MAGIC = 0xfd2fb528;
@@ -67,7 +68,10 @@ export function zstdFrames(buffer: Buffer): Buffer[] {
  * session's messages with the same IDs and times (verified on local sessions), so the Host's
  * dedup counts them once; a subagent's session is a folder of its own.
  */
-export async function readDshUsage(file: string): Promise<HarnessUsageEntry[]> {
+export async function readDshUsage(
+  file: string,
+  projects?: DshUsageProjects,
+): Promise<HarnessUsageEntry[]> {
   const buffer = await readFile(file);
   const text = file.endsWith(".zstd")
     ? zstdFrames(buffer)
@@ -77,6 +81,7 @@ export async function readDshUsage(file: string): Promise<HarnessUsageEntry[]> {
   const entries: HarnessUsageEntry[] = [];
   // The journal opens with a `"type":"session"` header naming the session and its cwd.
   let session: { sessionId?: string; cwd?: string; title?: string } = {};
+  let project: string | null | undefined;
   for (const line of text.split("\n")) {
     if (entries.length === 0 && line.startsWith('{"type":"session"')) {
       try {
@@ -87,6 +92,7 @@ export async function readDshUsage(file: string): Promise<HarnessUsageEntry[]> {
           ...(typeof header.cwd === "string" ? { cwd: header.cwd } : {}),
           ...(title ? { title } : {}),
         };
+        project = projects?.resolve(session.sessionId, session.cwd);
       } catch {
         // A damaged header only loses the attribution.
       }
@@ -101,7 +107,10 @@ export async function readDshUsage(file: string): Promise<HarnessUsageEntry[]> {
     }
     const record = deepSeekUsageRecord(event, true);
     const entry = record.kind === "request" && usageEntryFromRequest(record.request, event.time);
-    if (entry) entries.push(withUsageSession(entry, session));
+    if (entry) {
+      const attributed = withUsageSession(entry, session);
+      entries.push(project === undefined ? attributed : { ...attributed, project });
+    }
   }
   return entries;
 }
@@ -109,8 +118,10 @@ export async function readDshUsage(file: string): Promise<HarnessUsageEntry[]> {
 export function createDshUsageStatistics(
   environment: NodeJS.ProcessEnv,
 ): HarnessUsageStatisticsCapability {
+  let projects: DshUsageProjects | undefined;
   return Object.freeze({
     async listSources(signal: AbortSignal): Promise<HarnessUsageSource[]> {
+      projects = await readDshUsageProjects(dshHome(environment), signal);
       const root = path.join(dshHome(environment), "sessions");
       const sources: HarnessUsageSource[] = [];
       for (const project of await readdir(root).catch(() => [])) {
@@ -126,12 +137,15 @@ export function createDshUsageStatistics(
           const file = path.join(directory, latest.name);
           const info = await lstat(file).catch(() => null);
           if (info?.isFile() && info.size > 0) {
-            sources.push({ id: file, fingerprint: `${info.ino}:${info.size}:${info.mtimeMs}` });
+            sources.push({
+              id: file,
+              fingerprint: `${info.ino}:${info.size}:${info.mtimeMs}:${projects.fingerprint}`,
+            });
           }
         }
       }
       return sources;
     },
-    readSource: (id: string) => readDshUsage(id),
+    readSource: (id: string) => readDshUsage(id, projects),
   });
 }

@@ -68,6 +68,8 @@ export interface HarnessUsageEntry {
   sessionTitle?: string;
   /** Absolute working directory of that session, when the storage names it. */
   cwd?: string;
+  /** 原生元数据确定的项目位置（绝对路径或远端 URI）；null 表示无法归属，省略时沿用 cwd。 */
+  project?: string | null;
   /**
    * What the Harness itself recorded the request cost, in USD, when its storage has it. The Host
    * uses it instead of a list price, unless the user set a price for the model.
@@ -201,6 +203,16 @@ export function parseHarnessUsageEntry(value: unknown): HarnessUsageEntry | null
   if (((entry.reasoningOutputTokens as number | undefined) ?? 0) > entry.outputTokens) return null;
   if (entry.sessionId !== undefined && !sessionIdOk(entry.sessionId)) return null;
   if (entry.cwd !== undefined && !cwdOk(entry.cwd)) return null;
+  if (
+    entry.project !== undefined &&
+    entry.project !== null &&
+    (typeof entry.project !== "string" ||
+      entry.project.trim().length === 0 ||
+      entry.project.length > MAX_CWD_LENGTH ||
+      entry.project.includes("\0"))
+  ) {
+    return null;
+  }
   if (entry.sessionTitle !== undefined) {
     const sessionTitle = usageSessionTitle(entry.sessionTitle);
     if (sessionTitle === undefined) return null;

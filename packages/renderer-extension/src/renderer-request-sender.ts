@@ -25,7 +25,7 @@ export function isUnsupportedMethod(error: unknown, method: string): boolean {
   const message = "message" in error ? error.message : undefined;
   return (
     code === -32601 ||
-    (code === -32600 &&
+    ((code === -32600 || code === undefined) &&
       typeof message === "string" &&
       message.startsWith(`Invalid request: unknown variant \`${method}\``))
   );

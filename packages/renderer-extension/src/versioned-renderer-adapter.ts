@@ -17,7 +17,7 @@ import {
   type RendererHostRouting,
 } from "@codexhost/desktop-control/renderer-bindings";
 import { createRendererHostClients } from "./renderer-host-clients.js";
-import { RendererMethodUnavailableError } from "./renderer-request-sender.js";
+import { RendererMethodUnavailableError, isUnsupportedMethod } from "./renderer-request-sender.js";
 import { installIdleReleasePreferenceSync } from "./renderer-idle-release-preference.js";
 import { installThreadAutoArchivePreferenceSync } from "./renderer-thread-auto-archive-preference.js";
 import {
@@ -984,7 +984,7 @@ export function installCurrentRendererAdapter(): {
           ),
         );
       } catch (error) {
-        if ((error as { code?: unknown } | null)?.code === -32601) {
+        if (isUnsupportedMethod(error, PROVIDER_ROUTING_METHOD)) {
           throw new RendererMethodUnavailableError(PROVIDER_ROUTING_METHOD, error);
         }
         throw error;

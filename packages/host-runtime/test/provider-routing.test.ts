@@ -306,7 +306,7 @@ describe("multi-provider failover transport", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
-  it.each(["disconnect", "503", "429"])(
+  it.each(["disconnect", "500", "502", "503", "504", "429"])(
     "continues the same context through ordered fallbacks after %s without leaking credentials",
     async (failure) => {
       const primary = await upstream((request, response) => {
@@ -530,7 +530,11 @@ describe("routing configuration and runtime ownership", () => {
       join(home, "emergency-provider.json"),
       JSON.stringify({ apiKey: "unfinished" }),
     );
-    expect(await new ProviderRoutingStore(home).read()).toEqual({ enabled: false, providers: [] });
+    expect(await new ProviderRoutingStore(home).read()).toEqual({
+      enabled: false,
+      providers: [],
+      threadProviders: {},
+    });
   });
 
   it("migrates legacy settings once, protects secrets and preserves blank keys on edits", async () => {

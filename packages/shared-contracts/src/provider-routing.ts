@@ -68,6 +68,11 @@ export const providerRoutingParamsSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("configure"), enabled: z.boolean() }),
   z.object({
+    action: z.literal("select"),
+    threadId: hostThreadIdSchema,
+    providerId: z.string().min(1).max(120).nullable(),
+  }),
+  z.object({
     action: z.literal("save"),
     provider: fallbackProviderSchema,
     apiKey: z.string().trim().min(1).max(8192).optional(),
@@ -91,6 +96,14 @@ export const providerRoutingSnapshotSchema = z.object({
     z.object({ id: z.string(), name: z.string(), baseUrl: z.string(), covered: z.boolean() }),
   ),
   ready: z.boolean(),
+  thread: z
+    .object({
+      threadId: hostThreadIdSchema,
+      primaryProviderId: z.string().nullable(),
+      providerId: z.string().nullable(),
+      covered: z.boolean(),
+    })
+    .optional(),
   lastRoute: z.object({ provider: z.string(), fallback: z.boolean(), at: z.number() }).nullable(),
   failures: z
     .array(

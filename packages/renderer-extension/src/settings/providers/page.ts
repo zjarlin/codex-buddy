@@ -1,6 +1,13 @@
-import type { ProviderRoutingParams, ProviderRoutingSnapshot } from "@codexhost/shared-contracts";
+import {
+  PROVIDER_ROUTING_METHOD,
+  type ProviderRoutingParams,
+  type ProviderRoutingSnapshot,
+} from "@codexhost/shared-contracts";
 import type { RendererModelClient } from "../../renderer-model-client.js";
-import { RendererMethodUnavailableError } from "../../renderer-request-sender.js";
+import {
+  RendererMethodUnavailableError,
+  isUnsupportedMethod,
+} from "../../renderer-request-sender.js";
 import type { RendererSettingsPageDefinition, RendererSettingsPageMountContext } from "../core.js";
 import type { RendererSettingsMessages } from "../localization.js";
 import { createHelpTooltip, createPreferenceGroup } from "../preference-ui.js";
@@ -42,6 +49,7 @@ export function createProvidersSettingsPage(
       const status = document.createElement("p");
       status.className = "text-sm text-settings-muted";
       status.setAttribute("role", "status");
+      status.setAttribute("aria-label", m.title);
       const controls = document.createElement("fieldset");
       controls.className = "m-0 min-w-0 border-0 p-0";
       controls.disabled = true;
@@ -60,6 +68,7 @@ export function createProvidersSettingsPage(
       const syncStatus = document.createElement("p");
       syncStatus.className = "text-xs text-settings-muted";
       syncStatus.setAttribute("role", "status");
+      syncStatus.setAttribute("aria-label", m.catalog);
       const form = document.createElement("form");
       form.className =
         "mt-4 grid gap-3 rounded-lg border border-settings-border bg-settings-panel p-4";
@@ -193,7 +202,7 @@ export function createProvidersSettingsPage(
         catalog.card.replaceChildren();
         const entries = value.modelCatalog ?? [];
         if (!entries.length) {
-          catalog.card.textContent = value.providers.length ? m.catalogEmpty : m.empty;
+          catalog.card.textContent = m.catalogEmpty;
           return;
         }
         const summary = document.createElement("p");
@@ -342,7 +351,7 @@ export function createProvidersSettingsPage(
         if (!client?.providerRouting) {
           available = false;
           controls.disabled = true;
-          status.textContent = m.unavailable;
+          status.textContent = m.disconnected;
           status.setAttribute("role", "alert");
           return;
         }
@@ -371,7 +380,8 @@ export function createProvidersSettingsPage(
               available = false;
             }
             status.textContent =
-              error instanceof RendererMethodUnavailableError
+              error instanceof RendererMethodUnavailableError ||
+              isUnsupportedMethod(error, PROVIDER_ROUTING_METHOD)
                 ? m.unavailable
                 : error instanceof Error
                   ? error.message

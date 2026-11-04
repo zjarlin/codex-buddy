@@ -386,3 +386,24 @@ test("restoring unchanged native attributes does not feed the observer", async (
   });
   expect(result).toEqual({ notifications: 0, hidden: true, restored: true });
 });
+
+test("session provider control changes do not rescan the Composer", async ({ page }) => {
+  await page.setContent(
+    "<form data-codex-composer-root><button data-codexhost-thread-provider hidden></button></form>",
+  );
+  await page.addScriptTag({ content: browserBundle });
+  const relevant = await page.evaluate(() => {
+    const control = document.querySelector<HTMLButtonElement>("[data-codexhost-thread-provider]");
+    if (!control) throw new Error("Missing provider control");
+    const observer = new MutationObserver(() => {});
+    observer.observe(control, { attributes: true, childList: true });
+    control.hidden = false;
+    control.textContent = "会话供应商";
+    const records = observer
+      .takeRecords()
+      .filter((window as unknown as TestWindow).observerTest.mutationMayAffectComposer);
+    observer.disconnect();
+    return records.length;
+  });
+  expect(relevant).toBe(0);
+});

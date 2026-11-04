@@ -348,6 +348,58 @@ describe("AppServerHost HarnessAdapter projection", () => {
     await stopFixture(fixture);
   });
 
+  it("names an External Thread from each user question", async () => {
+    const fixture = createFixture();
+    const threadId = await startPiThread(fixture);
+
+    writeRequest(fixture.desktopInput, {
+      id: 2,
+      method: "turn/start",
+      params: {
+        threadId,
+        input: [{ type: "text", text: "第一轮用户提问，应该成为新的会话标题" }],
+      },
+    });
+    await expect(
+      fixture.collector.waitFor(
+        (message) =>
+          method(message, "thread/name/updated") &&
+          messageParams(message).threadName === "第一轮用户提问，应该成为新的会话标题",
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 2)),
+    ).resolves.toMatchObject({ result: { turn: {} } });
+
+    const session = fixture.adapter.sessions[0];
+    if (!session) throw new Error("Fake Pi Session was not opened");
+    session.succeedTurn();
+    await fixture.collector.waitFor((message) => method(message, "turn/completed"));
+
+    writeRequest(fixture.desktopInput, {
+      id: 3,
+      method: "turn/start",
+      params: {
+        threadId,
+        input: [{ type: "text", text: "第二次提问，标题应按这次重命名" }],
+      },
+    });
+    await expect(
+      fixture.collector.waitFor(
+        (message) =>
+          method(message, "thread/name/updated") &&
+          messageParams(message).threadName === "第二次提问，标题应按这次重命名",
+      ),
+    ).resolves.toBeDefined();
+    await expect(
+      fixture.collector.waitFor((message) => requestId(message, 3)),
+    ).resolves.toMatchObject({ result: { turn: {} } });
+    await fixture.collector.waitFor((message) => method(message, "turn/started"));
+    session.succeedTurn();
+    await fixture.collector.waitFor((message) => method(message, "turn/completed"));
+    await stopFixture(fixture);
+  });
+
   it("deletes an unused Pi prewarm locally", async () => {
     const fixture = createFixture();
     const officialWrite = vi.fn();

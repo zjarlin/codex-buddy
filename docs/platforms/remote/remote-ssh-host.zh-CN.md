@@ -68,6 +68,10 @@ Buddy 桌面通过自己的 GitHub Release 更新；上游 npm `@codexhost/cli` 
 
 维护上游远端时，应按照上游发布说明独立选择版本；不要用 Buddy 桌面版本号作为 npm 版本。Buddy 的 Linux 远端包通过正式 GitHub Release 附件交付；更新桌面包不会把这些代码传到远端。
 
+### CodexBuddy 版本线与远端 Host
+
+本仓库是 codexhost 的 CodexBuddy fork，包含上游完整的 Host 进程实现（launcher、shim、updater、platform 与 Host Runtime），不是只提供 Renderer 插件。CodexBuddy 与上游 codexhost 使用独立发行版本线：不要用上游 tag 或 npm `@codexhost/cli` 的版本号推断 Buddy 能力，也不要直接比较两边版本号。本机 CodexBuddy 与远端 Host 应来自由同一份构建产生的 CodexBuddy 版本。像 `codexhost/providers/routing` 这样的 Host 专属 RPC 只存在于匹配版本的 Host Runtime；旧 Host 会返回 `unknown variant`，即使 SSH 和原生 Codex 会话仍然正常。升级后要核对页面显示的运行中版本，并完成重启/重连；安装文件已更新但旧进程仍在运行时不会获得新能力。
+
 ### 从正式 Release 安装 Linux Host
 
 从同一个 [Buddy 正式 Release](https://github.com/zjarlin/codex-buddy/releases) 下载以下文件。`<version>` 必须与所选 Release 的版本一致；Linux 平台只选对应 CPU 架构的一项。旧 Release 若没有这些附件，不能用上游 npm 同名版本代替。

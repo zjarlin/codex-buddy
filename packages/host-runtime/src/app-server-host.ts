@@ -47,7 +47,11 @@ import { syncCodexCatalog } from "./buddy/catalog-sync.js";
 import { LiveModelCatalog } from "./buddy/live-model-catalog.js";
 import { ModelAvailability } from "./model-availability.js";
 import { ProviderRouting } from "./provider-routing/routing.js";
-import { PROVIDER_ROUTING_METHOD, providerRoutingParamsSchema } from "@codexhost/shared-contracts";
+import {
+  PROVIDER_ROUTING_METHOD,
+  providerRoutingParamsSchema,
+  type HostThreadId,
+} from "@codexhost/shared-contracts";
 import { MODEL_AVAILABILITY_METHOD } from "@codexhost/shared-contracts";
 import { InterruptedConversations } from "./buddy/continuation.js";
 import {
@@ -179,6 +183,7 @@ import { requestDesktopRemoteConnections } from "@codexhost/desktop-control";
 import type { RuntimeMaintenance } from "./runtime-maintenance.js";
 import { ExternalThreadPrewarms } from "./external-thread-prewarms.js";
 import { externalTurnInputText } from "./external-turn-input.js";
+import { threadQuestionTitle } from "./thread-question-title.js";
 import { HarnessLaunchSettingsStore } from "@codexhost/harness-plugin-files";
 import type { SharedThreadBridge } from "./shared-thread-bridge.js";
 import {
@@ -1560,6 +1565,31 @@ export class AppServerHost {
     }
   }
 
+  async #renameThreadFromQuestion(params: JsonObject): Promise<void> {
+    const threadId = params.threadId;
+    if (
+      typeof threadId !== "string" ||
+      this.#routeObservationTracker.threadPurpose(threadId) === "ephemeral"
+    ) {
+      return;
+    }
+    const title = threadQuestionTitle(params.input);
+    if (!title) return;
+    // Official Codex threads already get native titles. Naming them from the raw
+    // question would add an extra native request and could forward private text
+    // before routing decides whether that turn may reach the native runtime.
+    const resolution = await this.#resolveExternalThread(threadId);
+    if (resolution.kind !== "external") return;
+    const record = await this.#repository.setTitle(resolution.thread.id, title);
+    resolution.thread.record = record;
+    resolution.thread.thread.name = title;
+    resolution.thread.thread.updatedAt = unixSeconds();
+    await this.#writer.json({
+      method: "thread/name/updated",
+      params: { threadId, threadName: title },
+    });
+  }
+
   async #forwardDesktop(): Promise<void> {
     for await (const frame of readLfFrames(this.#options.desktopInput)) {
       const parsed = parseJsonFrame(frame);
@@ -1691,6 +1721,15 @@ export class AppServerHost {
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
     if (this.#closeRequested) return;
+    if (
+      (request.method === "turn/start" ||
+        request.method === "turn/steer" ||
+        request.method === "thread/queue/add" ||
+        request.method === "thread/queue/update") &&
+      isRecord(request.params)
+    ) {
+      void this.#renameThreadFromQuestion(request.params).catch((error) => this.#diagnose(error));
+    }
     if (
       request.method === RUNTIME_STATUS_METHOD ||
       request.method === REMOTE_UPDATE_METHOD ||
@@ -2176,7 +2215,27 @@ export class AppServerHost {
       try {
         const routing = this.#officialRuntimeScope.providerRouting;
         if (!routing) throw new Error("Provider routing is unavailable on this Host");
-        const snapshot = await routing.configure(providerRoutingParamsSchema.parse(request.params));
+        const params = providerRoutingParamsSchema.parse(request.params);
+        let thread: { threadId: HostThreadId; primaryProviderId: string | null } | undefined;
+        if ("threadId" in params && params.threadId) {
+          const resolution = await this.#resolveExternalThread(params.threadId);
+          let primaryProviderId: string | null = null;
+          if (resolution.kind === "error") throw new Error(resolution.error.message);
+          if (resolution.kind !== "external") {
+            const response = await this.#requestOfficial("thread/read", {
+              threadId: params.threadId,
+              includeTurns: false,
+            });
+            if (isRecord(response.error)) throw new Error(errorMessage(response.error.message));
+            const value = isRecord(response.result) ? response.result.thread : null;
+            if (!isRecord(value) || value.id !== params.threadId)
+              throw new Error("Thread not found");
+            primaryProviderId =
+              typeof value.modelProvider === "string" ? value.modelProvider : null;
+          }
+          thread = { threadId: params.threadId, primaryProviderId };
+        }
+        const snapshot = await routing.configure(params, thread);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(snapshot) }));
       } catch (error) {
         await this.#writer.json(rpcError(request, -32602, errorMessage(error)));

@@ -1,6 +1,9 @@
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RendererModelClient } from "../../src/renderer-model-client.js";
+import type {
+  RendererModelClient,
+  RendererThreadTurnState,
+} from "../../src/renderer-model-client.js";
 import {
   createInterruptedQueue,
   INTERRUPTED_QUEUE_STORAGE_KEY,
@@ -51,7 +54,7 @@ function fixture(storage = memoryStorage()) {
   );
   const client = {
     requestThreadProjection: projection,
-    readThreadTurnState: vi.fn(async (id: string) => ({
+    readThreadTurnState: vi.fn(async (id: string): Promise<RendererThreadTurnState> => ({
       running: false,
       status: "failed",
       turnId: `${id}-turn`,
@@ -116,6 +119,72 @@ describe("interrupted event queue", () => {
     f.queue.refresh();
     expect(f.projection).not.toHaveBeenCalled();
     f.queue.dispose();
+  });
+
+  it("reconciles the viewed session when its terminal notification was missed", async () => {
+    const f = fixture();
+    await f.queue.reconcile("local", "one");
+    expect(f.first()).toMatchObject({
+      threadId: "one",
+      turnId: "one-turn",
+      title: "Title one",
+      status: "failed",
+    });
+    // 30 秒内重复打开同一会话不重复读取；队列已有该回合时直接命中缓存。
+    await f.queue.reconcile("local", "one");
+    expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(1);
+    f.client.readThreadTurnState.mockClear();
+    f.queue.syncStorage();
+    await f.queue.reconcile("local", "one");
+    expect(f.client.readThreadTurnState).not.toHaveBeenCalled();
+  });
+
+  it("does not reconcile running, completed, external or superseded turns", async () => {
+    const f = fixture();
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: true,
+      status: null,
+      turnId: null,
+    });
+    await f.queue.reconcile("local", "running");
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "done-turn",
+    });
+    await f.queue.reconcile("local", "done");
+    f.projection.mockResolvedValueOnce({
+      thread: { ...metadata("external").thread, modelProvider: "codexhost" },
+    });
+    await f.queue.reconcile("local", "external");
+    f.emit("turn/started", "fresh", "new-turn");
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "fresh-turn",
+    });
+    await f.queue.reconcile("local", "fresh");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("does not resurrect a turn that was already started or settled", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    f.emit("turn/completed", "one", "second-turn", "failed");
+    await settle();
+    expect(f.first().turnId).toBe("second-turn");
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "second-turn",
+    });
+    await f.queue.resume(f.first());
+    vi.advanceTimersByTime(31_000);
+    f.client.readThreadTurnState.mockClear();
+    await f.queue.reconcile("local", "one");
+    expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(1);
+    expect(f.queue.list("local")).toEqual([]);
   });
 
   it.each(["failed", "interrupted", "cancelled"])(

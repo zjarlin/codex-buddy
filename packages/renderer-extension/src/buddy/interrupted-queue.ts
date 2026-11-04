@@ -171,6 +171,87 @@ export function createInterruptedQueue(options: {
   const readMetadata = <T>(operation: Promise<T>) =>
     bounded(operation, 20_000, "会话读取超时，请检查连接后重试。");
 
+  // 打开会话时只核对这一个会话，补偿客户端闪退或重连期间错过的终态通知。
+  // 不做全历史扫描，也未打开的会话不会被读取。
+  const reconciling = new Set<string>();
+  const reconciledAt = new Map<string, number>();
+  const RECONCILE_INTERVAL_MS = 30_000;
+  const RECONCILE_RETRY_MS = 10_000;
+
+  async function reconcile(hostId: string, threadId: string): Promise<void> {
+    if (disposed) return;
+    const key = keyFor(hostId, threadId);
+    const client = options.getClient(hostId);
+    if (!client?.requestThreadProjection || !client.readThreadTurnState) return;
+    if (excluded.has(key) || reconciling.has(key)) return;
+    const checkedAt = reconciledAt.get(key);
+    const now = Date.now();
+    if (checkedAt !== undefined && now - checkedAt < RECONCILE_INTERVAL_MS) return;
+    // 高频界面扫描只做内存限流；到点后才解析持久化队列。
+    readStorage();
+    const current = entries.get(key);
+    if (current && interrupted(current.status)) {
+      reconciledAt.set(key, now);
+      return;
+    }
+    reconciledAt.set(key, now);
+    reconciling.add(key);
+    try {
+      // 先读最新回合：健康会话只产生这一次读取，只有确实需要补录时才读取标题和归属。
+      const state = await readMetadata(client.readThreadTurnState(threadId));
+      if (
+        disposed ||
+        options.getClient(hostId) !== client ||
+        state.running ||
+        !interrupted(state.status) ||
+        !state.turnId
+      )
+        return;
+      const value = record(
+        await readMetadata(
+          client.requestThreadProjection("thread/read", {
+            threadId,
+            includeTurns: false,
+          }),
+        ),
+      );
+      if (disposed || options.getClient(hostId) !== client) return;
+      const thread = record(value.thread);
+      if (
+        thread.ephemeral === true ||
+        thread.threadSource === "thread_title" ||
+        thread.modelProvider === "codexhost" ||
+        thread.cliVersion === "codexhost"
+      ) {
+        excluded.add(key);
+        return;
+      }
+      assertNativeCodexThread(thread, threadId);
+      readStorage();
+      const previous = entries.get(key);
+      if (
+        previous?.status === "archived" ||
+        previous?.status === "vanished" ||
+        previous?.previousTurnIds?.includes(state.turnId) ||
+        (previous?.turnId === state.turnId && previous.status !== "active") ||
+        (previous?.status === "active" && previous.turnId !== state.turnId)
+      )
+        return;
+      put({
+        hostId,
+        threadId,
+        turnId: state.turnId,
+        title: (text(thread.name) || text(thread.preview) || threadId).slice(0, 160),
+        status: state.status,
+      });
+    } catch {
+      // 浏览会话时的读取失败不写入队列；连接或会话稍后可用时再重试。
+      reconciledAt.set(key, Date.now() - RECONCILE_INTERVAL_MS + RECONCILE_RETRY_MS);
+    } finally {
+      reconciling.delete(key);
+    }
+  }
+
   async function enrich(entry: QueueRecord, manager: NotificationManager): Promise<void> {
     const client = options.getClient(entry.hostId);
     if (!client?.requestThreadProjection) return;
@@ -391,6 +472,7 @@ export function createInterruptedQueue(options: {
 
   return {
     refresh,
+    reconcile,
     list(hostId: string): InterruptedQueueEntry[] {
       return [...entries.values()]
         .filter(

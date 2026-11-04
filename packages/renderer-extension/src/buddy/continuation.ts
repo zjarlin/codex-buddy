@@ -16,6 +16,7 @@ type RecoveryStatus = InterruptedThread["status"];
 const marker = "data-buddy-sidebar-recovery";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
 const stateMarker = "data-buddy-sidebar-state";
+const activeAttribute = "data-app-action-sidebar-thread-active";
 // 覆盖原生状态槽的视觉内容，卸载时保留 React 管理的原始节点。
 const style = `
 [${recoverableMarker}]{background:color-mix(in srgb,#d99000 9%,transparent)!important;box-shadow:inset 3px 0 0 #d99000!important}
@@ -37,6 +38,7 @@ export function installSidebarContinuation(options: {
   queue: InterruptedQueue;
   getClient(hostId: string): RendererModelClient | null;
   getLocale(): "zh-CN" | "en";
+  getActiveThread?(): { hostId: string; threadId: string } | null;
 }): { refresh(): void; dispose(): void } {
   const styles = document.createElement("style");
   styles.textContent = style;
@@ -99,6 +101,7 @@ export function installSidebarContinuation(options: {
     scheduled = false;
     if (disposed) return;
     const snapshots = new Map<string, Map<string, InterruptedThread>>();
+    const active = options.getActiveThread?.() ?? null;
     const rows = new Set(document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR));
     for (const row of mounted.keys()) {
       if (!rows.has(row)) clearRow(row);
@@ -117,6 +120,14 @@ export function installSidebarContinuation(options: {
         snapshots.set(hostId, threads);
       }
       const thread = threads.get(threadId);
+      // 原生选中行变化时补查该会话，覆盖客户端闪退或重连期间错过的终态通知。
+      if (
+        (active
+          ? active.hostId === hostId && active.threadId === threadId
+          : row.getAttribute(activeAttribute) === "true") &&
+        !thread
+      )
+        void options.queue.reconcile(hostId, threadId);
       decorate(row, false, thread?.status);
       const title = row.querySelector("[data-thread-title-trigger]");
       const slot = title?.previousElementSibling;
@@ -189,7 +200,11 @@ export function installSidebarContinuation(options: {
   const stopQueue = options.queue.subscribe(schedule);
   const stopObserving = getDomMutationHub(document).subscribe({
     kinds: ["childList", "attributes"],
-    attributeFilter: [SIDEBAR_THREAD_HOST_ID_ATTRIBUTE, SIDEBAR_THREAD_ID_ATTRIBUTE],
+    attributeFilter: [
+      SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
+      SIDEBAR_THREAD_ID_ATTRIBUTE,
+      activeAttribute,
+    ],
     test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
     onMutate: () => schedule(),
   });

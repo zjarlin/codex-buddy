@@ -108,6 +108,10 @@ export class RequestRouteObservationTracker {
     };
   }
 
+  threadPurpose(threadId: string): ThreadPurpose | null {
+    return this.#createByThreadId.get(threadId)?.threadPurpose ?? null;
+  }
+
   clear(): void {
     this.#pendingByRequestId.clear();
     this.#createByThreadId.clear();

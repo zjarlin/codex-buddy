@@ -17,6 +17,7 @@ export interface ProviderTarget {
   baseUrl: string;
   apiKey?: string;
   model?: string;
+  fallback?: boolean;
 }
 
 export interface ProviderRouteEvent {
@@ -36,7 +37,7 @@ export interface ProviderRouteEvent {
 }
 
 interface ProxyOptions {
-  targets(provider: string): Promise<ProviderTarget[]>;
+  targets(provider: string, threadId?: string): Promise<ProviderTarget[]>;
   routed(target: ProviderTarget, fallback: boolean): void;
   observed?(event: ProviderRouteEvent): void;
   projectCode?(
@@ -88,6 +89,12 @@ function requestTurnMetadata(request: IncomingMessage): TurnRequestMetadata | nu
   } catch {
     return null;
   }
+}
+
+// 官方 Responses 使用 session_id 标识 Thread；Turn 元数据只在部分请求中携带。
+function requestThreadId(request: IncomingMessage): string | undefined {
+  const id = requestTurnMetadata(request)?.threadId ?? headerValue(request.headers.session_id);
+  return id && id.trim() && id.length <= 200 ? id : undefined;
 }
 
 const transientStatuses = new Set([408, 429, 500, 502, 503, 504]);
@@ -305,8 +312,23 @@ export class ProviderFailoverProxy {
         at: Date.now(),
       });
     };
-    const targets = await this.options.targets(decodeURIComponent(provider));
-    const input = targets.length > 1 ? await fallbackInput(request, body) : null;
+    const targets = await this.options.targets(
+      decodeURIComponent(provider),
+      requestThreadId(request),
+    );
+    const input =
+      targets.length > 1 || targets[0]?.fallback ? await fallbackInput(request, body) : null;
+    if (targets[0]?.fallback && !input) {
+      response.writeHead(409, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          error: {
+            message: "Cannot switch providers without complete request context",
+            type: "invalid_request_error",
+          },
+        }),
+      );
+      return;
+    }
     // 上游私有响应 ID 不能跨供应商。先排除不兼容候选，再决定是否跳过冷却中的主供应商。
     const eligible = input ? targets : targets.slice(0, 1);
     const available = eligible.filter(
@@ -329,7 +351,7 @@ export class ProviderFailoverProxy {
         if (controller.signal.aborted) {
           return;
         }
-        const fallback = target.id !== targets[0]?.id;
+        const fallback = target.fallback ?? target.id !== targets[0]?.id;
         let payload = body;
         if (fallback && body.length && input) {
           const value = { ...input, ...(target.model ? { model: target.model } : {}) };

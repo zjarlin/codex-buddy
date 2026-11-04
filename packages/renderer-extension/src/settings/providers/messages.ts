@@ -36,7 +36,7 @@ export const providerMessages = {
     save: "保存供应商",
     cancel: "取消",
     remove: "删除",
-    confirmRemove: "确认删除此备用供应商？",
+    confirmRemove: "确认删除此备用供应商？显式选择了它的会话将恢复自动接续设置。",
     confirmDiscard: "存在未保存的供应商配置，确认放弃这些修改？",
     up: "上移",
     down: "下移",
@@ -60,7 +60,9 @@ export const providerMessages = {
     refresh: "刷新状态",
     loading: "正在读取…",
     saving: "正在保存…",
-    unavailable: "此 Host 未提供多供应商功能，请先更新对应 Host。",
+    unavailable:
+      "此连接未接入支持多供应商的 CodexBuddy Host。请为所选 Host 安装或更新匹配版本，并重新连接；本机供应商配置不会作用于远端会话。",
+    disconnected: "此 Host 连接不可用，请先连接后再刷新。",
     error: "操作失败，请检查配置并重试。",
     help: "故障接续说明",
     details: [
@@ -109,7 +111,8 @@ export const providerMessages = {
     save: "Save provider",
     cancel: "Cancel",
     remove: "Delete",
-    confirmRemove: "Delete this fallback provider?",
+    confirmRemove:
+      "Delete this fallback provider? Sessions pinned to it will return to automatic routing.",
     confirmDiscard: "Discard the unsaved provider changes?",
     up: "Move up",
     down: "Move down",
@@ -133,7 +136,9 @@ export const providerMessages = {
     refresh: "Refresh status",
     loading: "Loading…",
     saving: "Saving…",
-    unavailable: "Multiple providers are unavailable on this Host. Update that Host first.",
+    unavailable:
+      "This connection is not running a CodexBuddy Host with provider routing. Install or update the matching Host and reconnect. Local provider settings do not apply to remote sessions.",
+    disconnected: "This Host connection is unavailable. Connect and refresh.",
     error: "Operation failed. Check the configuration and try again.",
     help: "About failover",
     details: [

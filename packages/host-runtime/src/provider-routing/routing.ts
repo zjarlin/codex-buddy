@@ -5,6 +5,7 @@ import {
   type ProviderRoutingParams,
   type ProviderRoutingSnapshot,
   type ProviderSyncResult,
+  type HostThreadId,
 } from "@codexhost/shared-contracts";
 import { GatewayProjectAttribution } from "./project-attribution.js";
 import { ProviderRoutingStore } from "./store.js";
@@ -30,7 +31,7 @@ export class ProviderRouting {
   constructor(home: string) {
     this.store = new ProviderRoutingStore(home);
     this.#proxy = new ProviderFailoverProxy({
-      targets: (provider) => this.#targets(provider),
+      targets: (provider, threadId) => this.#targets(provider, threadId),
       projectCode: (baseUrl, authorization, threadId) =>
         this.#projects.project(baseUrl, authorization, threadId),
       routed: (target, fallback) => {
@@ -81,10 +82,38 @@ export class ProviderRouting {
     return [...overrides, ...args];
   }
 
-  async configure(input: ProviderRoutingParams): Promise<ProviderRoutingSnapshot> {
+  async configure(
+    input: ProviderRoutingParams,
+    thread?: { threadId: HostThreadId; primaryProviderId: string | null },
+  ): Promise<ProviderRoutingSnapshot> {
+    const primaries = await this.#readPrimaries();
+    const covered = Boolean(
+      this.#ready &&
+      thread?.primaryProviderId &&
+      /^[a-zA-Z0-9_-]+$/u.test(thread.primaryProviderId) &&
+      primaries.some(
+        (provider) =>
+          provider.id === thread.primaryProviderId &&
+          this.#primaries.some(
+            (active) => active.id === provider.id && active.baseUrl === provider.baseUrl,
+          ),
+      ),
+    );
+    if (input.action === "select") {
+      if (!thread || thread.threadId !== input.threadId || !covered) {
+        throw new Error("This thread is not connected to the provider proxy on this Host");
+      }
+      const config = await this.store.read();
+      if (
+        input.providerId !== null &&
+        input.providerId !== `primary:${thread.primaryProviderId}` &&
+        !config.providers.some((provider) => provider.id === input.providerId && provider.apiKey)
+      ) {
+        throw new Error("Unknown thread provider");
+      }
+    }
     const syncResults = input.action === "sync" ? await this.#sync(input.id) : undefined;
     const config = await this.store.update(input);
-    const primaries = await this.#readPrimaries();
     return {
       enabled: config.enabled,
       providers: config.providers.map(({ apiKey, ...provider }) => ({
@@ -103,6 +132,15 @@ export class ProviderRouting {
           ),
       })),
       ready: this.#ready,
+      ...(thread
+        ? {
+            thread: {
+              ...thread,
+              covered,
+              providerId: config.threadProviders[thread.threadId] ?? null,
+            },
+          }
+        : {}),
       lastRoute: this.#lastRoute,
       failures: this.#proxy.failures([
         ...this.#primaries.map((provider) => ({
@@ -150,13 +188,20 @@ export class ProviderRouting {
     }
   }
 
-  async #targets(id: string): Promise<ProviderTarget[]> {
+  async #targets(id: string, threadId?: string): Promise<ProviderTarget[]> {
     const primary = this.#primaries.find((provider) => provider.id === id);
     if (!primary) {
       throw new Error("Unknown primary provider");
     }
     const config = await this.store.read();
     const targets: ProviderTarget[] = [{ id: `primary:${id}`, baseUrl: primary.baseUrl }];
+    const selected = threadId ? config.threadProviders[threadId] : undefined;
+    if (selected === `primary:${id}`) return targets;
+    if (selected) {
+      const provider = config.providers.find((provider) => provider.id === selected);
+      if (!provider) throw new Error("Selected thread provider is unavailable");
+      return [{ ...provider, fallback: true }];
+    }
     if (config.enabled) {
       targets.push(
         ...config.providers
@@ -166,6 +211,7 @@ export class ProviderRouting {
             baseUrl: provider.baseUrl,
             apiKey: provider.apiKey,
             model: provider.model,
+            fallback: true,
           })),
       );
     }

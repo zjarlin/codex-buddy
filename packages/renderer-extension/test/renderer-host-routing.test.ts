@@ -161,6 +161,32 @@ it("routes provider settings through the current Host manager", async () => {
   }
 });
 
+it.each([-32600, undefined])(
+  "normalizes native unknown provider methods with code %s on both clients",
+  async (code) => {
+    const { adapter, remote, local } = await setup(remoteId);
+    remote.nativeSend.mockRejectedValue(
+      Object.assign(
+        new Error(
+          `Invalid request: unknown variant \`${PROVIDER_ROUTING_METHOD}\`, expected one of \`initialize\``,
+        ),
+        code === undefined ? {} : { code },
+      ),
+    );
+    try {
+      await expect(
+        adapter.modelControl?.providerRouting?.({ action: "read" }),
+      ).rejects.toMatchObject({ code: -32601 });
+      await expect(
+        adapter.modelControl?.clientForHost?.(remoteId)?.providerRouting?.({ action: "read" }),
+      ).rejects.toMatchObject({ code: -32601 });
+      expect(local.nativeSend).not.toHaveBeenCalledWith(PROVIDER_ROUTING_METHOD, expect.anything());
+    } finally {
+      adapter.dispose();
+    }
+  },
+);
+
 it("reads upstream Auto observations through the saved SSH Host for the native turn", async () => {
   const { adapter, local, remote } = await setup(remoteId);
   const threadId = "019ccb31-9520-7120-bc17-556e9a92d860";

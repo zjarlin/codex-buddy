@@ -1411,6 +1411,35 @@ test("session titles stay above muted projects with copying and filtering intact
   await table(page, "最近会话").screenshot({ path: info.outputPath("session-project-filter.png") });
 });
 
+test("remote projects display actual names and filter by resolved identity", async ({
+  page,
+}, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const state = await setup(page);
+  const project = "ssh://dev@build-host:22/work/sub2api";
+  state.entries.set("test-harness", [
+    request("old", { sessionId: "s1", cwd: "/runtime/wmv-old", project }),
+    request("new", { sessionId: "s2", cwd: "/runtime/remote-new", project }),
+    request("unknown", { sessionId: "s3", cwd: "/runtime/wmv-unknown", project: null }),
+  ]);
+  await openStatistics(page);
+  const projects = table(page, "按项目");
+  await expect(projects.locator("tbody tr")).toHaveCount(2);
+  await expect(projects.getByRole("button", { name: "sub2api", exact: true })).toBeVisible();
+  await expect(projects.getByRole("button", { name: "未知项目", exact: true })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("wmv-");
+  await projects.screenshot({ path: info.outputPath("resolved-projects.png") });
+  await choose(page, projectFilter(page), "sub2api");
+  await expect.poll(() => state.lastParams.project).toBe(project);
+  await expect(table(page, "最近会话").locator("tbody tr")).toHaveCount(2);
+  await expect(table(page, "最近会话").locator(".console-usage-row-filter")).toHaveText([
+    "sub2api",
+    "sub2api",
+  ]);
+  expect(errors).toEqual([]);
+});
+
 test("projects, sessions and CSV follow the filters", async ({ page }) => {
   const state = await setupDashboard(page);
   await openStatistics(page);

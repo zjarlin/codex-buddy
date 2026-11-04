@@ -992,6 +992,7 @@ export function installRendererBindingProbe(
     queue: interruptedQueue,
     getClient: (hostId) => modelClientForHost(hostId),
     getLocale: rendererLocale,
+    getActiveThread: viewedThread,
   });
   const pendingConfirmations = new PendingConfirmationsModel(window.localStorage);
   const sidebarUnread = installRendererSidebarUnread({
@@ -1457,6 +1458,18 @@ export function installRendererBindingProbe(
       mounted.shortcutRefreshReport,
     );
     delete mounted.shortcutRefreshReport;
+    const providerThreadId = threadIdFromComposerModelTarget(mounted.modelTarget);
+    const providerClient = composerClient(mounted);
+    mounted.control.threadProvider?.update(
+      controller.get(mounted.composer).agent === "codex" &&
+        mounted.ownershipStatus !== "error" &&
+        providerThreadId &&
+        hostId &&
+        providerClient
+        ? { threadId: providerThreadId, hostId, client: providerClient }
+        : null,
+      settingsLifecycle.locale,
+    );
     showCodexUsageGateStatus(mounted, mounted.codexUsageGate.update(externalSubmissionReady));
     if (mounted.control.usage) {
       mounted.control.usage.onOpen = () => {
@@ -3622,6 +3635,9 @@ export function installRendererBindingProbe(
     // 会话切换会在挂载的 Composer 目标上体现，标题栏项目名与左侧树对齐依赖它。
     titlebarProjectName.refresh();
     sidebarThreadAlign.refresh();
+    // 打开会话时核对一次该会话的最新回合，补上客户端闪退或重连期间错过的中断通知。
+    const viewed = viewedThread();
+    if (viewed) void interruptedQueue.reconcile(viewed.hostId, viewed.threadId);
     questions.refreshContext();
   };
 

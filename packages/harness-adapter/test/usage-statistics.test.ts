@@ -76,6 +76,17 @@ it("validates optional native credits without treating missing values as zero", 
   }
 });
 
+it("distinguishes an explicit project, unknown project and cwd fallback", () => {
+  const entry = { id: "r", occurredAtMs: 1, inputTokens: 10, outputTokens: 2, cwd: "/runtime" };
+  expect(parseHarnessUsageEntry(entry)).not.toHaveProperty("project");
+  for (const project of [null, "/work/repo", "ssh://user@host:22/work/repo"]) {
+    expect(parseHarnessUsageEntry({ ...entry, project })).toEqual({ ...entry, project });
+  }
+  for (const project of [false, 1, "", " ", "/a\0b", "a".repeat(4097)]) {
+    expect(parseHarnessUsageEntry({ ...entry, project })).toBeNull();
+  }
+});
+
 it("validates entries and native times", () => {
   const valid = {
     id: "r",

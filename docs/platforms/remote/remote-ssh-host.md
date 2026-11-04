@@ -68,6 +68,10 @@ Buddy Desktop updates from its own GitHub Release. Upstream npm `@codexhost/cli`
 
 Maintain an upstream remote using upstream release instructions and independently selected versions. Never substitute a Buddy Desktop version for an upstream npm version. Buddy publishes Linux remote packages as formal GitHub Release assets; updating Desktop does not upload remote code.
 
+### CodexBuddy version line and the remote Host
+
+This repository is the CodexBuddy fork of codexhost and includes the complete upstream Host process implementation (launcher, shim, updater, platform and Host Runtime), not only a Renderer extension. CodexBuddy and upstream codexhost use separate release lines: do not infer Buddy capabilities from an upstream tag or npm `@codexhost/cli` version, and do not compare the two version numbers directly. Local CodexBuddy and the remote Host must come from the same CodexBuddy build version. Host-only RPCs such as `codexhost/providers/routing` exist only in a matching Host Runtime; an older Host returns `unknown variant` even while SSH and native Codex sessions still work. After upgrading, verify the running version shown by the page and restart/reconnect. Updated files do not add capabilities while the old process is still running.
+
 ### Install a Linux Host from a formal Release
 
 Download these files from the same [Buddy formal Release](https://github.com/zjarlin/codex-buddy/releases). Replace `<version>` with that Release's version and select only the Linux package matching the remote CPU architecture. If an older Release lacks these assets, do not substitute the same version from upstream npm.

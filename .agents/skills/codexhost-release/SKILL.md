@@ -7,6 +7,8 @@ description: 发布 codexhost 正式版、预览版，编写或确认 Release No
 
 目标：通过仓库既有 GitHub Actions 发布，不在本地执行 `npm publish`，不手动创建 GitHub Release，不绕过 CI。
 
+本仓库是 CodexBuddy fork。Buddy 与上游 codexhost 使用独立发行版本线；合并上游后不要自动把 Buddy 的包版本改成上游 tag，也不要跨发行线比较版本号。只在本 Skill 驱动的显式发布准备中修改版本文件，并在 Release Notes 中说明对应的 Buddy 版本和必要的上游基线。
+
 ## 必须先读
 
 完整读取 [发布提交指南](references/release-guide.md)。该参考收录用户提供的发布指南，并补充正式与预览发行的区别。

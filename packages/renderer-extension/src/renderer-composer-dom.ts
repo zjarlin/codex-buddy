@@ -1,3 +1,4 @@
+import { mountThreadProviderControl } from "./settings/providers/thread-control.js";
 import type {
   ComposerAgentPhase,
   ExternalRendererAgent,
@@ -115,6 +116,7 @@ export interface ComposerAgentControl {
   composerId: string;
   harnessCommands: RendererHarnessCommandControl;
   sessionTransfer: RendererSessionTransferControl;
+  threadProvider?: ReturnType<typeof mountThreadProviderControl>;
   sendButton: HTMLButtonElement;
   sendDisabledBeforeSwitch: boolean | null;
   stopCompactLayout?: () => void;
@@ -148,6 +150,7 @@ function isOwnedRendererControl(element: Element): boolean {
     element.hasAttribute("data-codexhost-credits-control") ||
     element.hasAttribute("data-codexhost-harness-command-control") ||
     element.hasAttribute("data-codexhost-session-transfer-control") ||
+    element.hasAttribute("data-codexhost-thread-provider") ||
     element.hasAttribute("data-codexhost-composer-indicators")
   );
 }
@@ -568,6 +571,7 @@ function refreshTrailingClusterPlacement(control: ComposerAgentControl): void {
   const modelRoot = control.modelPicker?.root;
   const agentRoot = control.root ?? control.picker?.root;
   const transferRoot = control.sessionTransfer?.root;
+  const providerRoot = control.threadProvider?.root;
   if (!sendButton || !modelRoot || !agentRoot || !transferRoot) return;
   const anchor = trailingActionAnchor(sendButton);
   const parent = anchor.parentElement;
@@ -577,13 +581,15 @@ function refreshTrailingClusterPlacement(control: ComposerAgentControl): void {
     modelRoot.parentElement === parent &&
     agentRoot.parentElement === parent &&
     modelRoot.nextElementSibling === agentRoot &&
-    agentRoot.nextElementSibling === transferRoot &&
+    agentRoot.nextElementSibling === (providerRoot ?? transferRoot) &&
+    (!providerRoot || providerRoot.nextElementSibling === transferRoot) &&
     transferRoot.nextElementSibling === anchor
   ) {
     return;
   }
   parent.insertBefore(modelRoot, anchor);
   parent.insertBefore(agentRoot, anchor);
+  if (providerRoot) parent.insertBefore(providerRoot, anchor);
   parent.insertBefore(transferRoot, anchor);
 }
 
@@ -744,6 +750,7 @@ export function mountComposerAgentControl(
   );
   composer.before(modelShortcuts.root);
   const composerIndicators = mountRendererComposerIndicators(composer);
+  const threadProvider = mountThreadProviderControl(composer.ownerDocument);
 
   const toolbar = sendButton.parentElement;
   const harnessCommands = mountRendererHarnessCommandControl(
@@ -811,6 +818,7 @@ export function mountComposerAgentControl(
     usage: null,
     harnessCommands,
     sessionTransfer,
+    threadProvider,
     sendButton,
     sendDisabledBeforeSwitch: null,
   };
@@ -1002,6 +1010,7 @@ export function disposeComposerAgentControl(control: ComposerAgentControl): void
   control.usage = null;
   control.harnessCommands.dispose();
   control.sessionTransfer.dispose();
+  control.threadProvider?.dispose();
   control.permissionModePicker.dispose();
   control.modelPicker.dispose();
   control.modelShortcuts?.dispose();

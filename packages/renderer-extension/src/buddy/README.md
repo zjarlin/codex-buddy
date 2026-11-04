@@ -2,7 +2,7 @@
 
 `installBuddyControl` 从现有 renderer 绑定获取当前 Codex 任务、输入框锚点和 Host 客户端，只在收藏模型前保留默认展开、可收起的中断恢复列表，不再挂载 Auto Router 设置或任务包面板。仅通过共享浏览器安全契约调用 Host；不读取 Node、文件或供应商凭据。
 
-恢复不依赖路由状态读取。`interrupted-queue.ts` 订阅各 Host 的回合终态、开始和归档事件，failed / interrupted / cancelled 当场入队，开始新回合、恢复成功或归档后移除。队列以 Host 与原生会话 ID 隔离，使用 `codexhost.interrupted-queue.v1` 持久保存标题、回合与已处理标记，重复和迟到通知不会复活旧记录。只按中断事件读取该会话元数据；启动、连接切换、聚焦、DOM 重绘和顶部点击均不扫描历史，无定时轮询。仅“补录历史中断”调用已有发现接口，补齐旧记录或离线期间错过的事件。
+恢复不依赖路由状态读取。`interrupted-queue.ts` 订阅各 Host 的回合终态、开始和归档事件，failed / interrupted / cancelled 当场入队，开始新回合、恢复成功或归档后移除。队列以 Host 与原生会话 ID 隔离，使用 `codexhost.interrupted-queue.v1` 持久保存标题、回合与已处理标记，重复和迟到通知不会复活旧记录。只按中断事件读取该会话元数据；打开会话时额外核对当前会话的最新回合，用于补齐客户端闪退或重连期间错过的终态通知，并限制为 30 秒一次。启动、连接切换、聚焦、DOM 重绘和顶部点击都不扫描历史，也无定时轮询。仅“补录历史中断”调用已有发现接口，补齐未打开会话的旧记录。
 
 双语路由配置在 `settings/routing-page.ts`，按当前 Host 保存自动路由、System One、旁路、角色和单模型偏好，校验连接身份并保留失败草稿。`dispose()` 释放事件监听和 DOM。
 

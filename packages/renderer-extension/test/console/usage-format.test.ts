@@ -7,11 +7,31 @@ import {
   formatMeasure,
   inputWithoutCache,
   measured,
+  baseName,
+  projectNames,
   tokenCount,
   tokenSummary,
   tokensWithCache,
   tokensWithoutCache,
 } from "../../src/console/usage/format.js";
+
+it("shows real remote project names and distinguishes identical paths on different hosts", () => {
+  const a = "ssh://dev@host-a:22/work/repo";
+  const b = "ssh://dev@host-b:22/work/repo";
+  const c = "ssh://other@host-a:22/work/repo";
+  expect(projectNames([a]).get(a)).toBe("repo");
+  expect(projectNames([a, b, c, "/work/repo"])).toEqual(
+    new Map([
+      [a, "work/repo (dev@host-a:22)"],
+      [b, "work/repo (dev@host-b:22)"],
+      [c, "work/repo (other@host-a:22)"],
+      ["/work/repo", "work/repo"],
+    ]),
+  );
+  expect(baseName("ssh://dev@host:22/work/%E9%A1%B9%E7%9B%AE%20%231")).toBe("项目 #1");
+  expect(baseName("C:\\work\\repo")).toBe("repo");
+  expect(baseName("/work/repo/")).toBe("repo");
+});
 
 describe("usage token accounting", () => {
   it("includes normalized cache and reasoning only once in the overview total", () => {

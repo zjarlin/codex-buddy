@@ -94,6 +94,51 @@ async function settledGet(stats: UsageStatistics, range: "today" | "7d" | "all" 
 }
 
 describe("UsageStatistics", () => {
+  it("groups and filters resolved projects, preserving unknown and cwd fallback across cache reloads", async () => {
+    const project = "ssh://dev@host-a:22/work/repo";
+    const other = "ssh://dev@host-b:22/work/repo";
+    const storage = new FakeStorage(
+      new Map([
+        [
+          "one",
+          {
+            fingerprint: "1",
+            entries: [
+              entry("a", { sessionId: "s1", cwd: "/runtime/old", project }),
+              entry("b", { sessionId: "s2", cwd: "/runtime/new", project }),
+              entry("c", { sessionId: "s3", cwd: "/runtime/unknown", project: null }),
+              entry("d", { sessionId: "s4", cwd: "/work/local" }),
+              entry("e", { sessionId: "s5", cwd: "/runtime/other", project: other }),
+            ],
+          },
+        ],
+      ]),
+    );
+    for (const stats of [statistics(), statistics()]) {
+      stats.attach(() => [{ harness: "deepseek", capability: storage }]);
+      try {
+        const result = await settledGet(stats);
+        expect(usageStatisticsResultSchema.safeParse(result).success).toBe(true);
+        expect(result.totals).toMatchObject({ requests: 5, inputTokens: 5_000_000, costUsd: 15 });
+        expect(result.options.projects).toEqual(
+          expect.arrayContaining([project, other, null, "/work/local"]),
+        );
+        expect(result.byProject).toHaveLength(4);
+        expect(result.byProject.find((row) => row.project === project)?.requests).toBe(2);
+        const selected = await stats.get({ range: "all", project });
+        expect(selected.totals.requests).toBe(2);
+        expect(selected.sessions.map((session) => session.project)).toEqual([project, project]);
+        expect((await stats.get({ range: "all", project: null })).totals.requests).toBe(1);
+        expect((await stats.get({ range: "all", project: "/runtime/old" })).totals.requests).toBe(
+          0,
+        );
+      } finally {
+        stats.close();
+      }
+    }
+    expect(storage.reads).toEqual(["one"]);
+  });
+
   it("retries an appended Codex rollout on first load and caches its fresh fingerprint", async () => {
     let now = NOW;
     const home = path.join(directory, "codex");
@@ -582,7 +627,7 @@ describe("UsageStatistics", () => {
     stats.attach(() => [{ harness: "claude-code", capability: storage }]);
     const first = await settledGet(stats);
     expect(storage.reads).toEqual(["one", "two"]);
-    expect(await readdir(path.join(directory, "usage-statistics", "v7"))).toEqual([
+    expect(await readdir(path.join(directory, "usage-statistics", "v8"))).toEqual([
       "claude-code.json",
     ]);
 
@@ -605,7 +650,7 @@ describe("UsageStatistics", () => {
     const stats = statistics();
     stats.attach(() => [{ harness: "pi", capability: storage }]);
     const before = await settledGet(stats);
-    await writeFile(path.join(directory, "usage-statistics", "v7", "pi.json"), "{broken");
+    await writeFile(path.join(directory, "usage-statistics", "v8", "pi.json"), "{broken");
     const again = statistics();
     again.attach(() => [{ harness: "pi", capability: storage }]);
     expect((await settledGet(again)).totals).toEqual(before.totals);

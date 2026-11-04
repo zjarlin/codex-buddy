@@ -112,14 +112,18 @@ for (const selected of ["local", "remote"] as const) {
       await page.addScriptTag({ content: bundle });
       await expect(page.getByText(`${selected} gateway · 已接入`, { exact: true })).toBeVisible();
       await page.getByLabel("自动故障接续", { exact: true }).check();
-      await expect(page.getByRole("status")).toContainText("自动接续尚未就绪");
+      await expect(page.getByRole("status", { name: "多供应商配置", exact: true })).toContainText(
+        "自动接续尚未就绪",
+      );
       await page.getByRole("button", { name: "添加供应商", exact: true }).click();
       await page.getByLabel("供应商名称", { exact: true }).fill("备用测试");
       await page.getByLabel("API Base URL", { exact: true }).fill(failedBackup);
       await page.getByLabel("API Key", { exact: true }).fill("old-fixture-key");
       await page.getByLabel("备用模型（可选）", { exact: true }).fill("backup-model");
       await page.getByRole("button", { name: "保存供应商", exact: true }).click();
-      await expect(page.getByRole("status")).toHaveText("自动接续已开启");
+      await expect(page.getByRole("status", { name: "多供应商配置", exact: true })).toHaveText(
+        "自动接续已开启",
+      );
       await expect(page.getByRole("button", { name: "添加供应商", exact: true })).toBeFocused();
       const routing = hosts.get(selected);
       if (!routing) throw new Error("Selected routing missing");
@@ -156,7 +160,9 @@ for (const selected of ["local", "remote"] as const) {
       ).toBeVisible();
       await page.getByLabel("API Key", { exact: true }).fill("new-fixture-key");
       await page.getByRole("button", { name: "保存供应商", exact: true }).click();
-      await expect(page.getByRole("status")).toHaveText("自动接续已开启");
+      await expect(page.getByRole("status", { name: "多供应商配置", exact: true })).toHaveText(
+        "自动接续已开启",
+      );
       const recovered = await request();
       expect(await recovered.json()).toEqual({ output_text: "hi from backup" });
       expect(received).toEqual([

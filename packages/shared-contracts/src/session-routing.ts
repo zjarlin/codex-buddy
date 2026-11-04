@@ -4,7 +4,8 @@ export const SESSION_ROUTE_METHOD = "codexhost/session/route";
 
 export const sessionRouteParamsSchema = z
   .object({
-    message: z.string().trim().min(1).max(12_000),
+    // History lookup does not rank by draft text; an empty Composer must still list targets.
+    message: z.string().trim().max(12_000),
     cwd: z.string().trim().min(1).max(4_000).nullable().optional(),
   })
   .strict();

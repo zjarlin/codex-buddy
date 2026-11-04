@@ -4382,7 +4382,8 @@ describe("Multiple provider settings", () => {
       new RendererMethodUnavailableError("codexhost/providers/routing", { code: -32601 }),
     );
     find("刷新状态").dispatch("click");
-    const unavailable = "此 Host 未提供多供应商功能，请先更新对应 Host。";
+    const unavailable =
+      "此连接未接入支持多供应商的 CodexBuddy Host。请为所选 Host 安装或更新匹配版本，并重新连接；本机供应商配置不会作用于远端会话。";
     await vi.waitFor(() => expect(visibleText(content)).toContain(unavailable));
     expect(visibleText(content)).not.toContain("codexhost/providers/routing");
     expect(find(unavailable).getAttribute("role")).toBe("alert");
@@ -4439,7 +4440,8 @@ describe("Multiple provider settings", () => {
       runLatest: vi.fn(),
     });
     await vi.waitFor(() => expect(providerRouting).toHaveBeenCalledTimes(1));
-    const unavailable = "此 Host 未提供多供应商功能，请先更新对应 Host。";
+    const unavailable =
+      "此连接未接入支持多供应商的 CodexBuddy Host。请为所选 Host 安装或更新匹配版本，并重新连接；本机供应商配置不会作用于远端会话。";
     await vi.waitFor(() => expect(visibleText(content)).toContain(unavailable));
 
     const refresh = descendants(content).find((item) => item.textContent === "刷新状态");
@@ -4542,7 +4544,9 @@ describe("Multiple provider settings", () => {
     remote.providerRouting.mockRejectedValueOnce(new Error("Could not delete"));
     find("Delete: Backup").dispatch("click");
     await vi.waitFor(() => expect(find("Could not delete")).toBeDefined());
-    expect(confirm).toHaveBeenCalledWith("Delete this fallback provider? (Backup)");
+    expect(confirm).toHaveBeenCalledWith(
+      "Delete this fallback provider? Sessions pinned to it will return to automatic routing. (Backup)",
+    );
     expect(form.hidden).toBe(false);
     expect(find("API key").value).toBe("unsaved-secret");
 

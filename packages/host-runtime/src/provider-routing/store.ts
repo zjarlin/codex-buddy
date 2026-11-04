@@ -19,7 +19,11 @@ export interface ProviderModelSync {
   models?: string[];
   syncedAt?: number;
 }
-const fileSchema = z.object({ enabled: z.boolean(), providers: z.array(storedProvider).max(20) });
+const fileSchema = z.object({
+  enabled: z.boolean(),
+  providers: z.array(storedProvider).max(20),
+  threadProviders: z.record(z.string(), z.string().min(1).max(120)).default({}),
+});
 export type RoutingConfiguration = z.infer<typeof fileSchema>;
 
 export class ProviderRoutingStore {
@@ -40,7 +44,7 @@ export class ProviderRoutingStore {
     try {
       const legacy = JSON.parse(await readFile(join(this.home, "emergency-provider.json"), "utf8"));
       if (!legacy.apiKey || !legacy.baseURL) {
-        return { enabled: false, providers: [] };
+        return fileSchema.parse({ enabled: false, providers: [] });
       }
       return fileSchema.parse({
         enabled: legacy.enabled !== false,
@@ -59,7 +63,7 @@ export class ProviderRoutingStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw new Error("Cannot read legacy emergency provider configuration");
       }
-      return { enabled: false, providers: [] };
+      return fileSchema.parse({ enabled: false, providers: [] });
     }
   }
 
@@ -87,6 +91,19 @@ export class ProviderRoutingStore {
     }
     return this.#mutate((config) => {
       switch (params.action) {
+        case "select":
+          if (params.providerId === null) {
+            Reflect.deleteProperty(config.threadProviders, params.threadId);
+          } else {
+            if (
+              !params.providerId.startsWith("primary:") &&
+              !config.providers.some((provider) => provider.id === params.providerId)
+            ) {
+              throw new Error("Unknown thread provider");
+            }
+            config.threadProviders[params.threadId] = params.providerId;
+          }
+          break;
         case "configure":
           config.enabled = params.enabled;
           break;
@@ -118,6 +135,11 @@ export class ProviderRoutingStore {
           break;
         }
         case "remove":
+          for (const [threadId, providerId] of Object.entries(config.threadProviders)) {
+            if (providerId === params.id) {
+              Reflect.deleteProperty(config.threadProviders, threadId);
+            }
+          }
           config.providers = config.providers.filter((provider) => provider.id !== params.id);
           break;
         case "move": {

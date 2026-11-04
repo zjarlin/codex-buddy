@@ -32,7 +32,7 @@ import {
 } from "./model-prices.js";
 
 /** Bump when a reader's output changes meaning, so cached parses are read again. */
-const CACHE_VERSION = 7;
+const CACHE_VERSION = 8;
 const STALE_AFTER_MS = 10_000;
 const WARM_DELAY_MS = 3_000;
 /** At most one rewrite of a Harness's cache file per interval while its sessions keep growing. */
@@ -79,6 +79,7 @@ type CompactEntry = [
   number | null,
   boolean,
   string | null,
+  string | null | false,
 ];
 
 function compact(entry: HarnessUsageEntry): CompactEntry {
@@ -98,6 +99,7 @@ function compact(entry: HarnessUsageEntry): CompactEntry {
     entry.credits ?? null,
     entry.tokensUnknown === true,
     entry.sessionTitle ?? null,
+    entry.project === undefined ? false : entry.project,
   ];
 }
 
@@ -114,9 +116,9 @@ function interner(): (value: unknown) => unknown {
 }
 
 function expand(value: unknown, intern: (value: unknown) => unknown): HarnessUsageEntry | null {
-  if (!Array.isArray(value) || value.length !== 15) return null;
+  if (!Array.isArray(value) || value.length !== 16) return null;
   const [id, occurredAtMs, model, input, cached, written, written1h, output, reasoning] = value;
-  const [sessionId, cwd, costUsd, credits, tokensUnknown, sessionTitle] = value.slice(9);
+  const [sessionId, cwd, costUsd, credits, tokensUnknown, sessionTitle, project] = value.slice(9);
   return parseHarnessUsageEntry({
     id,
     occurredAtMs,
@@ -133,6 +135,7 @@ function expand(value: unknown, intern: (value: unknown) => unknown): HarnessUsa
     ...(credits !== null ? { credits } : {}),
     ...(tokensUnknown === true ? { tokensUnknown } : {}),
     ...(sessionTitle !== null ? { sessionTitle: intern(sessionTitle) } : {}),
+    ...(project !== false ? { project: intern(project) } : {}),
   });
 }
 
@@ -618,7 +621,7 @@ export class UsageStatistics {
       const { harness, entry, date } = indexed;
       if (!inRange(date)) continue;
       const model = entry.model ?? null;
-      const project = entry.cwd ?? null;
+      const project = entry.project === undefined ? (entry.cwd ?? null) : entry.project;
       harnesses.add(harness);
       models.add(model);
       if (model !== null && modelLabels.size < 4096) {

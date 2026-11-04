@@ -245,6 +245,17 @@ test("a new draft still lists other conversations in its project", async ({ page
   await expect(page.getByRole("button", { name: /Source discussion/ })).toBeVisible();
 });
 
+test("an empty draft still lists resumable conversations", async ({ page }) => {
+  await setup(page, { existing: true });
+  await page.getByRole("textbox", { name: "Message" }).fill("");
+  await transfer(page).click();
+  await expect(page.getByRole("button", { name: /Existing discussion/ })).toBeVisible();
+  await expect(picker(page)).not.toContainText("近期会话暂不可用");
+  await page.getByRole("button", { name: /Existing discussion/ }).click();
+  await expect(picker(page).getByRole("status")).toContainText("请输入消息后再发送");
+  expect(await sends(page)).toEqual([]);
+});
+
 for (const hostId of ["local", "remote-ssh-discovered:okm252"]) {
   test(`current project uses the composer instead of another prewarmed project: ${hostId}`, async ({
     page,

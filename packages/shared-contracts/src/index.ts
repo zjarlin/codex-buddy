@@ -768,3 +768,11 @@ export {
   type CodexSshConnection,
   type CodexSshDraft,
 } from "./remote-connections.js";
+
+export {
+  LOCAL_WORKSPACE_PREPARE_METHOD,
+  localWorkspacePrepareParamsSchema,
+  localWorkspacePrepareResultSchema,
+  type LocalWorkspacePrepareParams,
+  type LocalWorkspacePrepareResult,
+} from "./local-workspace.js";

@@ -1,3 +1,4 @@
+import { installRendererLocalWorkspace } from "./renderer-local-workspace.js";
 import { createOwnershipRetry, ownershipFailureKind } from "./renderer-ownership-retry.js";
 import { installTurnActionCards } from "./turn-action-card/index.js";
 import { createSessionRouting } from "./renderer-session-routing.js";
@@ -1048,6 +1049,13 @@ export function installRendererBindingProbe(
     },
   });
   const titlebarProjectName = installRendererTitlebarProjectName({ getActiveThread: viewedThread });
+  const localWorkspace = installRendererLocalWorkspace({
+    getActiveThread: viewedThread,
+    getLocale: rendererLocale,
+    getManager: (hostId) => window.__codexhostHostRoutingV1?.forHost(hostId)?.manager ?? null,
+    openThread: (threadId) =>
+      openSidebarThread(hostThreadIdSchema.parse(threadId), { hostId: "local" }),
+  });
   const sidebarThreadAlign = installRendererSidebarThreadAlign({ getActiveThread: viewedThread });
   const sidebarStatusFilter = installRendererSidebarStatusFilter({
     getClient: (hostId) => modelClientForHost(hostId),
@@ -3634,6 +3642,7 @@ export function installRendererBindingProbe(
     gitWorkflowControl.refreshContext();
     // 会话切换会在挂载的 Composer 目标上体现，标题栏项目名与左侧树对齐依赖它。
     titlebarProjectName.refresh();
+    localWorkspace.refresh();
     sidebarThreadAlign.refresh();
     // 打开会话时核对一次该会话的最新回合，补上客户端闪退或重连期间错过的中断通知。
     const viewed = viewedThread();
@@ -3854,6 +3863,7 @@ export function installRendererBindingProbe(
     projectActions.refresh();
     projectTabs.refresh();
     titlebarProjectName.refresh();
+    localWorkspace.refresh();
     sidebarThreadAlign.refresh();
     // Reapply the visible draft's selection after its native connection changes.
     // Do this before rebinding Hosts: an old local draft is not a remote choice.
@@ -4366,6 +4376,7 @@ export function installRendererBindingProbe(
       projectTools?.dispose();
       projectTools = null;
       titlebarProjectName.dispose();
+      localWorkspace.dispose();
       sidebarThreadAlign.dispose();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();

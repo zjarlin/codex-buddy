@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { sign } from "node:crypto";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -206,5 +206,56 @@ describe("ProjectSync", () => {
     await expect(
       store.merge([{ name: "private", remote: "https://user:token@example.com/repo.git" }]),
     ).rejects.toThrow();
+  });
+});
+
+describe("local workspace preparation", () => {
+  it("clones to the exact absolute path including Unicode and spaces, then reuses it", async () => {
+    const { root, remote } = await fixture();
+    const store = new ProjectSync({ CODEXHOST_DATA_DIR: path.join(root, "state") }, true);
+    const target = path.join(root, "公司的项目", "local workspace");
+    const prepared = await store.prepareLocalWorkspace(target, remote);
+    expect(prepared).toEqual({ path: await realpath(target), cloned: true });
+    await writeFile(path.join(target, "README.md"), "local edit");
+    expect(await store.prepareLocalWorkspace(target, remote)).toEqual({
+      path: prepared.path,
+      cloned: false,
+    });
+    expect(await readFile(path.join(target, "README.md"), "utf8")).toBe("local edit");
+  });
+
+  it("rejects relative paths, missing URLs, non-repositories and nested directories", async () => {
+    const { root, project, remote } = await fixture();
+    const store = new ProjectSync({ CODEXHOST_DATA_DIR: path.join(root, "state") }, true);
+    await expect(store.prepareLocalWorkspace("relative", remote)).rejects.toThrow("绝对路径");
+    await expect(store.prepareLocalWorkspace(path.join(root, "missing"))).rejects.toThrow("Git");
+    const nested = path.join(project, "nested");
+    await mkdir(nested);
+    await expect(store.prepareLocalWorkspace(nested, remote)).rejects.toThrow("根目录");
+    const ordinary = path.join(root, "ordinary");
+    await mkdir(ordinary);
+    await writeFile(path.join(ordinary, "keep.txt"), "keep");
+    await expect(store.prepareLocalWorkspace(ordinary, remote)).rejects.toThrow();
+    expect(await readFile(path.join(ordinary, "keep.txt"), "utf8")).toBe("keep");
+  });
+
+  it("rejects a different origin without changing the existing repository", async () => {
+    const { root, project } = await fixture();
+    const store = new ProjectSync({ CODEXHOST_DATA_DIR: path.join(root, "state") }, true);
+    await expect(
+      store.prepareLocalWorkspace(project, path.join(root, "another.git")),
+    ).rejects.toThrow("不一致");
+    expect(await readFile(path.join(project, "README.md"), "utf8")).toBe("test\n");
+  });
+
+  it("cleans up a failed clone and allows retry", async () => {
+    const { root, remote } = await fixture();
+    const store = new ProjectSync({ CODEXHOST_DATA_DIR: path.join(root, "state") }, true);
+    const target = path.join(root, "retry");
+    await expect(
+      store.prepareLocalWorkspace(target, path.join(root, "absent.git")),
+    ).rejects.toThrow();
+    await expect(stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await store.prepareLocalWorkspace(target, remote)).cloned).toBe(true);
   });
 });

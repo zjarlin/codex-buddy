@@ -1,3 +1,7 @@
+import {
+  LOCAL_WORKSPACE_PREPARE_METHOD,
+  localWorkspacePrepareParamsSchema,
+} from "@codexhost/shared-contracts";
 import { readSshTurnActions } from "./ssh-auto-model-routes.js";
 import { TurnActions, type TurnActionContext } from "./turn-actions.js";
 import { actionThreadTurns, actionGitFeatures } from "./turn-action-context.js";
@@ -2457,6 +2461,25 @@ export class AppServerHost {
       request.method === THREAD_FOLDERS_SET_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleThreadFoldersSettingsRequest(request));
+      return;
+    }
+    if (request.method === LOCAL_WORKSPACE_PREPARE_METHOD) {
+      this.#dispatchDesktopReply(request, async () => {
+        const parsed = localWorkspacePrepareParamsSchema.safeParse(request.params);
+        if (!parsed.success) {
+          await this.#writer.json(rpcError(request, -32602, "Invalid local workspace params"));
+          return;
+        }
+        try {
+          const result = await this.#projectSync.prepareLocalWorkspace(
+            parsed.data.path,
+            parsed.data.remote,
+          );
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 2000)));
+        }
+      });
       return;
     }
     if (

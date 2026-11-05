@@ -518,6 +518,9 @@ export class ProjectSyncPeer {
   bind(remote: string, folder: string): Promise<ProjectSyncSnapshot> {
     return this.#store.bind(remote, folder).then(() => this.inspect());
   }
+  prepareLocalWorkspace(folder: string, remote?: string) {
+    return this.#store.prepareLocalWorkspace(folder, remote);
+  }
   clone(remote: string, parent: string): Promise<ProjectSyncSnapshot> {
     return this.#store.clone(remote, parent).then(() => this.inspect());
   }

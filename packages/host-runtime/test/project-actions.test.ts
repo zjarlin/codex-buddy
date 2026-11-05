@@ -2,15 +2,68 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECT_TERMINAL_OPEN_METHOD,
   PROJECT_WORKSPACE_OPEN_METHOD,
+  LOCAL_WORKSPACE_PREPARE_METHOD,
 } from "@codexhost/shared-contracts";
 
 import * as terminal from "../src/thread-terminal.js";
 import * as workspace from "../src/thread-workspace.js";
+import { ProjectSyncPeer } from "../src/project-sync-peer.js";
 import { createFixture, requestId, stopFixture, writeRequest } from "./app-server-host-fixture.js";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("project actions", () => {
+  it("prepares a local workspace through Host RPC without forwarding to Codex", async () => {
+    const prepare = vi
+      .spyOn(ProjectSyncPeer.prototype, "prepareLocalWorkspace")
+      .mockResolvedValue({ path: "/local/project", cloned: true });
+    const fixture = createFixture();
+    const officialWrite = vi.fn();
+    fixture.official.stdin.on("data", officialWrite);
+    try {
+      writeRequest(fixture.desktopInput, {
+        id: 1,
+        method: LOCAL_WORKSPACE_PREPARE_METHOD,
+        params: { path: "/local/project", remote: "https://example.test/project.git" },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 1)),
+      ).resolves.toMatchObject({ result: { path: "/local/project", cloned: true } });
+      expect(prepare).toHaveBeenCalledWith("/local/project", "https://example.test/project.git");
+      writeRequest(fixture.desktopInput, {
+        id: 2,
+        method: LOCAL_WORKSPACE_PREPARE_METHOD,
+        params: { path: "/local/project", command: "unexpected" },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 2)),
+      ).resolves.toMatchObject({ error: { code: -32602 } });
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(officialWrite).not.toHaveBeenCalled();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
+  it("returns preparation failures instead of reporting a ready workspace", async () => {
+    vi.spyOn(ProjectSyncPeer.prototype, "prepareLocalWorkspace").mockRejectedValue(
+      new Error("clone failed"),
+    );
+    const fixture = createFixture();
+    try {
+      writeRequest(fixture.desktopInput, {
+        id: 1,
+        method: LOCAL_WORKSPACE_PREPARE_METHOD,
+        params: { path: "/local/project" },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 1)),
+      ).resolves.toMatchObject({ error: { code: -32094, message: "clone failed" } });
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("routes terminal and VS Code project requests to the local Host", async () => {
     const openTerminal = vi.fn(async () => ({
       workspace: "/repo",

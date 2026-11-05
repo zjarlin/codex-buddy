@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { projectSyncRemoteSchema, type ProjectSyncSnapshot } from "@codexhost/shared-contracts";
+import {
+  projectSyncRemoteSchema,
+  type LocalWorkspacePrepareResult,
+  type ProjectSyncSnapshot,
+} from "@codexhost/shared-contracts";
 import { normalizeGitRemote, repositoryDirectoryName } from "./git-remote.js";
 
 const execute = promisify(execFile);
@@ -288,6 +292,46 @@ export class ProjectSync {
       state.peers = state.peers.filter((peer) => peer.id !== peerId);
       await this.save(state);
       return this.snapshot(state);
+    });
+  }
+
+  /** 准备用户指定的完整本地路径；已有仓库只校验，不拉取或改写工作区。 */
+  prepareLocalWorkspace(folder: string, remote?: string): Promise<LocalWorkspacePrepareResult> {
+    return this.serialized(async () => {
+      if (!path.isAbsolute(folder) || /[\x00-\x1f]/u.test(folder)) {
+        throw new Error("请输入本机工作区的绝对路径。");
+      }
+      const target = path.resolve(folder);
+      const expected = remote === undefined ? undefined : this.remote(remote);
+      let existing;
+      try {
+        existing = await lstat(target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      let cloned = false;
+      if (!existing) {
+        if (!expected) throw new Error("目录不存在，请填写 Git 仓库地址以自动克隆。");
+        const parent = path.dirname(target);
+        await mkdir(parent, { recursive: true });
+        // 排他创建目标目录；失败时只删除本次创建的内容，不清理其他进程的目录。
+        await mkdir(target);
+        try {
+          await this.git(parent, "clone", "--", expected, target);
+          cloned = true;
+        } catch (error) {
+          await rm(target, { recursive: true, force: true });
+          throw error;
+        }
+      }
+      if (!(await stat(target)).isDirectory()) throw new Error("本机工作区不是目录。");
+      const root = await this.git(target, "rev-parse", "--show-toplevel");
+      const canonical = await realpath(target);
+      if ((await realpath(root)) !== canonical) throw new Error("请选择 Git 仓库根目录。");
+      if (expected && !(await this.matches(target, expected))) {
+        throw new Error("已有目录的 Git origin 与指定仓库不一致，未修改目录。");
+      }
+      return { path: canonical, cloned };
     });
   }
 

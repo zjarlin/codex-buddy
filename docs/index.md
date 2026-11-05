@@ -153,7 +153,7 @@
 | [`product/emergency-provider.md`](product/emergency-provider.md) | 本地与远程 Host 的多网关配置、目录同步、自动故障接续，以及公司网关按 Git 仓库统计项目用量。 |
 | [`product/buddy-auto-router.md`](product/buddy-auto-router.md) | 单模型路由与设置表单、模型目录热更新、持久 Pin、Auto routed 卡片和 System One 回合动作。 |
 | [`product/translate-cards.md`](product/translate-cards.md) | 模型回答及进度消息的自动翻译展示、网关接口与 SSH 会话兼容。 |
-| [`product/project-sync.md`](product/project-sync.md) | 独立项目清单、设备配对中继与私有 Git 清单同步。 |
+| [`product/project-sync.md`](product/project-sync.md) | 项目清单同步、远程聊天切回本地、目录克隆与上下文复用。 |
 | [`product/persistent-local-host.md`](product/persistent-local-host.md) | 本地工作区常驻 Host：Desktop 重启不结束后台 Host，不需要 SSH 或反向组网；启用、停止、升级和文件边界。 |
 | [`product/remote-shared-projects.md`](product/remote-shared-projects.md) | SSH 主机共享项目发现、身份隔离与原生项目／会话恢复。 |
 | [`product/project-actions.md`](product/project-actions.md) | 项目快捷 URL 与启停脚本、项目分类 Tab、前缀规则、会话文件夹与在文件夹中新建会话，以及 Doubao 桌面客户端入口。 |

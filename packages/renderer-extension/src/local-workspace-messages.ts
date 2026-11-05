@@ -1,0 +1,51 @@
+export function localWorkspaceMessages(locale: string) {
+  return locale === "zh-CN"
+    ? {
+        switch: "切回本地",
+        title: "在本地续接聊天",
+        path: "本地工作区绝对路径",
+        remote: "Git 仓库地址（目录不存在时必填）",
+        start: "准备目录并续接",
+        close: "关闭",
+        details:
+          "使用本机 Codex 新建聊天，带入消息和工具结果。远程未提交文件、附件及 Agent 内部状态不会复制；远程任务不会自动停止。",
+        loading: "正在读取远程聊天上下文…",
+        working: "正在准备本地目录和聊天…",
+        missing: "无法读取远程聊天，也没有可用缓存。请恢复连接后重试。",
+        cached: "远端不可用，使用本机缓存",
+        fresh: "已读取远程聊天",
+        partial: "较长历史仅保留最近部分",
+        complete: "已带入上下文，可在本地继续。",
+        open: "打开本地聊天",
+        failed: "操作失败：",
+        localMissing: "本地 Host 不可用。",
+        cacheFailed: "无法保存离线缓存：",
+        uncertain: "创建请求结果尚未确认，请先检查本地聊天列表，避免重复创建。",
+        created: "本地聊天已创建。若后续步骤失败，请打开它核对结果，避免重复创建或发送。",
+      }
+    : {
+        switch: "Continue locally",
+        title: "Continue this chat locally",
+        path: "Absolute local workspace path",
+        remote: "Git repository URL (required if the directory is missing)",
+        start: "Prepare and continue",
+        close: "Close",
+        details:
+          "Create a local Codex chat with messages and tool results. Uncommitted remote files, attachments and native agent state are not copied. Remote tasks are not stopped.",
+        loading: "Reading remote conversation context…",
+        working: "Preparing local workspace and chat…",
+        missing:
+          "Remote history is unavailable and there is no cached context. Reconnect and try again.",
+        cached: "Remote unavailable; using local cache",
+        fresh: "Remote history loaded",
+        partial: "Long history: only the most recent part is included",
+        complete: "Context transferred. Continue in the local chat.",
+        open: "Open local chat",
+        failed: "Operation failed: ",
+        localMissing: "Local Host is unavailable.",
+        cacheFailed: "Could not save offline cache: ",
+        uncertain: "Creation result is unknown. Check the local chat list before creating again.",
+        created:
+          "Local chat created. If a later step fails, open it to check the result before creating or sending again.",
+      };
+}

@@ -82,8 +82,9 @@ Existing Harness integration and Desktop update audit skills remain applicable t
 
 ## Testing & Completion
 
+- **Mac mini 构建禁令**：Mac mini 只进行代码编辑、轻量静态检查和 Git 操作，禁止本地编译、构建、打包、镜像构建，以及会隐式构建的测试、类型检查或开发启动命令。完成改动后直接提交并推送项目约定的远端分支，由 182 算力上的 TeamCity 自动构建；本地构建不是推送前置条件。本节及 skill 中的本地构建要求在 Mac mini 上均交由远端流水线执行；流水线未触发或失败时检查远端配置和日志，不回退到本机构建。构建结果以对应提交的远端流水线为准。
 - Choose build and validation commands from `package.json`, not a copied command catalog. For focused tests, use the repository configuration in `tests/vitest.config.js` or `tests/e2e/playwright.config.js`, and the owning `Cargo.toml` for Rust test features.
-- To build and launch from source, run `npm start` at the repository root; `npm start -- --no-build` reuses existing artifacts. On macOS/Windows this stops running Codex Desktop processes before launch. Use it when launching is intended, not as a routine validation command; implementation is in `tools/dev-desktop/run.mjs`.
+- On machines permitted to build, run `npm start` at the repository root to build and launch from source. On Mac mini, an explicitly requested launch must reuse existing artifacts with `npm start -- --no-build`. On macOS/Windows this stops running Codex Desktop processes before launch. Use it when launching is intended, not as a routine validation command; implementation is in `tools/dev-desktop/run.mjs`.
 - 安装包的构建与发布统一交给 `.github/workflows/release-packages.yml`。完成仓库改动后执行相应验证，默认不再手动打包或通过 SSH 安装；安装与重启按用户明确要求执行。
 - 安装包交付以正式 GitHub Release 为准；客户端通过应用内自动更新获取新版，流水线不推送安装包到任何机器。发布状态以流水线实际执行结果为准，不把本地构建成功当作发布完成。
 - Small, low-risk changes do not require tests. For high-risk or cross-package changes, or when explicitly requested, add focused tests for changed behavior and boundary conditions; do not run full test suites by default.

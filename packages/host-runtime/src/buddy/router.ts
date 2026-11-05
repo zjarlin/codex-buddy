@@ -31,9 +31,9 @@ import {
 } from "./classification.js";
 import { AutomaticRecovery } from "./recovery.js";
 import { NativeContextCompaction } from "./context-compaction.js";
-import { InterruptedConversations } from "./continuation.js";
+import { InterruptedConversations, type InterruptedTurnClassifierInput } from "./continuation.js";
 import { GitPushBypassScores, gitPushSkills, gitWorkflowGuidance } from "./git-push-bypass.js";
-import { createJevClient, type SystemOneCommand } from "./judgment.js";
+import { createJevClient, judgeInterruptedTurn, type SystemOneCommand } from "./judgment.js";
 import type { TypeSafeClient } from "@codexhost/jev";
 
 const quote = (text: string): string => `'${text.replaceAll("'", "'\"'\"'")}'`;
@@ -339,6 +339,23 @@ export class BuddyRouter {
   async privateMode(): Promise<boolean> {
     await this.#loadSettings();
     return this.#settings.privateMode;
+  }
+
+  /**
+   * 中断队列的结尾兜底：只有配置了 JEV 连接、开启 JEV 且非隐私模式时才询问 Laya。
+   * 判断失败返回 null，让调用方保留官方 Turn 状态。
+   */
+  async classifyInterruptedTurn(input: InterruptedTurnClassifierInput): Promise<boolean | null> {
+    try {
+      await this.#loadSettings();
+      if (this.#settings.privateMode || !this.#settings.jev) return null;
+      await this.#loadJevKey();
+      if (!this.#jev) return null;
+      return await judgeInterruptedTurn(this.#jev, input);
+    } catch (error) {
+      this.options.diagnose(error);
+      return null;
+    }
   }
 
   get hasActiveWork(): boolean {

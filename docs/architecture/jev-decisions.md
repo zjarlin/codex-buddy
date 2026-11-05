@@ -18,6 +18,8 @@ Host Runtime 的 `packages/host-runtime/src/buddy/judgment.ts` 是唯一 System 
 
 候选 CLI 入口来自项目清单（`inspectProject` 的 `commands` 加上 `pwd` / `ls -la` 等内建只读入口），由 Host 作为 `commands` 发给 System One。命中后 Host 只执行清单里已有的调用字符串，不把用户原文拼进命令。为避免过长选项列表拖累本地小模型，候选上限为 12 个。
 
+中断队列另有一条独立判断：`judgeInterruptedTurn(client, evidence)` 固定使用 `model: "laya"`，只读取最近 3 天更新、且最新 Turn 不是明确 completed/succeeded 的会话。输入只包含会话标题、Turn 状态、最后一个用户请求和最后一条 Assistant 回复的尾部（各截断到 2k / 6k 字符），以及最后一个 item 的类型与是否仍有未完成工具调用；不发送整段历史。高置信 `interrupted` 才补入队列，`completed` 排除，`unknown`、低置信或调用失败时回退官方 Turn 状态；隐私模式或关闭 `settings.jev` 时不调用。
+
 承接上文的判断分两阶段：首轮只发当前请求；只有 System One 判定为承接上文时才读取有界历史并复评一次，避免每个普通回合都付出历史读取成本。
 
 接线语义：

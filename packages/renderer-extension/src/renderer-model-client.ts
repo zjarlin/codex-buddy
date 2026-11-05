@@ -457,6 +457,8 @@ export interface RendererThreadTurnState {
   running: boolean;
   status: RendererThreadTurnStatus | null;
   turnId: string | null;
+  /** 最新回合的原始状态；用于区分 unknown 与明确 completed。 */
+  turnStatus?: string | null;
 }
 
 type NativeGitWorkflowState = {
@@ -502,9 +504,12 @@ function nativeThreadTurnStatus(
     case "cancelled":
       return "cancelled";
     case "inProgress": {
-      // 进程退出等情况可能只留下未结束回合；须由原生会话状态确认已经停下。
+      // 进程退出等情况可能只留下未结束回合；官方对非 active 会话同样投影为中断。
+      // systemError 等异常状态也可能残留 inProgress，不能只看 idle / notLoaded。
       const state = nativeThreadStatusType(thread);
-      return state === "idle" || state === "notLoaded" ? "interrupted" : null;
+      return state === "idle" || state === "notLoaded" || state === "systemError"
+        ? "interrupted"
+        : null;
     }
     default:
       return null;
@@ -1531,12 +1536,13 @@ export function createRendererModelClient(
     readThreadTurnState: async (threadId: string) => {
       const { thread, turn } = await readNativeThreadTurn(threadId);
       if (nativeThreadStatusType(thread) === "active") {
-        return { running: true, status: null, turnId: null };
+        return { running: true, status: null, turnId: null, turnStatus: null };
       }
       return {
         running: false,
         status: nativeThreadTurnStatus(thread, turn),
         turnId: typeof turn?.id === "string" ? turn.id : null,
+        turnStatus: typeof turn?.status === "string" ? turn.status : null,
       };
     },
     buddyContinue: async (threadId: string, turnId: string, model?: string) => {

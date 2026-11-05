@@ -573,4 +573,58 @@ describe("interrupted event queue", () => {
     expect(f.queue.list("local")).toHaveLength(1);
     expect(f.queue.problem("local")).toBe("");
   });
+
+  it("resumes a Laya-classified ambiguous entry whose native status is not mapped", async () => {
+    const f = fixture();
+    f.client.buddyInterrupted.mockResolvedValueOnce({
+      threads: [
+        {
+          threadId: "one",
+          turnId: "one-turn",
+          title: "one",
+          owner: "codex",
+          status: "interrupted",
+        },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    await f.queue.importHistory("local");
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "one-turn",
+      turnStatus: "unknown",
+    });
+    await f.queue.resume(f.first());
+    expect(f.client.buddyContinue).toHaveBeenCalledWith("one", "one-turn");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("drops a Laya-classified entry once the native turn is clearly completed", async () => {
+    const f = fixture();
+    f.client.buddyInterrupted.mockResolvedValueOnce({
+      threads: [
+        {
+          threadId: "one",
+          turnId: "one-turn",
+          title: "one",
+          owner: "codex",
+          status: "interrupted",
+        },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    await f.queue.importHistory("local");
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "one-turn",
+      turnStatus: "completed",
+    });
+    await expect(f.queue.resume(f.first())).rejects.toThrow("已运行或最新回合已改变");
+    expect(f.queue.list("local")).toEqual([]);
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+  });
 });

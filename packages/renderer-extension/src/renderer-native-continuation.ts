@@ -69,7 +69,13 @@ export function createNativeContinuation(options: {
     }
     assertNativeCodexThread(value.thread, threadId);
     const activity = record(value.thread.status).type;
-    if (activity !== "active" && activity !== "idle" && activity !== "notLoaded") {
+    // 只接受官方已知状态；无法识别时不能安全地假定会话已经停下。
+    if (
+      activity !== "active" &&
+      activity !== "idle" &&
+      activity !== "notLoaded" &&
+      activity !== "systemError"
+    ) {
       throw new Error("无法确认会话运行状态，请刷新后重试。");
     }
     return { ...value, thread: value.thread, running: activity === "active" };

@@ -879,6 +879,7 @@ export class AppServerHost {
     (method, params) => this.#requestOfficial(method, params),
     (id) => this.#activeOfficialTurns.has(id),
     async () => !(await this.#buddy?.privateMode()),
+    async (input) => (await this.#buddy?.classifyInterruptedTurn(input)) ?? null,
   );
   #privateChat: BuddyPrivateChat | undefined;
   #translator: BuddyTranslator | undefined;

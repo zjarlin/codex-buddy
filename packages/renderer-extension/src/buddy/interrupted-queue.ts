@@ -442,7 +442,13 @@ export function createInterruptedQueue(options: {
         throw failure;
       }
       ensureCurrent();
-      if (state.running || state.turnId !== entry.turnId || !interrupted(state.status)) {
+      // Laya 兜底可能补入官方状态不明确的回合；只排除明确完成或已换回合的条目。
+      const settled =
+        state.turnStatus === "completed" ||
+        state.turnStatus === "succeeded" ||
+        (state.turnStatus === undefined && state.status === null) ||
+        (state.status !== null && !interrupted(state.status));
+      if (state.running || state.turnId !== entry.turnId || settled) {
         remove(entry, "completed");
         throw new Error("会话已运行或最新回合已改变，已移出中断队列。");
       }

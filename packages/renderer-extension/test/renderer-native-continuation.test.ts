@@ -425,4 +425,35 @@ describe("native recovery on connections without Buddy recovery RPCs", () => {
       clients.dispose();
     }
   });
+
+  it("treats a non-active thread with a leftover inProgress turn as interrupted", async () => {
+    const f = fixture();
+    f.send.mockImplementation(async (method, params) => {
+      if (method === BUDDY_INTERRUPTED_METHOD) throw missing(method);
+      if (method === "thread/list") return { data: [{ id: "thread" }], nextCursor: null };
+      if (method === "thread/read")
+        return { thread: { ...metadata("thread", "systemError"), turns: [] } };
+      if (method === "thread/turns/list") return { data: [{ id: "turn", status: "inProgress" }] };
+      return f.original(method, params);
+    });
+    await expect(f.client.buddyInterrupted()).resolves.toEqual({
+      threads: [
+        {
+          threadId: "thread",
+          turnId: "turn",
+          title: "Title thread",
+          status: "interrupted",
+          owner: "codex",
+        },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    const client = createRendererModelClient([{ sendRequest: f.send }]);
+    if (!client?.readThreadTurnState) throw new Error("Fixture recovery client unavailable");
+    await expect(client.readThreadTurnState("thread")).resolves.toMatchObject({
+      status: "interrupted",
+      turnStatus: "inProgress",
+    });
+  });
 });

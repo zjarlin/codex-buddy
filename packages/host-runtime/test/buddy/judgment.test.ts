@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BuddyRouter } from "../../src/buddy/router.js";
 import { TypeSafeClient } from "@codexhost/jev";
-import { createJevClient, judgeWithJev } from "../../src/buddy/judgment.js";
+import { createJevClient, judgeInterruptedTurn, judgeWithJev } from "../../src/buddy/judgment.js";
 
 function client(body: unknown) {
   const fetch = vi.fn(async () => Response.json(body, { status: 200 }));
@@ -73,6 +73,25 @@ function response(overrides: Record<string, unknown> = {}) {
         confidence: 0.9,
       },
       ...overrides,
+    },
+    usage: { input_tokens: 100, output_tokens: 0 },
+  };
+}
+
+function interruptedResponse(choice: "interrupted" | "completed" | "unknown", confidence: number) {
+  return {
+    model: "laya",
+    answers: {
+      outcome: {
+        type: "choice",
+        choice,
+        probabilities: {
+          interrupted: choice === "interrupted" ? confidence : (1 - confidence) / 2,
+          completed: choice === "completed" ? confidence : (1 - confidence) / 2,
+          unknown: choice === "unknown" ? confidence : (1 - confidence) / 2,
+        },
+        confidence,
+      },
     },
     usage: { input_tokens: 100, output_tokens: 0 },
   };
@@ -319,5 +338,67 @@ describe("JEV API key persistence", () => {
       router.close();
       await rm(home, { recursive: true, force: true });
     }
+  });
+
+  it("asks Laya to classify the ending of a recent turn", async () => {
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        model?: string;
+        state?: { assistantTail?: string; user?: string; pendingTool?: boolean };
+      };
+      expect(body.model).toBe("laya");
+      expect(body.state?.assistantTail).toBe("我先检查一下构建日志");
+      expect(body.state?.user).toBe("修复构建");
+      expect(body.state?.pendingTool).toBe(true);
+      return Response.json(interruptedResponse("interrupted", 0.92), { status: 200 });
+    });
+    const c = new TypeSafeClient({
+      apiKey: "test-only-key",
+      baseURL: "https://jev.invalid",
+      logLevel: "off",
+      retry: { maxRetries: 0 },
+      fetch,
+    });
+    await expect(
+      judgeInterruptedTurn(c, {
+        threadId: "thread",
+        turnId: "turn",
+        title: "Build",
+        turnStatus: "inProgress",
+        userText: "修复构建",
+        assistantText: "我先检查一下构建日志",
+        lastItemType: "commandExecution",
+        pendingTool: true,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("returns false for a confident completed ending and null below the threshold", async () => {
+    const completed = new TypeSafeClient({
+      apiKey: "test-only-key",
+      baseURL: "https://jev.invalid",
+      logLevel: "off",
+      retry: { maxRetries: 0 },
+      fetch: vi.fn(async () => Response.json(interruptedResponse("completed", 0.9))),
+    });
+    const uncertain = new TypeSafeClient({
+      apiKey: "test-only-key",
+      baseURL: "https://jev.invalid",
+      logLevel: "off",
+      retry: { maxRetries: 0 },
+      fetch: vi.fn(async () => Response.json(interruptedResponse("interrupted", 0.55))),
+    });
+    const evidence = {
+      threadId: "thread",
+      turnId: "turn",
+      title: "Build",
+      turnStatus: "inProgress",
+      userText: "",
+      assistantText: "done",
+      lastItemType: "agentMessage",
+      pendingTool: false,
+    };
+    await expect(judgeInterruptedTurn(completed, evidence)).resolves.toBe(false);
+    await expect(judgeInterruptedTurn(uncertain, evidence)).resolves.toBeNull();
   });
 });

@@ -89,6 +89,60 @@ export interface JudgmentInput {
 // JEV 经网关转发的实测延迟超过四秒，沿用 SDK 的十秒单次预算且不重试。
 const timeoutMs = 10_000;
 
+/** 最近会话结尾的判定证据；只携带片段，不传整段历史。 */
+export interface InterruptedTurnEvidence {
+  threadId: string;
+  turnId: string;
+  title: string;
+  turnStatus: string;
+  userText: string;
+  assistantText: string;
+  lastItemType: string | null;
+  pendingTool: boolean;
+}
+
+/**
+ * 用 Laya 判断最近一个未明确完成的回合是否真的停在请求中途。
+ * 返回 true/false 表示高置信结论，null 表示证据不足或判断不可用。
+ */
+export async function judgeInterruptedTurn(
+  client: TypeSafeClient,
+  evidence: InterruptedTurnEvidence,
+  options: { signal?: AbortSignal } = {},
+): Promise<boolean | null> {
+  const result = await evaluateDecisions(
+    client,
+    {
+      state: {
+        title: evidence.title.slice(0, 200),
+        turnStatus: evidence.turnStatus,
+        lastItemType: evidence.lastItemType,
+        pendingTool: evidence.pendingTool,
+        user: evidence.userText.slice(-2_000),
+        assistantTail: evidence.assistantText.slice(-6_000),
+      },
+      questions: {
+        outcome: choice("最后一条 Assistant 回复是否在用户请求完成前被中断或截断？", {
+          interrupted:
+            "回复明显未完成：说到一半、承诺继续但没有下文、工具调用悬空，或用户请求尚未交付",
+          completed: "回复已给出完整答案或明确结束，用户只是在等待新的输入",
+          unknown: "证据不足，无法判断",
+        }),
+      },
+      // 用户指定用本地 Laya 判断结尾语义，不跟随界面上的通用 System One 模型。
+      model: "laya",
+    },
+    { outcome: { automatic: 0.8, review: 0.6 } },
+    { timeout: timeoutMs, ...(options.signal ? { signal: options.signal } : {}) },
+  );
+  const decision = result.decisions.outcome;
+  if (decision.status !== "automatic") return null;
+  const answer = result.answers.outcome.choice;
+  if (answer === "interrupted") return true;
+  if (answer === "completed") return false;
+  return null;
+}
+
 const policies = {
   route: { automatic: 0.85, review: 0.6 },
   complexity: { automatic: 0.9, review: 0.7 },

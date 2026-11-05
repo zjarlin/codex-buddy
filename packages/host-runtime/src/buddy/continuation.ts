@@ -10,28 +10,112 @@ const THREAD_LIST_PAGE_SIZE = 100;
 const MAX_THREAD_LIST_PAGES = 20;
 const MAX_THREADS = 2_000;
 const READ_CONCURRENCY = 4;
+// Laya 只分析最近活跃的会话，避免把长期历史全部送到网关。
+const RECENT_ACTIVITY_SECONDS = 3 * 24 * 60 * 60;
+const MAX_CLASSIFICATIONS = 64;
+const VERDICT_TTL_MS = 30 * 60_000;
+const FAILED_VERDICT_TTL_MS = 60_000;
+
+const TOOL_ITEM_TYPES = new Set([
+  "commandExecution",
+  "fileChange",
+  "mcpToolCall",
+  "dynamicToolCall",
+  "collabAgentToolCall",
+  "functionCall",
+]);
+const TERMINAL_ITEM_STATUSES = new Set([
+  "completed",
+  "succeeded",
+  "failed",
+  "declined",
+  "cancelled",
+  "interrupted",
+]);
+
+type RecoverableStatus = BuddyInterrupted["threads"][number]["status"];
+
+/** 交给 Laya 的结尾证据；只包含最后一个回合的片段。 */
+export interface InterruptedTurnClassifierInput {
+  threadId: string;
+  turnId: string;
+  title: string;
+  turnStatus: string;
+  userText: string;
+  assistantText: string;
+  lastItemType: string | null;
+  pendingTool: boolean;
+}
+
+export type InterruptedTurnClassifier = (
+  input: InterruptedTurnClassifierInput,
+) => Promise<boolean | null>;
 
 interface ThreadMetadata {
   id: string;
+  title: string;
+  updatedAt: number | null;
 }
 
-function recoverableStatus(
-  thread: Record<string, unknown>,
-  turn: Record<string, unknown>,
-): BuddyInterrupted["threads"][number]["status"] | null {
+function explicitStatus(turn: Record<string, unknown>): RecoverableStatus | null {
   switch (turn.status) {
     case "failed":
     case "interrupted":
     case "cancelled":
       return turn.status;
-    case "inProgress": {
-      // 进程退出等情况可能只留下未结束回合；须由原生会话状态确认已经停下。
-      const state = object(thread.status).type;
-      return state === "idle" || state === "notLoaded" ? "interrupted" : null;
-    }
     default:
       return null;
   }
+}
+
+// 官方只在读取时把非 active 会话里残留的 inProgress 回合投影为 interrupted；
+// 进程退出后不一定还会发送 turn/completed，因此这里按同一语义兜底。
+const STOPPED_THREAD_STATUSES = new Set(["idle", "notLoaded", "systemError"]);
+
+function staleInProgress(thread: Record<string, unknown>, turn: Record<string, unknown>): boolean {
+  const state = object(thread.status).type;
+  return (
+    turn.status === "inProgress" && typeof state === "string" && STOPPED_THREAD_STATUSES.has(state)
+  );
+}
+
+function recoverableStatus(
+  thread: Record<string, unknown>,
+  turn: Record<string, unknown>,
+): RecoverableStatus | null {
+  return explicitStatus(turn) ?? (staleInProgress(thread, turn) ? "interrupted" : null);
+}
+
+function threadTitle(thread: Record<string, unknown>, fallback: string): string {
+  const name = typeof thread.name === "string" ? thread.name : "";
+  const preview = typeof thread.preview === "string" ? thread.preview : "";
+  return (name || preview || fallback).slice(0, 160);
+}
+
+function turnText(turn: Record<string, unknown>) {
+  const items = Array.isArray(turn.items) ? turn.items.map(object) : [];
+  const assistantText = (
+    items
+      .filter((item) => item.type === "agentMessage" && typeof item.text === "string")
+      .map((item) => item.text as string)
+      .filter((text) => text.trim().length > 0)
+      .at(-1) ?? ""
+  ).slice(-6_000);
+  const userText = (
+    items
+      .filter((item) => item.type === "userMessage")
+      .flatMap((item) => (Array.isArray(item.content) ? item.content.map(object) : []))
+      .filter((content) => content.type === "text" && typeof content.text === "string")
+      .map((content) => content.text as string)
+      .at(-1) ?? ""
+  ).slice(-2_000);
+  const last = items.at(-1);
+  const lastItemType = typeof last?.type === "string" ? last.type : null;
+  const pendingTool =
+    lastItemType !== null &&
+    TOOL_ITEM_TYPES.has(lastItemType) &&
+    !TERMINAL_ITEM_STATUSES.has(String(last?.status));
+  return { userText, assistantText, lastItemType, pendingTool };
 }
 
 async function mapWithConcurrency<T, R>(
@@ -56,10 +140,12 @@ async function mapWithConcurrency<T, R>(
 
 export class InterruptedConversations {
   readonly #pending = new Set<string>();
+  readonly #verdicts = new Map<string, { verdict: boolean | null; at: number }>();
   constructor(
     private readonly request: NativeRequest,
     private readonly busy: (id: string) => boolean,
     private readonly allowed: () => Promise<boolean>,
+    private readonly classifier?: InterruptedTurnClassifier,
   ) {}
 
   async #checkAllowed(): Promise<void> {
@@ -68,17 +154,23 @@ export class InterruptedConversations {
 
   // 只读取会话元数据和最新回合：`thread/read includeTurns` 会物化整段历史，
   // 单个大会话可能超过内部请求超时，进而让整轮扫描失败。分页接口按需返回单个
-  // 回合，默认不加载 items；旧版不支持分页时回退到完整历史读取。
-  async #read(threadId: string) {
+  // 回合，默认不加载 items；只有需要 Laya 判断结尾时才读取 full items。
+  async #read(threadId: string, options: { items?: boolean } = {}) {
     const metadata = result(await this.request("thread/read", { threadId, includeTurns: false }));
     const thread = object(metadata.thread);
     const embedded = Array.isArray(thread.turns) ? thread.turns : [];
-    if (embedded.length > 0) return { thread, turn: object(embedded.at(-1)) };
+    const embeddedTurn = embedded.length > 0 ? object(embedded.at(-1)) : null;
+    if (
+      embeddedTurn &&
+      (!options.items || (Array.isArray(embeddedTurn.items) && embeddedTurn.items.length > 0))
+    ) {
+      return { thread, turn: embeddedTurn };
+    }
     const response = await this.request("thread/turns/list", {
       threadId,
       limit: 1,
       sortDirection: "desc",
-      itemsView: "notLoaded",
+      itemsView: options.items ? "full" : "notLoaded",
     });
     const error = object(response.error);
     const unsupported =
@@ -116,7 +208,17 @@ export class InterruptedConversations {
       for (const entry of data) {
         const metadata = object(entry);
         if (typeof metadata.id !== "string") continue;
-        threads.push({ id: metadata.id });
+        const updatedAt =
+          typeof metadata.updatedAt === "number" && Number.isFinite(metadata.updatedAt)
+            ? metadata.updatedAt
+            : null;
+        const title =
+          typeof metadata.name === "string"
+            ? metadata.name
+            : typeof metadata.preview === "string"
+              ? metadata.preview
+              : "";
+        threads.push({ id: metadata.id, title, updatedAt });
         if (threads.length > MAX_THREADS) {
           throw new Error("thread/list exceeded the recovery scan item limit");
         }
@@ -133,6 +235,49 @@ export class InterruptedConversations {
       cursor = page.nextCursor;
     }
     throw new Error("thread/list exceeded the recovery scan page limit");
+  }
+
+  async #classify(
+    threadId: string,
+    turnId: string,
+    thread: Record<string, unknown>,
+    turn: Record<string, unknown>,
+  ): Promise<boolean | null> {
+    if (!this.classifier) return null;
+    const key = `${threadId}\u0000${turnId}`;
+    const cached = this.#verdicts.get(key);
+    if (
+      cached &&
+      Date.now() - cached.at < (cached.verdict === null ? FAILED_VERDICT_TTL_MS : VERDICT_TTL_MS)
+    ) {
+      return cached.verdict;
+    }
+    let verdict: boolean | null = null;
+    try {
+      let evidenceTurn = turn;
+      const items = Array.isArray(turn.items) ? turn.items : [];
+      if (items.length === 0) {
+        const full = await this.#read(threadId, { items: true });
+        if (object(full.turn).id !== turnId) return null;
+        evidenceTurn = full.turn;
+      }
+      verdict = await this.classifier({
+        threadId,
+        turnId,
+        title: threadTitle(thread, threadId),
+        turnStatus: typeof turn.status === "string" ? turn.status : "",
+        ...turnText(evidenceTurn),
+      });
+    } catch {
+      // 判断失败不能阻断其余会话；调用方回退到官方状态。
+      verdict = null;
+    }
+    this.#verdicts.set(key, { verdict, at: Date.now() });
+    if (this.#verdicts.size > 500) {
+      const oldest = this.#verdicts.keys().next().value;
+      if (oldest !== undefined) this.#verdicts.delete(oldest);
+    }
+    return verdict;
   }
 
   async archiveCompleted(threadId: string): Promise<ThreadArchiveCompletedResult> {
@@ -177,6 +322,8 @@ export class InterruptedConversations {
 
   async list(): Promise<BuddyInterrupted> {
     const candidates = await this.#listThreads();
+    const cutoff = Math.floor(Date.now() / 1000) - RECENT_ACTIVITY_SECONDS;
+    let classifications = 0;
     const entries = await mapWithConcurrency(candidates, READ_CONCURRENCY, async (metadata) => {
       if (this.busy(metadata.id)) {
         return { kind: "running" as const, threadId: metadata.id };
@@ -187,18 +334,34 @@ export class InterruptedConversations {
           return { kind: "running" as const, threadId: metadata.id };
         }
         if (typeof turn.id !== "string") return { kind: "done" as const };
-        const status = recoverableStatus(thread, turn);
-        if (status === null) return { kind: "done" as const };
-        return {
+        const interrupted = (status: RecoverableStatus) => ({
           kind: "interrupted" as const,
           thread: {
             threadId: metadata.id,
-            turnId: turn.id,
-            title: String(thread.name || thread.preview || metadata.id).slice(0, 160),
+            turnId: turn.id as string,
+            title: threadTitle(thread, metadata.title || metadata.id),
             status,
             owner: "codex" as const,
           } satisfies BuddyInterrupted["threads"][number],
-        };
+        });
+        const explicit = explicitStatus(turn);
+        if (explicit !== null) return interrupted(explicit);
+        // 官方明确完成的回合不送 Laya；其余状态才需要判断结尾语义。
+        if (turn.status === "completed" || turn.status === "succeeded") {
+          return { kind: "done" as const };
+        }
+        const updatedAt =
+          metadata.updatedAt ?? (typeof thread.updatedAt === "number" ? thread.updatedAt : null);
+        const recent = updatedAt === null || updatedAt >= cutoff;
+        const stale = staleInProgress(thread, turn);
+        if (!this.classifier || !recent || classifications >= MAX_CLASSIFICATIONS) {
+          return stale ? interrupted("interrupted") : { kind: "done" as const };
+        }
+        classifications += 1;
+        const verdict = await this.#classify(metadata.id, turn.id, thread, turn);
+        if (verdict === true) return interrupted("interrupted");
+        // Laya 不可用或证据不足时，保留官方 stale inProgress 兜底。
+        return verdict === null && stale ? interrupted("interrupted") : { kind: "done" as const };
       } catch {
         // 单个历史不可读不阻断其他会话，并明确返回遗漏数量。
         return { kind: "unreadable" as const };
@@ -232,7 +395,14 @@ export class InterruptedConversations {
         const { thread, turn } = await this.#read(threadId);
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
-        if (turn.id !== turnId || recoverableStatus(thread, turn) === null) {
+        if (turn.id !== turnId) throw new Error("会话状态已改变，请刷新列表。");
+        if (recoverableStatus(thread, turn) !== null) return;
+        // 官方状态不明确时，只接受 Laya 对同一回合的高置信中断判断。
+        if (
+          turn.status === "completed" ||
+          turn.status === "succeeded" ||
+          !(await this.#classify(threadId, turnId, thread, turn))
+        ) {
           throw new Error("会话状态已改变，请刷新列表。");
         }
       };

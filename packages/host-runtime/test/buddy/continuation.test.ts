@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { InterruptedConversations } from "../../src/buddy/continuation.js";
+import {
+  InterruptedConversations,
+  type InterruptedTurnClassifier,
+} from "../../src/buddy/continuation.js";
 import type { NativeRequest } from "../../src/buddy/native.js";
 
 function fixture() {
@@ -47,6 +50,71 @@ function fixture() {
       allowed = false;
     },
   };
+}
+
+function layaFixture(
+  options: {
+    status?: string;
+    threadStatus?: string | null;
+    updatedAt?: number;
+    assistant?: string;
+    user?: string;
+    verdict?: boolean;
+    throws?: boolean;
+  } = {},
+) {
+  const now = Math.floor(Date.now() / 1000);
+  const status = options.status ?? "inProgress";
+  const threadStatus = options.threadStatus === undefined ? "idle" : options.threadStatus;
+  const turn = {
+    id: "turn",
+    status,
+    items: [
+      {
+        type: "userMessage",
+        content: [{ type: "text", text: options.user ?? "修复构建" }],
+      },
+      { type: "agentMessage", text: options.assistant ?? "我先检查一下构建日志" },
+    ],
+  };
+  const request = vi.fn<NativeRequest>(async (method, params) => {
+    if (method === "thread/list")
+      return {
+        result: {
+          data: [{ id: "thread", name: "Build", updatedAt: options.updatedAt ?? now }],
+        },
+      };
+    if (method === "thread/read")
+      return {
+        result: {
+          thread: {
+            name: "Build",
+            status: threadStatus === null ? null : { type: threadStatus },
+            ...(params.includeTurns === true ? { turns: [turn] } : {}),
+          },
+        },
+      };
+    if (method === "thread/turns/list")
+      return {
+        result: {
+          data: [params.itemsView === "full" ? turn : { id: "turn", status }],
+        },
+      };
+    if (method === "thread/resume") return { result: { thread: { status: { type: "idle" } } } };
+    if (method === "turn/start") return { result: { turn: { id: "continued" } } };
+    return { result: {} };
+  });
+  const classifier = vi.fn<InterruptedTurnClassifier>(async () => {
+    if (options.throws) throw new Error("laya unavailable");
+    return options.verdict ?? true;
+  });
+  const service = new InterruptedConversations(
+    request,
+    () => false,
+    async () => true,
+    classifier,
+  );
+  return { service, request, classifier };
 }
 
 describe("interrupted conversations", () => {
@@ -277,7 +345,7 @@ describe("interrupted conversations", () => {
     await expect(f.service.continue("thread", "turn")).rejects.toThrow();
     expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
   });
-  it.each(["idle", "notLoaded"])(
+  it.each(["idle", "notLoaded", "systemError"])(
     "marks an unfinished turn in a %s thread as interrupted and allows recovery",
     async (threadStatus) => {
       const f = fixture();
@@ -300,7 +368,7 @@ describe("interrupted conversations", () => {
       expect(f.request.mock.calls.filter(([method]) => method === "turn/start")).toHaveLength(1);
     },
   );
-  it.each([null, "systemError", "unknown"])(
+  it.each([null, "unknown"])(
     "does not infer an interruption from an unfinished turn with thread status %s",
     async (threadStatus) => {
       const f = fixture();
@@ -480,5 +548,74 @@ describe("interrupted conversations", () => {
     );
     expect(await f.service.list()).toEqual({ threads: [], runningThreadIds: [], unreadable: 1 });
     await expect(f.service.continue("broken", "turn")).rejects.toThrow("missing source rollout");
+  });
+
+  it("uses Laya to classify a recent ambiguous turn and sends only its tail", async () => {
+    const assistant = `${"x".repeat(10_000)}TAIL`;
+    const f = layaFixture({ assistant });
+    await expect(f.service.list()).resolves.toMatchObject({
+      threads: [{ threadId: "thread", turnId: "turn", status: "interrupted" }],
+    });
+    expect(f.classifier).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnStatus: "inProgress",
+        assistantText: expect.stringMatching(/TAIL$/),
+        userText: "修复构建",
+        lastItemType: "agentMessage",
+        pendingTool: false,
+      }),
+    );
+    expect(f.classifier.mock.calls[0]?.[0].assistantText).toHaveLength(6_000);
+    expect(f.request).toHaveBeenCalledWith(
+      "thread/turns/list",
+      expect.objectContaining({ itemsView: "full" }),
+    );
+  });
+
+  it("excludes an ambiguous turn when Laya confidently says completed", async () => {
+    const f = layaFixture({ verdict: false });
+    expect((await f.service.list()).threads).toEqual([]);
+    expect(f.classifier).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to stale inProgress when Laya is unavailable", async () => {
+    const f = layaFixture({ throws: true });
+    expect((await f.service.list()).threads.map((thread) => thread.status)).toEqual([
+      "interrupted",
+    ]);
+  });
+
+  it("does not call Laya for a clearly completed turn", async () => {
+    const f = layaFixture({ status: "completed" });
+    expect((await f.service.list()).threads).toEqual([]);
+    expect(f.classifier).not.toHaveBeenCalled();
+  });
+
+  it("only classifies sessions updated within the last three days", async () => {
+    const f = layaFixture({
+      status: "unknown",
+      updatedAt: Math.floor(Date.now() / 1000) - 4 * 24 * 60 * 60,
+    });
+    expect((await f.service.list()).threads).toEqual([]);
+    expect(f.classifier).not.toHaveBeenCalled();
+  });
+
+  it("continues an ambiguous turn only after Laya confirms it", async () => {
+    const f = layaFixture({ status: "unknown" });
+    await expect(f.service.list()).resolves.toMatchObject({
+      threads: [{ threadId: "thread", turnId: "turn" }],
+    });
+    await expect(f.service.continue("thread", "turn")).resolves.toBe("continued");
+    expect(f.request).toHaveBeenCalledWith(
+      "turn/start",
+      expect.objectContaining({ threadId: "thread" }),
+    );
+  });
+
+  it("does not continue an ambiguous turn that Laya rejects", async () => {
+    const f = layaFixture({ status: "unknown", verdict: false });
+    expect((await f.service.list()).threads).toEqual([]);
+    await expect(f.service.continue("thread", "turn")).rejects.toThrow("状态已改变");
+    expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
   });
 });

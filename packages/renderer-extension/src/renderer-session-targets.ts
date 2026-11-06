@@ -94,12 +94,14 @@ export function sessionDraftCleanup(editor: HTMLElement): () => void {
     throw new Error("无法安全清理来源草稿，未转移消息");
   }
   const key = Object.keys(editor).find((name) => name.startsWith("__reactFiber$"));
-  const props = (key ? committedReactAncestors(Reflect.get(editor, key)) : [])
+  const candidates = (key ? committedReactAncestors(Reflect.get(editor, key)) : [])
     .map((fiber) => record(fiber.memoizedProps))
-    .find(
-      (props) =>
-        typeof props?.onDocumentChange === "function" && Object.hasOwn(props, "initialDocument"),
-    );
+    .filter((props) => typeof props?.onDocumentChange === "function");
+  // Desktop 26.1027 may omit initialDocument from the owning wrapper while
+  // still passing onDocumentChange. Prefer the callback bound to this exact
+  // Composer controller; otherwise the nearest document owner is the save entry.
+  const props =
+    candidates.find((props) => props?.composerController === controller) ?? candidates[0];
   if (typeof props?.onDocumentChange !== "function") {
     throw new Error("无法确认来源草稿的保存入口，未转移消息");
   }

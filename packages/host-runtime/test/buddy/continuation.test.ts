@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { JsonValue } from "@codexhost/shared-contracts";
 import {
   InterruptedConversations,
   type InterruptedTurnClassifier,
@@ -61,7 +62,7 @@ function layaFixture(
     user?: string;
     verdict?: boolean;
     throws?: boolean;
-    items?: unknown[];
+    items?: JsonValue[];
     error?: string;
   } = {},
 ) {

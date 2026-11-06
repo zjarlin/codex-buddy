@@ -1248,3 +1248,28 @@ describe("mapping-store package", () => {
     await store.close();
   });
 });
+
+describe("Thread activity persistence", () => {
+  it("keeps a viewed thread recent after reopening the store without changing its history", async () => {
+    const directory = await temporaryStoreDirectory();
+    let now = new Date("2026-01-01T00:00:00Z");
+    const store = new MappingStore({ directory, now: () => now });
+    await store.initialize();
+    await createReady(store);
+    const before = await store.getThread(threadId);
+    now = new Date("2026-03-01T00:00:00Z");
+    await store.touchThread(threadId);
+    await store.close();
+    const restored = new MappingStore({ directory });
+    try {
+      await restored.initialize();
+      const after = await restored.getThread(threadId);
+      expect(after?.updatedAt).toBe(now.toISOString());
+      expect(after?.turnMappings).toEqual(before?.turnMappings);
+      expect(after?.nativeSessionRef).toEqual(before?.nativeSessionRef);
+      expect(after?.archived).toBe(false);
+    } finally {
+      await restored.close();
+    }
+  });
+});

@@ -1037,32 +1037,42 @@ export class AppServerHost {
         this.#canAutoArchiveOfficial(threadId, cutoffSeconds),
       canArchiveExternal: (threadId, cutoffSeconds) =>
         this.#canAutoArchiveExternal(threadId, cutoffSeconds),
-      archiveOfficial: async (threadId, cutoffSeconds) => {
-        if (!(await this.#canAutoArchiveOfficial(threadId, cutoffSeconds))) return;
-        const response = await this.#requestOfficial("thread/archive", { threadId });
-        if (isRecord(response.error)) {
-          throw new Error(String(response.error.message ?? "Official Thread archive failed"));
-        }
-      },
-      archiveExternal: async (threadId, cutoffSeconds) => {
-        if (!(await this.#canAutoArchiveExternal(threadId, cutoffSeconds))) return;
-        const parsed = hostThreadIdSchema.parse(threadId);
-        const record = await this.#repository.setArchived(parsed, true);
-        const loaded = this.#externalRuntime.get(threadId);
-        if (loaded) {
-          loaded.record = record;
-          loaded.thread = {
-            ...externalThreadValue({
-              record,
-              turns: [],
-              sessionId: loaded.sessionId,
-              running: loaded.running,
-            }),
-            turns: loaded.thread.turns ?? [],
-          };
-        }
-        await this.#writer.json({ method: "thread/archived", params: { threadId } });
-      },
+      archiveOfficial: (threadId, cutoffSeconds, isCurrent) =>
+        this.#desktopRequests.run(threadId, () =>
+          this.#externalRuntime.idleRelease.runMaintenance(threadId, async () => {
+            if (!isCurrent() || !(await this.#canAutoArchiveOfficial(threadId, cutoffSeconds)))
+              return;
+            if (!isCurrent()) return;
+            const response = await this.#requestOfficial("thread/archive", { threadId });
+            if (isRecord(response.error)) {
+              throw new Error(String(response.error.message ?? "Official Thread archive failed"));
+            }
+          }),
+        ),
+      archiveExternal: (threadId, cutoffSeconds, isCurrent) =>
+        this.#desktopRequests.run(threadId, () =>
+          this.#externalRuntime.idleRelease.runMaintenance(threadId, async () => {
+            if (!isCurrent() || !(await this.#canAutoArchiveExternal(threadId, cutoffSeconds)))
+              return;
+            if (!isCurrent()) return;
+            const parsed = hostThreadIdSchema.parse(threadId);
+            const record = await this.#repository.setArchived(parsed, true);
+            const loaded = this.#externalRuntime.get(threadId);
+            if (loaded) {
+              loaded.record = record;
+              loaded.thread = {
+                ...externalThreadValue({
+                  record,
+                  turns: [],
+                  sessionId: loaded.sessionId,
+                  running: loaded.running,
+                }),
+                turns: loaded.thread.turns ?? [],
+              };
+            }
+            await this.#writer.json({ method: "thread/archived", params: { threadId } });
+          }),
+        ),
       diagnose: (error) => this.#diagnose(error),
     });
     this.#sshGit = new SshGitWorkspaces(permanentHome, environment);
@@ -1656,8 +1666,11 @@ export class AppServerHost {
         request.method === "codexhost/thread/usage/inspect" ? undefined : threadId;
       this.#dispatchDesktopRequest(() =>
         this.#desktopRequests.run(queueThreadId, () =>
-          this.#externalRuntime.idleRelease.runOperation(threadId, () =>
-            this.#guardReply(request, () => this.#handleDesktopRequest(request, frame)),
+          this.#externalRuntime.idleRelease.runOperation(
+            threadId,
+            () => this.#guardReply(request, () => this.#handleDesktopRequest(request, frame)),
+            request.method !== "codexhost/thread/usage/inspect" ||
+              requestObject(request).refresh === "exact",
           ),
         ),
       );
@@ -3109,6 +3122,10 @@ export class AppServerHost {
           : ({ kind: "official" } as const);
       if (await this.#writeResolutionError(request, resolution)) return;
       if (resolution.kind === "external") {
+        const thread = resolution.thread;
+        thread.record = await this.#repository.touchThread(thread.id);
+        const recencyAt = Math.floor(Date.parse(thread.record.updatedAt) / 1_000);
+        thread.thread = { ...thread.thread, updatedAt: recencyAt, recencyAt };
         if (request.method === "thread/read") {
           await this.#readExternalThread(
             request,
@@ -3549,6 +3566,8 @@ export class AppServerHost {
     if (
       !thread ||
       thread.id !== threadId ||
+      this.#activeOfficialTurns.has(threadId) ||
+      [...this.#pendingOfficialTurnStarts.values()].includes(threadId) ||
       (isRecord(thread.status) && thread.status.type === "active")
     ) {
       return false;
@@ -3578,6 +3597,11 @@ export class AppServerHost {
         loaded.running ||
         loaded.activeTurnId ||
         loaded.persistenceError ||
+        loaded.sessionUnavailable ||
+        loaded.session.hasBackgroundWork?.() ||
+        this.#externalRuntime.idleRelease.failure(loaded) ||
+        [...this.#pendingDesktopApprovals.values()].some((pending) => pending.thread === loaded) ||
+        [...this.#pendingDesktopQuestions.values()].some((pending) => pending.thread === loaded) ||
         this.#pendingExternalCommandRequests.has(threadId) ||
         this.#externalSteering.hasPending(threadId) ||
         this.#hasRunningSubagents(threadId)
@@ -5557,7 +5581,10 @@ export class AppServerHost {
       await this.#writer.json(rpcError(request, -32602, "Invalid Thread Usage inspection params"));
       return;
     }
-    const resolution = await this.#resolveExternalThread(params.data.threadId);
+    const resolution =
+      params.data.refresh === "exact"
+        ? await this.#resolveExternalThread(params.data.threadId)
+        : await this.#locateExternalThread(params.data.threadId);
     if (resolution.kind === "error") {
       await this.#writer.json(rpcError(request, resolution.error.code, resolution.error.message));
       return;
@@ -5582,8 +5609,13 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
       return;
     }
-    if (params.data.refresh === "exact") void resolution.thread.session.refreshUsage?.();
-    const adapter = this.#externalAdapters.get(resolution.thread.harnessId);
+    const thread = resolution.thread;
+    if (params.data.refresh === "exact" && thread) void thread.session.refreshUsage?.();
+    const harnessId =
+      thread?.harnessId ?? ("record" in resolution ? resolution.record.harnessId : undefined);
+    const adapter = harnessId
+      ? this.#externalAdapters.get(harnessId as ExternalHarnessId)
+      : undefined;
     if (adapter?.credits && adapter.refreshCredits)
       void Promise.resolve()
         .then(() => adapter.refreshCredits?.())
@@ -5596,7 +5628,7 @@ export class AppServerHost {
     }
     const result = threadUsageInspectionSchema.parse({
       threadId: params.data.threadId,
-      usage: await this.#threadUsage(resolution.thread),
+      usage: thread ? await this.#threadUsage(thread) : null,
       accountCreditsSupported: typeof adapter?.credits === "function",
       ...(credits ? { accountCredits: credits } : {}),
     });

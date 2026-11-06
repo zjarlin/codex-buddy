@@ -379,4 +379,58 @@ describe("external Thread idle release", () => {
     f.idle.stop();
     expect(vi.getTimerCount()).toBe(0);
   });
+  it("passive polling does not renew the idle period", async () => {
+    const f = await fixture();
+    f.idle.configure({ enabled: true, timeoutMinutes: 5 });
+    for (let index = 0; index < 37; index++) {
+      await vi.advanceTimersByTimeAsync(8_000);
+      await f.idle.runOperation(f.id, async () => undefined, false);
+    }
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(f.close).toHaveBeenCalledOnce();
+    f.idle.stop();
+  });
+
+  it("maintenance skips occupied threads and serializes new operations without extending activity", async () => {
+    const f = await fixture();
+    const operationGate = deferred();
+    const operation = f.idle.runOperation(f.id, () => operationGate.promise);
+    const skipped = vi.fn(async () => undefined);
+    await f.idle.runMaintenance(f.id, skipped);
+    expect(skipped).not.toHaveBeenCalled();
+    operationGate.resolve();
+    await operation;
+    const lastActivity = f.idle.lastActivityAt(f.thread);
+    await vi.advanceTimersByTimeAsync(MINUTE);
+    const maintenanceGate = deferred();
+    const maintenance = f.idle.runMaintenance(f.id, () => maintenanceGate.promise);
+    const next = vi.fn(async () => undefined);
+    const waiting = f.idle.runOperation(f.id, next, false);
+    await Promise.resolve();
+    expect(next).not.toHaveBeenCalled();
+    maintenanceGate.resolve();
+    await maintenance;
+    await waiting;
+    expect(next).toHaveBeenCalledOnce();
+    expect(f.idle.lastActivityAt(f.thread)).toBe(lastActivity);
+    f.idle.stop();
+    await f.thread.session.close();
+  });
+
+  it("a failed maintenance operation releases waiting requests", async () => {
+    const f = await fixture();
+    const gate = deferred();
+    const maintenance = f.idle.runMaintenance(f.id, async () => {
+      await gate.promise;
+      throw new Error("archive failed");
+    });
+    const failed = expect(maintenance).rejects.toThrow("archive failed");
+    const next = vi.fn(async () => "continued");
+    const waiting = f.idle.runOperation(f.id, next);
+    gate.resolve();
+    await failed;
+    await expect(waiting).resolves.toBe("continued");
+    f.idle.stop();
+    await f.thread.session.close();
+  });
 });

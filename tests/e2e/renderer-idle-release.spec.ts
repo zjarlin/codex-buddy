@@ -253,3 +253,34 @@ test("unsupported Host is visible rather than reported as applied", async ({ pag
     page.getByRole("status").filter({ hasText: "当前 Host 不支持" }).first(),
   ).toBeVisible();
 });
+
+for (const failedSource of ["idle-release", "thread-auto-archive"]) {
+  test(`keeps ${failedSource} failures visible when the other setting succeeds`, async ({
+    page,
+  }) => {
+    await setup(page);
+    await expect(page.getByText("同步中…", { exact: true })).toBeHidden();
+    const otherSource = failedSource === "idle-release" ? "thread-auto-archive" : "idle-release";
+    await page.evaluate(
+      ({ failedSource, otherSource }) => {
+        window.dispatchEvent(
+          new CustomEvent(`codexhost:${failedSource}-status`, { detail: "failed" }),
+        );
+        window.dispatchEvent(
+          new CustomEvent(`codexhost:${otherSource}-status`, { detail: "applied" }),
+        );
+      },
+      { failedSource, otherSource },
+    );
+    await expect(page.getByText("同步失败，请重试", { exact: true })).toBeVisible();
+    await page.evaluate((source) => {
+      window.dispatchEvent(new CustomEvent(`codexhost:${source}-status`, { detail: "pending" }));
+    }, failedSource);
+    await expect(page.getByText("同步中…", { exact: true })).toBeVisible();
+    await page.evaluate((source) => {
+      window.dispatchEvent(new CustomEvent(`codexhost:${source}-status`, { detail: "applied" }));
+    }, failedSource);
+    await expect(page.getByText("同步中…", { exact: true })).toBeHidden();
+    await expect(page.getByText("同步失败，请重试", { exact: true })).toBeHidden();
+  });
+}

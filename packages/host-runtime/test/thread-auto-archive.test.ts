@@ -22,12 +22,12 @@ function fixture(
   const canArchiveExternal = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<boolean>>(
     async () => input.canExternal ?? true,
   );
-  const archiveOfficial = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<void>>(
-    async () => undefined,
-  );
-  const archiveExternal = vi.fn<(threadId: string, cutoffSeconds: number) => Promise<void>>(
-    async () => undefined,
-  );
+  const archiveOfficial = vi.fn<
+    (threadId: string, cutoffSeconds: number, isCurrent: () => boolean) => Promise<void>
+  >(async () => undefined);
+  const archiveExternal = vi.fn<
+    (threadId: string, cutoffSeconds: number, isCurrent: () => boolean) => Promise<void>
+  >(async () => undefined);
   const diagnose = vi.fn();
   const service = new ThreadAutoArchive({
     listOfficial,
@@ -81,10 +81,18 @@ describe("Thread auto archive", () => {
     const cutoff = Math.floor(Date.parse("2026-09-30T00:00:00.000Z") / 1_000) - 30 * 86_400;
     expect(f.listOfficial).toHaveBeenCalledWith(cutoff);
     expect(f.listExternal).toHaveBeenCalledWith(cutoff);
-    expect(f.archiveOfficial).toHaveBeenCalledWith("official-old", cutoff);
-    expect(f.archiveExternal).toHaveBeenCalledWith("external-old", cutoff);
-    expect(f.archiveOfficial).not.toHaveBeenCalledWith("external-old", cutoff);
-    expect(f.archiveExternal).not.toHaveBeenCalledWith("official-old", cutoff);
+    expect(f.archiveOfficial).toHaveBeenCalledWith("official-old", cutoff, expect.any(Function));
+    expect(f.archiveExternal).toHaveBeenCalledWith("external-old", cutoff, expect.any(Function));
+    expect(f.archiveOfficial).not.toHaveBeenCalledWith(
+      "external-old",
+      cutoff,
+      expect.any(Function),
+    );
+    expect(f.archiveExternal).not.toHaveBeenCalledWith(
+      "official-old",
+      cutoff,
+      expect.any(Function),
+    );
     f.service.stop();
   });
 
@@ -105,7 +113,11 @@ describe("Thread auto archive", () => {
     f.service.configure({ enabled: true, inactiveDays: 30 });
     await f.service.drain();
     expect(f.archiveOfficial).toHaveBeenCalledTimes(2);
-    expect(f.archiveOfficial).toHaveBeenCalledWith("archive", expect.any(Number));
+    expect(f.archiveOfficial).toHaveBeenCalledWith(
+      "archive",
+      expect.any(Number),
+      expect.any(Function),
+    );
     expect(f.diagnose).toHaveBeenCalledTimes(1);
     f.service.stop();
   });
@@ -116,6 +128,72 @@ describe("Thread auto archive", () => {
     await f.service.drain();
     expect(f.listOfficial).not.toHaveBeenCalled();
     expect(f.listExternal).not.toHaveBeenCalled();
+    f.service.stop();
+  });
+  it.each(["official", "external"] as const)(
+    "stops %s archiving when disabled during eligibility I/O",
+    async (source) => {
+      const f = fixture({ [source]: [{ threadId: "old", recencyAt: 1 }] });
+      const entered = Promise.withResolvers<undefined>();
+      const ready = Promise.withResolvers<boolean>();
+      const canArchive = source === "official" ? f.canArchiveOfficial : f.canArchiveExternal;
+      canArchive.mockImplementation(async () => {
+        entered.resolve(undefined);
+        return ready.promise;
+      });
+      f.service.configure({ enabled: true, inactiveDays: 1 });
+      await entered.promise;
+      f.service.configure({ enabled: false, inactiveDays: 1 });
+      ready.resolve(true);
+      await f.service.drain();
+      expect(f.archiveOfficial).not.toHaveBeenCalled();
+      expect(f.archiveExternal).not.toHaveBeenCalled();
+      f.service.stop();
+    },
+  );
+
+  it("restarts a pending scan with the new threshold and invalidates admitted callbacks", async () => {
+    vi.useFakeTimers();
+    const recent = Math.floor(Date.now() / 1_000) - 2 * 86_400;
+    const f = fixture({ external: [{ threadId: "two-days-old", recencyAt: recent }] });
+    f.canArchiveExternal.mockImplementation(async (_, cutoff) => recent < cutoff);
+    const entered = Promise.withResolvers<() => boolean>();
+    const release = Promise.withResolvers<undefined>();
+    const committed: string[] = [];
+    f.archiveExternal.mockImplementation(async (id, _, isCurrent) => {
+      entered.resolve(isCurrent);
+      await release.promise;
+      if (isCurrent()) committed.push(id);
+    });
+    f.service.configure({ enabled: true, inactiveDays: 1 });
+    const isCurrent = await entered.promise;
+    f.service.configure({ enabled: true, inactiveDays: 1 });
+    expect(isCurrent()).toBe(true);
+    f.service.configure({ enabled: true, inactiveDays: 30 });
+    expect(isCurrent()).toBe(false);
+    release.resolve(undefined);
+    await f.service.drain();
+    expect(committed).toEqual([]);
+    expect(f.listExternal).toHaveBeenCalledTimes(2);
+    expect(f.listExternal).toHaveBeenLastCalledWith(Math.floor(Date.now() / 1_000) - 30 * 86_400);
+    f.service.stop();
+  });
+
+  it("discards an old listing when the threshold changes while scanning", async () => {
+    const f = fixture();
+    const entered = Promise.withResolvers<undefined>();
+    const listing = Promise.withResolvers<ThreadAutoArchiveCandidate[]>();
+    f.listExternal.mockImplementationOnce(async () => {
+      entered.resolve(undefined);
+      return listing.promise;
+    });
+    f.service.configure({ enabled: true, inactiveDays: 1 });
+    await entered.promise;
+    f.service.configure({ enabled: true, inactiveDays: 30 });
+    listing.resolve([{ threadId: "old-candidate", recencyAt: 1 }]);
+    await f.service.drain();
+    expect(f.archiveExternal).not.toHaveBeenCalled();
+    expect(f.listExternal).toHaveBeenCalledTimes(2);
     f.service.stop();
   });
 });

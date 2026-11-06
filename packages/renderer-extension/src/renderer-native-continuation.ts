@@ -81,8 +81,9 @@ export function createNativeContinuation(options: {
     return { ...value, thread: value.thread, running: activity === "active" };
   }
 
-  async function discover(): Promise<BuddyInterrupted> {
-    const ids = await listThreadIds();
+  async function discover(threadId?: string): Promise<BuddyInterrupted> {
+    // 单会话核对只读目标会话，避免打开会话时遍历全部历史。
+    const ids = threadId ? [threadId] : await listThreadIds();
     const entries = new Array<InterruptedThread | null>(ids.length).fill(null);
     const running = new Set<string>();
     let unreadable = 0;
@@ -126,7 +127,9 @@ export function createNativeContinuation(options: {
   }
 
   return {
-    list(): Promise<BuddyInterrupted> {
+    list(threadId?: string): Promise<BuddyInterrupted> {
+      // 单会话核对不共享全量扫描缓存，避免把其他会话的旧结果带进队列。
+      if (threadId) return discover(threadId);
       listing ??= discover().finally(() => {
         listing = null;
       });

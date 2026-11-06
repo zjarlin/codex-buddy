@@ -189,24 +189,50 @@ export function createInterruptedQueue(options: {
     if (checkedAt !== undefined && now - checkedAt < RECONCILE_INTERVAL_MS) return;
     // 高频界面扫描只做内存限流；到点后才解析持久化队列。
     readStorage();
-    const current = entries.get(key);
-    if (current && interrupted(current.status)) {
-      reconciledAt.set(key, now);
-      return;
-    }
     reconciledAt.set(key, now);
     reconciling.add(key);
     try {
       // 先读最新回合：健康会话只产生这一次读取，只有确实需要补录时才读取标题和归属。
       const state = await readMetadata(client.readThreadTurnState(threadId));
-      if (
-        disposed ||
-        options.getClient(hostId) !== client ||
-        state.running ||
-        !interrupted(state.status) ||
-        !state.turnId
-      )
+      if (disposed || options.getClient(hostId) !== client) return;
+      readStorage();
+      const previous = entries.get(key);
+      // 记录过的中断已经继续运行：漏掉 turn/started 时，打开会话按原生状态清掉旧记录。
+      if (state.running) {
+        if (previous && interrupted(previous.status)) remove(previous, "completed");
         return;
+      }
+      if (!state.turnId) return;
+      // 同一回合已有记录：原生 completed 不代表已经交付，保留原有的中断判断。
+      if (previous && interrupted(previous.status) && previous.turnId === state.turnId) return;
+      // 会话已经进入新回合，旧回合的中断记录不再可恢复。
+      const stale = previous && interrupted(previous.status) ? previous : null;
+      const dropStale = () => {
+        if (stale) remove(stale, "completed");
+      };
+      let status = interrupted(state.status) ? state.status : null;
+      if (!status) {
+        // 官方把“以命令或错误收尾、没有 Assistant 交付”的回合标为 completed，界面却仍显示可继续；
+        // 这类回合交给 Host 的单会话扫描用 Laya 复核，确认中断后才补入队列。
+        if (
+          (state.turnStatus !== "completed" && state.turnStatus !== "succeeded") ||
+          !client.buddyInterrupted
+        ) {
+          dropStale();
+          return;
+        }
+        const scan = await client.buddyInterrupted(threadId);
+        if (disposed || options.getClient(hostId) !== client) return;
+        status = scan.runningThreadIds.includes(threadId)
+          ? null
+          : (scan.threads.find(
+              (entry) => entry.threadId === threadId && entry.turnId === state.turnId,
+            )?.status ?? null);
+        if (!status) {
+          dropStale();
+          return;
+        }
+      }
       const value = record(
         await readMetadata(
           client.requestThreadProjection("thread/read", {
@@ -217,6 +243,17 @@ export function createInterruptedQueue(options: {
       );
       if (disposed || options.getClient(hostId) !== client) return;
       const thread = record(value.thread);
+      // 读取标题期间会话可能已经开始新回合：原生状态已经变化时不再补入旧回合。
+      if (record(thread.status).type === "active") {
+        dropStale();
+        return;
+      }
+      const latest =
+        Array.isArray(thread.turns) && thread.turns.length > 0 ? record(thread.turns.at(-1)) : null;
+      if (latest && typeof latest.id === "string" && latest.id !== state.turnId) {
+        dropStale();
+        return;
+      }
       if (
         thread.ephemeral === true ||
         thread.threadSource === "thread_title" ||
@@ -224,17 +261,18 @@ export function createInterruptedQueue(options: {
         thread.cliVersion === "codexhost"
       ) {
         excluded.add(key);
+        dropStale();
         return;
       }
       assertNativeCodexThread(thread, threadId);
       readStorage();
-      const previous = entries.get(key);
+      const current = entries.get(key);
       if (
-        previous?.status === "archived" ||
-        previous?.status === "vanished" ||
-        previous?.previousTurnIds?.includes(state.turnId) ||
-        (previous?.turnId === state.turnId && previous.status !== "active") ||
-        (previous?.status === "active" && previous.turnId !== state.turnId)
+        current?.status === "archived" ||
+        current?.status === "vanished" ||
+        current?.previousTurnIds?.includes(state.turnId) ||
+        (current?.turnId === state.turnId && current.status !== "active") ||
+        (current?.status === "active" && current.turnId !== state.turnId)
       )
         return;
       put({
@@ -242,7 +280,7 @@ export function createInterruptedQueue(options: {
         threadId,
         turnId: state.turnId,
         title: (text(thread.name) || text(thread.preview) || threadId).slice(0, 160),
-        status: state.status,
+        status,
       });
     } catch {
       // 浏览会话时的读取失败不写入队列；连接或会话稍后可用时再重试。
@@ -442,10 +480,9 @@ export function createInterruptedQueue(options: {
         throw failure;
       }
       ensureCurrent();
-      // Laya 兜底可能补入官方状态不明确的回合；只排除明确完成或已换回合的条目。
+      // Laya 补录的条目在原生状态下可能仍是 completed（结尾没有 Assistant 交付）；
+      // 是否真的完成由 Host 续接时再次核对，这里只排除识别不到状态或已换回合的条目。
       const settled =
-        state.turnStatus === "completed" ||
-        state.turnStatus === "succeeded" ||
         (state.turnStatus === undefined && state.status === null) ||
         (state.status !== null && !interrupted(state.status));
       if (state.running || state.turnId !== entry.turnId || settled) {

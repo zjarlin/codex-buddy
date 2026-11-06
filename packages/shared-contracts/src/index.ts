@@ -40,6 +40,7 @@ export {
   BUDDY_CONTINUE_METHOD,
   nativeContinuationPrompt,
   buddyContinueSchema,
+  buddyInterruptedParamsSchema,
   buddyInterruptedSchema,
   type BuddyInterrupted,
 } from "./buddy-router.js";

@@ -368,7 +368,10 @@ describe("JEV API key persistence", () => {
         userText: "修复构建",
         assistantText: "我先检查一下构建日志",
         lastItemType: "commandExecution",
+        lastItemStatus: "inProgress",
+        tailItems: ["commandExecution:inProgress"],
         pendingTool: true,
+        errorText: "",
       }),
     ).resolves.toBe(true);
   });
@@ -396,9 +399,13 @@ describe("JEV API key persistence", () => {
       userText: "",
       assistantText: "done",
       lastItemType: "agentMessage",
+      lastItemStatus: null,
+      tailItems: [],
       pendingTool: false,
+      errorText: "",
     };
     await expect(judgeInterruptedTurn(completed, evidence)).resolves.toBe(false);
-    await expect(judgeInterruptedTurn(uncertain, evidence)).resolves.toBeNull();
+    // 队列宁可多报：低置信结论按未交付处理，避免漏掉可恢复会话。
+    await expect(judgeInterruptedTurn(uncertain, evidence)).resolves.toBe(true);
   });
 });

@@ -44,7 +44,11 @@ export interface InterruptedTurnClassifierInput {
   userText: string;
   assistantText: string;
   lastItemType: string | null;
+  lastItemStatus: string | null;
+  /** 最后一条 Assistant 文本之后的尾项摘要，帮助判断命令/错误之后是否还有解释。 */
+  tailItems: string[];
   pendingTool: boolean;
+  errorText: string;
 }
 
 export type InterruptedTurnClassifier = (
@@ -92,6 +96,17 @@ function threadTitle(thread: Record<string, unknown>, fallback: string): string 
   return (name || preview || fallback).slice(0, 160);
 }
 
+function tailText(items: readonly Record<string, unknown>[]): string {
+  return (
+    items
+      .filter((item) => item.type === "error")
+      .map((item) => (typeof item.message === "string" ? item.message : ""))
+      .filter((text) => text.trim().length > 0)
+      .at(-1)
+      ?.slice(0, 1_000) ?? ""
+  );
+}
+
 function turnText(turn: Record<string, unknown>) {
   const items = Array.isArray(turn.items) ? turn.items.map(object) : [];
   const assistantText = (
@@ -111,11 +126,43 @@ function turnText(turn: Record<string, unknown>) {
   ).slice(-2_000);
   const last = items.at(-1);
   const lastItemType = typeof last?.type === "string" ? last.type : null;
+  const lastItemStatus = typeof last?.status === "string" ? last.status : null;
   const pendingTool =
     lastItemType !== null &&
     TOOL_ITEM_TYPES.has(lastItemType) &&
-    !TERMINAL_ITEM_STATUSES.has(String(last?.status));
-  return { userText, assistantText, lastItemType, pendingTool };
+    !TERMINAL_ITEM_STATUSES.has(lastItemStatus ?? "");
+  const turnError = object(turn.error);
+  const errorText =
+    (typeof turnError.message === "string" ? turnError.message.slice(0, 1_000) : "") ||
+    tailText(items);
+  const tailItems = items
+    .slice(items.findLastIndex((item) => item.type === "agentMessage") + 1)
+    .slice(-6)
+    .map(
+      (item) => `${String(item.type)}${typeof item.status === "string" ? `:${item.status}` : ""}`,
+    );
+  return {
+    userText,
+    assistantText,
+    lastItemType,
+    lastItemStatus,
+    tailItems,
+    pendingTool,
+    errorText,
+  };
+}
+
+// 官方 Desktop 只在“回合以 Assistant 文本交付且没有残留错误”时认为是明确完成；
+// 其余状态（含 commandExecution 收尾、尾部错误）都会让输入区显示“继续”。
+function clearlyCompleted(turn: Record<string, unknown>): boolean {
+  if (turn.status !== "completed" && turn.status !== "succeeded") return false;
+  const items = Array.isArray(turn.items) ? turn.items.map(object) : [];
+  const last = items.at(-1);
+  if (last?.type !== "agentMessage" || typeof last.text !== "string" || !last.text.trim()) {
+    return false;
+  }
+  if (object(turn.error).message) return false;
+  return !items.some((item) => item.type === "error" && item.willRetry !== true);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -320,8 +367,11 @@ export class InterruptedConversations {
     return { archived, skipped, failed };
   }
 
-  async list(): Promise<BuddyInterrupted> {
-    const candidates = await this.#listThreads();
+  async list(options: { threadId?: string } = {}): Promise<BuddyInterrupted> {
+    // 打开单个会话时只扫描这一条，供界面核对漏检回合；未指定时按官方分页扫描全部历史。
+    const candidates: ThreadMetadata[] = options.threadId
+      ? [{ id: options.threadId, title: "", updatedAt: null }]
+      : await this.#listThreads();
     const cutoff = Math.floor(Date.now() / 1000) - RECENT_ACTIVITY_SECONDS;
     let classifications = 0;
     const entries = await mapWithConcurrency(candidates, READ_CONCURRENCY, async (metadata) => {
@@ -346,21 +396,27 @@ export class InterruptedConversations {
         });
         const explicit = explicitStatus(turn);
         if (explicit !== null) return interrupted(explicit);
-        // 官方明确完成的回合不送 Laya；其余状态才需要判断结尾语义。
-        if (turn.status === "completed" || turn.status === "succeeded") {
-          return { kind: "done" as const };
-        }
         const updatedAt =
           metadata.updatedAt ?? (typeof thread.updatedAt === "number" ? thread.updatedAt : null);
         const recent = updatedAt === null || updatedAt >= cutoff;
         const stale = staleInProgress(thread, turn);
+        const completedLike = turn.status === "completed" || turn.status === "succeeded";
         if (!this.classifier || !recent || classifications >= MAX_CLASSIFICATIONS) {
           return stale ? interrupted("interrupted") : { kind: "done" as const };
         }
+        // 官方按“最新回合是否已经交付 Assistant 文本”决定输入区是否显示继续；
+        // completed 但以命令或错误收尾的回合同样需要判断，分页摘要不含 items，必须补读完整回合。
+        let evidence = turn;
+        if (completedLike) {
+          const full = await this.#read(metadata.id, { items: true });
+          if (object(full.turn).id !== turn.id) return { kind: "done" as const };
+          evidence = full.turn;
+          if (clearlyCompleted(evidence)) return { kind: "done" as const };
+        }
         classifications += 1;
-        const verdict = await this.#classify(metadata.id, turn.id, thread, turn);
+        const verdict = await this.#classify(metadata.id, turn.id, thread, evidence);
         if (verdict === true) return interrupted("interrupted");
-        // Laya 不可用或证据不足时，保留官方 stale inProgress 兜底。
+        // Laya 不可用或证据不足时，只保留官方 stale inProgress 兜底。
         return verdict === null && stale ? interrupted("interrupted") : { kind: "done" as const };
       } catch {
         // 单个历史不可读不阻断其他会话，并明确返回遗漏数量。
@@ -397,14 +453,13 @@ export class InterruptedConversations {
           throw new Error("该会话仍在运行。");
         if (turn.id !== turnId) throw new Error("会话状态已改变，请刷新列表。");
         if (recoverableStatus(thread, turn) !== null) return;
-        // 官方状态不明确时，只接受 Laya 对同一回合的高置信中断判断。
-        if (
-          turn.status === "completed" ||
-          turn.status === "succeeded" ||
-          !(await this.#classify(threadId, turnId, thread, turn))
-        ) {
+        // 官方状态不明确时补读完整尾项：以 Assistant 文本交付且无残留错误的回合才算明确完成。
+        const full = await this.#read(threadId, { items: true });
+        if (object(full.turn).id !== turnId) throw new Error("会话状态已改变，请刷新列表。");
+        if (clearlyCompleted(full.turn)) throw new Error("会话状态已改变，请刷新列表。");
+        // Laya 明确判定已交付时同样停止；判断不可用不阻断续接，官方输入区此时本来可写。
+        if ((await this.#classify(threadId, turnId, thread, full.turn)) === false)
           throw new Error("会话状态已改变，请刷新列表。");
-        }
       };
       await verify();
       options?.signal?.throwIfAborted();

@@ -18,6 +18,12 @@ export const buddyContinueSchema = z
     model: z.string().trim().min(1).max(512).optional(),
   })
   .strict();
+export const buddyInterruptedParamsSchema = z
+  .object({
+    /** 只核对这一个会话；省略时扫描当前 Host 的全部未归档会话。 */
+    threadId: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
 export const buddyInterruptedSchema = z.object({
   threads: z
     .array(

@@ -42,8 +42,11 @@ export default defineConfig({
     maxWorkers: 4,
     passWithNoTests: false,
     // Hosted Windows runners have highly variable disk latency (fsync, rename
-    // and Git submodule operations under real-time scanning). Keep the default
-    // elsewhere so real hangs still fail fast.
-    ...(process.platform === "win32" ? { testTimeout: 45_000, hookTimeout: 30_000 } : {}),
+    // and Git submodule operations under real-time scanning), and hosted macOS
+    // runners are similarly slow at fork-heavy Git fixtures. Keep the default
+    // on Linux so real hangs still fail fast.
+    ...(process.platform === "win32" || process.platform === "darwin"
+      ? { testTimeout: 45_000, hookTimeout: 30_000 }
+      : {}),
   },
 });

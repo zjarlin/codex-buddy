@@ -46,6 +46,12 @@ describe("External Thread follow-up queue", () => {
         (message) =>
           method(message, "thread/queue/changed") && messageParams(message).threadId === threadId,
       );
+      await expect(
+        fixture.collector.waitFor(
+          (message) =>
+            method(message, "thread/name/updated") && messageParams(message).threadName === "first",
+        ),
+      ).resolves.toBeDefined();
       writeRequest(fixture.desktopInput, {
         id: 11,
         method: "thread/queue/add",
@@ -68,6 +74,13 @@ describe("External Thread follow-up queue", () => {
         params: { threadId, queuedSubmissionId: second.id, input: text("second edited") },
       });
       await fixture.collector.waitFor((message) => requestId(message, 13));
+      await expect(
+        fixture.collector.waitFor(
+          (message) =>
+            method(message, "thread/name/updated") &&
+            messageParams(message).threadName === "second edited",
+        ),
+      ).resolves.toBeDefined();
       writeRequest(fixture.desktopInput, {
         id: 14,
         method: "thread/queue/list",

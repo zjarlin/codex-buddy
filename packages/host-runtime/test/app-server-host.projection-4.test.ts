@@ -22,6 +22,7 @@ import {
   turnEvent,
   writeRequest,
   readJsonLine,
+  requiredMessageId,
   createFixture,
   startExternalThread,
   startPiThread,
@@ -1174,6 +1175,22 @@ describe("AppServerHost HarnessAdapter projection", () => {
       id: 100,
       result: { turnId: "official-turn" },
     });
+    const rename = await readJsonLine(fixture.official.stdin);
+    expect(rename).toMatchObject({
+      method: "thread/name/set",
+      params: { threadId: "official-thread", name: "new direction" },
+    });
+    writeRequest(fixture.official.stdout, {
+      id: requiredMessageId(rename),
+      result: {},
+    });
+    await expect(
+      fixture.collector.waitFor(
+        (message) =>
+          method(message, "thread/name/updated") &&
+          messageParams(message).threadName === "new direction",
+      ),
+    ).resolves.toBeDefined();
     expect(fixture.adapter.sessions).toHaveLength(0);
     await stopFixture(fixture);
   });

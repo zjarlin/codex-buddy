@@ -59,11 +59,8 @@ describe("main-process title policy", () => {
     const functionDeclaration = inspector.command.mock.calls.at(-2)?.[1]?.functionDeclaration;
     expect(functionDeclaration).toContain("webContents.fromId(rendererWebContentsId)");
     expect(functionDeclaration).toContain("ownService(sampleService, selected)");
-    expect(functionDeclaration).toContain("params?.refreshFrom != null");
-    expect(functionDeclaration).toContain(
-      "You are a helpful assistant. You will be presented with a user prompt",
-    );
     expect(functionDeclaration).toContain("counters.nativeTitleSkips += 1");
+    expect(functionDeclaration).not.toContain("return originalGenerateTitle.call(this, params)");
     expect(functionDeclaration).not.toContain("querySelectorAll('*').length");
     expect(functionDeclaration).not.toContain("constructor?.name");
     expect(inspector.command.mock.calls.at(-1)?.[1]).toEqual({

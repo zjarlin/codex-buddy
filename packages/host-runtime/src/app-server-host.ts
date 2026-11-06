@@ -935,6 +935,7 @@ export class AppServerHost {
   /** Active reply guards by request ID; each records whether its request was answered. */
   readonly #replyGuards = new Map<unknown, Set<{ answered: boolean }>>();
   #pendingOfficialTurnStarts = new Map<unknown, string>();
+  readonly #threadQuestionRenameRevisions = new Map<string, number>();
   #activeWorkDrainWaiters = new Set<() => void>();
   #pendingOfficialDelegationThreads = new Set<string>();
   #pendingOfficialTerminalStatuses = new Map<string, DelegationStartResult["status"]>();
@@ -1445,6 +1446,7 @@ export class AppServerHost {
       this.#externalRuntime.clear();
       this.#externalPrewarms.clear();
       this.#pendingOfficialTurnStarts.clear();
+      this.#threadQuestionRenameRevisions.clear();
       this.#routeObservationTracker.clear();
       this.#unregisterDelegationApi?.();
       this.#unregisterDelegationApi = undefined;
@@ -1570,29 +1572,52 @@ export class AppServerHost {
     }
   }
 
-  async #renameThreadFromQuestion(params: JsonObject): Promise<void> {
-    const threadId = params.threadId;
+  #scheduleThreadRenameFromQuestion(request: JsonRpcRequest): void {
     if (
-      typeof threadId !== "string" ||
-      this.#routeObservationTracker.threadPurpose(threadId) === "ephemeral"
+      !isRecord(request.params) ||
+      (request.method !== "turn/start" &&
+        request.method !== "turn/steer" &&
+        request.method !== "thread/queue/add" &&
+        request.method !== "thread/queue/update") ||
+      typeof request.params.threadId !== "string" ||
+      this.#routeObservationTracker.threadPurpose(request.params.threadId) === "ephemeral"
     ) {
       return;
     }
-    const title = threadQuestionTitle(params.input);
+    const title = threadQuestionTitle(request.params.input);
     if (!title) return;
-    // Official Codex threads already get native titles. Naming them from the raw
-    // question would add an extra native request and could forward private text
-    // before routing decides whether that turn may reach the native runtime.
+    const revision = (this.#threadQuestionRenameRevisions.get(request.params.threadId) ?? 0) + 1;
+    this.#threadQuestionRenameRevisions.set(request.params.threadId, revision);
+    void this.#renameThreadFromQuestion(request.params.threadId, title, revision).catch((error) =>
+      this.#diagnose(error),
+    );
+  }
+
+  async #renameThreadFromQuestion(
+    threadId: string,
+    title: string,
+    revision: number,
+  ): Promise<void> {
+    if (!this.#isLatestThreadQuestionRename(threadId, revision)) return;
     const resolution = await this.#resolveExternalThread(threadId);
-    if (resolution.kind !== "external") return;
-    const record = await this.#repository.setTitle(resolution.thread.id, title);
-    resolution.thread.record = record;
-    resolution.thread.thread.name = title;
-    resolution.thread.thread.updatedAt = unixSeconds();
+    if (!this.#isLatestThreadQuestionRename(threadId, revision)) return;
+    if (resolution.kind === "external") {
+      const record = await this.#repository.setTitle(resolution.thread.id, title);
+      resolution.thread.record = record;
+      resolution.thread.thread.name = title;
+      resolution.thread.thread.updatedAt = unixSeconds();
+    } else {
+      await this.#requestOfficial("thread/name/set", { threadId, name: title });
+    }
+    if (!this.#isLatestThreadQuestionRename(threadId, revision)) return;
     await this.#writer.json({
       method: "thread/name/updated",
       params: { threadId, threadName: title },
     });
+  }
+
+  #isLatestThreadQuestionRename(threadId: string, revision: number): boolean {
+    return this.#threadQuestionRenameRevisions.get(threadId) === revision;
   }
 
   async #forwardDesktop(): Promise<void> {
@@ -1726,15 +1751,6 @@ export class AppServerHost {
     frame: Buffer<ArrayBufferLike>,
   ): Promise<void> {
     if (this.#closeRequested) return;
-    if (
-      (request.method === "turn/start" ||
-        request.method === "turn/steer" ||
-        request.method === "thread/queue/add" ||
-        request.method === "thread/queue/update") &&
-      isRecord(request.params)
-    ) {
-      void this.#renameThreadFromQuestion(request.params).catch((error) => this.#diagnose(error));
-    }
     if (
       request.method === RUNTIME_STATUS_METHOD ||
       request.method === REMOTE_UPDATE_METHOD ||
@@ -3005,6 +3021,7 @@ export class AppServerHost {
         return;
       }
       if (resolution.kind === "external") {
+        this.#scheduleThreadRenameFromQuestion(request);
         this.#dispatchDesktopReply(
           request,
           async () => {
@@ -3024,6 +3041,7 @@ export class AppServerHost {
         this.#dispatchDesktopRequest(async () => {
           try {
             if (await buddy.route(request)) {
+              this.#scheduleThreadRenameFromQuestion(request);
               if (typeof threadId === "string" && !buddy.activeThreadIds.includes(threadId)) {
                 this.#pendingOfficialTurnStarts.delete(request.id);
               }
@@ -3053,6 +3071,7 @@ export class AppServerHost {
           : ({ kind: "official" } as const);
       if (await this.#writeResolutionError(request, resolution)) return;
       if (resolution.kind === "external") {
+        this.#scheduleThreadRenameFromQuestion(request);
         this.#dispatchDesktopReply(
           request,
           () => this.#steerExternalTurn(request, resolution.thread),
@@ -3170,6 +3189,7 @@ export class AppServerHost {
       const location = await this.#locateExternalThread(request.params.threadId);
       if (await this.#writeResolutionError(request, location)) return;
       if (location.kind === "external") {
+        this.#scheduleThreadRenameFromQuestion(request);
         this.#dispatchDesktopReply(
           request,
           () => this.#handleExternalQueueRequest(request, location.record.hostThreadId),
@@ -3332,6 +3352,7 @@ export class AppServerHost {
       }
       await this.#officialRuntime.sendFrame(frame);
       this.#markDesktopRequestAnswered(request.id);
+      this.#scheduleThreadRenameFromQuestion(request);
     } catch {
       if (request.method === "turn/start") {
         this.#pendingOfficialTurnStarts.delete(request.id);

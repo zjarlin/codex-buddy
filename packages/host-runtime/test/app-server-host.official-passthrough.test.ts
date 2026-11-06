@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   createFixture,
+  method,
+  messageParams,
   readJsonLine,
   requestId,
   requiredMessageId,
@@ -90,6 +92,110 @@ describe("official Codex passthrough", () => {
       await initialize(fixture);
       await expectForwardedUnchanged(fixture, { id: 2, ...request });
       expect(fixture.adapter.sessions).toHaveLength(0);
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
+  it("names an official Thread after forwarding each user question", async () => {
+    const fixture = createFixture();
+    try {
+      await initialize(fixture);
+      writeRequest(fixture.desktopInput, {
+        id: 10,
+        method: "thread/start",
+        params: { model: "official/model" },
+      });
+      const threadStart = await readJsonLine(fixture.official.stdin);
+      expect(threadStart).toMatchObject({ id: 10, method: "thread/start" });
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(threadStart),
+        result: { thread: { id: "official-thread" } },
+      });
+      await fixture.collector.waitFor((message) => requestId(message, 10));
+
+      for (const [id, question] of [
+        [11, "第一轮原生提问，标题应先转发提问"],
+        [12, "第二轮原生提问，标题应继续更新"],
+      ] as const) {
+        writeRequest(fixture.desktopInput, {
+          id,
+          method: "turn/start",
+          params: {
+            threadId: "official-thread",
+            input: [{ type: "text", text: question }],
+          },
+        });
+        const turnStart = await readJsonLine(fixture.official.stdin);
+        expect(turnStart).toMatchObject({
+          id,
+          method: "turn/start",
+          params: { threadId: "official-thread", input: [{ type: "text", text: question }] },
+        });
+        writeRequest(fixture.official.stdout, {
+          id: requiredMessageId(turnStart),
+          result: { turn: { id: `official-turn-${id}` } },
+        });
+        await fixture.collector.waitFor((message) => requestId(message, id));
+
+        const rename = await readJsonLine(fixture.official.stdin);
+        expect(rename).toMatchObject({
+          method: "thread/name/set",
+          params: { threadId: "official-thread", name: question },
+        });
+        writeRequest(fixture.official.stdout, {
+          id: requiredMessageId(rename),
+          result: {},
+        });
+        await expect(
+          fixture.collector.waitFor(
+            (message) =>
+              method(message, "thread/name/updated") &&
+              messageParams(message).threadId === "official-thread" &&
+              messageParams(message).threadName === question,
+          ),
+        ).resolves.toBeDefined();
+      }
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
+  it("does not name an ephemeral official Thread", async () => {
+    const fixture = createFixture();
+    try {
+      await initialize(fixture);
+      writeRequest(fixture.desktopInput, {
+        id: 10,
+        method: "thread/start",
+        params: { ephemeral: true, threadSource: "mcp_extension_host" },
+      });
+      const threadStart = await readJsonLine(fixture.official.stdin);
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(threadStart),
+        result: { thread: { id: "ephemeral-thread", ephemeral: true } },
+      });
+      await fixture.collector.waitFor((message) => requestId(message, 10));
+      writeRequest(fixture.desktopInput, {
+        id: 11,
+        method: "turn/start",
+        params: {
+          threadId: "ephemeral-thread",
+          input: [{ type: "text", text: "内部标题生成结果不应被重命名" }],
+        },
+      });
+      const turnStart = await readJsonLine(fixture.official.stdin);
+      expect(turnStart).toMatchObject({ id: 11, method: "turn/start" });
+      writeRequest(fixture.official.stdout, {
+        id: requiredMessageId(turnStart),
+        result: { turn: { id: "ephemeral-turn" } },
+      });
+      await fixture.collector.waitFor((message) => requestId(message, 11));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(fixture.official.stdin.readableLength).toBe(0);
+      expect(
+        fixture.collector.messages.some((message) => method(message, "thread/name/updated")),
+      ).toBe(false);
     } finally {
       await stopFixture(fixture);
     }

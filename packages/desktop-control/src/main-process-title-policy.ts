@@ -154,14 +154,6 @@ const INSTALL_POLICY_FUNCTION = `async function (rendererWebContentsId) {
       counters.ambiguousTitleSkips += 1;
       return null;
     }
-    if (
-      params?.refreshFrom != null ||
-      (typeof params?.prompt === 'string' &&
-        params.prompt.includes('You are a helpful assistant. You will be presented with a user prompt'))
-    ) {
-      counters.nativeTitleSkips += 1;
-      return null;
-    }
     if (selection.agent === 'pi') {
       counters.piTitleSkips += 1;
       return null;
@@ -170,8 +162,8 @@ const INSTALL_POLICY_FUNCTION = `async function (rendererWebContentsId) {
       counters.externalTitleSkips += 1;
       return null;
     }
-    counters.codexTitleCalls += 1;
-    return originalGenerateTitle.call(this, params);
+    counters.nativeTitleSkips += 1;
+    return null;
   };
 
   context.createAppHost = wrappedCreateAppHost;

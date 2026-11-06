@@ -98,7 +98,12 @@ export interface InterruptedTurnEvidence {
   userText: string;
   assistantText: string;
   lastItemType: string | null;
+  lastItemStatus: string | null;
+  /** 最后一条 Assistant 文本之后的尾项摘要。 */
+  tailItems: string[];
   pendingTool: boolean;
+  /** 回合或尾项残留的错误文本；命令失败后是否已经解释并交付，是判断中断的关键证据。 */
+  errorText: string;
 }
 
 /**
@@ -117,17 +122,24 @@ export async function judgeInterruptedTurn(
         title: evidence.title.slice(0, 200),
         turnStatus: evidence.turnStatus,
         lastItemType: evidence.lastItemType,
+        lastItemStatus: evidence.lastItemStatus,
+        tailItems: evidence.tailItems.slice(-6),
         pendingTool: evidence.pendingTool,
         user: evidence.userText.slice(-2_000),
         assistantTail: evidence.assistantText.slice(-6_000),
+        errorTail: evidence.errorText.slice(-1_000),
       },
       questions: {
-        outcome: choice("最后一条 Assistant 回复是否在用户请求完成前被中断或截断？", {
-          interrupted:
-            "回复明显未完成：说到一半、承诺继续但没有下文、工具调用悬空，或用户请求尚未交付",
-          completed: "回复已给出完整答案或明确结束，用户只是在等待新的输入",
-          unknown: "证据不足，无法判断",
-        }),
+        outcome: choice(
+          "根据回合状态、最后一项和最后一条 Assistant 文本，判断这个回合是否已经把用户请求做完。",
+          {
+            interrupted:
+              "未交付：最后一项是命令执行、工具调用或错误，之后没有 Assistant 文本解释结果；或 Assistant 文本明显说到一半、承诺继续但没有下文",
+            completed:
+              "已交付：最后一项是完整的 Assistant 文本；或最后一项是命令/工具，但 Assistant 已经解释结果、给出结论或明确结束",
+            unknown: "证据不足，无法判断",
+          },
+        ),
       },
       // 用户指定用本地 Laya 判断结尾语义，不跟随界面上的通用 System One 模型。
       model: "laya",
@@ -136,11 +148,10 @@ export async function judgeInterruptedTurn(
     { timeout: timeoutMs, ...(options.signal ? { signal: options.signal } : {}) },
   );
   const decision = result.decisions.outcome;
-  if (decision.status !== "automatic") return null;
   const answer = result.answers.outcome.choice;
-  if (answer === "interrupted") return true;
-  if (answer === "completed") return false;
-  return null;
+  // 队列宁可多报：只有 Laya 高置信判定“已经交付”时才排除；
+  // 证据不足或置信度不够时按未交付处理，避免再次漏掉可恢复的会话。
+  return !(answer === "completed" && decision.status === "automatic");
 }
 
 const policies = {

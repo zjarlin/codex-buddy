@@ -107,7 +107,9 @@ for (const mode of ["online", "offline"]) {
     expect(
       calls
         .filter(([host]: string[]) => host === "remote")
-        .every(([, method]: string[]) => ["thread/read", "codexhost/git/origin"].includes(method)),
+        .every(([, method]: [string, string]) =>
+          ["thread/read", "codexhost/git/origin"].includes(method),
+        ),
     ).toBe(true);
     expect(
       calls.find(([, method]: string[]) => method === "codexhost/local-workspace/prepare")[2],

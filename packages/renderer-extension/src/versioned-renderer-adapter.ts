@@ -1116,12 +1116,12 @@ export function installCurrentRendererAdapter(): {
       }
       return client.buddyStatus();
     },
-    buddyInterrupted: () => {
+    buddyInterrupted: (threadId?: string) => {
       const client = currentModelClientOrNull();
       if (!client?.buddyInterrupted) {
         return Promise.reject(new Error("Continuation unavailable"));
       }
-      return client.buddyInterrupted();
+      return client.buddyInterrupted(threadId);
     },
     buddyContinue: (threadId: string, turnId: string, model?: string) => {
       const client = currentModelClient();

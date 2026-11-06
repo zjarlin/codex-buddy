@@ -601,7 +601,7 @@ describe("interrupted event queue", () => {
     expect(f.queue.list("local")).toEqual([]);
   });
 
-  it("drops a Laya-classified entry once the native turn is clearly completed", async () => {
+  it("resumes a Laya-classified entry whose native turn is still marked completed", async () => {
     const f = fixture();
     f.client.buddyInterrupted.mockResolvedValueOnce({
       threads: [
@@ -623,8 +623,112 @@ describe("interrupted event queue", () => {
       turnId: "one-turn",
       turnStatus: "completed",
     });
+    await f.queue.resume(f.first());
+    expect(f.client.buddyContinue).toHaveBeenCalledWith("one", "one-turn");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("drops an entry once the native turn really moved on", async () => {
+    const f = fixture();
+    f.emit("turn/completed");
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "newer-turn",
+      turnStatus: "completed",
+    });
     await expect(f.queue.resume(f.first())).rejects.toThrow("已运行或最新回合已改变");
     expect(f.queue.list("local")).toEqual([]);
     expect(f.client.buddyContinue).not.toHaveBeenCalled();
+  });
+
+  it("adds a completed turn that Host classifies as interrupted when the session is opened", async () => {
+    const f = fixture();
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "one-turn",
+      turnStatus: "completed",
+    });
+    f.client.buddyInterrupted.mockResolvedValueOnce({
+      threads: [
+        {
+          threadId: "one",
+          turnId: "one-turn",
+          title: "Title one",
+          owner: "codex",
+          status: "interrupted",
+        },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledWith("one");
+    expect(f.first()).toMatchObject({ threadId: "one", turnId: "one-turn", status: "interrupted" });
+  });
+
+  it("leaves a completed turn out of the queue when Host finds no interruption", async () => {
+    const f = fixture();
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "one-turn",
+      turnStatus: "completed",
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledWith("one");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("clears a queued interruption when the viewed session is running again", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    expect(f.first().status).toBe("failed");
+    vi.advanceTimersByTime(31_000);
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: true,
+      status: null,
+      turnId: null,
+      turnStatus: null,
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("clears a queued interruption after the session moved on to a newer turn", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    vi.advanceTimersByTime(31_000);
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: null,
+      turnId: "later-turn",
+      turnStatus: "completed",
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledWith("one");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("keeps a queued interruption while the same native turn is still stopped", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    vi.advanceTimersByTime(31_000);
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "one-turn",
+      turnStatus: "failed",
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(1);
+    expect(f.first()).toMatchObject({ turnId: "one-turn", status: "failed" });
   });
 });

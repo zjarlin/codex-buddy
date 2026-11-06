@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { JsonValue } from "@codexhost/shared-contracts";
 import {
   InterruptedConversations,
   type InterruptedTurnClassifier,
@@ -61,6 +62,8 @@ function layaFixture(
     user?: string;
     verdict?: boolean;
     throws?: boolean;
+    items?: JsonValue[];
+    error?: string;
   } = {},
 ) {
   const now = Math.floor(Date.now() / 1000);
@@ -69,7 +72,8 @@ function layaFixture(
   const turn = {
     id: "turn",
     status,
-    items: [
+    ...(options.error ? { error: { message: options.error } } : {}),
+    items: options.items ?? [
       {
         type: "userMessage",
         content: [{ type: "text", text: options.user ?? "修复构建" }],
@@ -591,6 +595,59 @@ describe("interrupted conversations", () => {
     expect(f.classifier).not.toHaveBeenCalled();
   });
 
+  it("classifies a completed turn that ends in a failed command", async () => {
+    const f = layaFixture({
+      status: "completed",
+      items: [
+        { type: "userMessage", content: [{ type: "text", text: "修复构建" }] },
+        { type: "agentMessage", text: "我先运行构建" },
+        { type: "commandExecution", status: "failed", command: "npm run build" },
+      ],
+    });
+    await expect(f.service.list()).resolves.toMatchObject({
+      threads: [{ threadId: "thread", turnId: "turn", status: "interrupted" }],
+    });
+    expect(f.classifier).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnStatus: "completed",
+        lastItemType: "commandExecution",
+        lastItemStatus: "failed",
+        pendingTool: false,
+      }),
+    );
+  });
+
+  it("classifies a completed turn that ends in a succeeded command without an answer", async () => {
+    const f = layaFixture({
+      status: "completed",
+      items: [
+        { type: "userMessage", content: [{ type: "text", text: "看看构建结果" }] },
+        { type: "commandExecution", status: "completed", command: "npm run build" },
+      ],
+    });
+    expect((await f.service.list()).threads).toHaveLength(1);
+    expect(f.classifier).toHaveBeenCalledOnce();
+  });
+
+  it("checks one named thread without listing the rest of the history", async () => {
+    const f = layaFixture({ status: "unknown" });
+    await expect(f.service.list({ threadId: "thread" })).resolves.toMatchObject({
+      threads: [{ threadId: "thread", turnId: "turn" }],
+    });
+    expect(f.request.mock.calls.some(([method]) => method === "thread/list")).toBe(false);
+  });
+
+  it("classifies an answered completed turn that still carries an unresolved error", async () => {
+    const f = layaFixture({
+      status: "completed",
+      error: "stream disconnected",
+    });
+    expect((await f.service.list()).threads).toHaveLength(1);
+    expect(f.classifier).toHaveBeenCalledWith(
+      expect.objectContaining({ errorText: "stream disconnected" }),
+    );
+  });
+
   it("only classifies sessions updated within the last three days", async () => {
     const f = layaFixture({
       status: "unknown",
@@ -610,6 +667,30 @@ describe("interrupted conversations", () => {
       "turn/start",
       expect.objectContaining({ threadId: "thread" }),
     );
+  });
+
+  it("continues a completed turn whose tail is a failed command when Laya confirms", async () => {
+    const f = layaFixture({
+      status: "completed",
+      items: [
+        { type: "userMessage", content: [{ type: "text", text: "修复构建" }] },
+        { type: "commandExecution", status: "failed", command: "npm run build" },
+      ],
+    });
+    expect((await f.service.list()).threads).toHaveLength(1);
+    await expect(f.service.continue("thread", "turn")).resolves.toBe("continued");
+    expect(f.request).toHaveBeenCalledWith("thread/resume", { threadId: "thread" });
+    expect(f.request).toHaveBeenCalledWith(
+      "turn/start",
+      expect.objectContaining({ threadId: "thread" }),
+    );
+  });
+
+  it("does not continue a clearly completed turn without an unfinished tail", async () => {
+    const f = layaFixture({ status: "completed" });
+    await expect(f.service.continue("thread", "turn")).rejects.toThrow("状态已改变");
+    expect(f.classifier).not.toHaveBeenCalled();
+    expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
   });
 
   it("does not continue an ambiguous turn that Laya rejects", async () => {

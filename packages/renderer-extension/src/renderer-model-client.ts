@@ -633,7 +633,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   runProjectScript?(params: ProjectScriptRunParams): Promise<ProjectScriptRunResult>;
   getThreadFolders?(): Promise<ThreadFoldersState>;
   setThreadFolders?(config: ThreadFoldersConfig): Promise<ThreadFoldersState>;
-  buddyInterrupted?(): Promise<BuddyInterrupted>;
+  buddyInterrupted?(threadId?: string): Promise<BuddyInterrupted>;
   readThreadActivity?(threadId: string): Promise<boolean>;
   readThreadTurnState?(threadId: string): Promise<RendererThreadTurnState>;
   readAutoModelRoutes?(threadId: string, runId?: string): Promise<AutoModelRoutesResult>;
@@ -1465,10 +1465,10 @@ export function createRendererModelClient(
     },
     buddyStatus: async () =>
       buddySnapshotSchema.parse(await manager.sendRequest(BUDDY_STATUS_METHOD, {})),
-    buddyInterrupted: async () => {
+    buddyInterrupted: async (threadId?: string) => {
       try {
         return buddyInterruptedSchema.parse(
-          await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, {}),
+          await manager.sendRequest(BUDDY_INTERRUPTED_METHOD, threadId ? { threadId } : {}),
         );
       } catch (error) {
         if (
@@ -1477,7 +1477,7 @@ export function createRendererModelClient(
         ) {
           throw error;
         }
-        return nativeContinuation.list();
+        return nativeContinuation.list(threadId);
       }
     },
     readAutoModelRoutes: async (

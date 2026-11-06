@@ -67,6 +67,7 @@ import {
   BUDDY_CONTINUE_METHOD,
   THREAD_ARCHIVE_COMPLETED_METHOD,
   buddyContinueSchema,
+  buddyInterruptedParamsSchema,
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,
 } from "@codexhost/shared-contracts";
@@ -1980,8 +1981,13 @@ export class AppServerHost {
           );
           await this.#writer.json(rpcEnvelope(request, { result: {} }));
         } else {
+          const params = buddyInterruptedParamsSchema.parse(request.params ?? {});
           await this.#writer.json(
-            rpcEnvelope(request, { result: jsonValueSchema.parse(await this.#interrupted.list()) }),
+            rpcEnvelope(request, {
+              result: jsonValueSchema.parse(
+                await this.#interrupted.list(params.threadId ? { threadId: params.threadId } : {}),
+              ),
+            }),
           );
         }
       } catch (error) {

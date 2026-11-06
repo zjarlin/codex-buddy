@@ -12,3 +12,10 @@ export const localWorkspacePrepareResultSchema = z
   .strict();
 export type LocalWorkspacePrepareParams = z.infer<typeof localWorkspacePrepareParamsSchema>;
 export type LocalWorkspacePrepareResult = z.infer<typeof localWorkspacePrepareResultSchema>;
+
+export const LOCAL_WORKSPACE_DIRECTORIES_METHOD = "codexhost/local-workspace/directories";
+export const localWorkspaceDirectoriesParamsSchema = z
+  .object({ path: z.string().min(1).max(4096).optional() })
+  .strict();
+export const GIT_ORIGIN_METHOD = "codexhost/git/origin";
+export const gitOriginResultSchema = z.object({ remote: z.string().nullable() }).strict();

@@ -1,8 +1,13 @@
+import { GitWorkspace } from "../src/git-workspace.js";
+import { GitRepositoryLinks } from "../src/git-repository-links.js";
+import * as directories from "../src/local-workspace-directories.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECT_TERMINAL_OPEN_METHOD,
   PROJECT_WORKSPACE_OPEN_METHOD,
   LOCAL_WORKSPACE_PREPARE_METHOD,
+  LOCAL_WORKSPACE_DIRECTORIES_METHOD,
+  GIT_ORIGIN_METHOD,
 } from "@codexhost/shared-contracts";
 
 import * as terminal from "../src/thread-terminal.js";
@@ -13,6 +18,46 @@ import { createFixture, requestId, stopFixture, writeRequest } from "./app-serve
 afterEach(() => vi.restoreAllMocks());
 
 describe("project actions", () => {
+  it("routes origin lookup and local folder browsing without official RPC", async () => {
+    vi.spyOn(GitRepositoryLinks.prototype, "resolve").mockResolvedValue("/project");
+    const origin = vi
+      .spyOn(GitWorkspace.prototype, "origin")
+      .mockResolvedValue("https://example.test/project.git");
+    const browse = vi.spyOn(directories, "localWorkspaceDirectories").mockResolvedValue({
+      project: "/local",
+      path: "/local",
+      parent: "/",
+      entries: [],
+      truncated: false,
+    });
+    const fixture = createFixture();
+    const officialWrite = vi.fn();
+    fixture.official.stdin.on("data", officialWrite);
+    try {
+      writeRequest(fixture.desktopInput, {
+        id: 1,
+        method: GIT_ORIGIN_METHOD,
+        params: { cwd: "/project" },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 1)),
+      ).resolves.toMatchObject({ result: { remote: "https://example.test/project.git" } });
+      expect(origin).toHaveBeenCalledWith("/project");
+      writeRequest(fixture.desktopInput, {
+        id: 2,
+        method: LOCAL_WORKSPACE_DIRECTORIES_METHOD,
+        params: { path: "/missing/project" },
+      });
+      await expect(
+        fixture.collector.waitFor((message) => requestId(message, 2)),
+      ).resolves.toMatchObject({ result: { path: "/local" } });
+      expect(browse).toHaveBeenCalledWith(expect.any(GitWorkspace), "/missing/project");
+      expect(officialWrite).not.toHaveBeenCalled();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("prepares a local workspace through Host RPC without forwarding to Codex", async () => {
     const prepare = vi
       .spyOn(ProjectSyncPeer.prototype, "prepareLocalWorkspace")

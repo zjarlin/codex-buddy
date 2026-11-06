@@ -1,4 +1,10 @@
 import {
+  cachedLocalWorkspaceProject,
+  resolveLocalWorkspaceProject,
+} from "./local-workspace-project.js";
+import { createLocalWorkspacePicker } from "./local-workspace-picker.js";
+import { threadProject } from "./project-tabs/native-binding.js";
+import {
   LOCAL_WORKSPACE_PREPARE_METHOD,
   localWorkspacePrepareParamsSchema,
   localWorkspacePrepareResultSchema,
@@ -49,7 +55,6 @@ export function installRendererLocalWorkspace(options: {
     [data-codexhost-local-workspace-dialog]::backdrop{background:#0006}
     [data-codexhost-local-workspace-dialog] form{display:grid;gap:12px}
     [data-codexhost-local-workspace-dialog] label{display:grid;gap:6px;font-size:13px}
-    [data-codexhost-local-workspace-dialog] input{box-sizing:border-box;width:100%;padding:8px;border:1px solid #8885;border-radius:6px;background:transparent;color:inherit;font:inherit}
     [data-codexhost-local-workspace-dialog] button{padding:6px 10px;border:1px solid #8885;border-radius:6px;background:transparent;color:inherit;cursor:pointer;font:inherit}
     [data-codexhost-local-workspace-dialog] button:disabled{opacity:.5;cursor:default}
     [data-codexhost-local-workspace-dialog] [role=status]{white-space:pre-wrap;font-size:13px;overflow-wrap:anywhere}
@@ -60,6 +65,7 @@ export function installRendererLocalWorkspace(options: {
   let dialog: HTMLDialogElement | null = null;
   let cacheError = "";
   const contexts = new Map<string, LocalWorkspaceContext>();
+  const projectCached = new Set<string>();
   const pending = new Map<string, Promise<LocalWorkspaceContext>>();
   const key = (target: Target) => JSON.stringify([target.hostId, target.threadId]);
   try {
@@ -92,20 +98,38 @@ export function installRendererLocalWorkspace(options: {
         ]);
         if (disposed || options.getManager(target.hostId) !== manager)
           throw new Error("Connection changed");
-        const context = captureLocalWorkspaceContext(
+        const captured = captureLocalWorkspaceContext(
           target.hostId,
           target.threadId,
           record(response).thread,
         );
+        const owner = threadProject(document, { ...target, cwd: captured.cwd });
+        const ownerPath: unknown = owner ? Reflect.get(owner, "path") : undefined;
+        const project = await resolveLocalWorkspaceProject({
+          context: captured,
+          cwd: typeof ownerPath === "string" && ownerPath ? ownerPath : captured.cwd,
+          manager,
+          local: options.getManager("local"),
+          isCurrent: () => !disposed && options.getManager(target.hostId) === manager,
+          storage: window.localStorage,
+        });
+        if (disposed || options.getManager(target.hostId) !== manager)
+          throw new Error("Connection changed");
+        const context = project.context;
+        if (project.cached) projectCached.add(id);
+        else projectCached.delete(id);
         contexts.delete(id);
         contexts.set(id, context);
         if (contexts.size > 8) {
           const oldest = contexts.keys().next().value;
-          if (oldest) contexts.delete(oldest);
+          if (oldest) {
+            contexts.delete(oldest);
+            projectCached.delete(oldest);
+          }
         }
         try {
           saveLocalWorkspaceContext(window.localStorage, context);
-          cacheError = "";
+          cacheError = project.warning;
         } catch (error) {
           cacheError = errorText(error);
         }
@@ -146,17 +170,26 @@ export function installRendererLocalWorkspace(options: {
     summary.setAttribute("aria-label", copy.title);
     help.append(summary, document.createTextNode(copy.details));
     const field = (label: string) => {
-      const wrapper = document.createElement("label");
-      const input = document.createElement("input");
-      input.type = "text";
-      input.autocomplete = "off";
-      input.spellcheck = false;
-      wrapper.append(document.createTextNode(label), input);
-      return { wrapper, input };
+      const wrapper = document.createElement("div");
+      const title = document.createElement("div");
+      title.textContent = label;
+      const value = document.createElement("span");
+      value.setAttribute("aria-label", label);
+      value.style.cssText = "display:block;overflow-wrap:anywhere;padding:8px 0";
+      wrapper.append(title, value);
+      return { wrapper, value };
     };
     const folder = field(copy.path);
     const remote = field(copy.remote);
-    folder.input.required = true;
+    const choose = document.createElement("button");
+    choose.type = "button";
+    choose.textContent = copy.chooseDirectory;
+    choose.disabled = true;
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.textContent = copy.resetDirectory;
+    reset.disabled = true;
+    folder.wrapper.append(choose, reset);
     const status = document.createElement("div");
     status.setAttribute("role", "status");
     status.textContent = copy.loading;
@@ -184,9 +217,34 @@ export function installRendererLocalWorkspace(options: {
     panel.addEventListener("close", () => {
       panel.remove();
       if (dialog === panel) dialog = null;
+      picker.close();
       button.focus();
     });
     close.addEventListener("click", () => panel.close());
+    const picker = createLocalWorkspacePicker({
+      document,
+      copy,
+      request: async (method, params) => {
+        const manager = options.getManager("local");
+        if (!manager) throw new Error(copy.localMissing);
+        const result = await manager.sendRequest(method, params, {
+          priority: "interactive",
+          timeoutMs: 15000,
+        });
+        if (disposed || dialog !== panel || options.getManager("local") !== manager)
+          throw new Error(copy.localMissing);
+        return result;
+      },
+      onSelect: (path) => {
+        folder.value.textContent = path;
+        explicitPath = true;
+        savePath();
+      },
+    });
+    form.insertBefore(picker.panel, status);
+    let explicitPath = false;
+    let savePath = () => {};
+    choose.addEventListener("click", () => picker.open(folder.value.textContent ?? ""));
     panel.showModal();
     let context: LocalWorkspaceContext | undefined;
     let cached = false;
@@ -194,6 +252,13 @@ export function installRendererLocalWorkspace(options: {
       context = await capture(target);
     } catch {
       context = contexts.get(key(target));
+      if (context) {
+        try {
+          context = cachedLocalWorkspaceProject(window.localStorage, context);
+        } catch (error) {
+          cacheError = errorText(error);
+        }
+      }
       cached = true;
     }
     if (disposed || dialog !== panel) return;
@@ -207,17 +272,39 @@ export function installRendererLocalWorkspace(options: {
     const contextStatus = `${cached ? copy.cached : copy.fresh} · ${new Date(snapshot.capturedAt).toLocaleString()}${snapshot.truncated ? `\n${copy.partial}` : ""}`;
     status.textContent = contextStatus;
     if (cacheError) status.textContent += `\n${copy.cacheFailed}${cacheError}`;
-    remote.input.value = snapshot.remote;
+    remote.value.textContent = snapshot.remote || copy.remoteMissing;
+    if (snapshot.remote && (cached || projectCached.has(key(target))))
+      status.textContent += `\n${copy.remoteCached}`;
+    folder.value.textContent = snapshot.cwd;
     try {
       const bindings = record(JSON.parse(window.localStorage.getItem(BINDINGS_KEY) ?? "{}"));
       const binding = record(bindings[bindingKey]);
-      folder.input.value = typeof binding.path === "string" ? binding.path : "";
-      if (typeof binding.remote === "string") remote.input.value = binding.remote;
+      if (binding.picked === true && typeof binding.path === "string") {
+        folder.value.textContent = binding.path;
+        explicitPath = true;
+      }
     } catch (error) {
       status.textContent += `\n${copy.cacheFailed}${errorText(error)}`;
     }
+    savePath = () => {
+      try {
+        const bindings = record(JSON.parse(window.localStorage.getItem(BINDINGS_KEY) ?? "{}"));
+        bindings[bindingKey] = { path: folder.value.textContent, picked: explicitPath };
+        window.localStorage.setItem(BINDINGS_KEY, JSON.stringify(bindings));
+      } catch (error) {
+        status.textContent += `\n${copy.cacheFailed}${errorText(error)}`;
+      }
+    };
+    reset.addEventListener("click", () => {
+      picker.close();
+      folder.value.textContent = snapshot.cwd;
+      explicitPath = false;
+      savePath();
+    });
     submit.disabled = false;
-    folder.input.focus();
+    choose.disabled = false;
+    reset.disabled = false;
+    submit.focus();
     const openLocal = async () => {
       if (!localThreadId) return;
       await options.openThread(localThreadId);
@@ -243,20 +330,18 @@ export function installRendererLocalWorkspace(options: {
       busy = true;
       submit.disabled = true;
       close.disabled = true;
-      folder.input.disabled = true;
-      remote.input.disabled = true;
+      choose.disabled = true;
+      reset.disabled = true;
+      picker.close();
       status.textContent = copy.working;
       void (async () => {
         const params = localWorkspacePrepareParamsSchema.parse({
-          path: folder.input.value,
-          ...(remote.input.value.trim() ? { remote: remote.input.value.trim() } : {}),
+          path: folder.value.textContent,
+          ...(snapshot.remote ? { remote: snapshot.remote } : {}),
         });
         const prepared = localWorkspacePrepareResultSchema.parse(
           await request(LOCAL_WORKSPACE_PREPARE_METHOD, params),
         );
-        const bindings = record(JSON.parse(window.localStorage.getItem(BINDINGS_KEY) ?? "{}"));
-        bindings[bindingKey] = { path: prepared.path, remote: params.remote ?? "" };
-        window.localStorage.setItem(BINDINGS_KEY, JSON.stringify(bindings));
         creationAttempted = true;
         const started = record(
           await request("thread/start", {
@@ -289,8 +374,8 @@ export function installRendererLocalWorkspace(options: {
           submit.disabled = creationAttempted;
           navigate.disabled = false;
           close.disabled = false;
-          folder.input.disabled = localThreadId !== null;
-          remote.input.disabled = localThreadId !== null;
+          choose.disabled = creationAttempted;
+          reset.disabled = creationAttempted;
         });
     });
   };

@@ -1,5 +1,9 @@
+import { localWorkspaceDirectories } from "./local-workspace-directories.js";
 import {
   LOCAL_WORKSPACE_PREPARE_METHOD,
+  LOCAL_WORKSPACE_DIRECTORIES_METHOD,
+  localWorkspaceDirectoriesParamsSchema,
+  GIT_ORIGIN_METHOD,
   localWorkspacePrepareParamsSchema,
 } from "@codexhost/shared-contracts";
 import { readSshTurnActions } from "./ssh-auto-model-routes.js";
@@ -2392,6 +2396,7 @@ export class AppServerHost {
       request.method === GIT_REPOSITORY_UNLINK_METHOD ||
       request.method === GIT_REPOSITORY_DIRECTORIES_METHOD ||
       request.method === GIT_REPOSITORY_CLONE_METHOD ||
+      request.method === GIT_ORIGIN_METHOD ||
       request.method === GIT_STATUS_METHOD ||
       request.method === GIT_DIFF_METHOD ||
       request.method === GIT_CONTENT_METHOD ||
@@ -2477,6 +2482,14 @@ export class AppServerHost {
       request.method === THREAD_FOLDERS_SET_METHOD
     ) {
       this.#dispatchDesktopRequest(() => this.#handleThreadFoldersSettingsRequest(request));
+      return;
+    }
+    if (request.method === LOCAL_WORKSPACE_DIRECTORIES_METHOD) {
+      this.#dispatchDesktopReply(request, async () => {
+        const params = localWorkspaceDirectoriesParamsSchema.parse(request.params);
+        const result = await localWorkspaceDirectories(this.#gitWorkspace, params.path);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+      });
       return;
     }
     if (request.method === LOCAL_WORKSPACE_PREPARE_METHOD) {
@@ -5205,6 +5218,14 @@ export class AppServerHost {
       input: GitWorkspaceTarget & { repository?: string | undefined },
     ) => links.resolve(await projectWorkspace(input), input.repository);
     try {
+      if (request.method === GIT_ORIGIN_METHOD) {
+        const params = gitWorkspaceParamsSchema.parse(request.params);
+        const cwd = await resolveWorkspace(params);
+        const result = { remote: await git.origin(cwd) };
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+
       if (
         [
           GIT_REPOSITORIES_METHOD,

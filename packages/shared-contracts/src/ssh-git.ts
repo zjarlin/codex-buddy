@@ -6,6 +6,7 @@ export const SSH_GIT_METHOD = "codexhost/ssh/git";
 // 仅转发确定的 Git 操作，不能把 SSH 通道当作任意命令或 Host RPC 代理。
 export const sshGitMethods = [
   "codexhost/git/status",
+  "codexhost/git/origin",
   "codexhost/git/diff",
   "codexhost/git/content",
   "codexhost/git/stage",

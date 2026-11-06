@@ -771,6 +771,10 @@ export {
 
 export {
   LOCAL_WORKSPACE_PREPARE_METHOD,
+  LOCAL_WORKSPACE_DIRECTORIES_METHOD,
+  localWorkspaceDirectoriesParamsSchema,
+  GIT_ORIGIN_METHOD,
+  gitOriginResultSchema,
   localWorkspacePrepareParamsSchema,
   localWorkspacePrepareResultSchema,
   type LocalWorkspacePrepareParams,

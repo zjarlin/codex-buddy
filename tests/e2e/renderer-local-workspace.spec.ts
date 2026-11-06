@@ -11,7 +11,7 @@ const { outputFiles } = await build({
       globalThis.setupLocalWorkspace = (mode) => {
         const sourceId = "7b249261-9be6-4562-8cea-555ed09455f1";
         const localId = "2b249261-9be6-4562-8cea-555ed09455f2";
-        const source = { id: sourceId, cwd: "/remote/project", name: "Pagination", turns: [{ items: [
+        const source = { id: sourceId, cwd: "/remote/project", name: "Pagination", gitInfo: { repositoryUrl: "https://example.test/cached.git" }, turns: [{ items: [
           { type: "userMessage", content: [{ type: "text", text: "Keep pagination in the URL" }] },
           { type: "commandExecution", command: "git status", aggregatedOutput: "clean" }
         ] }] };
@@ -20,10 +20,15 @@ const { outputFiles } = await build({
         const remote = { sendRequest: async (method, params) => {
           calls.push(["remote", method, params]);
           if (mode === "offline" || mode === "missing") throw new Error("disconnected");
+          if (method === "codexhost/git/origin") return { remote: "https://example.test/project.git" };
           return { thread: source };
         } };
         const local = { sendRequest: async (method, params) => {
           calls.push(["local", method, params]);
+          if (method === "codexhost/local-workspace/directories") return {
+            project: "/local", path: params.path === "/local/chosen" ? "/local/chosen" : "/local", parent: "/",
+            entries: params.path === "/local/chosen" ? [] : [{ name: "chosen", path: "/local/chosen" }], truncated: false
+          };
           if (method === "codexhost/local-workspace/prepare") {
             if (mode === "clone-failure") throw new Error("Clone failed");
             return { path: params.path, cloned: true };
@@ -93,10 +98,8 @@ for (const mode of ["online", "offline"]) {
     const dialog = page.getByRole("dialog");
     if (mode === "offline") await expect(dialog.getByRole("status")).toContainText("使用本机缓存");
     await expect(dialog.getByRole("button", { name: "准备目录并续接" })).toBeEnabled();
-    await dialog.getByLabel("本地工作区绝对路径").fill("/Users/example/公司的项目/local project");
-    await dialog
-      .getByLabel("Git 仓库地址", { exact: false })
-      .fill("https://example.test/project.git");
+    await expect(dialog.getByLabel("本地工作区绝对路径")).toHaveText("/remote/project");
+    await expect(dialog.locator("input")).toHaveCount(0);
     await dialog.getByRole("button", { name: "准备目录并续接" }).click();
     await expect(dialog).not.toBeVisible();
     expect(await page.evaluate(() => Reflect.get(globalThis, "localOpened"))).toBe(true);
@@ -104,13 +107,18 @@ for (const mode of ["online", "offline"]) {
     expect(
       calls
         .filter(([host]: string[]) => host === "remote")
-        .every(([, method]: string[]) => method === "thread/read"),
+        .every(([, method]: string[]) => ["thread/read", "codexhost/git/origin"].includes(method)),
     ).toBe(true);
+    expect(
+      calls.find(([, method]: string[]) => method === "codexhost/local-workspace/prepare")[2],
+    ).toEqual({
+      path: "/remote/project",
+      remote:
+        mode === "offline" ? "https://example.test/cached.git" : "https://example.test/project.git",
+    });
     const turn = calls.find(([, method]: string[]) => method === "turn/start");
     expect(turn[2].input[0].text).toContain("Keep pagination in the URL");
-    expect(turn[2].input[0].text).toContain(
-      "Current workspace: /Users/example/公司的项目/local project",
-    );
+    expect(turn[2].input[0].text).toContain("Current workspace: /remote/project");
     if (mode === "offline") expect(turn[2].input[0].text).toContain("1970-01-01T00:00:01.000Z");
   });
 }
@@ -124,7 +132,6 @@ test("blocks continuation when both remote and cached history are absent", async
 test("does not create a chat when clone fails", async ({ page }) => {
   await setup(page, "clone-failure");
   await expect(page.getByRole("button", { name: "准备目录并续接" })).toBeEnabled();
-  await page.getByLabel("本地工作区绝对路径").fill("/local/project");
   await page.getByRole("button", { name: "准备目录并续接" }).click();
   await expect(page.getByRole("status")).toContainText("Clone failed");
   await expect(page.getByRole("button", { name: "准备目录并续接" })).toBeEnabled();
@@ -142,7 +149,6 @@ test("retains the created chat and blocks duplicate creation after a turn failur
 }) => {
   await setup(page, "turn-failure");
   await expect(page.getByRole("button", { name: "准备目录并续接" })).toBeEnabled();
-  await page.getByLabel("本地工作区绝对路径").fill("/local/project");
   await page.getByRole("button", { name: "准备目录并续接" }).click();
   await expect(page.getByRole("status")).toContainText("Turn result unknown");
   await expect(page.getByRole("button", { name: "准备目录并续接" })).toBeDisabled();
@@ -162,7 +168,6 @@ test("does not retry an ambiguous creation request", async ({ page }) => {
   await setup(page, "start-failure");
   const submit = page.getByRole("button", { name: "准备目录并续接" });
   await expect(submit).toBeEnabled();
-  await page.getByLabel("本地工作区绝对路径").fill("/local/project");
   await submit.click();
   await expect(page.getByRole("status")).toContainText("创建请求结果尚未确认");
   await expect(submit).toBeDisabled();
@@ -188,4 +193,28 @@ test("restores the action after the native titlebar remounts", async ({ page }) 
   await expect(page.getByRole("button", { name: "切回本地" })).toHaveCount(1);
   await page.getByRole("button", { name: "切回本地" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
+});
+
+test("changes the path only on picker confirmation and remembers explicit selection", async ({
+  page,
+}) => {
+  await setup(page, "online");
+  const choose = page.getByRole("button", { name: "选择本地目录…", exact: true });
+  await expect(choose).toBeEnabled();
+  const folder = page.getByLabel("本地工作区绝对路径");
+  await choose.click();
+  await page.getByRole("button", { name: "📁 chosen", exact: true }).click();
+  await expect(page.getByRole("button", { name: "选择此目录", exact: true })).toBeEnabled();
+  await expect(folder).toHaveText("/remote/project");
+  await page.getByRole("button", { name: "取消选择", exact: true }).click();
+  await expect(folder).toHaveText("/remote/project");
+  await choose.click();
+  await page.getByRole("button", { name: "📁 chosen", exact: true }).click();
+  await page.getByRole("button", { name: "选择此目录", exact: true }).click();
+  await expect(folder).toHaveText("/local/chosen");
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "切回本地", exact: true }).click();
+  await expect(folder).toHaveText("/local/chosen");
+  await page.getByRole("button", { name: "使用远程同一路径", exact: true }).click();
+  await expect(folder).toHaveText("/remote/project");
 });

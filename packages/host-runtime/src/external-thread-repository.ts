@@ -72,6 +72,7 @@ export interface ExternalThreadStore {
     hostThreadId: HostThreadId,
     transportModelId: string,
   ): Promise<StoredThreadRecordV1>;
+  touchThread(hostThreadId: HostThreadId): Promise<StoredThreadRecordV1>;
   setArchived(hostThreadId: HostThreadId, archived: boolean): Promise<StoredThreadRecordV1>;
   updateMetadata(
     hostThreadId: HostThreadId,
@@ -213,6 +214,10 @@ export class ExternalThreadRepository {
     transportModelId: string,
   ): Promise<StoredThreadRecordV1> {
     return this.store.setTransportModelId(hostThreadId, transportModelId);
+  }
+
+  touchThread(hostThreadId: HostThreadId): Promise<StoredThreadRecordV1> {
+    return this.store.touchThread(hostThreadId);
   }
 
   setArchived(hostThreadId: HostThreadId, archived: boolean): Promise<StoredThreadRecordV1> {

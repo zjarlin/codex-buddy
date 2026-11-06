@@ -29,8 +29,16 @@ export class ThreadAutoArchive {
       listExternal(cutoffSeconds: number): Promise<ThreadAutoArchiveCandidate[]>;
       canArchiveOfficial(threadId: string, cutoffSeconds: number): Promise<boolean>;
       canArchiveExternal(threadId: string, cutoffSeconds: number): Promise<boolean>;
-      archiveOfficial(threadId: string, cutoffSeconds: number): Promise<void>;
-      archiveExternal(threadId: string, cutoffSeconds: number): Promise<void>;
+      archiveOfficial(
+        threadId: string,
+        cutoffSeconds: number,
+        isCurrent: () => boolean,
+      ): Promise<void>;
+      archiveExternal(
+        threadId: string,
+        cutoffSeconds: number,
+        isCurrent: () => boolean,
+      ): Promise<void>;
       allowed?(): Promise<boolean>;
       diagnose(error: unknown): void;
     },
@@ -39,31 +47,41 @@ export class ThreadAutoArchive {
   configure(value: unknown): ThreadAutoArchiveSettings {
     const settings = threadAutoArchiveSettingsSchema.parse(value);
     if (this.#stopped) throw new Error("Host is shutting down");
+    if (
+      settings.enabled === this.#settings.enabled &&
+      settings.inactiveDays === this.#settings.inactiveDays
+    ) {
+      return { ...settings };
+    }
     this.#settings = settings;
     if (settings.enabled && !this.#timer) {
       this.#timer = setInterval(() => this.check(), CHECK_INTERVAL_MS);
       this.#timer.unref();
-      this.check();
     } else if (!settings.enabled && this.#timer) {
       clearInterval(this.#timer);
       this.#timer = undefined;
     }
+    this.check();
     return { ...settings };
   }
 
   check(): void {
     if (this.#stopped || !this.#settings.enabled || this.#checking) return;
+    const settings = this.#settings;
     const checking = this.#run()
       .catch((error: unknown) => this.options.diagnose(error))
       .finally(() => {
         if (this.#checking === checking) this.#checking = undefined;
+        if (settings !== this.#settings) this.check();
       });
     this.#checking = checking;
   }
 
   async #run(): Promise<void> {
     const settings = this.#settings;
+    const isCurrent = () => !this.#stopped && settings.enabled && this.#settings === settings;
     if (this.options.allowed && !(await this.options.allowed())) return;
+    if (!isCurrent()) return;
     const cutoffSeconds = Math.floor(Date.now() / 1_000) - settings.inactiveDays * DAY_SECONDS;
     const candidates = new Map<string, { source: "official" | "external"; recencyAt: number }>();
     const discovered = await Promise.allSettled([
@@ -84,18 +102,20 @@ export class ThreadAutoArchive {
       }
     }
     for (const [threadId, candidate] of candidates) {
-      if (this.#stopped || !this.#settings.enabled) return;
+      if (!isCurrent()) return;
       if (this.options.allowed && !(await this.options.allowed())) return;
+      if (!isCurrent()) return;
       try {
         const canArchive =
           candidate.source === "official"
             ? await this.options.canArchiveOfficial(threadId, cutoffSeconds)
             : await this.options.canArchiveExternal(threadId, cutoffSeconds);
+        if (!isCurrent()) return;
         if (!canArchive) continue;
         if (candidate.source === "official") {
-          await this.options.archiveOfficial(threadId, cutoffSeconds);
+          await this.options.archiveOfficial(threadId, cutoffSeconds, isCurrent);
         } else {
-          await this.options.archiveExternal(threadId, cutoffSeconds);
+          await this.options.archiveExternal(threadId, cutoffSeconds, isCurrent);
         }
       } catch (error) {
         this.options.diagnose(error);
@@ -115,6 +135,6 @@ export class ThreadAutoArchive {
   }
 
   async drain(): Promise<void> {
-    await this.#checking;
+    while (this.#checking) await this.#checking;
   }
 }

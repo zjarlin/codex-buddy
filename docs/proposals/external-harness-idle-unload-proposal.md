@@ -258,3 +258,8 @@
 - 以下失败在未修改的 HEAD 隔离 worktree 中同样复现，与设置页改版无关：`renderer-external-queue.test.ts` 4 项；`renderer-binding-startup.spec.ts` 与 `renderer-chat-composer-isolation.spec.ts` 共 6 项；`renderer-usage-notification.spec.ts` 因打包未配置 `.svg` loader 无法构建。
 - 未启动真实 Codex Desktop，也未运行任何使用真实 Harness/账号的端到端自动释放验证，以免中断当前会话或启动付费请求。因此 Pi、OMP、Claude Code、CodeBuddy、Cursor、Grok、Hermes、Kiro、OpenCode、Antigravity、DeepSeek Harness 的真实资源释放范围、连续恢复和其他会话不受影响仍逐项待验证。
 - 全量测试、Rust 构建/测试未运行；没有 Rust 改动。
+
+
+## 活动时间与自动归档
+
+被动 `codexhost/thread/usage/inspect` 只读取已加载实例，不恢复已释放实例，也不更新空闲计时；显式请求精确用量刷新仍属于用户操作。前台打开会话与读取完整历史会持久化最近使用时间，供长期不用自动归档在释放或重启后继续使用。自动归档取得 Thread 维护占用期间，新的 Host 操作等待维护完成；原生后台任务及待处理交互阻止归档。

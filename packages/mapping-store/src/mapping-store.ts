@@ -885,6 +885,11 @@ export class MappingStore {
     );
   }
 
+  /** 查看会话也属于使用；写入最近时间，使释放实例和重启后仍能判断归档期限。 */
+  async touchThread(hostThreadId: HostThreadId): Promise<StoredThreadRecordV1> {
+    return this.#update(hostThreadId, (current) => ({ ...current }));
+  }
+
   async setArchived(hostThreadId: HostThreadId, archived: boolean): Promise<StoredThreadRecordV1> {
     return this.#update(hostThreadId, (current) =>
       current.archived === archived ? null : { ...current, archived },

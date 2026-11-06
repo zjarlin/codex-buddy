@@ -132,11 +132,17 @@ export function mountIdleReleaseControls(
     unavailable: messages.idleReleaseUnavailable,
     failed: messages.idleReleaseFailed,
   };
-  const showStatus = (value: IdleReleaseSyncStatus | ThreadAutoArchiveSyncStatus): void => {
-    status.dataset.state = value;
-    // An applied setting needs no message; only pending, unsupported or failed sync is shown.
-    status.hidden = value === "applied";
-    statusText.textContent = value === "applied" ? "" : statusMessages[value];
+  const statuses = new Map([
+    [IDLE_RELEASE_STATUS_EVENT, "pending" as IdleReleaseSyncStatus],
+    [THREAD_AUTO_ARCHIVE_STATUS_EVENT, "pending" as ThreadAutoArchiveSyncStatus],
+  ]);
+  const showStatus = (source: string, value: IdleReleaseSyncStatus): void => {
+    statuses.set(source, value);
+    const current = ["failed", "unavailable", "pending", "applied"] as const;
+    const combined = current.find((state) => [...statuses.values()].includes(state)) ?? "pending";
+    status.dataset.state = combined;
+    status.hidden = combined === "applied";
+    statusText.textContent = combined === "applied" ? "" : statusMessages[combined];
   };
   const setInvalid = (invalid: boolean): void => {
     field.dataset.invalid = String(invalid);
@@ -179,12 +185,12 @@ export function mountIdleReleaseControls(
   const save = (settings: IdleReleaseSettings): void => {
     if (writeIdleReleasePreference(owner, settings)) return;
     sync();
-    showStatus("failed");
+    showStatus(IDLE_RELEASE_STATUS_EVENT, "failed");
   };
   const saveArchive = (settings: ThreadAutoArchiveSettings): void => {
     if (writeThreadAutoArchivePreference(owner, settings)) return;
     sync();
-    showStatus("failed");
+    showStatus(THREAD_AUTO_ARCHIVE_STATUS_EVENT, "failed");
   };
 
   enabled.addEventListener("change", () => {
@@ -227,14 +233,14 @@ export function mountIdleReleaseControls(
       sync();
   };
   const onStatus = (event: Event): void =>
-    showStatus((event as CustomEvent<IdleReleaseSyncStatus | ThreadAutoArchiveSyncStatus>).detail);
+    showStatus(event.type, (event as CustomEvent<IdleReleaseSyncStatus>).detail);
   owner.addEventListener(IDLE_RELEASE_CHANGE_EVENT, sync);
   owner.addEventListener(IDLE_RELEASE_STATUS_EVENT, onStatus);
   owner.addEventListener(THREAD_AUTO_ARCHIVE_CHANGE_EVENT, sync);
   owner.addEventListener(THREAD_AUTO_ARCHIVE_STATUS_EVENT, onStatus);
   owner.addEventListener("storage", storage);
   sync();
-  showStatus("pending");
+  showStatus(IDLE_RELEASE_STATUS_EVENT, "pending");
   // Ask the installed connection synchronizer to report whether the saved setting was applied.
   owner.dispatchEvent(new Event(IDLE_RELEASE_CHANGE_EVENT));
   owner.dispatchEvent(new Event(THREAD_AUTO_ARCHIVE_CHANGE_EVENT));

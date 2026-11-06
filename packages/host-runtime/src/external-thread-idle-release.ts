@@ -22,6 +22,7 @@ interface Activity {
 export class ExternalThreadIdleRelease {
   readonly #activity = new WeakMap<ExternalThread, Activity>();
   readonly #operations = new Map<string, number>();
+  readonly #maintenance = new Map<string, Promise<void>>();
   readonly #closing = new Map<string, Promise<void>>();
   readonly #pending = new Set<Promise<unknown>>();
   readonly #scheduled = new Set<string>();
@@ -97,13 +98,42 @@ export class ExternalThreadIdleRelease {
   }
 
   /** Acquire before resolving a Session, not after an await has exposed its reference. */
-  async runOperation<T>(id: string | undefined, operation: () => Promise<T>): Promise<T> {
+  async runOperation<T>(
+    id: string | undefined,
+    operation: () => Promise<T>,
+    activity = true,
+  ): Promise<T> {
     if (this.#stopped) throw new Error("Host is shutting down");
     if (id) {
-      while (this.#closing.has(id)) await this.#closing.get(id);
+      while (this.#closing.has(id) || this.#maintenance.has(id)) {
+        const pending = this.#closing.get(id) ?? this.#maintenance.get(id);
+        // 维护失败由调度器报告；等待者仍须正常处理自己的请求。
+        await pending?.catch(() => undefined);
+      }
     }
     if (this.#stopped) throw new Error("Host is shutting down");
-    return this.#track(id, operation);
+    return this.#track(id, operation, true, activity);
+  }
+
+  /** 自动维护只占用空闲 Thread；新请求等待维护完成，维护本身不刷新活动时间。 */
+  runMaintenance(id: string, operation: () => Promise<void>): Promise<void> {
+    if (
+      this.#stopped ||
+      this.#operations.has(id) ||
+      this.#closing.has(id) ||
+      this.#maintenance.has(id)
+    ) {
+      return Promise.resolve();
+    }
+    const task = Promise.resolve()
+      .then(operation)
+      .finally(() => {
+        this.#maintenance.delete(id);
+        this.#pending.delete(task);
+      });
+    this.#maintenance.set(id, task);
+    this.#pending.add(task);
+    return task;
   }
 
   /** Closing may emit outputs: consume them without waiting on the close being drained. */
@@ -112,7 +142,12 @@ export class ExternalThreadIdleRelease {
     return this.#track(thread.id, operation, false);
   }
 
-  #track<T>(id: string | undefined, operation: () => Promise<T>, drain = true): Promise<T> {
+  #track<T>(
+    id: string | undefined,
+    operation: () => Promise<T>,
+    drain = true,
+    activity = true,
+  ): Promise<T> {
     if (id) this.#operations.set(id, (this.#operations.get(id) ?? 0) + 1);
     const task = Promise.resolve()
       .then(operation)
@@ -122,9 +157,9 @@ export class ExternalThreadIdleRelease {
           if (remaining) this.#operations.set(id, remaining);
           else {
             this.#operations.delete(id);
-            const thread = this.options.get(id);
-            if (thread) this.touch(thread);
           }
+          const thread = this.options.get(id);
+          if (thread && activity) this.touch(thread);
         }
         this.#pending.delete(task);
       });
@@ -158,7 +193,7 @@ export class ExternalThreadIdleRelease {
       ) {
         state = "blocked";
         reason = "identity";
-      } else if (this.#operations.has(thread.id)) {
+      } else if (this.#operations.has(thread.id) || this.#maintenance.has(thread.id)) {
         state = "busy";
         reason = "operation";
       } else if (!this.options.canRelease(thread)) {
@@ -190,6 +225,7 @@ export class ExternalThreadIdleRelease {
       !state.closeFailed &&
       this.options.get(thread.id) === thread &&
       !this.#closing.has(thread.id) &&
+      !this.#maintenance.has(thread.id) &&
       !this.#operations.has(thread.id) &&
       !thread.record.subagent &&
       thread.record.state === "ready" &&

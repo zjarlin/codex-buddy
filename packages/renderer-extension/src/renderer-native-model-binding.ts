@@ -11,6 +11,20 @@ interface NativeModelOption {
   disabledReason?: unknown;
 }
 
+// 原生 Composer 模型菜单在 React props 上的契约。模型目录与选择回调是
+// 模型菜单的稳定信号；思考强度可能由 onSelectReasoningEffort 发布，也可能
+// 由 onSelectPower/powerSelections 发布，两种形态都接受。
+export function isNativeModelMenuProps(value: unknown): boolean {
+  const props = record(value);
+  if (!props || !Array.isArray(props.modelOptions) || typeof props.onSelectModel !== "function")
+    return false;
+  return (
+    typeof props.onSelectReasoningEffort === "function" ||
+    typeof props.onSelectPower === "function" ||
+    Array.isArray(props.powerSelections)
+  );
+}
+
 // 复用原生模型选择回调；手填 ID 不依赖目录成员资格，也不改写发送请求。
 export function nativeModelBinding(trigger: HTMLElement | null): {
   view: ModelShortcutView;
@@ -33,11 +47,14 @@ export function nativeModelBinding(trigger: HTMLElement | null): {
         disabledReason: option?.disabledReason,
       });
     }
+    // 与原生菜单一致：禁用只来自菜单与选项状态。menuFooter 是菜单底部的
+    // 附加内容（例如额度提升提示），不代表模型选择被锁定。
+    const daybreak = record(props.daybreak);
     const disabled =
       props.disabled === true ||
       props.modelOptionsDisabled === true ||
-      record(props.daybreak)?.isSaving === true ||
-      props.menuFooter != null;
+      daybreak?.disabled === true ||
+      daybreak?.isSaving === true;
     // 隐藏或目录外的锁定模型也必须在关闭自动策略之前被拒绝。
     const unavailableModelIds = options
       .filter(({ disabledReason }) => disabledReason != null)

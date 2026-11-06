@@ -187,7 +187,7 @@ describe("Renderer Agent picker presentation", () => {
     const element = (
       ownAttributes: readonly string[],
       matches: boolean,
-      modelProps: boolean,
+      props: Record<string, unknown> | null,
       attributes: Readonly<Record<string, string>> = {},
     ) => {
       const candidate = {
@@ -196,33 +196,50 @@ describe("Renderer Agent picker presentation", () => {
         matches: () => matches,
       } as unknown as Element;
       Object.defineProperty(candidate, "__reactFiber$test", {
-        value: {
-          memoizedProps: modelProps
-            ? {
-                onSelectModel: () => undefined,
-                onSelectReasoningEffort: () => undefined,
-                reasoningEffort: "medium",
-                fallbackPowerSelection: {},
-              }
-            : {},
-        },
+        value: { memoizedProps: props ?? {} },
       });
       return candidate;
     };
 
-    expect(isNativeModelControlCandidate(element([], true, true))).toBe(true);
+    const legacyProps = {
+      modelOptions: [{ model: { model: "auto", displayName: "Auto" } }],
+      onSelectModel: () => undefined,
+      onSelectReasoningEffort: () => undefined,
+      reasoningEffort: "medium",
+      fallbackPowerSelection: {},
+    };
+    const currentProps = {
+      model: "auto",
+      modelOptions: [{ model: { model: "auto", displayName: "Auto" } }],
+      onSelectModel: () => undefined,
+      onSelectPower: () => undefined,
+      onCommitPower: () => undefined,
+      powerSelections: [],
+      reasoningEffort: "medium",
+    };
+
+    expect(isNativeModelControlCandidate(element([], true, legacyProps))).toBe(true);
     expect(
       isNativeModelControlCandidate(
-        element([], true, false, {
+        element([], true, currentProps, {
+          "data-composer-navigation-target": "reasoning",
+        }),
+      ),
+    ).toBe(true);
+    // 其他菜单即使祖先带有模型列表，也不能冒充推理导航目标。
+    expect(isNativeModelControlCandidate(element([], true, currentProps))).toBe(false);
+    expect(
+      isNativeModelControlCandidate(
+        element([], true, null, {
           "data-codex-intelligence-trigger": "true",
           "data-composer-navigation-target": "reasoning",
         }),
       ),
     ).toBe(true);
-    expect(isNativeModelControlCandidate(element([], true, false))).toBe(false);
-    expect(isNativeModelControlCandidate(element([], false, true))).toBe(false);
+    expect(isNativeModelControlCandidate(element([], true, null))).toBe(false);
+    expect(isNativeModelControlCandidate(element([], false, currentProps))).toBe(false);
     expect(
-      isNativeModelControlCandidate(element(["data-codexhost-agent-control"], true, true)),
+      isNativeModelControlCandidate(element(["data-codexhost-agent-control"], true, currentProps)),
     ).toBe(false);
   });
 });

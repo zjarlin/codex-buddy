@@ -51,7 +51,7 @@ import {
 import type { RendererSettingsLocale } from "./settings/localization.js";
 import type { ModelShortcutView } from "./renderer-model-shortcuts.js";
 import { mountModelShortcuts } from "./renderer-model-shortcuts.js";
-import { nativeModelBinding } from "./renderer-native-model-binding.js";
+import { isNativeModelMenuProps, nativeModelBinding } from "./renderer-native-model-binding.js";
 import type { RendererAdapterStatus } from "./versioned-renderer-adapter.js";
 import type { ModelRefreshReport } from "./renderer-model-refresh-summary.js";
 import type { ModelRefreshOutcome } from "./renderer-model-refresh-summary.js";
@@ -263,9 +263,11 @@ export function isNativeModelControlCandidate(element: Element): boolean {
   ) {
     return false;
   }
+  const ownsReasoningNavigation =
+    element.getAttribute("data-composer-navigation-target") === "reasoning";
   if (
-    element.getAttribute("data-codex-intelligence-trigger") === "true" &&
-    element.getAttribute("data-composer-navigation-target") === "reasoning"
+    ownsReasoningNavigation &&
+    element.getAttribute("data-codex-intelligence-trigger") === "true"
   ) {
     return true;
   }
@@ -282,10 +284,11 @@ export function isNativeModelControlCandidate(element: Element): boolean {
     const props = fiber.memoizedProps;
     if (
       isRecord(props) &&
-      typeof props.onSelectModel === "function" &&
-      typeof props.onSelectReasoningEffort === "function" &&
-      "reasoningEffort" in props &&
-      isRecord(props.fallbackPowerSelection)
+      isNativeModelMenuProps(props) &&
+      // 只有推理导航按钮带该属性；其他菜单即使祖先带有模型列表，
+      // 也不能冒充模型控件。旧版仍以推理回调与当前强度确认归属。
+      (ownsReasoningNavigation ||
+        (typeof props.onSelectReasoningEffort === "function" && "reasoningEffort" in props))
     ) {
       return true;
     }

@@ -40,6 +40,18 @@ describe("native manual model selection", () => {
     expect(binding.view.models.map(({ id }) => id)).toEqual(["known"]);
   });
 
+  it("binds the current Composer menu that publishes power selection instead of onSelectReasoningEffort", () => {
+    const { binding, onSelectModel } = fixture({
+      onSelectPower: () => undefined,
+      onCommitPower: () => undefined,
+      powerSelections: [],
+    });
+    expect(binding.view.disabled).toBe(false);
+    expect(binding.view.models).toEqual([{ id: "known", label: "Known", disabled: false }]);
+    binding.select("known");
+    expect(onSelectModel).toHaveBeenCalledExactlyOnceWith("known", "low");
+  });
+
   it("keeps the explicit selected ID when the entire directory disappears", () => {
     const { binding, onSelectModel } = fixture({
       model: "Provider/Recovered-Model",
@@ -64,12 +76,19 @@ describe("native manual model selection", () => {
     { disabled: true },
     { modelOptionsDisabled: true },
     { daybreak: { isSaving: true } },
-    { menuFooter: {} },
+    { daybreak: { disabled: true } },
     { lockedModelSlug: "custom" },
   ])("retains native availability guards for custom IDs: %j", (overrides) => {
     const { binding, onSelectModel } = fixture(overrides);
     expect(() => binding.select("custom")).toThrow("unavailable");
     expect(onSelectModel).not.toHaveBeenCalled();
+  });
+
+  it("keeps the menu usable when it renders footer content", () => {
+    const { binding, onSelectModel } = fixture({ menuFooter: {} });
+    expect(binding.view.disabled).toBe(false);
+    binding.select("known");
+    expect(onSelectModel).toHaveBeenCalledExactlyOnceWith("known", "low");
   });
 
   it("does not allow manually typed IDs to bypass a disabled model, including hidden entries", () => {

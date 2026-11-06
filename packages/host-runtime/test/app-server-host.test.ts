@@ -1545,6 +1545,15 @@ describe("Buddy legacy privacy migration", () => {
         await expect(
           fixture.collector.waitFor((message) => message.id === id),
         ).resolves.toMatchObject({ result: {} });
+        const rename = await readJsonLine(fixture.official.stdin);
+        expect(rename).toMatchObject({
+          method: "thread/name/set",
+          params: { threadId: "synthetic-thread", name: "【隐私】ordinary input" },
+        });
+        writeRequest(fixture.official.stdout, {
+          id: requiredMessageId(rename),
+          result: {},
+        });
       }
       writeRequest(fixture.official.stdout, {
         id: "approval",

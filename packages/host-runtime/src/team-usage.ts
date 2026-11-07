@@ -226,6 +226,9 @@ export class TeamUsage {
     try {
       const state = await this.#states.read();
       this.#liveSettings = { name: state.name, department: state.department };
+      // A Host that never enabled team usage keeps its data directory untouched: the stable ID
+      // is created with the first listener, not on every start.
+      if (!state.enabled) return;
       await this.#apply(state);
       await this.#applyDiscovery(state, await this.#states.id());
     } catch (error) {

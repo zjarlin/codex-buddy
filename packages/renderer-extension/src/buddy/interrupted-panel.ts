@@ -7,6 +7,7 @@ import type { RendererModelClient } from "../renderer-model-client.js";
 import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
 import { MODEL_FAVORITES_CHANGED, readModelFavorites } from "../renderer-model-favorites.js";
 import { createRecoveryHeader } from "./recovery-header.js";
+import { createAutoResume, type AutoResumeState } from "./auto-resume.js";
 import {
   InterruptedEntryGoneError,
   type InterruptedQueue,
@@ -26,6 +27,17 @@ const messages = {
     resuming: "正在恢复…",
     resumeAll: "一键恢复所有",
     resumeAllHint: "按顺序恢复当前连接下列表中的所有中断会话。",
+    autoResume: "网关恢复后自动续接",
+    autoResumeHint:
+      "中断队列非空时检查网关 /ready（不可用时回退 /health）；恢复后自动逐条续接。已取消的会话不自动续接，同一回合最多自动尝试 3 次。",
+    autoWaiting: (count: number) => `网关未就绪；恢复后会自动续接 ${count} 条中断会话。`,
+    autoRunning: (count: number) => `网关已恢复，正在自动续接 ${count} 条中断会话。`,
+    autoFallback: "主网关不可用，备用供应商可用；续接会按现有故障接续顺序切换。",
+    autoReady: (count: number) =>
+      `网关已就绪；仍有 ${count} 条中断会话等待下一次自动尝试或手动恢复。`,
+    autoExhausted: (count: number) => `${count} 条会话已自动尝试 3 次，仍保留在队列中。`,
+    autoUnsupported: "当前 Host 不支持自动续接所需的健康检查或续接接口，只能手动恢复。",
+    autoResumeFailed: "自动续接失败",
     resumeWithModel: "以某模型 ID 继续",
     resumeWithModelHint: "复用当前模型选择；指定模型 ID 可避免自动选模导致再次中断。",
     resumeFailed: "恢复失败",
@@ -60,6 +72,22 @@ const messages = {
     resuming: "Resuming…",
     resumeAll: "Resume all",
     resumeAllHint: "Resume all interrupted conversations listed on this connection, one by one.",
+    autoResume: "Resume after gateway recovers",
+    autoResumeHint:
+      "While the interruption queue is non-empty, probe the gateway /ready endpoint (falling back to /health); resume queued chats one by one after recovery. Cancelled chats are never resumed automatically, and each turn is tried at most 3 times.",
+    autoWaiting: (count: number) =>
+      `Gateway not ready; ${count} interrupted chat${count === 1 ? "" : "s"} will resume after recovery.`,
+    autoRunning: (count: number) =>
+      `Gateway recovered; resuming ${count} interrupted chat${count === 1 ? "" : "s"}.`,
+    autoFallback:
+      "Primary gateway unavailable; a fallback provider is healthy, so resume will use the existing failover order.",
+    autoReady: (count: number) =>
+      `Gateway ready; ${count} interrupted chat${count === 1 ? "" : "s"} can be retried automatically or manually.`,
+    autoExhausted: (count: number) =>
+      `${count} chat${count === 1 ? "" : "s"} exhausted 3 automatic attempts and remain queued.`,
+    autoUnsupported:
+      "This Host lacks the health check or continuation interface needed for automatic resume; use manual resume.",
+    autoResumeFailed: "Automatic resume failed",
     resumeWithModel: "Resume with model ID",
     resumeWithModelHint:
       "Reuse current model picker; specifying a model ID avoids repeated interruptions from auto selection.",
@@ -87,6 +115,23 @@ const messages = {
 };
 
 const keyFor = (thread: InterruptedThread) => JSON.stringify([thread.threadId, thread.turnId]);
+const AUTO_RESUME_STORAGE_KEY = "codexhost.interrupted-auto-resume.v1";
+function readAutoResumeEnabled(): boolean {
+  try {
+    if (typeof window === "undefined") return true;
+    return window.localStorage?.getItem(AUTO_RESUME_STORAGE_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+function writeAutoResumeEnabled(enabled: boolean): void {
+  try {
+    if (typeof window !== "undefined")
+      window.localStorage?.setItem(AUTO_RESUME_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {
+    // 本机存储不可用时保持当前窗口内的选择。
+  }
+}
 
 interface TurnAccountsView {
   loading: boolean;
@@ -118,6 +163,8 @@ function session(client: RendererModelClient | null, hostId: string | null = nul
     modelView: null as ModelShortcutView | null,
     harnessId: "",
     accounts: new Map<string, TurnAccountsView>(),
+    autoResumeEnabled: readAutoResumeEnabled(),
+    auto: null as AutoResumeState | null,
   };
 }
 
@@ -139,10 +186,12 @@ export function createInterruptedPanel(
   let focusToggle = false;
   let selectedModelId = "";
   let customModelId = "";
+  let autoResume: ReturnType<typeof createAutoResume> | null = null;
   const header = createRecoveryHeader(getLocale, () => resumeAll());
   const syncQueue = () => {
     state.threads = state.hostId ? queue.list(state.hostId) : [];
     render();
+    autoResume?.update();
   };
   const stopQueue = queue.subscribe(syncQueue);
   const favoritesChanged = (): void => render();
@@ -179,7 +228,10 @@ export function createInterruptedPanel(
       return false;
     } finally {
       target.loading = false;
-      if (current(target)) render();
+      if (current(target)) {
+        render();
+        autoResume?.update();
+      }
     }
   }
 
@@ -188,7 +240,8 @@ export function createInterruptedPanel(
     thread: InterruptedThread,
     modelId?: string,
     action: "resume" | "archive" = "resume",
-  ): Promise<void> {
+    source: "manual" | "auto" = "manual",
+  ): Promise<boolean> {
     const key = keyFor(thread);
     if (
       !current(target) ||
@@ -197,18 +250,20 @@ export function createInterruptedPanel(
       target.pending.has(key) ||
       queue.isPending(thread)
     ) {
-      return;
+      return false;
     }
     target.pending.add(key);
     target.failures.delete(key);
-    target.error = "";
+    if (source === "manual") target.error = "";
     render();
+    let succeeded = false;
     try {
       if (action === "archive") {
         await queue.archive(thread);
       } else {
-        await queue.resume(thread, modelId);
+        await queue.resume(thread, modelId, { auto: source === "auto" });
       }
+      succeeded = true;
       target.threads = target.hostId ? queue.list(target.hostId) : [];
       if (current(target) && !target.batch) onResumed?.();
     } catch (failure) {
@@ -217,6 +272,8 @@ export function createInterruptedPanel(
         target.failures.delete(key);
         target.gone.add(key);
         target.vanished = target.gone.size;
+      } else if (source === "auto") {
+        target.error = `${messages[getLocale()].autoResumeFailed}: ${errorMessage(failure)}`;
       } else {
         target.failures.set(
           key,
@@ -227,6 +284,7 @@ export function createInterruptedPanel(
       target.pending.delete(key);
       if (current(target)) render();
     }
+    return succeeded;
   }
 
   // 调度账号按「会话 + 回合」缓存；展开列表时按需回查网关，不阻塞恢复操作。
@@ -323,34 +381,38 @@ export function createInterruptedPanel(
     }
   }
 
-  async function resumeAll(modelId?: string): Promise<void> {
-    const target = state;
+  async function resumeEntries(
+    target: typeof state,
+    threads: InterruptedThread[],
+    modelId?: string,
+    source: "manual" | "auto" = "manual",
+  ): Promise<void> {
     if (
       !current(target) ||
       target.batch ||
       target.loading ||
       target.pending.size > 0 ||
-      target.threads.some(queue.isPending)
+      target.threads.some(queue.isPending) ||
+      threads.length === 0
     )
       return;
-    const candidates = [...target.threads];
+    const candidates = [...threads];
     const startedAtEpoch = epoch;
     target.batch = true;
     target.total = candidates.length;
     target.completed = 0;
     target.succeeded = 0;
+    target.error = "";
     target.gone.clear();
     target.vanished = 0;
     render();
     try {
-      // 只处理点击时的列表；逐条提交，切换连接或卸载后停止剩余请求。
+      // 只处理触发时的列表；逐条提交，切换连接或卸载后停止剩余请求。
       for (const thread of candidates) {
         if (!current(target) || epoch !== startedAtEpoch) break;
-        await resume(target, thread, modelId);
+        const succeeded = await resume(target, thread, modelId, "resume", source);
         target.completed += 1;
-        // 已不存在的会话既没有提交恢复，也不算失败。
-        if (!target.gone.has(keyFor(thread)) && !target.failures.has(keyFor(thread)))
-          target.succeeded += 1;
+        if (succeeded) target.succeeded += 1;
         if (current(target)) render();
       }
     } finally {
@@ -359,8 +421,41 @@ export function createInterruptedPanel(
         target.threads = target.hostId ? queue.list(target.hostId) : [];
         render();
         if (target.succeeded > 0) onResumed?.();
+        autoResume?.update();
       }
     }
+  }
+
+  async function resumeAll(modelId?: string): Promise<void> {
+    await resumeEntries(state, state.threads, modelId, "manual");
+  }
+
+  function createResumeAutomation() {
+    return createAutoResume({
+      enabled: () => {
+        const client = state.client;
+        return Boolean(
+          state.autoResumeEnabled && state.hostId && client?.buddyHealth && client.buddyContinue,
+        );
+      },
+      busy: () =>
+        state.loading ||
+        state.batch ||
+        state.pending.size > 0 ||
+        state.threads.some(queue.isPending),
+      candidates: () => (state.hostId ? queue.list(state.hostId) : []),
+      probe: async () => {
+        const client = state.client;
+        if (!client?.buddyHealth) throw new Error("当前连接不支持网关健康检查。");
+        return client.buddyHealth();
+      },
+      resume: (entries) => resumeEntries(state, entries, undefined, "auto"),
+      onChange: (next) => {
+        if (disposed) return;
+        state.auto = next;
+        render();
+      },
+    });
   }
 
   function render(): void {
@@ -471,6 +566,19 @@ export function createInterruptedPanel(
     const queueError = state.hostId ? queue.problem(state.hostId) : "";
     if (queueError) note(queueError, true);
     if (state.unreadable > 0) note(`${state.unreadable} ${m.unreadable}`);
+    const auto = state.auto;
+    if (state.autoResumeEnabled && auto && auto.pending + auto.exhausted > 0) {
+      const primaryDown = auto.providers.some(
+        (provider) => !provider.fallback && !provider.healthy,
+      );
+      const fallbackUp = auto.providers.some((provider) => provider.fallback && provider.healthy);
+      if (!auto.supported) note(m.autoUnsupported);
+      else if (primaryDown && fallbackUp) note(m.autoFallback);
+      else if (auto.running) note(m.autoRunning(auto.pending));
+      else if (auto.health === "unhealthy" && auto.pending > 0) note(m.autoWaiting(auto.pending));
+      else if (auto.health === "healthy" && auto.pending > 0) note(m.autoReady(auto.pending));
+      if (auto.exhausted > 0) note(m.autoExhausted(auto.exhausted));
+    }
     if (expanded && !state.loading && state.threads.length === 0 && !state.error) note(m.empty);
     const reload = document.createElement("button");
     reload.type = "button";
@@ -498,6 +606,25 @@ export function createInterruptedPanel(
       void resumeAll();
     });
     toolbar.append(reload, all);
+    const autoSupported = Boolean(state.client.buddyHealth && state.client.buddyContinue);
+    const autoLabel = document.createElement("label");
+    autoLabel.className = "buddy-interrupted-auto-resume";
+    autoLabel.title = autoSupported ? m.autoResumeHint : m.autoUnsupported;
+    const autoToggle = document.createElement("input");
+    autoToggle.type = "checkbox";
+    autoToggle.checked = state.autoResumeEnabled;
+    autoToggle.disabled = !autoSupported;
+    autoToggle.addEventListener("change", () => {
+      state.autoResumeEnabled = autoToggle.checked;
+      writeAutoResumeEnabled(autoToggle.checked);
+      autoResume?.reset();
+      render();
+      autoResume?.update();
+    });
+    const autoText = document.createElement("span");
+    autoText.textContent = m.autoResume;
+    autoLabel.append(autoToggle, autoText);
+    toolbar.append(autoLabel);
     // 收起后只保留标题行、刷新、批量入口和已知提示；模型 ID 行和列表留给展开状态。
     if (!expanded) {
       finish();
@@ -719,8 +846,11 @@ export function createInterruptedPanel(
     ) {
       if (disposed) return;
       if (client !== state.client || hostId !== state.hostId) {
+        autoResume?.dispose();
+        autoResume = null;
         state = session(client, hostId);
         epoch += 1;
+        if (state.client && state.hostId) autoResume = createResumeAutomation();
       }
       if (modelView !== undefined) state.modelView = modelView;
       if (harnessId !== undefined) state.harnessId = harnessId;
@@ -729,6 +859,8 @@ export function createInterruptedPanel(
     refresh,
     dispose() {
       disposed = true;
+      autoResume?.dispose();
+      autoResume = null;
       window.removeEventListener(MODEL_FAVORITES_CHANGED, favoritesChanged);
       window.removeEventListener("storage", favoritesChanged);
       stopQueue();

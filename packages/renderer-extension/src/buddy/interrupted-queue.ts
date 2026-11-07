@@ -3,6 +3,7 @@ import type { RendererModelClient, RendererThreadTurnState } from "../renderer-m
 import { assertNativeCodexThread, isMissingNativeThreadError } from "../renderer-native-thread.js";
 
 export const INTERRUPTED_QUEUE_STORAGE_KEY = "codexhost.interrupted-queue.v1";
+export const AUTO_RESUME_MAX_ATTEMPTS = 3;
 
 /** 会话在 Host 上已不存在（被删除或 rollout 丢失），既不能恢复也不能归档。 */
 export class InterruptedEntryGoneError extends Error {
@@ -21,6 +22,8 @@ export interface InterruptedQueueEntry {
   turnId: string;
   title: string;
   status: Status;
+  /** 自动续接已提交的次数；手动恢复不增加。达到上限后只保留手动入口。 */
+  autoResumeAttempts?: number;
 }
 type SettledStatus = "active" | "completed" | "archived" | "vanished";
 interface QueueRecord extends Omit<InterruptedQueueEntry, "status"> {
@@ -93,6 +96,12 @@ export function createInterruptedQueue(options: {
         if ((entries.get(key)?.updatedAt ?? -1) < entry.updatedAt)
           entries.set(key, {
             ...entry,
+            autoResumeAttempts:
+              typeof entry.autoResumeAttempts === "number" &&
+              Number.isFinite(entry.autoResumeAttempts) &&
+              entry.autoResumeAttempts >= 0
+                ? Math.floor(entry.autoResumeAttempts)
+                : undefined,
             previousTurnIds: Array.isArray(entry.previousTurnIds)
               ? entry.previousTurnIds
                   .filter((id): id is string => typeof id === "string")
@@ -440,9 +449,18 @@ export function createInterruptedQueue(options: {
     entry: InterruptedQueueEntry,
     action: "resume" | "archive",
     model?: string,
+    source: "manual" | "auto" = "manual",
   ): Promise<void> {
     const key = keyFor(entry.hostId, entry.threadId);
     if (!same(entry)) throw new Error("队列中的会话状态已改变。");
+    if (source === "auto" && action === "resume") {
+      readStorage();
+      const current = entries.get(key);
+      if (!current || current.turnId !== entry.turnId || !interrupted(current.status))
+        throw new Error("队列中的会话状态已改变。");
+      if ((current.autoResumeAttempts ?? 0) >= AUTO_RESUME_MAX_ATTEMPTS)
+        throw new Error("自动续接次数已达上限，请手动恢复。");
+    }
     if (pending.has(key)) throw new Error("该会话正在处理中，请勿重复操作。");
     const client = options.getClient(entry.hostId);
     if (
@@ -488,6 +506,13 @@ export function createInterruptedQueue(options: {
       if (state.running || state.turnId !== entry.turnId || settled) {
         remove(entry, "completed");
         throw new Error("会话已运行或最新回合已改变，已移出中断队列。");
+      }
+      if (source === "auto" && action === "resume") {
+        readStorage();
+        const current = entries.get(key);
+        if (!current || current.turnId !== entry.turnId || !interrupted(current.status))
+          throw new Error("队列中的会话状态已改变。");
+        put({ ...current, autoResumeAttempts: (current.autoResumeAttempts ?? 0) + 1 });
       }
       // 提交步骤超时只代表结果未知：保留条目，由用户查看会话后决定是否重试。
       const submit = (operation: Promise<void>) =>
@@ -537,7 +562,8 @@ export function createInterruptedQueue(options: {
       readStorage();
       emit();
     },
-    resume: (entry: InterruptedQueueEntry, model?: string) => act(entry, "resume", model),
+    resume: (entry: InterruptedQueueEntry, model?: string, options?: { auto?: boolean }) =>
+      act(entry, "resume", model, options?.auto ? "auto" : "manual"),
     archive: (entry: InterruptedQueueEntry) => act(entry, "archive"),
     async importHistory(hostId: string): Promise<number> {
       const client = options.getClient(hostId);

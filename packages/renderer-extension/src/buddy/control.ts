@@ -12,6 +12,8 @@ const style = `
 [data-buddy-recovery] .buddy-interrupted-heading b{font-size:11px;font-weight:500}
 [data-buddy-recovery] .buddy-interrupted-count{min-width:16px;padding:0 5px;border-radius:999px;font-size:10px;text-align:center;background:color-mix(in srgb,currentColor 14%,transparent)}
 [data-buddy-recovery] .buddy-interrupted-model-resume{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto;max-width:100%}
+[data-buddy-recovery] .buddy-interrupted-auto-resume{display:inline-flex;align-items:center;gap:4px;font-size:11px;opacity:.8;white-space:nowrap}
+[data-buddy-recovery] .buddy-interrupted-auto-resume input{height:auto;padding:0;margin:0}
 [data-buddy-recovery] :is(select,input){min-width:0;max-width:220px;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:6px;padding:3px 6px;font:inherit;height:26px;background:color-mix(in srgb,currentColor 4%,transparent);color:inherit}
 [data-buddy-recovery] button{display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap;font:inherit;background:transparent;color:inherit;border:1px solid color-mix(in srgb,currentColor 25%,transparent);border-radius:6px;padding:4px 8px;cursor:pointer}
 [data-buddy-recovery] button:disabled{opacity:.55;cursor:default}

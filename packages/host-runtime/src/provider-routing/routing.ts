@@ -6,7 +6,9 @@ import {
   type ProviderRoutingSnapshot,
   type ProviderSyncResult,
   type HostThreadId,
+  type ProviderHealth,
 } from "@codexhost/shared-contracts";
+import { probeProviderHealth } from "../provider-health.js";
 import { GatewayProjectAttribution } from "./project-attribution.js";
 import { ProviderRoutingStore } from "./store.js";
 import { mergeProviderModels, syncProviderModels } from "./models.js";
@@ -150,6 +152,42 @@ export class ProviderRouting {
         ...config.providers,
       ]),
     };
+  }
+
+  /**
+   * 检查当前会话会用到的主供应商与备用供应商。显式选择会话供应商时只看该目标；
+   * 自动模式按现有顺序返回主供应商和已启用且有密钥的备用项。
+   */
+  async health(input: {
+    primaryProviderId: string;
+    threadId?: string;
+    primaryHeaders?: HeadersInit;
+    fetch?: typeof fetch;
+    timeoutMs?: number;
+  }): Promise<ProviderHealth[]> {
+    const targets = await this.#targets(input.primaryProviderId, input.threadId);
+    return Promise.all(
+      targets.map(async (target) => {
+        const headers = target.apiKey
+          ? { Authorization: `Bearer ${target.apiKey}` }
+          : target.fallback
+            ? undefined
+            : input.primaryHeaders;
+        const result = await probeProviderHealth(target.baseUrl, headers, {
+          ...(input.fetch ? { fetch: input.fetch } : {}),
+          ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+        });
+        return {
+          id: target.id,
+          name: target.name ?? target.id,
+          baseUrl: target.baseUrl,
+          fallback: Boolean(target.fallback),
+          healthy: result.healthy,
+          status: result.status,
+          reason: result.reason,
+        };
+      }),
+    );
   }
 
   // 直接从各网关的 `/v1/models` 拉取模型目录：只同步已保存密钥的网关，

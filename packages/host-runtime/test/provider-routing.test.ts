@@ -646,6 +646,57 @@ describe("routing configuration and runtime ownership", () => {
     expect(JSON.stringify(stored)).not.toContain("key-a");
   });
 
+  it("checks the primary and enabled fallbacks so a recovered fallback can resume", async () => {
+    const home = await temporaryHome();
+    const primary = await upstream((_request, response) => response.writeHead(503).end());
+    const backup = await upstream((_request, response) => response.writeHead(200).end());
+    await writeFile(
+      join(home, "config.toml"),
+      `model_provider = "sub2api"\n\n[model_providers.sub2api]\nbase_url = ${JSON.stringify(primary)}\n`,
+    );
+    const routing = new ProviderRouting(home);
+    await routing.start();
+    cleanup.push(() => routing.close());
+    await routing.configure({
+      action: "save",
+      provider: {
+        id: "backup",
+        name: "Backup",
+        baseUrl: backup,
+        model: "",
+        enabled: true,
+      },
+      apiKey: "backup-key",
+    });
+    await routing.configure({ action: "configure", enabled: true });
+
+    const providers = await routing.health({
+      primaryProviderId: "sub2api",
+      primaryHeaders: { Authorization: "Bearer primary-key" },
+    });
+    expect(providers).toEqual([
+      {
+        id: "primary:sub2api",
+        name: "sub2api",
+        baseUrl: primary,
+        fallback: false,
+        healthy: false,
+        status: 503,
+        reason: "HTTP 503",
+      },
+      {
+        id: "backup",
+        name: "Backup",
+        baseUrl: backup,
+        fallback: true,
+        healthy: true,
+        status: 200,
+        reason: null,
+      },
+    ]);
+    expect(providers.some((provider) => provider.healthy)).toBe(true);
+  });
+
   it("keeps a gateway disabled instead of deleting it, and skips it while syncing", async () => {
     const home = await temporaryHome();
     const hit = vi.fn();

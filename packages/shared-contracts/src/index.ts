@@ -38,11 +38,17 @@ export type {
 export {
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
+  BUDDY_HEALTH_METHOD,
+  buddyHealthParamsSchema,
   nativeContinuationPrompt,
   buddyContinueSchema,
   buddyInterruptedParamsSchema,
   buddyInterruptedSchema,
+  buddyHealthSchema,
+  providerHealthSchema,
   type BuddyInterrupted,
+  type BuddyHealth,
+  type ProviderHealth,
 } from "./buddy-router.js";
 import { z } from "zod";
 export * from "./delegation-read.js";

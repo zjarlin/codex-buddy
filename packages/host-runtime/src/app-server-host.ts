@@ -62,14 +62,20 @@ import {
 } from "@codexhost/shared-contracts";
 import { MODEL_AVAILABILITY_METHOD } from "@codexhost/shared-contracts";
 import { InterruptedConversations } from "./buddy/continuation.js";
+import { probeGatewayHealth } from "./buddy/health.js";
+import { readConnection } from "@codexhost/buddy-engine";
 import {
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
+  BUDDY_HEALTH_METHOD,
+  buddyHealthSchema,
+  buddyHealthParamsSchema,
   THREAD_ARCHIVE_COMPLETED_METHOD,
   buddyContinueSchema,
   buddyInterruptedParamsSchema,
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,
+  type BuddyHealth,
 } from "@codexhost/shared-contracts";
 import { BuddyPrivateChat, privacySafeRequest } from "./buddy/private-chat.js";
 import { BuddyTranslator } from "./buddy/translator.js";
@@ -1980,6 +1986,46 @@ export class AppServerHost {
           ? request.params.threadId
           : undefined,
       );
+      return;
+    }
+    if (request.method === BUDDY_HEALTH_METHOD) {
+      this.#dispatchDesktopRequest(async () => {
+        try {
+          const params = buddyHealthParamsSchema.parse(request.params ?? {});
+          const environment = this.#options.environment ?? process.env;
+          const routing = this.#officialRuntimeScope.providerRouting;
+          let health: BuddyHealth;
+          if (routing) {
+            try {
+              const connection = await readConnection(
+                this.#officialRuntimeScope.permanentHome,
+                environment,
+              );
+              const providers = await routing.health({
+                primaryProviderId: connection.providerId,
+                ...(params.threadId ? { threadId: params.threadId } : {}),
+                primaryHeaders: connection.headers,
+              });
+              const primary = providers.find((provider) => !provider.fallback);
+              health = buddyHealthSchema.parse({
+                supported: true,
+                healthy: providers.some((provider) => provider.healthy),
+                checkedAt: Date.now(),
+                status: primary?.status ?? null,
+                reason: primary?.reason ?? null,
+                providers,
+              });
+            } catch {
+              health = await probeGatewayHealth(environment);
+            }
+          } else {
+            health = await probeGatewayHealth(environment);
+          }
+          await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(health) }));
+        } catch (error) {
+          await this.#writer.json(rpcError(request, -32602, errorMessage(error)));
+        }
+      });
       return;
     }
     if (request.method === BUDDY_INTERRUPTED_METHOD || request.method === BUDDY_CONTINUE_METHOD) {

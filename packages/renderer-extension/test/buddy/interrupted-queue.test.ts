@@ -715,6 +715,23 @@ describe("interrupted event queue", () => {
     expect(f.queue.list("local")).toEqual([]);
   });
 
+  it("counts automatic resume attempts per turn and keeps manual recovery available", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    f.client.buddyContinue.mockRejectedValue(new Error("gateway down"));
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow(
+        "gateway down",
+      );
+      expect(f.first().autoResumeAttempts).toBe(attempt);
+    }
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("上限");
+    expect(f.first().autoResumeAttempts).toBe(3);
+    await expect(f.queue.resume(f.first())).rejects.toThrow("gateway down");
+    expect(f.first().autoResumeAttempts).toBe(3);
+  });
+
   it("keeps a queued interruption while the same native turn is still stopped", async () => {
     vi.useFakeTimers();
     const f = fixture();

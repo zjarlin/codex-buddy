@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RendererHostRoute } from "@codexhost/desktop-control/renderer-bindings";
 import {
   BUDDY_CONTINUE_METHOD,
+  BUDDY_HEALTH_METHOD,
   BUDDY_INTERRUPTED_METHOD,
   nativeContinuationPrompt,
 } from "@codexhost/shared-contracts";
@@ -93,6 +94,42 @@ describe("native recovery on connections without Buddy recovery RPCs", () => {
       });
     },
   );
+
+  it("forwards gateway health and marks a Host without the RPC as unsupported", async () => {
+    const send = vi.fn(async (method: string) => {
+      throw missing(method);
+    });
+    const unsupported = createRendererModelClient([{ sendRequest: send }]);
+    await expect(unsupported?.buddyHealth?.()).resolves.toMatchObject({
+      supported: false,
+      healthy: false,
+      providers: [],
+    });
+
+    const health = {
+      supported: true,
+      healthy: true,
+      checkedAt: 1,
+      status: 200,
+      reason: null,
+      providers: [
+        {
+          id: "sub2api",
+          name: "Sub2API",
+          baseUrl: "https://gateway.example/v1",
+          fallback: false,
+          healthy: true,
+          status: 200,
+          reason: null,
+        },
+      ],
+    };
+    const supportedSend = vi.fn().mockResolvedValue(health);
+    const supported = createRendererModelClient([{ sendRequest: supportedSend }]);
+    await expect(supported?.buddyHealth?.()).resolves.toEqual(health);
+    expect(supported?.buddyHealth).toBeTypeOf("function");
+    expect(supportedSend).toHaveBeenCalledWith(BUDDY_HEALTH_METHOD, {});
+  });
 
   it("preserves a supported Buddy response and recovery request", async () => {
     const send = vi

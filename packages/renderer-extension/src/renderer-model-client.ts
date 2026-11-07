@@ -225,11 +225,14 @@ import {
   type ThreadFoldersState,
   BUDDY_INTERRUPTED_METHOD,
   BUDDY_CONTINUE_METHOD,
+  BUDDY_HEALTH_METHOD,
   THREAD_ARCHIVE_COMPLETED_METHOD,
   buddyInterruptedSchema,
+  buddyHealthSchema,
   threadArchiveCompletedParamsSchema,
   threadArchiveCompletedResultSchema,
   type BuddyInterrupted,
+  type BuddyHealth,
   type ThreadArchiveCompletedResult,
   BUDDY_PRIVATE_METHOD,
   BUDDY_TRANSLATE_METHOD,
@@ -645,6 +648,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     until?: number;
   }): Promise<TurnAccountsResult>;
   buddyContinue?(threadId: string, turnId: string, model?: string): Promise<void>;
+  buddyHealth?(threadId?: string): Promise<BuddyHealth>;
   archiveCompletedThreads?(threadId: string): Promise<ThreadArchiveCompletedResult>;
   buddyPrivate?(input: BuddyPrivateRequest): Promise<BuddyPrivateSnapshot>;
   translate?(input: {
@@ -1560,6 +1564,28 @@ export function createRendererModelClient(
           throw error;
         }
         await nativeContinuation.continue(threadId, turnId, model);
+      }
+    },
+    buddyHealth: async (threadId?: string) => {
+      try {
+        return buddyHealthSchema.parse(
+          await manager.sendRequest(BUDDY_HEALTH_METHOD, threadId ? { threadId } : {}),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof RendererMethodUnavailableError) ||
+          error.method !== BUDDY_HEALTH_METHOD
+        ) {
+          throw error;
+        }
+        return {
+          supported: false,
+          healthy: false,
+          checkedAt: Date.now(),
+          status: null,
+          reason: "当前 Host 不支持网关健康检查。",
+          providers: [],
+        };
       }
     },
     archiveCompletedThreads: async (threadId: string) =>

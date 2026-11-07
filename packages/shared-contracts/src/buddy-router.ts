@@ -9,6 +9,7 @@ export const BUDDY_CANCEL_METHOD = "codexhost/buddy/cancel";
 export const EMERGENCY_PROVIDER_METHOD = "codexhost/emergency/provider";
 export const BUDDY_INTERRUPTED_METHOD = "codexhost/buddy/interrupted";
 export const BUDDY_CONTINUE_METHOD = "codexhost/buddy/continue";
+export const BUDDY_HEALTH_METHOD = "codexhost/buddy/health";
 export const nativeContinuationPrompt =
   "继续本会话上一次尚未完成的请求。先核对已有回答、工具结果和当前实际状态，从中断处继续；不要盲目重放已完成的命令、修改或外部操作。若上次请求已经完成，简要说明即可。";
 export const buddyContinueSchema = z
@@ -40,6 +41,35 @@ export const buddyInterruptedSchema = z.object({
   unreadable: z.number(),
 });
 export type BuddyInterrupted = z.infer<typeof buddyInterruptedSchema>;
+// 单个供应商只回答“当前请求能否到达它”；它不证明某个模型或账号可用。
+export const providerHealthSchema = z.object({
+  id: z.string().min(1).max(120),
+  name: z.string().min(1).max(120),
+  baseUrl: z.string().min(1),
+  fallback: z.boolean().default(false),
+  healthy: z.boolean(),
+  status: z.number().int().nullable().default(null),
+  reason: z.string().nullable().default(null),
+});
+// 网关健康检查回答“现在是否可以开始新的续接请求”。providers 保留主供应商和
+// 当前会话可用的备用供应商；healthy 表示至少一个目标可用，代理仍按现有顺序切换。
+// supported=false 表示当前 Host 还没有这个能力，客户端应退回手动恢复。
+export const buddyHealthSchema = z.object({
+  supported: z.boolean().default(true),
+  healthy: z.boolean(),
+  checkedAt: z.number().int().nonnegative(),
+  status: z.number().int().nullable().default(null),
+  reason: z.string().nullable().default(null),
+  providers: z.array(providerHealthSchema).default([]),
+});
+export const buddyHealthParamsSchema = z
+  .object({
+    /** 用该会话的显式供应商选择决定检查哪些目标；省略时按主供应商的自动顺序。 */
+    threadId: z.string().trim().min(1).max(512).optional(),
+  })
+  .strict();
+export type BuddyHealth = z.infer<typeof buddyHealthSchema>;
+export type ProviderHealth = z.infer<typeof providerHealthSchema>;
 const buddySettingsShape = {
   enabled: z.boolean().default(true),
   privateMode: z.boolean().default(false),

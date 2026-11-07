@@ -1193,6 +1193,8 @@ export function installRendererBindingProbe(
     getRemoteConnections: () => remoteConnections,
     requestUsageStatistics: usageStatistics.request,
     usageStatisticsHosts: usageStatistics.hosts,
+    // Team figures always come from the local Host, which pulls its paired members itself.
+    requestTeamUsage: (method, params) => usageStatistics.request(method, params, "local"),
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
     // 更新页读取本机安装版本；Composer 指向远端 SSH Host 时不能把本机版本请求路由过去。
     getUpdateClient: () => localClient ?? modelClientForHost("local"),

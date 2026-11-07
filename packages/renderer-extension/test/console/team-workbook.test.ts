@@ -142,7 +142,8 @@ describe("team usage workbook", () => {
     expect(sheet).toContain('<c r="C3"/>');
     expect(sheet).toContain('<c r="D3" s="3"><v>3</v></c>');
     expect(sheet).toContain("total");
-    expect(sheet).toContain('<c r="B4" s="3"><v>8</v></c>');
+    // The total row repeats each project's column total, then the grand total: a = 2 + 3, b = 3.
+    expect(sheet).toContain('<c r="B4" s="3"><v>5</v></c>');
     expect(sheet).toContain('<c r="C4" s="3"><v>3</v></c>');
     expect(sheet).toContain('<c r="D4" s="3"><v>8</v></c>');
   });

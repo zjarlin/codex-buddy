@@ -525,6 +525,25 @@ import { ModelPriceCatalog } from "./model-prices.js";
 import { ObservedSessionUsage } from "./observed-session-usage.js";
 import type { UsageStatistics, UsageStatisticsSource } from "./usage-statistics.js";
 import { USAGE_STATISTICS_METHOD, usageStatisticsParamsSchema } from "@codexhost/shared-contracts";
+import { TeamUsage } from "./team-usage.js";
+import {
+  TEAM_USAGE_ACCEPT_METHOD,
+  TEAM_USAGE_INVITE_METHOD,
+  TEAM_USAGE_MEMBER_REMOVE_METHOD,
+  TEAM_USAGE_MEMBER_SET_METHOD,
+  TEAM_USAGE_PAIR_METHOD,
+  TEAM_USAGE_REJECT_METHOD,
+  TEAM_USAGE_SETTINGS_SET_METHOD,
+  TEAM_USAGE_SNAPSHOT_METHOD,
+  TEAM_USAGE_STATE_METHOD,
+  teamUsageEmptyParamsSchema,
+  teamUsageMemberRemoveParamsSchema,
+  teamUsageMemberSetParamsSchema,
+  teamUsagePairParamsSchema,
+  teamUsageRequestParamsSchema,
+  teamUsageSettingsSetParamsSchema,
+  teamUsageSnapshotParamsSchema,
+} from "@codexhost/shared-contracts";
 import {
   carriesHostThreadListCursor,
   CodexTurnProjector,
@@ -947,6 +966,7 @@ export class AppServerHost {
   readonly #turnActions: TurnActions;
   readonly #turnActionPlanModes = new Map<string, boolean>();
   readonly #projectSync: ProjectSyncPeer;
+  readonly #teamUsage: TeamUsage;
   #unregisterDelegationApi: (() => void) | undefined;
   #unsubscribeAccountState: (() => void) | undefined;
   #activeOfficialTurns = new Map<string, string>();
@@ -1042,6 +1062,12 @@ export class AppServerHost {
     this.#projectScriptRunner = new ProjectScriptRunner(environment);
     this.#threadFoldersSettings = new ThreadFoldersSettingsStore(environment);
     this.#projectSync = new ProjectSyncPeer(environment);
+    this.#teamUsage = new TeamUsage({
+      environment,
+      usage: () => this.#options.usageStatistics,
+      diagnose: (text) => this.#diagnose(new Error(text)),
+    });
+    void this.#teamUsage.start();
     this.#launchSettings = new HarnessLaunchSettingsStore(
       this.#options.pluginContext?.environment ?? environment,
     );
@@ -1329,6 +1355,7 @@ export class AppServerHost {
   async #closeOfficialRuntime(): Promise<void> {
     this.#gitWorkflow.close();
     await this.#projectSync.close();
+    await this.#teamUsage.close();
     this.#buddy?.close();
     this.#privateChat?.close();
     this.#nativeAccountObserver?.close();
@@ -2042,6 +2069,10 @@ export class AppServerHost {
         this.#diagnose(error);
         await this.#writer.json(rpcError(request, -32000, errorMessage(error)));
       }
+      return;
+    }
+    if (request.method.startsWith("codexhost/team-usage/")) {
+      await this.#handleTeamUsageRequest(request);
       return;
     }
     if (isModelPriceOverridesMethod(request.method)) {
@@ -5284,6 +5315,70 @@ export class AppServerHost {
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32102, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  async #handleTeamUsageRequest(request: JsonRpcRequest): Promise<void> {
+    const method = request.method;
+    const team = this.#teamUsage;
+    const paramsSchema =
+      method === TEAM_USAGE_STATE_METHOD || method === TEAM_USAGE_INVITE_METHOD
+        ? teamUsageEmptyParamsSchema
+        : method === TEAM_USAGE_SNAPSHOT_METHOD
+          ? teamUsageSnapshotParamsSchema
+          : method === TEAM_USAGE_PAIR_METHOD
+            ? teamUsagePairParamsSchema
+            : method === TEAM_USAGE_ACCEPT_METHOD || method === TEAM_USAGE_REJECT_METHOD
+              ? teamUsageRequestParamsSchema
+              : method === TEAM_USAGE_SETTINGS_SET_METHOD
+                ? teamUsageSettingsSetParamsSchema
+                : method === TEAM_USAGE_MEMBER_SET_METHOD
+                  ? teamUsageMemberSetParamsSchema
+                  : method === TEAM_USAGE_MEMBER_REMOVE_METHOD
+                    ? teamUsageMemberRemoveParamsSchema
+                    : null;
+    const parsed = paramsSchema?.safeParse(request.params);
+    if (!paramsSchema || !parsed?.success) {
+      await this.#writer.json(
+        rpcError(
+          request,
+          paramsSchema ? -32602 : -32601,
+          paramsSchema ? "Invalid team usage request" : "Unknown team usage method",
+        ),
+      );
+      return;
+    }
+    try {
+      let result: unknown;
+      if (method === TEAM_USAGE_STATE_METHOD) {
+        result = await team.state();
+      } else if (method === TEAM_USAGE_INVITE_METHOD) {
+        result = await team.invite();
+      } else if (method === TEAM_USAGE_PAIR_METHOD) {
+        const { address, code } = teamUsagePairParamsSchema.parse(request.params);
+        result = await team.pair(address, code);
+      } else if (method === TEAM_USAGE_ACCEPT_METHOD) {
+        result = await team.accept(teamUsageRequestParamsSchema.parse(request.params).requestId);
+      } else if (method === TEAM_USAGE_REJECT_METHOD) {
+        result = await team.reject(teamUsageRequestParamsSchema.parse(request.params).requestId);
+      } else if (method === TEAM_USAGE_SETTINGS_SET_METHOD) {
+        result = await team.setSettings(teamUsageSettingsSetParamsSchema.parse(request.params));
+      } else if (method === TEAM_USAGE_MEMBER_SET_METHOD) {
+        const { id, ...input } = teamUsageMemberSetParamsSchema.parse(request.params);
+        result = await team.memberSet(id, input);
+      } else if (method === TEAM_USAGE_MEMBER_REMOVE_METHOD) {
+        const { id, direction } = teamUsageMemberRemoveParamsSchema.parse(request.params);
+        result = await team.memberRemove(id, direction);
+      } else {
+        // Reading member figures needs the same plugin readiness as the machine-wide page.
+        await this.#waitForPlugins();
+        this.#attachUsageStatistics();
+        result = await team.snapshot(teamUsageSnapshotParamsSchema.parse(request.params));
+      }
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      this.#diagnose(error);
+      await this.#writer.json(rpcError(request, -32095, errorMessage(error).slice(0, 2000)));
     }
   }
 

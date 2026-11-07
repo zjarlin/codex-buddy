@@ -117,3 +117,17 @@ it("reports an unreadable database instead of silently hiding usage", async () =
   const [source] = await capability.listSources(signal);
   await expect(capability.readSource(source?.id ?? file, signal)).rejects.toThrow();
 });
+
+it("reads a sessions table whose schema lacks display_name", async () => {
+  const file = hermesStateDatabasePath({ HERMES_HOME: home });
+  const db = new DatabaseSync(file);
+  db.exec(`CREATE TABLE sessions (
+    id TEXT, model TEXT, cwd TEXT, title TEXT, started_at REAL, last_activity_at REAL,
+    api_call_count INTEGER, input_tokens INTEGER, output_tokens INTEGER,
+    cache_read_tokens INTEGER, cache_write_tokens INTEGER, reasoning_tokens INTEGER
+  );
+  INSERT INTO sessions VALUES ('s1', 'glm-5.2', '/work', '标题', 1.5, 9.5, 1, 10, 2, 0, 0, 0);`);
+  db.close();
+  const [entry] = await createHermesUsageStatistics({ HERMES_HOME: home }).readSource(file, signal);
+  expect(entry).toMatchObject({ id: "s1", sessionTitle: "标题", inputTokens: 10, outputTokens: 2 });
+});

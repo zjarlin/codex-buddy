@@ -87,11 +87,33 @@ export function hermesUsageEntry(row: Record<string, unknown>): HarnessUsageEntr
   });
 }
 
-const SESSIONS_QUERY = `
-  SELECT id, model, cwd, title, display_name, started_at, last_activity_at,
-         api_call_count, input_tokens, output_tokens, cache_read_tokens,
-         cache_write_tokens, reasoning_tokens
-    FROM sessions`;
+/**
+ * Columns this reader can use. `sessions` gained and lost columns across Hermes schema versions
+ * (`display_name` for one), so the query selects the ones the database actually has and fills the
+ * rest with NULL instead of failing the whole Harness on an unknown column.
+ */
+const SESSION_COLUMNS = [
+  "id",
+  "model",
+  "cwd",
+  "title",
+  "display_name",
+  "started_at",
+  "last_activity_at",
+  "api_call_count",
+  "input_tokens",
+  "output_tokens",
+  "cache_read_tokens",
+  "cache_write_tokens",
+  "reasoning_tokens",
+] as const;
+
+function sessionsQuery(available: ReadonlySet<string>): string {
+  const columns = SESSION_COLUMNS.map((column) =>
+    available.has(column) ? column : `NULL AS ${column}`,
+  );
+  return `SELECT ${columns.join(", ")} FROM sessions`;
+}
 
 /**
  * Every Hermes session with recorded API usage in the database, read-only. Hidden sessions are
@@ -102,8 +124,13 @@ export async function readHermesUsage(file: string): Promise<HarnessUsageEntry[]
   const { DatabaseSync } = await import("node:sqlite");
   const database = new DatabaseSync(file, { readOnly: true });
   try {
+    const available = new Set(
+      (database.prepare("PRAGMA table_info(sessions)").all() as Array<{ name?: unknown }>).flatMap(
+        (column) => (typeof column.name === "string" ? [column.name] : []),
+      ),
+    );
     const entries: HarnessUsageEntry[] = [];
-    for (const row of database.prepare(SESSIONS_QUERY).iterate()) {
+    for (const row of database.prepare(sessionsQuery(available)).iterate()) {
       const entry = hermesUsageEntry(row as Record<string, unknown>);
       if (entry) entries.push(entry);
     }

@@ -11,11 +11,17 @@ import {
   type Totals,
 } from "./format.js";
 
+/** The labels the three tiles need; every surface that shows them has these. */
+export type SummaryLabels = Pick<
+  ConsoleMessages["usageStatistics"],
+  "cost" | "tokenUsage" | "input" | "output" | "cache" | "cacheHitRate"
+>;
+
 /** Overview totals and their three non-overlapping token buckets, shared by both surfaces. */
 export function summaryTiles(
   document: Document,
   totals: Totals,
-  messages: ConsoleMessages["usageStatistics"],
+  messages: SummaryLabels,
   locale: string,
 ): HTMLElement {
   const tile = (

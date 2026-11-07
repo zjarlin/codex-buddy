@@ -1,5 +1,6 @@
 import type { RendererUsageStatisticsRequest } from "./console/pages/usage-statistics.js";
 import type { RendererUsageStatisticsHostsProvider } from "./console/usage/usage-hosts.js";
+import type { TeamUsageRequest } from "./console/pages/team-usage-page.js";
 import type { RemoteConnectionsControl } from "./remote-connections-control.js";
 import type { LoadedSessionsClient } from "./settings/loaded-sessions-table.js";
 import type { EmergencyProviderClient } from "./renderer-model-client.js";
@@ -49,6 +50,8 @@ export interface RendererSettingsLifecycleOptions {
   requestUsageStatistics?: RendererUsageStatisticsRequest;
   /** Machines the usage statistics page may read besides the local Host. */
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider;
+  /** LAN team figures; always the local Host, which pulls its paired members itself. */
+  requestTeamUsage?: TeamUsageRequest;
   openImportedThread?: RendererImportedThreadOpener;
   onLocaleChange?(locale: RendererSettingsLocale): void;
 }
@@ -113,6 +116,7 @@ export function installRendererSettingsLifecycle(
             },
           }
         : undefined,
+      options.requestTeamUsage,
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document, {
       onOpenChange(open) {

@@ -146,6 +146,9 @@ export function startConsoleApp(document: Document): void {
     undefined,
     () => remoteConnections,
     (method, params) => manager.sendRequest(method, params),
+    undefined,
+    undefined,
+    (method, params) => manager.sendRequest(method, params),
   );
   const navigate = (pageId: string): void => {
     window.location.hash = pageId;
@@ -172,6 +175,7 @@ export function startConsoleApp(document: Document): void {
         hostPage(required(settingsPages, "accounts"), messages, state),
         hostPage(required(settingsPages, "session-import"), messages, state),
         hostPage(required(settingsPages, "usage-statistics"), messages, state),
+        hostPage(required(settingsPages, "team-usage"), messages, state),
         required(settingsPages, "updates"),
       ],
     },

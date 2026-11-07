@@ -905,3 +905,16 @@ th[aria-sort] .console-usage-sort__mark {
     forced-color-adjust: none;
   }
 }
+
+/* Team pairing fields: the port and code are short numbers, not free-text widths. */
+.console-usage-port,
+.console-usage-code {
+  width: 9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Discovered members carry a label and an action; wrap instead of squeezing the name. */
+.console-usage-notices .console-notice {
+  flex-wrap: wrap;
+  align-items: center;
+}

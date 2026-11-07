@@ -69,6 +69,8 @@ import {
   type Measure,
   type Totals,
 } from "../usage/format.js";
+import { METRIC_HEADER, metricCells } from "../usage/workbook-metrics.js";
+import { Workbook, integer, money } from "../usage/xlsx.js";
 
 export type RendererUsageStatisticsRequest = (
   method: string,
@@ -164,11 +166,6 @@ function slot<K>(map: Map<K, Totals>, key: K): Totals {
     map.set(key, totals);
   }
   return totals;
-}
-
-function csvCell(value: string | number): string {
-  const text = String(value);
-  return /[",\n]/u.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 /** The Monday on or before `date`. */
@@ -377,9 +374,9 @@ export function createUsageStatisticsPage(
         document,
         "button",
         { type: "button", className: "settings-command-button settings-command-button--secondary" },
-        messages.exportCsv,
+        messages.exportXlsx,
       );
-      exportButton.addEventListener("click", () => exportCsv());
+      exportButton.addEventListener("click", () => exportWorkbook());
       const header = h(
         document,
         "div",
@@ -515,6 +512,7 @@ export function createUsageStatisticsPage(
         }
         rebuildKeepingFocus(body, [
           summaryTiles(document, data.totals, messages, locale),
+          h(document, "p", { className: "console-muted" }, messages.costBasis),
           // One day has one column: the hourly panel shows that day instead.
           data.range === "today" ? null : trendPanel(data),
           h(
@@ -1268,45 +1266,72 @@ export function createUsageStatisticsPage(
         );
       }
 
-      function exportCsv(): void {
+      function exportWorkbook(): void {
         if (!result) return;
-        const lines = [
-          [
-            "date",
-            "harness",
-            "requests",
-            "input_without_cache",
-            "cache_read",
-            "cache_write",
-            "output",
-            "reasoning",
-            "cost_usd",
-            "unpriced_requests",
-          ].join(","),
-        ];
-        for (const row of result.daily) {
-          lines.push(
+        const data = result;
+        const book = new Workbook();
+        book.sheet("Summary", [
+          ["field", "value"],
+          ["range", messages.ranges[data.range]],
+          ["from", data.from],
+          ["to", data.to],
+          ["time_zone", timeZone],
+          ["cost_basis", messages.costBasis],
+          ["harness_filter", data.filters.harness ?? ""],
+          ["model_filter", data.filters.unknownModel ? "(none)" : (data.filters.model ?? "")],
+          ["project_filter", data.filters.unknownProject ? "(none)" : (data.filters.project ?? "")],
+          ["date", data.filters.date ?? ""],
+          [],
+          ["metric", "value"],
+          ...(
             [
-              row.date,
-              harnessName(row.harness),
-              row.requests,
-              inputWithoutCache(row),
-              row.cachedInputTokens,
-              row.cacheWriteInputTokens,
-              row.outputTokens,
-              row.reasoningOutputTokens,
-              row.costUsd.toFixed(6),
-              row.unpricedRequests,
-            ]
-              .map(csvCell)
-              .join(","),
-          );
-        }
+              ["requests", data.totals.requests],
+              ["input_tokens", data.totals.inputTokens],
+              ["input_without_cache", inputWithoutCache(data.totals)],
+              ["cache_read", data.totals.cachedInputTokens],
+              ["cache_write", data.totals.cacheWriteInputTokens],
+              ["output_tokens", data.totals.outputTokens],
+              ["reasoning_tokens", data.totals.reasoningOutputTokens],
+              ["unpriced_requests", data.totals.unpricedRequests],
+              ["unmetered_requests", data.totals.unmeteredRequests],
+            ] as const
+          ).map(([name, value]) => [name, integer(value)]),
+          ["cost_usd", money(data.totals.costUsd)],
+        ]);
+        book.sheet("Daily", [
+          ["date", "harness", ...METRIC_HEADER],
+          ...data.daily.map((row) => [row.date, harnessName(row.harness), ...metricCells(row)]),
+        ]);
+        book.sheet("By Harness", [
+          ["harness", "harness_id", ...METRIC_HEADER],
+          ...data.byHarness.map((row) => [
+            harnessName(row.harness),
+            row.harness,
+            ...metricCells(row),
+          ]),
+        ]);
+        book.sheet("By Model", [
+          ["model", "model_id", ...METRIC_HEADER, "harness_priced_requests"],
+          ...data.byModel.map((row) => [
+            row.model === null ? messages.unknownModel : modelName(keyOf(row.model)),
+            row.model ?? "(none)",
+            ...metricCells(row),
+            integer(row.harnessPricedRequests),
+          ]),
+        ]);
+        book.sheet("By Project", [
+          ["project", "project_path", ...METRIC_HEADER],
+          ...data.byProject.map((row) => [
+            row.project === null ? messages.unknownProject : projectName(keyOf(row.project)),
+            row.project ?? "(none)",
+            ...metricCells(row),
+          ]),
+        ]);
         download(
           document,
-          `codexhost-usage-${result.range}-${result.to}.csv`,
-          `${lines.join("\n")}\n`,
-          "text/csv;charset=utf-8",
+          `codexhost-usage-${data.range}-${data.to}.xlsx`,
+          book.toBytes(),
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         );
       }
 

@@ -52,12 +52,14 @@ describe("session draft cleanup", () => {
     expect(save).toHaveBeenCalledWith({ empty: true }, false);
   });
 
-  it("falls back to the nearest document owner when no ancestor carries the controller", () => {
+  it("falls back to the nearest document owner when the controller is not bound to a saver", () => {
     const nearest = vi.fn();
     const outer = vi.fn();
-    const { editor } = editorFixture(() => [
+    const { editor } = editorFixture((controller) => [
       { onDocumentChange: nearest },
       { onDocumentChange: outer },
+      // 控制器在外层 fiber 上，但没有任何 onDocumentChange 与它绑定。
+      { composerController: controller },
     ]);
 
     sessionDraftCleanup(editor)();

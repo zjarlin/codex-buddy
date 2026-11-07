@@ -114,14 +114,14 @@ export function createTeamUsagePage(
       const nameField = h(document, "input", {
         type: "text",
         className: "console-input",
-        maxLength: 120,
+        maxLength: "120",
         placeholder: messages.namePlaceholder,
         "aria-label": messages.name,
       });
       const departmentField = h(document, "input", {
         type: "text",
         className: "console-input",
-        maxLength: 120,
+        maxLength: "120",
         placeholder: messages.departmentPlaceholder,
         "aria-label": messages.department,
       });
@@ -162,7 +162,7 @@ export function createTeamUsagePage(
         type: "text",
         className: "console-input console-usage-code",
         inputMode: "numeric",
-        maxLength: 8,
+        maxLength: "8",
         placeholder: messages.codePlaceholder,
         "aria-label": messages.code,
       });

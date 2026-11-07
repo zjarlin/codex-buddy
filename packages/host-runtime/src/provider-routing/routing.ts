@@ -232,7 +232,9 @@ export class ProviderRouting {
       throw new Error("Unknown primary provider");
     }
     const config = await this.store.read();
-    const targets: ProviderTarget[] = [{ id: `primary:${id}`, baseUrl: primary.baseUrl }];
+    const targets: ProviderTarget[] = [
+      { id: `primary:${id}`, name: primary.name, baseUrl: primary.baseUrl },
+    ];
     const selected = threadId ? config.threadProviders[threadId] : undefined;
     if (selected === `primary:${id}`) return targets;
     if (selected) {
@@ -246,6 +248,7 @@ export class ProviderRouting {
           .filter((provider) => provider.enabled && provider.baseUrl !== primary.baseUrl)
           .map((provider) => ({
             id: provider.id,
+            name: provider.name,
             baseUrl: provider.baseUrl,
             apiKey: provider.apiKey,
             model: provider.model,

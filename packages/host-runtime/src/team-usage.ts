@@ -28,9 +28,11 @@ import {
 } from "./team-usage-http.js";
 import {
   DEVICE_ID,
+  MAX_PENDING,
   TeamUsageStateStore,
   dataDirectory,
   type TeamPeer,
+  type TeamPending,
   type TeamState,
 } from "./team-usage-state.js";
 import type { UsageStatistics } from "./usage-statistics.js";
@@ -42,6 +44,12 @@ const PAIR_LIFETIME_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 4_000;
 const CODE = /^\d{8}$/u;
 const MAX_PEERS_PER_DIRECTION = 200;
+
+/** Keeps the newest attempts so a burst of requests cannot exceed what the page renders. */
+function trimPending(pending: TeamPending[]): TeamPending[] {
+  if (pending.length <= MAX_PENDING) return pending;
+  return pending.sort((left, right) => left.expiresAt - right.expiresAt).slice(-MAX_PENDING);
+}
 
 function isTimeZone(value: string): boolean {
   try {
@@ -368,14 +376,17 @@ export class TeamUsage {
       // Keep reading the old row until the member approves this attempt: a rejected or abandoned
       // re-pairing must not blank that person's figures or the department assigned here.
       if (!next.pending.some((entry) => entry.requestId === requestId)) {
-        next.pending.push({
-          requestId,
-          name: typeof response.name === "string" ? response.name.slice(0, 120) : address,
-          address,
-          expiresAt: Date.now() + PAIR_LIFETIME_MS,
-          outbound: true,
-          memberId,
-        });
+        next.pending = trimPending([
+          ...next.pending,
+          {
+            requestId,
+            name: typeof response.name === "string" ? response.name.slice(0, 120) : address,
+            address,
+            expiresAt: Date.now() + PAIR_LIFETIME_MS,
+            outbound: true,
+            memberId,
+          },
+        ]);
       }
       await this.#states.write(next);
     });
@@ -606,15 +617,17 @@ export class TeamUsage {
       const requestId = randomUUID();
       await this.#serialized(async () => {
         const next = await this.#states.read();
-        next.pending = next.pending.filter((entry) => entry.expiresAt > Date.now());
-        next.pending.push({
-          requestId,
-          name: body.name as string,
-          address,
-          expiresAt: Date.now() + PAIR_LIFETIME_MS,
-          outbound: false,
-          memberId: body.id as string,
-        });
+        next.pending = trimPending([
+          ...next.pending.filter((entry) => entry.expiresAt > Date.now()),
+          {
+            requestId,
+            name: body.name as string,
+            address,
+            expiresAt: Date.now() + PAIR_LIFETIME_MS,
+            outbound: false,
+            memberId: body.id as string,
+          },
+        ]);
         await this.#states.write(next);
       });
       sendJson(response, 200, { requestId, name: state.name, id: await this.#states.id() });

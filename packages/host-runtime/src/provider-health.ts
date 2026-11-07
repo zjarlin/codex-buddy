@@ -2,6 +2,9 @@ import { providerModelListUrl } from "./provider-routing/models.js";
 
 const DEFAULT_TIMEOUT_MS = 3_000;
 
+/** 健康检查接受已构造的 Headers 或普通对象；不依赖全局 HeadersInit 名称。 */
+export type ProviderRequestHeaders = Headers | Record<string, string>;
+
 export interface ProviderProbeOptions {
   fetch?: typeof fetch;
   timeoutMs?: number;
@@ -57,7 +60,7 @@ async function get(
 
 export async function probeProviderHealth(
   baseUrl: string,
-  headers?: HeadersInit,
+  headers?: ProviderRequestHeaders,
   options: ProviderProbeOptions = {},
 ): Promise<ProviderProbeResult> {
   const request = options.fetch ?? fetch;

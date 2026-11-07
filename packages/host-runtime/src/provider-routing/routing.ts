@@ -8,7 +8,7 @@ import {
   type HostThreadId,
   type ProviderHealth,
 } from "@codexhost/shared-contracts";
-import { probeProviderHealth } from "../provider-health.js";
+import { probeProviderHealth, type ProviderRequestHeaders } from "../provider-health.js";
 import { GatewayProjectAttribution } from "./project-attribution.js";
 import { ProviderRoutingStore } from "./store.js";
 import { mergeProviderModels, syncProviderModels } from "./models.js";
@@ -161,7 +161,7 @@ export class ProviderRouting {
   async health(input: {
     primaryProviderId: string;
     threadId?: string;
-    primaryHeaders?: HeadersInit;
+    primaryHeaders?: ProviderRequestHeaders;
     fetch?: typeof fetch;
     timeoutMs?: number;
   }): Promise<ProviderHealth[]> {

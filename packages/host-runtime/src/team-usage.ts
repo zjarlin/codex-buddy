@@ -327,7 +327,10 @@ export class TeamUsage {
     });
   }
 
-  async memberSet(id: string, input: { name?: string; department?: string | null }) {
+  async memberSet(
+    id: string,
+    input: { name?: string | undefined; department?: string | null | undefined },
+  ) {
     return this.#serialized(async () => {
       const state = await this.#states.read();
       const peers = state.peers.filter((entry) => entry.id === id);

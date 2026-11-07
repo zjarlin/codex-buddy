@@ -60,6 +60,15 @@ export function defaultName(): string {
   return os.hostname().slice(0, 120) || "codexhost";
 }
 
+/** An unexpired invite code, or null when the stored value is not one. */
+function readInvite(value: unknown): TeamState["invite"] {
+  if (!value || typeof value !== "object") return null;
+  const invite = value as Record<string, unknown>;
+  return typeof invite.code === "string" && typeof invite.expiresAt === "number"
+    ? { code: invite.code, expiresAt: invite.expiresAt }
+    : null;
+}
+
 /**
  * Settings, peers and the pending pairing attempts of one Host. Every read validates what an older
  * or hand-edited file could contain, so a malformed row is dropped instead of breaking the page.
@@ -176,16 +185,7 @@ export class TeamUsageStateStore {
           : DEFAULT_PORT,
       name: typeof record.name === "string" && record.name ? record.name : defaultName(),
       department: typeof record.department === "string" ? record.department : null,
-      invite:
-        record.invite &&
-        typeof record.invite === "object" &&
-        typeof (record.invite as Record<string, unknown>).code === "string" &&
-        typeof (record.invite as Record<string, unknown>).expiresAt === "number"
-          ? {
-              code: (record.invite as Record<string, string>).code,
-              expiresAt: (record.invite as Record<string, number>).expiresAt,
-            }
-          : null,
+      invite: readInvite(record.invite),
       peers,
       // Live attempts only, newest kept: a burst of requests must not grow the file past what the
       // page can render, which would drop the whole settings response.

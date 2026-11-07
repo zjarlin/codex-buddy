@@ -188,7 +188,7 @@ function memberNode(
   const department = h(document, "input", {
     type: "text",
     className: "console-input",
-    maxLength: 120,
+    maxLength: "120",
     value: peer.department ?? "",
     placeholder: messages.departmentPlaceholder,
     "aria-label": messages.department,

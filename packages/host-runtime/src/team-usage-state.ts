@@ -5,6 +5,8 @@ import path from "node:path";
 
 const STATE_VERSION = 1;
 const DEFAULT_PORT = 45_871;
+/** Matches the contract: the page renders at most this many pairing attempts. */
+export const MAX_PENDING = 32;
 export const DEVICE_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -185,7 +187,12 @@ export class TeamUsageStateStore {
             }
           : null,
       peers,
-      pending: pending.filter((entry) => entry.expiresAt > Date.now()),
+      // Live attempts only, newest kept: a burst of requests must not grow the file past what the
+      // page can render, which would drop the whole settings response.
+      pending: pending
+        .filter((entry) => entry.expiresAt > Date.now())
+        .sort((left, right) => left.expiresAt - right.expiresAt)
+        .slice(-MAX_PENDING),
     };
   }
 

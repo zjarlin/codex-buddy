@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { UsageStatistics } from "../src/usage-statistics.js";
 import { TeamUsage } from "../src/team-usage.js";
+import { MAX_PENDING, TeamUsageStateStore } from "../src/team-usage-state.js";
 
 const directories: string[] = [];
 const instances: TeamUsage[] = [];
@@ -144,4 +145,33 @@ describe("team usage pairing", () => {
     await source.team.memberRemove(peer?.id ?? "", "in");
     expect((await source.team.state()).peers).toHaveLength(0);
   }, 30_000);
+});
+
+describe("team usage state", () => {
+  it("keeps at most the pairing attempts the page can render, newest first", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "team-usage-state-"));
+    directories.push(directory);
+    const store = new TeamUsageStateStore(directory);
+    const now = Date.now();
+    await store.write({
+      version: 1,
+      enabled: false,
+      port: 45871,
+      name: "本机",
+      department: null,
+      invite: null,
+      peers: [],
+      pending: Array.from({ length: MAX_PENDING + 8 }, (_unused, index) => ({
+        requestId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+        name: `成员${index}`,
+        address: "192.168.1.9",
+        // Later entries expire later, so the newest are the ones that survive.
+        expiresAt: now + 60_000 + index * 1_000,
+        outbound: false,
+      })),
+    });
+    const state = await store.read();
+    expect(state.pending).toHaveLength(MAX_PENDING);
+    expect(state.pending.at(-1)?.name).toBe(`成员${MAX_PENDING + 7}`);
+  });
 });

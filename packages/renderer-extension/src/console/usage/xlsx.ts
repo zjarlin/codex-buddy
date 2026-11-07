@@ -191,7 +191,7 @@ export function money(value: number): StyledNumber {
   return { number: value, style: "money" };
 }
 
-/** A 0–1 ratio shown as 0.0%. */
+/** A 0–1 ratio shown as 0.00% (built-in format 10). */
 export function ratio(value: number): StyledNumber {
   return { number: value, style: "percent" };
 }

@@ -213,7 +213,7 @@ describe("header interrupted recovery queue", () => {
     expect(header().button.textContent).toBe("一键恢复中断会话 (1)");
     header().button.click();
     await settle();
-    expect(f.value.resume).toHaveBeenCalledWith(candidate("new"), undefined);
+    expect(f.value.resume).toHaveBeenCalledWith(candidate("new"), undefined, { auto: false });
     expect(f.value.importHistory).not.toHaveBeenCalled();
     expect(header().status.textContent).toContain("已提交恢复 1，失败 0");
   });

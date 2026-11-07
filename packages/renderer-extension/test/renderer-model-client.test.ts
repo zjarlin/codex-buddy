@@ -772,6 +772,7 @@ describe("Renderer fixed Model request client", () => {
       "buddyCancel",
       "buddyConfigure",
       "buddyContinue",
+      "buddyHealth",
       "buddyInterrupted",
       "buddyJevKey",
       "buddyModels",

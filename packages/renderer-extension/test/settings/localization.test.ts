@@ -96,6 +96,7 @@ describe("Renderer settings localization", () => {
       "项目",
       "会话导入",
       "用量统计",
+      "团队用量",
       "通用",
       "更新",
       "关于",

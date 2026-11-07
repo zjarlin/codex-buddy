@@ -1440,7 +1440,7 @@ test("remote projects display actual names and filter by resolved identity", asy
   expect(errors).toEqual([]);
 });
 
-test("projects, sessions and CSV follow the filters", async ({ page }) => {
+test("projects, sessions and the Excel export follow the filters", async ({ page }) => {
   const state = await setupDashboard(page);
   await openStatistics(page);
   await page.getByRole("button", { name: "7 天", exact: true }).click();
@@ -1467,14 +1467,15 @@ test("projects, sessions and CSV follow the filters", async ({ page }) => {
   ]);
 
   const downloaded = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出 CSV", exact: true }).click();
+  await page.getByRole("button", { name: "导出 Excel", exact: true }).click();
   const file = await downloaded;
-  expect(file.suggestedFilename()).toBe("codexhost-usage-7d-2026-09-18.csv");
-  const csv = await readFile((await file.path()) ?? "", "utf8");
-  expect(csv.split("\n")[0]).toBe(
-    "date,harness,requests,input_without_cache,cache_read,cache_write,output,reasoning,cost_usd,unpriced_requests",
-  );
-  expect(csv).toContain("2026-09-18,");
+  expect(file.suggestedFilename()).toBe("codexhost-usage-7d-2026-09-18.xlsx");
+  // The workbook stores its XML uncompressed, so the sheet contents are readable as bytes.
+  const bytes = await readFile((await file.path()) ?? "");
+  const text = bytes.toString("latin1");
+  expect(text).toContain("xl/worksheets/sheet1.xml");
+  expect(text).toContain("input_without_cache");
+  expect(text).toContain("2026-09-18");
 });
 
 test("refreshes keep focus and the chart's hover, and say when they happened", async ({ page }) => {

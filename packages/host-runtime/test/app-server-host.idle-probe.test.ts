@@ -197,7 +197,8 @@ describe("AppServerHost idle probing for automatic update", () => {
       const threadId = await startPiThread(fixture);
       const turnId = await startPiTurn(fixture, threadId);
       expect(await probe()).toBe(false);
-      expect(autoUpdate.activityChanged).toHaveBeenCalled();
+      // The lifecycle signal is delivered after the start reply is written.
+      await vi.waitFor(() => expect(autoUpdate.activityChanged).toHaveBeenCalled());
 
       const session = fixture.adapter.sessions[0];
       if (!session) throw new Error("Fake Pi Session was not opened");

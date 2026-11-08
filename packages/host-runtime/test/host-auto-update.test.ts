@@ -187,14 +187,12 @@ describe("automatic update when idle", () => {
     await settle();
     expect(coordinator.start).not.toHaveBeenCalled();
 
-    // The Renderer retry starts the operation; the next automatic check sees
-    // its progress and follows it to the idle restart.
-    coordinator.check = vi.fn(async () => check(status("downloading")));
-    await vi.advanceTimersByTimeAsync(10);
-    await settle();
-    expect(coordinator.start).not.toHaveBeenCalled();
+    // The Renderer retry starts the operation and publishes its status; the
+    // Host adopts it directly instead of waiting for another automatic check.
+    update.statusObserved(status("downloading"));
     await vi.advanceTimersByTimeAsync(20);
     await settle();
+    expect(coordinator.start).not.toHaveBeenCalled();
     expect(coordinator.restart).toHaveBeenCalledOnce();
     update.dispose();
   });

@@ -10,4 +10,4 @@
 - [x] 单元测试：下载→就绪→宽限→重启；有工作不重启；无法证明空闲不重启；失败不重试；`prepared` 继续轮询；迟到的 Host 触发复查。
 - [x] 集成测试：Host 探针注册/注销、外部 Turn、原生分页与异常响应；`runHostRuntime` 共享实例与 SSH 排除。
 - [x] 更新 `docs/operations/repository-maintenance.md` 与 OpenSpec delta。
-- [ ] 远端 TeamCity 流水线验证 TypeScript 构建与测试（本机为 Mac mini，按仓库规定不本地构建）。
+- [x] 远端 CI 流水线验证 TypeScript 构建与测试、Rust 检查与跨平台测试（本机为 Mac mini，按仓库规定不本地构建）。

@@ -51,6 +51,7 @@ import { remoteOfficialAppServerSocketPath } from "./remote-official-app-server.
 import { startConsoleControlServer } from "./console-control-server.js";
 import { consoleEntrypoint, createHostConsoleOpener } from "./console-opener.js";
 import { createHostUpdateCoordinator, type HostUpdateCoordinator } from "./update-coordinator.js";
+import { HostAutoUpdate } from "./host-auto-update.js";
 import {
   clearLocalHostListenerState,
   localHostPaths,
@@ -252,6 +253,19 @@ export async function runHostRuntime(input: {
           environment: input.environment,
         })
       : undefined);
+  // Only the Desktop-launched local Host restarts this machine's application.
+  // A managed SSH Host may share the same runtime package, but its update must
+  // not terminate a Desktop that lives on another machine.
+  const autoUpdate =
+    updateCoordinator && input.environment.CODEXHOST_REMOTE_SSH_MANAGED !== "1"
+      ? new HostAutoUpdate({
+          coordinator: updateCoordinator,
+          diagnose: (error) =>
+            process.stderr.write(
+              `codexhost automatic update: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+            ),
+        })
+      : undefined;
   // Only a Launcher-started local Host can open the console on this machine.
   // The development entry does not pass its URL; the Launcher still exports the path.
   const consoleHostRuntimePath = hostRuntimePath ?? input.environment.CODEXHOST_HOST_RUNTIME_PATH;
@@ -314,8 +328,10 @@ export async function runHostRuntime(input: {
               ...installedHarnessPluginOptions(delegationEnvironment, false, input.hostRuntimeUrl),
               onDelegationApi,
               ...(updateCoordinator ? { updateCoordinator } : {}),
+              ...(autoUpdate ? { autoUpdate } : {}),
               ...(consoleOpener ? { consoleOpener } : {}),
             });
+            autoUpdate?.start();
             return await runWithConsoleControl(
               host,
               consoleOpener !== undefined,
@@ -323,6 +339,7 @@ export async function runHostRuntime(input: {
             );
           } finally {
             await official.close();
+            autoUpdate?.dispose();
           }
         }
         const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
@@ -337,6 +354,7 @@ export async function runHostRuntime(input: {
             mappingStore,
             closeMappingStoreOnExit: false,
             ...(updateCoordinator ? { updateCoordinator } : {}),
+            ...(autoUpdate ? { autoUpdate } : {}),
             ...(consoleOpener ? { consoleOpener } : {}),
           };
           const host = new AppServerHost({
@@ -368,6 +386,7 @@ export async function runHostRuntime(input: {
           });
           await listener.listen();
           await publishRemoteControlAppServerDescriptor(remoteControlPlan);
+          autoUpdate?.start();
           // Official failure/replacement must never close this listener or external Harnesses.
           return await runWithConsoleControl(
             host,
@@ -381,7 +400,11 @@ export async function runHostRuntime(input: {
             try {
               await official.close();
             } finally {
-              await mappingStore.close();
+              try {
+                await mappingStore.close();
+              } finally {
+                autoUpdate?.dispose();
+              }
             }
           }
         }
@@ -456,6 +479,7 @@ export async function runHostRuntime(input: {
           sharedDelegation = api;
           return registry.register(api, { harnessCatalog: true });
         },
+        ...(autoUpdate ? { autoUpdate } : {}),
       });
       const externalRunning = externalHost.run();
       const sharedListener = createRemoteAppServerWebSocketListener({
@@ -493,6 +517,7 @@ export async function runHostRuntime(input: {
             accountControl,
             onDelegationApi: (api) => registry.register(api),
             ...(updateCoordinator ? { updateCoordinator } : {}),
+            ...(autoUpdate ? { autoUpdate } : {}),
           });
         },
       });
@@ -536,6 +561,7 @@ export async function runHostRuntime(input: {
           );
         }
         await sharedListener.listen();
+        autoUpdate?.start();
         process.title = MANAGED_REMOTE_APP_SERVER_PROCESS_TITLE;
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
@@ -560,7 +586,11 @@ export async function runHostRuntime(input: {
             try {
               await officialRuntimeScope.close();
             } finally {
-              await mappingStore.close();
+              try {
+                await mappingStore.close();
+              } finally {
+                autoUpdate?.dispose();
+              }
             }
           }
         }

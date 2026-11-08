@@ -273,6 +273,7 @@ export interface RendererSettingsMessages {
   readonly updateReadyToRestart: string;
   readonly updateRestart: string;
   readonly updateLater: string;
+  readonly updateClose: string;
   readonly updateNotificationTitle: string;
   readonly updateChecking: string;
   readonly updateDownloading: string;
@@ -643,9 +644,11 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     "This Release has no verified installer for your system. Download it manually below.",
   updateAndRestart: "Update",
   updateDownload: "Download update",
-  updateReadyToRestart: "Update ready. Restart to install.",
+  updateReadyToRestart:
+    "Update ready. It installs after an automatic restart once nothing is running.",
   updateRestart: "Restart and update",
   updateLater: "Later",
+  updateClose: "Close",
   updateNotificationTitle: "Codex Buddy update",
   updateChecking: "Checking for updates...",
   updateDownloading: "Downloading update...",
@@ -1025,9 +1028,10 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   updateInstallationUnavailable: "该版本没有适用于当前系统的安装包，请在下方手动下载。",
   updateAndRestart: "更新",
   updateDownload: "下载更新",
-  updateReadyToRestart: "更新已就绪，重启后安装。",
+  updateReadyToRestart: "更新已就绪，没有进行中的任务时会自动重启安装。",
   updateRestart: "重启更新",
   updateLater: "稍后",
+  updateClose: "关闭",
   updateNotificationTitle: "Codex Buddy 更新",
   updateChecking: "正在检查更新...",
   updateDownloading: "正在下载更新...",

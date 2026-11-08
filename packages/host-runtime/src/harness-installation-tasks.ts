@@ -12,6 +12,11 @@ export class HarnessInstallationTasks {
   readonly #tasks = new Map<string, { state: HarnessInstallationTask; finishedAt?: number }>();
   readonly #active = new Map<string, string>();
 
+  /** A restart would abandon a Harness version operation the user started. */
+  get active(): boolean {
+    return this.#active.size > 0;
+  }
+
   #prune(): void {
     const cutoff = Date.now() - 15 * 60_000;
     for (const [id, task] of this.#tasks) {

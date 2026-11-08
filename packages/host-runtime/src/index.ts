@@ -93,6 +93,7 @@ export type {
   RemoteHostStatus,
 } from "./remote-host-lifecycle.js";
 export { createHostUpdateCoordinator } from "./update-coordinator.js";
+export type { HostAutoUpdateParticipant } from "./host-auto-update.js";
 export type {
   CreateHostUpdateCoordinatorOptions,
   HostUpdateCoordinator,

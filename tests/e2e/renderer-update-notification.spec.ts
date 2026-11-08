@@ -156,10 +156,13 @@ for (const { width, height, scheme } of [
     await popup.getByRole("button", { name: "稍后" }).click();
     await expect(popup).toBeHidden();
     await expect(popup.getByRole("button", { name: "重启更新" })).toBeVisible();
+    // A downloaded update restarts automatically when idle, so the secondary
+    // action only closes the panel instead of promising to postpone it.
+    await expect(popup.getByRole("button", { name: "关闭" })).toBeVisible();
     expect(calls.restarts).toBe(0);
     await page.screenshot({ path: testInfo.outputPath("ready-to-restart.png") });
     const pollsAtReady = calls.status;
-    await popup.getByRole("button", { name: "稍后" }).click();
+    await popup.getByRole("button", { name: "关闭" }).click();
     await expect(popup).toBeHidden();
     await page.waitForTimeout(1_500);
     expect(calls.status).toBe(pollsAtReady);
@@ -194,6 +197,10 @@ test("settings and notification share the ready state and restart action", async
   const popup = page.locator("[data-codexhost-update-notification]");
   await page.locator("[data-codexhost-update-trigger] button").click();
   await popup.getByRole("button", { name: "稍后" }).click();
+  // The panel reopens when the download finishes; the secondary action now
+  // only closes it because the restart will happen automatically.
+  await expect(popup.getByRole("button", { name: "关闭" })).toBeVisible();
+  await popup.getByRole("button", { name: "关闭" }).click();
   await page.locator("[data-codexhost-settings-trigger] button").click();
   await page.locator(".settings-nav").getByRole("button", { name: "更新", exact: true }).click();
   const panel = page.locator(".settings-update-panel");

@@ -134,6 +134,9 @@ export function installRendererUpdateNotification(options: {
         : snapshot.busy === "start" && !active
           ? messages.updatePreparing
           : (statusMessage(snapshot.status, messages) ?? messages.updateAvailable);
+    // While the update waits for an idle Desktop, "Later" would be misleading:
+    // the restart still happens automatically, so the button only closes this panel.
+    later.textContent = ready ? messages.updateClose : messages.updateLater;
     progress.hidden = phase !== "downloading";
     detail.hidden = progress.hidden;
     if (!progress.hidden) {

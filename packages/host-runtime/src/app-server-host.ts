@@ -376,6 +376,7 @@ import {
   type HostInteractionId,
   type HostItemId,
   type HostTurnId,
+  type UpdateStatus,
 } from "@codexhost/shared-contracts";
 import { executeExternalThreadFork } from "./external-thread-fork.js";
 import { settleExternalOutputFailure } from "./external-output-failure.js";
@@ -479,6 +480,7 @@ import {
   OfficialRuntimeScope,
 } from "./codex-runtime/official-runtime-scope.js";
 import type { HostUpdateCoordinator } from "./update-coordinator.js";
+import type { HostAutoUpdateParticipant } from "./host-auto-update.js";
 import {
   GitPushRejectedError,
   GitSyncConflictError,
@@ -602,6 +604,11 @@ export interface AppServerHostOptions {
   onCreateRequestRoute?: (observation: CreateRequestRouteObservation) => void;
   onRequestRoute?: (observation: RequestRouteObservation) => void;
   updateCoordinator?: HostUpdateCoordinator;
+  /**
+   * Shared by every Host of one Desktop process. Desktop restarts into a
+   * downloaded update only when all of them report no running work.
+   */
+  autoUpdate?: HostAutoUpdateParticipant;
   gitWorkflowGroup?: ProjectGitWorkflowGroup;
   runtimeMaintenance?: RuntimeMaintenance;
   /** Present only on the local Host started by the Launcher. */
@@ -980,6 +987,8 @@ export class AppServerHost {
   #catalogRefresh: Promise<BuddyCatalogSync> | undefined;
   readonly #modelAvailability: ModelAvailability;
   #threadAutoArchive: ThreadAutoArchive;
+  readonly #autoUpdate: HostAutoUpdateParticipant | undefined;
+  #unregisterAutoUpdate: (() => void) | undefined;
   #modelCatalogGeneration = 0;
 
   constructor(options: AppServerHostOptions) {
@@ -1018,6 +1027,7 @@ export class AppServerHost {
       this.#noteDesktopReply(value);
       return this.#takeConsoleReply(value);
     });
+    this.#autoUpdate = options.autoUpdate;
     const environment = this.#options.environment ?? process.env;
     this.#turnActions = new TurnActions({
       environment,
@@ -1283,6 +1293,12 @@ export class AppServerHost {
     });
     this.#unregisterDelegationApi =
       typeof unregisterDelegationApi === "function" ? unregisterDelegationApi : undefined;
+    // Register only once every collection the probe reads exists. A Host can
+    // attach after the update is already waiting, so registration itself may
+    // start an idle read immediately.
+    this.#unregisterAutoUpdate = this.#autoUpdate?.register(() => this.#hostIdle(), {
+      nativeAuthority: this.#options.externalOnly !== true,
+    });
   }
 
   close(): void {
@@ -1293,6 +1309,7 @@ export class AppServerHost {
     this.#modelAvailability.close();
     this.#privateChat?.close();
     this.#options.sharedThreads?.close();
+    this.#unregisterIdleProbe();
     this.#externalRuntime.idleRelease.disable();
     this.#threadAutoArchive.disable();
     this.#pluginLoadAbort.abort();
@@ -1302,6 +1319,11 @@ export class AppServerHost {
     // run() still awaits shutdown and propagates unconfirmed exit. This eager
     // close attempt must not create an independent unhandled rejection.
     void this.#closeOfficialRuntime().catch((error: unknown) => this.#diagnose(error));
+  }
+
+  #unregisterIdleProbe(): void {
+    this.#unregisterAutoUpdate?.();
+    this.#unregisterAutoUpdate = undefined;
   }
 
   async #closeOfficialRuntime(): Promise<void> {
@@ -1403,6 +1425,10 @@ export class AppServerHost {
       this.#unregisterDelegationApi = undefined;
       this.#unsubscribeAccountState?.();
       this.#unsubscribeAccountState = undefined;
+      // A Host whose run loop ended must not keep answering the shared idle
+      // probe: its official connection is gone, which would block the restart
+      // as "cannot prove idle" for the remaining Hosts.
+      this.#unregisterIdleProbe();
       if (this.#options.closeMappingStoreOnExit !== false) {
         await this.#repository.close().catch((closeError) => this.#diagnose(closeError));
       }
@@ -1473,6 +1499,9 @@ export class AppServerHost {
       this.#unregisterDelegationApi = undefined;
       this.#unsubscribeAccountState?.();
       this.#unsubscribeAccountState = undefined;
+      // A finished run loop can no longer read the native Thread list; keeping
+      // its probe registered would make the shared idle check fail closed.
+      this.#unregisterIdleProbe();
       if (this.#options.closeMappingStoreOnExit !== false) {
         await this.#repository.close().catch((error) => this.#diagnose(error));
       }
@@ -1493,6 +1522,81 @@ export class AppServerHost {
     );
   }
 
+  /**
+   * Work the Host can prove still belongs to this Desktop process. Running work is
+   * false; an unreadable native Thread list without local work is null, because an
+   * automatic restart must not rely on a failed observation.
+   */
+  async #hostIdle(): Promise<boolean | null> {
+    // Pending interactions and prepared-but-not-started work are also unfinished:
+    // restarting would discard what the user is expected to answer or run.
+    if (
+      this.#hasActiveWork() ||
+      this.#externalQueue.active ||
+      this.#pendingDesktopApprovals.size > 0 ||
+      this.#pendingDesktopQuestions.size > 0 ||
+      this.#pendingOfficialDelegationThreads.size > 0 ||
+      this.#pendingExternalCommandRequests.size > 0 ||
+      this.#installationTasks.active ||
+      this.#hasOpenBackgroundCommands()
+    ) {
+      return false;
+    }
+    // Another Host in this Desktop process owns the native Thread list. This
+    // Host only contributes its own external Sessions, so it must not claim
+    // native authority or pretend an unreadable native state is idle.
+    if (this.#options.externalOnly) return true;
+    try {
+      let cursor: string | null = null;
+      const seen = new Set<string>();
+      for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+        const response = await this.#requestOfficial("thread/list", {
+          limit: 100,
+          archived: false,
+          ...(cursor ? { cursor } : {}),
+        });
+        const page = isRecord(response.result) ? response.result : null;
+        if (
+          (response.error !== undefined && response.error !== null) ||
+          !page ||
+          !Array.isArray(page.data) ||
+          page.data.some((entry) => !isRecord(entry))
+        )
+          return null;
+        for (const entry of page.data) {
+          if (isRecord(entry) && isRecord(entry.status) && entry.status.type === "active")
+            return false;
+        }
+        const nextCursor = page.nextCursor;
+        if (nextCursor !== undefined && nextCursor !== null && typeof nextCursor !== "string")
+          return null;
+        cursor = typeof nextCursor === "string" ? nextCursor : null;
+        if (!cursor) return true;
+        if (seen.has(cursor)) return null;
+        seen.add(cursor);
+      }
+      return null;
+    } catch (error) {
+      // A failed observation is not evidence of idleness.
+      this.#diagnose(error);
+      return null;
+    }
+  }
+
+  /**
+   * A finished Turn can still own native background commands that are running.
+   * A reloaded Session may retain that work without a projected Turn.
+   */
+  #hasOpenBackgroundCommands(): boolean {
+    return this.#externalRuntime
+      .values()
+      .some(
+        (thread) =>
+          thread.session.hasBackgroundWork?.() === true ||
+          [...thread.projectedTurns.values()].some((turn) => turn.projector.hasOpenDetachedItems),
+      );
+  }
+
   async #waitForActiveWorkToDrain(): Promise<void> {
     while (!this.#closeRequested && this.#hasActiveWork()) {
       await new Promise<void>((resolve) => this.#activeWorkDrainWaiters.add(resolve));
@@ -1501,6 +1605,7 @@ export class AppServerHost {
 
   #signalActiveWorkChanged(notifyWorkflow = true): void {
     if (notifyWorkflow) this.#gitWorkflow.activityChanged();
+    this.#autoUpdate?.activityChanged();
     if (!this.#closeRequested && this.#hasActiveWork()) return;
     const waiters = [...this.#activeWorkDrainWaiters];
     this.#activeWorkDrainWaiters.clear();
@@ -4652,11 +4757,16 @@ export class AppServerHost {
     try {
       if (request.method === "codexhost/update/check") {
         const result = updateCheckResultSchema.parse(await coordinator.check());
+        // The Renderer can find a download that the Host has not checked yet.
+        // Hand its readiness to the idle policy now instead of after the next
+        // hourly check, so the panel's automatic-restart message stays true.
+        this.#observeUpdateStatus(result.status);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
       }
       if (request.method === "codexhost/update/status") {
         const result = updateStatusResultSchema.parse(await coordinator.status());
+        this.#observeUpdateStatus(result.status);
         await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
         return;
       }
@@ -4665,10 +4775,20 @@ export class AppServerHost {
           ? await coordinator.restart()
           : await coordinator.start(),
       );
+      this.#observeUpdateStatus(result.status);
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
     } catch (error) {
       await this.#writer.json(rpcError(request, -32091, errorMessage(error).slice(0, 500)));
     }
+  }
+
+  /**
+   * A Renderer on another Host may poll a different coordinator. `autoUpdate`
+   * is only attached to Hosts that share this Desktop's coordinator, so an
+   * unwired Renderer observation cannot affect this machine.
+   */
+  #observeUpdateStatus(status: UpdateStatus | null): void {
+    this.#autoUpdate?.statusObserved(status);
   }
 
   // 原生任务列表读取失败时只保留 Host 已观测到的运行状态，不让一个过期的

@@ -22,6 +22,7 @@ import type { CodexAccountControl } from "../src/account/codex-account-control.j
 import type { OfficialRuntimeScope } from "../src/codex-runtime/official-runtime-scope.js";
 import type { OfficialAppServerConnection } from "../src/official-app-server-connection.js";
 import type { HostUpdateCoordinator } from "../src/update-coordinator.js";
+import type { HostAutoUpdateParticipant } from "../src/host-auto-update.js";
 import type { HostConsoleOpener } from "../src/console-opener.js";
 
 export class FakeOfficialProcess extends EventEmitter {
@@ -288,6 +289,8 @@ export function createFixture(
     createOfficialConnection?: () =>
       OfficialAppServerConnection | Promise<OfficialAppServerConnection>;
     updateCoordinator?: HostUpdateCoordinator;
+    autoUpdate?: HostAutoUpdateParticipant;
+    externalOnly?: boolean;
     runtimeMaintenance?: RuntimeMaintenance;
     consoleOpener?: HostConsoleOpener;
     accountControl?: CodexAccountControl;
@@ -364,6 +367,8 @@ export function createFixture(
         }
       : {}),
     ...(options.updateCoordinator ? { updateCoordinator: options.updateCoordinator } : {}),
+    ...(options.autoUpdate ? { autoUpdate: options.autoUpdate } : {}),
+    ...(options.externalOnly ? { externalOnly: true } : {}),
     ...(options.runtimeMaintenance ? { runtimeMaintenance: options.runtimeMaintenance } : {}),
     ...(options.consoleOpener ? { consoleOpener: options.consoleOpener } : {}),
     ...(options.modelPrices ? { modelPrices: options.modelPrices } : {}),
@@ -378,6 +383,12 @@ export function createFixture(
     () => startup.reject(new Error("Host exited before fixture startup")),
     (error) => startup.reject(error),
   );
+  // A test may finish without awaiting readiness, for example an external-only
+  // Host. Keep that rejection observed while awaited callers still see it.
+  const ready = startup.promise.then(
+    () => new Promise<undefined>((resolve) => setImmediate(resolve, undefined)),
+  );
+  void ready.catch(() => undefined);
   return {
     adapter,
     collector,
@@ -387,9 +398,7 @@ export function createFixture(
     host,
     official,
     running,
-    ready: startup.promise.then(
-      () => new Promise<undefined>((resolve) => setImmediate(resolve, undefined)),
-    ),
+    ready,
     mappingStore,
     mappingStoreDirectory,
     spawnOfficial,

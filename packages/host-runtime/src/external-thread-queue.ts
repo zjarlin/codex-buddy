@@ -63,6 +63,11 @@ export class ExternalThreadQueue {
     return (this.#queues.get(threadId)?.length ?? 0) > 0;
   }
 
+  /** Any queued follow-up in this Host is unfinished user work. */
+  get active(): boolean {
+    return [...this.#queues.values()].some((items) => items.length > 0);
+  }
+
   list(threadId: string, params: JsonObject): JsonObject {
     const items = this.#queues.get(threadId) ?? [];
     const start = params.cursor == null ? 0 : Number(params.cursor);

@@ -103,7 +103,7 @@ export function sidebarThreadNativeStatus(row: HTMLElement): SidebarThreadNative
     else if (status?.type === "error") error = true;
     else if (status?.unread === true) unread = true;
   }
-  // 执行中优先；否则保留“需要处理”和未读两个独立信号，调用方不能把它们互相当替代。
+  // 执行中优先，其次是“需要处理”；两者都成立时不再叠加未读标记。
   const result = running
     ? { running: true, unread: false, error: false }
     : { running: false, unread, error };

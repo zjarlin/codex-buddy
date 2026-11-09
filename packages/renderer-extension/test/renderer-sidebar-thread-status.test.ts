@@ -66,9 +66,10 @@ describe("Sidebar thread native status", () => {
     expect(
       sidebarThreadNativeStatus(rowWith([{ type: "error", unread: false, unreadCount: 0 }])),
     ).toEqual({ running: false, unread: false, error: true });
+    // 三角已经表达“需要处理”，不再叠加未读标记。
     expect(
       sidebarThreadNativeStatus(rowWith([{ type: "error", unread: true, unreadCount: 2 }])),
-    ).toEqual({ running: false, unread: true, error: true });
+    ).toEqual({ running: false, unread: false, error: true });
   });
 
   it("honours the Host running marker without walking the Fiber tree", () => {

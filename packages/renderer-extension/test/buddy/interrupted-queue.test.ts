@@ -746,6 +746,57 @@ describe("interrupted event queue", () => {
     expect(f.first().autoResumeAttempts).toBe(3);
   });
 
+  it("discovers interruptions of sessions the sidebar never rendered", async () => {
+    const f = fixture();
+    f.client.buddyInterrupted.mockResolvedValueOnce({
+      threads: [
+        {
+          threadId: "unrendered",
+          turnId: "unrendered-turn",
+          title: "未渲染的会话",
+          owner: "codex",
+          status: "interrupted",
+        },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    await f.queue.discover("local");
+    expect(f.queue.list("local")).toEqual([
+      expect.objectContaining({ threadId: "unrendered", turnId: "unrendered-turn" }),
+    ]);
+  });
+
+  it("rate limits background discovery per Host and retries sooner after a failure", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const interrupted = (turnId: string): BuddyInterrupted => ({
+      threads: [{ threadId: "one", turnId, title: "one", owner: "codex", status: "interrupted" }],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    await f.queue.discover("local");
+    await f.queue.discover("local");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(1);
+
+    // 失败只在较短的退避后重试，而不是等满一个完整周期。
+    f.client.buddyInterrupted.mockRejectedValueOnce(new Error("host offline"));
+    vi.advanceTimersByTime(121_000);
+    await f.queue.discover("local");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(31_000);
+    f.client.buddyInterrupted.mockResolvedValueOnce(interrupted("one-turn"));
+    await f.queue.discover("local");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(3);
+    expect(f.queue.list("local")).toHaveLength(1);
+
+    // 未到间隔时既不重复扫描，也不阻塞下一个 Host。
+    await f.queue.discover("local");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(3);
+    await f.queue.discover("remote");
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(4);
+  });
+
   it("keeps a queued interruption while the same native turn is still stopped", async () => {
     vi.useFakeTimers();
     const f = fixture();

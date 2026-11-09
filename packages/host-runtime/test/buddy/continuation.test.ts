@@ -638,7 +638,7 @@ describe("interrupted conversations", () => {
     const request = vi.fn<NativeRequest>(async (method, params) => {
       if (method === "thread/list") return { result: { data: threads, nextCursor: null } };
       if (method === "thread/read")
-        return { result: { thread: { name: params.threadId, status: { type: "idle" } } } };
+        return { result: { thread: { name: "Thread", status: { type: "idle" } } } };
       if (method === "thread/turns/list")
         return {
           result: {

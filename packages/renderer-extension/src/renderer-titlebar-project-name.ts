@@ -1,7 +1,7 @@
 import { committedReactAncestors } from "@codexhost/desktop-control/renderer-bindings";
 
 import { CODEX_COMPOSER_SELECTOR } from "./renderer-composer-dom.js";
-import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { mutationAffectsElements, mutationIsRendererOwnedWrite } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
@@ -168,8 +168,9 @@ export function installRendererTitlebarProjectName(source: TitlebarProjectNameSo
     // 只关心标题栏内容节点本身的重挂；自身属性的写入不在过滤范围内，不会自激。
     attributeFilter: [CONTENT_ATTRIBUTE],
     test: (mutation) =>
-      mutationAffectsElements(mutation, CONTENT_SELECTOR) ||
-      mutationAffectsElements(mutation, CODEX_COMPOSER_SELECTOR),
+      !mutationIsRendererOwnedWrite(mutation) &&
+      (mutationAffectsElements(mutation, CONTENT_SELECTOR) ||
+        mutationAffectsElements(mutation, CODEX_COMPOSER_SELECTOR)),
     onMutate: () => schedule(),
   });
   schedule();

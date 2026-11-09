@@ -15,7 +15,11 @@ import type {
   ProjectToolsConfig,
 } from "@codexhost/shared-contracts";
 
-import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import {
+  RENDERER_INJECTED_ATTRIBUTE,
+  mutationAffectsElements,
+  mutationIsRendererOwnedWrite,
+} from "../renderer-dom-mutations.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { composerDraftTarget, composerDraftWorkspace } from "../renderer-composer-workspace.js";
@@ -115,6 +119,7 @@ export function installProjectTools(options: {
   let openingDialog = false;
   let disposed = false;
   let scheduled = false;
+  let refreshFrame: number | null = null;
   let dialog: { element: HTMLDialogElement; projectKey: string } | null = null;
   let picker: Picker | null = null;
   let toast: HTMLElement | null = null;
@@ -659,6 +664,7 @@ export function installProjectTools(options: {
     mounted?.wrapper.remove();
     const wrapper = document.createElement("span");
     wrapper.setAttribute("data-codexhost-project-tools", "");
+    wrapper.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
     const tools: ToolDefinition[] = [];
     if (binding?.intranetUrl || binding?.publicUrl) {
       tools.push(
@@ -756,6 +762,7 @@ export function installProjectTools(options: {
     }
     const wrapper = document.createElement("span");
     wrapper.setAttribute("data-codexhost-project-titlebar-tools", "");
+    wrapper.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
     wrapper.setAttribute("role", "toolbar");
     wrapper.setAttribute("aria-label", `${project.label} · ${labels.title}`);
     wrapper.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -822,12 +829,15 @@ export function installProjectTools(options: {
   const stopObserving = getDomMutationHub(document).subscribe({
     kinds: ["childList"],
     test: (record) =>
-      mutationAffectsElements(record, "#app-shell-sidebar") ||
-      mutationAffectsElements(record, TITLEBAR_CONTENT_SELECTOR),
+      !mutationIsRendererOwnedWrite(record) &&
+      (mutationAffectsElements(record, "#app-shell-sidebar") ||
+        mutationAffectsElements(record, TITLEBAR_CONTENT_SELECTOR)),
     onMutate: () => {
       if (scheduled || disposed) return;
       scheduled = true;
-      queueMicrotask(() => {
+      // 与观察者写入合并在同一帧：微任务频率的全会话回溯会饿死主线程。
+      refreshFrame = window.requestAnimationFrame(() => {
+        refreshFrame = null;
         scheduled = false;
         refresh();
       });
@@ -878,6 +888,8 @@ export function installProjectTools(options: {
       if (disposed) return;
       disposed = true;
       stopObserving();
+      if (refreshFrame !== null) window.cancelAnimationFrame(refreshFrame);
+      refreshFrame = null;
       closePicker();
       dialog?.element.close();
       dialog = null;

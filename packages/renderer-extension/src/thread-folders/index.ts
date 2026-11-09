@@ -4,7 +4,11 @@ import LoaderCircle from "lucide/dist/esm/icons/loader-circle.mjs";
 import Plus from "lucide/dist/esm/icons/plus.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { ThreadFoldersConfig, ThreadFoldersState } from "@codexhost/shared-contracts";
-import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import {
+  RENDERER_INJECTED_ATTRIBUTE,
+  mutationAffectsElements,
+  mutationIsRendererOwnedWrite,
+} from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { projectKey, type SidebarProject } from "../project-tabs/model.js";
 import { rowProject } from "../project-tabs/native-binding.js";
@@ -44,6 +48,7 @@ const PROJECT_HEADER_SELECTOR = "[data-app-action-sidebar-project-row]";
 
 interface ProjectBarEntry {
   container: HTMLElement;
+  project: SidebarProject;
   bar: HTMLElement;
   signature: string;
 }
@@ -142,8 +147,18 @@ export function installThreadFolders(options: {
   let hostWrite = Promise.resolve();
   let disposed = false;
   let scheduled = false;
+  let refreshFrame: number | null = null;
   let dialog: HTMLDialogElement | null = null;
-  const bars = new Map<string, ProjectBarEntry>();
+  // 同一项目可能同时出现在置顶区与项目区（原生保留两份容器）。投影必须按容器
+  // 记账，否则每次 refresh 都会把同一个 bar 在两个容器之间来回搬动，写入又会
+  // 触发观察者，形成刷新风暴。
+  const bars = new Map<HTMLElement, ProjectBarEntry>();
+  const barForProject = (key: string): ProjectBarEntry | undefined => {
+    for (const entry of bars.values()) {
+      if (projectKey(entry.project) === key) return entry;
+    }
+    return undefined;
+  };
   const hiddenRows = new Set<HTMLElement>();
   const pendingThreads = createPendingFolderThreads();
   const storage = (): Storage | null => {
@@ -494,13 +509,13 @@ export function installThreadFolders(options: {
         : null;
     const folderId = folder?.getAttribute(FOLDER_ATTRIBUTE);
     if (folderId) {
-      const target = bars.get(key)?.container;
+      const target = barForProject(key)?.container;
       if (target) addAction(m.newThread, () => startNewThread(project, key, folderId, target));
     }
     addAction(m.add, () => configure(project, key, true));
     addAction(m.manage, () => configure(project, key));
     const nativeTarget =
-      row ?? bars.get(key)?.container.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
+      row ?? barForProject(key)?.container.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
     if (nativeTarget)
       addAction(m.nativeActions, () => {
         forwardingNativeMenu = true;
@@ -762,30 +777,30 @@ export function installThreadFolders(options: {
         ).catch(() => undefined);
       }
     }
-    const activeKeys = new Set(projects.map(({ project }) => projectKey(project)));
-    for (const [key, entry] of bars) {
-      if (!activeKeys.has(key) || !entry.container.isConnected || !entry.bar.isConnected) {
+    const activeContainers = new Set(projects.map(({ container }) => container));
+    for (const [container, entry] of bars) {
+      if (!activeContainers.has(container) || !container.isConnected || !entry.bar.isConnected) {
         entry.bar.remove();
-        bars.delete(key);
+        bars.delete(container);
       }
     }
     for (const { container, project } of projects) {
-      const key = projectKey(project);
       const header = container.querySelector<HTMLElement>(PROJECT_HEADER_SELECTOR);
       if (!header) continue;
-      let entry = bars.get(key);
+      let entry = bars.get(container);
       if (!entry) {
         const bar = document.createElement("div");
         bar.setAttribute(BAR_ATTRIBUTE, "");
-        entry = { container, bar, signature: "" };
-        bars.set(key, entry);
+        bar.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
+        entry = { container, project, bar, signature: "" };
+        bars.set(container, entry);
+      } else {
+        entry.project = project;
       }
       if (
-        entry.container !== container ||
         entry.bar.parentElement !== header.parentElement ||
         entry.bar.previousElementSibling !== header
       ) {
-        entry.container = container;
         header.after(entry.bar);
       }
       // 原生项目行收起时会卸载其会话行，但投影 bar 是外部节点，必须按原生
@@ -828,7 +843,11 @@ export function installThreadFolders(options: {
   const schedule = (): void => {
     if (disposed || scheduled) return;
     scheduled = true;
-    queueMicrotask(refresh);
+    // 与观察者写入合并在同一帧：微任务频率的全会话回溯会饿死主线程。
+    refreshFrame = window.requestAnimationFrame(() => {
+      refreshFrame = null;
+      refresh();
+    });
   };
   const onStorage = (event: StorageEvent): void => {
     if (event.key !== THREAD_FOLDERS_STORAGE_KEY && event.key !== null) return;
@@ -852,6 +871,7 @@ export function installThreadFolders(options: {
       RECOVERY_ATTRIBUTE,
     ],
     test: (record) =>
+      !mutationIsRendererOwnedWrite(record) &&
       record.target instanceof Element &&
       record.target.closest(`[${BAR_ATTRIBUTE}]`) === null &&
       mutationAffectsElements(record, SIDEBAR_SCOPE),
@@ -866,6 +886,8 @@ export function installThreadFolders(options: {
     dispose() {
       disposed = true;
       stopObserving();
+      if (refreshFrame !== null) window.cancelAnimationFrame(refreshFrame);
+      refreshFrame = null;
       closeContextMenu();
       document.removeEventListener("contextmenu", onSidebarContextMenu, true);
       document.removeEventListener("pointerdown", onOutsidePointer, true);

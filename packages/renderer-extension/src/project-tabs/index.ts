@@ -22,7 +22,11 @@ import {
   threadProject,
   type ThreadProjectTarget,
 } from "./native-binding.js";
-import { mutationAffectsElements } from "../renderer-dom-mutations.js";
+import {
+  RENDERER_INJECTED_ATTRIBUTE,
+  mutationAffectsElements,
+  mutationIsRendererOwnedWrite,
+} from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { createRecentSectionCollapse } from "./recent-section.js";
 import { createProjectTabSearch } from "./search-picker.js";
@@ -93,10 +97,12 @@ export function installProjectTabs(options: {
   read();
   let disposed = false;
   let scheduled = false;
+  let refreshFrame: number | null = null;
   let signature = "";
   let dialog: HTMLDialogElement | null = null;
   const bar = document.createElement("div");
   bar.setAttribute("data-codexhost-project-tabs", "");
+  bar.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
   const group = document.createElement("div");
   group.setAttribute("role", "group");
   let tabButtons: { id: string | null; element: HTMLButtonElement }[] = [];
@@ -104,10 +110,12 @@ export function installProjectTabs(options: {
   actions.setAttribute("data-codexhost-project-tab-actions", "");
   const empty = document.createElement("p");
   empty.setAttribute("data-codexhost-project-tabs-empty", "");
+  empty.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
   empty.setAttribute("role", "status");
   empty.hidden = true;
   const error = document.createElement("p");
   error.setAttribute("data-codexhost-project-tabs-error", "");
+  error.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
   error.setAttribute("role", "alert");
   error.hidden = true;
   const hiddenRows = new Set<HTMLElement>();
@@ -672,11 +680,14 @@ export function installProjectTabs(options: {
       "data-app-action-sidebar-section-collapsed",
       "aria-expanded",
     ],
-    test: (record) => mutationAffectsElements(record, SIDEBAR_SCOPE),
+    test: (record) =>
+      !mutationIsRendererOwnedWrite(record) && mutationAffectsElements(record, SIDEBAR_SCOPE),
     onMutate: () => {
       if (scheduled || disposed) return;
       scheduled = true;
-      queueMicrotask(() => {
+      // 与观察者写入合并在同一帧：微任务频率的全会话回溯会饿死主线程。
+      refreshFrame = window.requestAnimationFrame(() => {
+        refreshFrame = null;
         scheduled = false;
         refresh();
       });
@@ -692,6 +703,8 @@ export function installProjectTabs(options: {
     dispose() {
       disposed = true;
       stopObserving();
+      if (refreshFrame !== null) window.cancelAnimationFrame(refreshFrame);
+      refreshFrame = null;
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("click", onProjectCreateClick, true);
       window.removeEventListener("storage", onStorage);

@@ -1,4 +1,4 @@
-import { mutationAffectsElements } from "./renderer-dom-mutations.js";
+import { mutationAffectsElements, mutationIsRendererOwnedWrite } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
 import {
   SIDEBAR_THREAD_HOST_ID_ATTRIBUTE,
@@ -147,7 +147,9 @@ export function installRendererSidebarThreadAlign(source: SidebarThreadAlignSour
       "data-app-action-sidebar-thread-id",
       "data-app-action-sidebar-thread-active",
     ],
-    test: (mutation) => mutationAffectsElements(mutation, SIDEBAR_SELECTOR),
+    test: (mutation) =>
+      !mutationIsRendererOwnedWrite(mutation) &&
+      mutationAffectsElements(mutation, SIDEBAR_SELECTOR),
     onMutate: () => schedule(),
   });
   schedule();

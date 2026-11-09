@@ -28,15 +28,44 @@ function asProject(value: unknown): SidebarProject | null {
   return project as unknown as SidebarProject;
 }
 
+// 侧栏刷新由观察者驱动，可能按帧反复执行；Fiber 回溯是全量刷新里最贵的部分。
+// 同一节点在身份属性和标签都没变时给出同一个项目，避免每帧重复回溯。
+const projectsByRow = new WeakMap<
+  HTMLElement,
+  {
+    kind: string | null;
+    containerId: string | null;
+    label: string;
+    project: SidebarProject | null;
+  }
+>();
+
 export function rowProject(row: HTMLElement): SidebarProject | null {
+  const kind = row.getAttribute("data-sidebar-project-kind");
+  const containerId = row.getAttribute("data-sidebar-project-container-id");
+  const label = row.querySelector("[data-app-action-sidebar-project-label]")?.textContent ?? "";
+  const cached = projectsByRow.get(row);
+  if (
+    cached &&
+    cached.kind === kind &&
+    cached.containerId === containerId &&
+    cached.label === label
+  )
+    return cached.project;
+  const project = projectFromFiber(row, kind, containerId);
+  projectsByRow.set(row, { kind, containerId, label, project });
+  return project;
+}
+
+function projectFromFiber(
+  row: HTMLElement,
+  kind: string | null,
+  containerId: string | null,
+): SidebarProject | null {
   for (const fiber of ancestors(row)) {
     const props = record(fiber.memoizedProps);
     const project = asProject(props?.group) ?? asProject(props?.project);
-    if (
-      project &&
-      row.getAttribute("data-sidebar-project-kind") === project.projectKind &&
-      row.getAttribute("data-sidebar-project-container-id") === `project:${project.projectId}`
-    ) {
+    if (project && kind === project.projectKind && containerId === `project:${project.projectId}`) {
       return project;
     }
   }

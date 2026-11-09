@@ -308,7 +308,7 @@ test("background polling finds a row that stopped without a terminal event", asy
     // 后台核对需要读取标题与归属，才能在侧栏补出恢复按钮。
     Reflect.set(globalThis, "sidebarClient", {
       ...Reflect.get(globalThis, "sidebarClient"),
-      requestThreadProjection: async (method, params) => ({
+      requestThreadProjection: async (method: string, params: { threadId: string }) => ({
         thread: {
           id: params.threadId,
           name: "未打开的中断会话",

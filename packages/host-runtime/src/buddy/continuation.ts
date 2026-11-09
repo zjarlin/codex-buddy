@@ -13,6 +13,8 @@ const READ_CONCURRENCY = 4;
 // Laya 只分析最近活跃的会话，避免把长期历史全部送到网关。
 const RECENT_ACTIVITY_SECONDS = 3 * 24 * 60 * 60;
 const MAX_CLASSIFICATIONS = 64;
+// 网关不可用时连续失败几次就停止问询，避免整轮扫描被超时拖住。
+const MAX_CLASSIFIER_FAILURES = 3;
 const VERDICT_TTL_MS = 30 * 60_000;
 const FAILED_VERDICT_TTL_MS = 60_000;
 
@@ -172,7 +174,13 @@ function clearlyCompleted(turn: Record<string, unknown>): boolean {
     return false;
   }
   if (object(turn.error).message) return false;
-  return !items.some((item) => item.type === "error" && item.willRetry !== true);
+  return !terminalError(turn);
+}
+
+// 官方侧栏的三角同样来自最后一条不可重试的错误项；这是确定的终态，不必再问 Laya。
+function terminalError(turn: Record<string, unknown>): boolean {
+  const items = Array.isArray(turn.items) ? turn.items.map(object) : [];
+  return items.some((item) => item.type === "error" && item.willRetry !== true);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -379,11 +387,13 @@ export class InterruptedConversations {
 
   async list(options: { threadId?: string } = {}): Promise<BuddyInterrupted> {
     // 打开单个会话时只扫描这一条，供界面核对漏检回合；未指定时按官方分页扫描全部历史。
-    const candidates: ThreadMetadata[] = options.threadId
-      ? [{ id: options.threadId, title: "", updatedAt: null }]
+    const single = options.threadId !== undefined;
+    const candidates: ThreadMetadata[] = single
+      ? [{ id: options.threadId as string, title: "", updatedAt: null }]
       : await this.#listThreads();
     const cutoff = Math.floor(Date.now() / 1000) - RECENT_ACTIVITY_SECONDS;
     let classifications = 0;
+    let failures = 0;
     const entries = await mapWithConcurrency(candidates, READ_CONCURRENCY, async (metadata) => {
       if (this.busy(metadata.id)) {
         return { kind: "running" as const, threadId: metadata.id };
@@ -404,37 +414,43 @@ export class InterruptedConversations {
             owner: "codex" as const,
           } satisfies BuddyInterrupted["threads"][number],
         });
-        const explicit = explicitStatus(turn);
-        if (explicit !== null) return interrupted(explicit);
+        // 后台发现只看最近活跃的会话，避免把很早以前的失败重新翻出来；
+        // 打开单个会话时用户已经指明目标，不再按时间过滤。
         const updatedAt =
           metadata.updatedAt ?? (typeof thread.updatedAt === "number" ? thread.updatedAt : null);
-        const recent = updatedAt === null || updatedAt >= cutoff;
+        if (!single && updatedAt !== null && updatedAt < cutoff) return { kind: "done" as const };
+        const explicit = explicitStatus(turn);
+        if (explicit !== null) return interrupted(explicit);
         const stale = staleInProgress(thread, turn);
-        // 系统错误同样是确定的终态，不该再交给 Laya 猜结尾；只补最近活跃的会话，
-        // 避免把很早以前的系统错误重新翻出来。回合没写完时仍按中断处理。
-        if (recent && !stale && systemErrorStatus(thread) !== null) return interrupted("failed");
-        const completedLike = turn.status === "completed" || turn.status === "succeeded";
-        if (!this.classifier || !recent || classifications >= MAX_CLASSIFICATIONS) {
-          return stale ? interrupted("interrupted") : { kind: "done" as const };
-        }
+        const systemError = systemErrorStatus(thread);
+        // 系统错误同样是确定的终态，不该再交给 Laya 猜结尾；回合没写完时仍按中断处理。
+        if (!stale && systemError !== null) return interrupted(systemError);
         // 官方按“最新回合是否已经交付 Assistant 文本”决定输入区是否显示继续；
         // completed 但以命令或错误收尾的回合同样需要判断，分页摘要不含 items，必须补读完整回合。
+        const completedLike = turn.status === "completed" || turn.status === "succeeded";
         let evidence = turn;
         if (completedLike) {
           const full = await this.#read(metadata.id, { items: true });
           if (object(full.turn).id !== turn.id) return { kind: "done" as const };
           evidence = full.turn;
           if (clearlyCompleted(evidence)) return { kind: "done" as const };
+          // 不可重试的错误项就是官方侧栏的三角，是确定的终态，不必再问 Laya。
+          if (terminalError(evidence)) return interrupted("failed");
         }
+        // 没有配置判断入口或本轮预算用尽时，只保留官方 stale inProgress 兜底。
+        if (!this.classifier || classifications >= MAX_CLASSIFICATIONS) {
+          return stale ? interrupted("interrupted") : { kind: "done" as const };
+        }
+        // 连续失败说明网关不可用；按官方尾项规则保留，不能因为判断失败就丢掉会话。
+        if (failures >= MAX_CLASSIFIER_FAILURES) return interrupted("interrupted");
         const verdict = await this.#classify(metadata.id, turn.id, thread, evidence);
         // 命中缓存的判断不消耗本轮预算，否则每轮都会重新占满同样的名额，
         // 排在后面的会话永远轮不到 Laya，只能等用户点开才被发现。
         if (verdict.classified) classifications += 1;
-        if (verdict.value === true) return interrupted("interrupted");
-        // Laya 不可用或证据不足时，只保留官方 stale inProgress 兜底。
-        return verdict.value === null && stale
-          ? interrupted("interrupted")
-          : { kind: "done" as const };
+        if (verdict.value === false) return { kind: "done" as const };
+        if (verdict.value === null && verdict.classified) failures += 1;
+        // Laya 不可用时同样按未交付处理，避免网关故障让整轮发现变成空转。
+        return interrupted("interrupted");
       } catch {
         // 单个历史不可读不阻断其他会话，并明确返回遗漏数量。
         return { kind: "unreadable" as const };

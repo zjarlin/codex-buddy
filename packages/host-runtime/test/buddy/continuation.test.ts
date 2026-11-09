@@ -612,6 +612,86 @@ describe("interrupted conversations", () => {
     expect((await f.service.list()).threads).toEqual([]);
   });
 
+  it("enqueues a recent turn with a non-retryable error item without asking Laya", async () => {
+    const f = layaFixture({
+      status: "completed",
+      items: [
+        { type: "userMessage", content: [{ type: "text", text: "修复构建" }] },
+        { type: "agentMessage", text: "构建失败了" },
+        { type: "error", message: "stream disconnected", willRetry: false },
+      ],
+    });
+    await expect(f.service.list()).resolves.toMatchObject({
+      threads: [{ threadId: "thread", turnId: "turn", status: "failed" }],
+    });
+    expect(f.classifier).not.toHaveBeenCalled();
+  });
+
+  it("keeps an ambiguous turn when Laya is unavailable instead of dropping it", async () => {
+    const f = layaFixture({
+      status: "completed",
+      throws: true,
+      items: [
+        { type: "userMessage", content: [{ type: "text", text: "跑一下构建" }] },
+        { type: "commandExecution", status: "completed", command: "npm run build" },
+      ],
+    });
+    expect((await f.service.list()).threads.map((thread) => thread.status)).toEqual([
+      "interrupted",
+    ]);
+    expect(f.classifier).toHaveBeenCalledOnce();
+  });
+
+  it("stops asking Laya after repeated failures and keeps the remaining turns", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const threads = Array.from({ length: 12 }, (_, index) => ({
+      id: `thread-${index}`,
+      name: `Thread ${index}`,
+      updatedAt: now - index,
+    }));
+    const turn = {
+      id: "turn",
+      status: "completed",
+      items: [{ type: "commandExecution", status: "completed", command: "npm run build" }],
+    };
+    const request = vi.fn<NativeRequest>(async (method, params) => {
+      if (method === "thread/list") return { result: { data: threads, nextCursor: null } };
+      if (method === "thread/read")
+        return { result: { thread: { name: "Thread", status: { type: "idle" } } } };
+      if (method === "thread/turns/list")
+        return {
+          result: {
+            data: [params.itemsView === "full" ? turn : { id: "turn", status: "completed" }],
+          },
+        };
+      return { result: {} };
+    });
+    const classifier = vi.fn<InterruptedTurnClassifier>(async () => {
+      throw new Error("503 System One account is busy");
+    });
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+      classifier,
+    );
+    expect((await service.list()).threads).toHaveLength(threads.length);
+    // 并发读取会同时发起几条请求，失败计数达到上限后不再继续问询。
+    expect(classifier.mock.calls.length).toBeLessThan(threads.length);
+    expect(classifier.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+
+  it("skips old failures in background discovery but still checks one opened thread", async () => {
+    const f = layaFixture({
+      status: "failed",
+      updatedAt: Math.floor(Date.now() / 1000) - 4 * 24 * 60 * 60,
+    });
+    expect((await f.service.list()).threads).toEqual([]);
+    await expect(f.service.list({ threadId: "thread" })).resolves.toMatchObject({
+      threads: [{ threadId: "thread", status: "failed" }],
+    });
+  });
+
   it("continues a queued systemError thread without asking Laya again", async () => {
     const f = layaFixture({ status: "completed", threadStatus: "systemError" });
     await expect(f.service.list()).resolves.toMatchObject({ threads: [{ status: "failed" }] });

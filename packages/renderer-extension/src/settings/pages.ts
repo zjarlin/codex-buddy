@@ -4,6 +4,7 @@ import {
   type RendererUsageStatisticsHostsProvider,
   type RendererUsageStatisticsRequest,
 } from "../console/pages/usage-statistics.js";
+import { createTeamUsagePage, type TeamUsageRequest } from "../console/pages/team-usage-page.js";
 import { consoleMessages } from "../console/messages.js";
 import { createRemoteConnectionsPage } from "./remote-connections-page.js";
 import type { RemoteConnectionsControl } from "../remote-connections-control.js";
@@ -92,6 +93,7 @@ export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "project-sync",
   "session-import",
   "usage-statistics",
+  "team-usage",
   "appearance",
   "updates",
   "about",
@@ -799,6 +801,8 @@ export function createDefaultRendererSettingsPages(
     Promise.reject(new Error("Local Host connection is unavailable")),
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider,
   harnessSchedules?: HarnessSchedulesPageOptions,
+  requestTeamUsage: TeamUsageRequest = () =>
+    Promise.reject(new Error("Local Host connection is unavailable")),
 ): readonly RendererSettingsPageDefinition[] {
   // 保留既有调用方的参数位置；旧应急入口合并到多供应商页面。
   void getEmergencyProviderClient;
@@ -822,6 +826,7 @@ export function createDefaultRendererSettingsPages(
       messages.locale,
       usageStatisticsHosts,
     ),
+    createTeamUsagePage(consoleMessages(messages.locale), requestTeamUsage, messages.locale),
     createAppearanceSettingsPage(messages, getLoadedSessionsClient, getThreadTerminalClient),
     updatesPage(messages, getUpdateClient),
     aboutPage(messages, getUpdateClient),
@@ -837,6 +842,7 @@ export function createDefaultRendererSettingsRegistry(
   openImportedThread?: RendererImportedThreadOpener,
   requestUsageStatistics?: RendererUsageStatisticsRequest,
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider,
+  requestTeamUsage?: TeamUsageRequest,
 ): RendererSettingsPageRegistry {
   return createRendererSettingsPageRegistry(
     createDefaultRendererSettingsPages(
@@ -854,6 +860,8 @@ export function createDefaultRendererSettingsRegistry(
       undefined,
       requestUsageStatistics,
       usageStatisticsHosts,
+      undefined,
+      requestTeamUsage,
     ),
   );
 }

@@ -471,9 +471,16 @@ export function tooltipLine(
   );
 }
 
-/** Saves `text` as a file the viewer downloads. */
-export function download(document: Document, name: string, text: string, type: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type }));
+/** Saves text or bytes as a file the viewer downloads. */
+export function download(
+  document: Document,
+  name: string,
+  content: string | Uint8Array,
+  type: string,
+): void {
+  const part: BlobPart =
+    typeof content === "string" ? content : new Uint8Array(content).slice().buffer;
+  const url = URL.createObjectURL(new Blob([part], { type }));
   const link = h(document, "a", { href: url, download: name });
   document.body.append(link);
   link.click();

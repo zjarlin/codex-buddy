@@ -4,6 +4,10 @@ import { assertNativeCodexThread, isMissingNativeThreadError } from "../renderer
 
 export const INTERRUPTED_QUEUE_STORAGE_KEY = "codexhost.interrupted-queue.v1";
 export const AUTO_RESUME_MAX_ATTEMPTS = 3;
+/** 打开会话时的核对间隔：迟到的终态通知要尽快补上。 */
+export const INTERRUPTED_RECONCILE_INTERVAL_MS = 30_000;
+/** 侧栏后台核对间隔：没有打开会话时也要发现停下且可继续的会话。 */
+export const INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS = 180_000;
 
 /** 会话在 Host 上已不存在（被删除或 rollout 丢失），既不能恢复也不能归档。 */
 export class InterruptedEntryGoneError extends Error {
@@ -180,22 +184,28 @@ export function createInterruptedQueue(options: {
   const readMetadata = <T>(operation: Promise<T>) =>
     bounded(operation, 20_000, "会话读取超时，请检查连接后重试。");
 
-  // 打开会话时只核对这一个会话，补偿客户端闪退或重连期间错过的终态通知。
-  // 不做全历史扫描，也未打开的会话不会被读取。
+  // 核对单个会话，补偿客户端闪退或重连期间错过的终态通知。调用方只传入界面上
+  // 已经渲染的原生会话，从不遍历 thread/list 历史；打开会话用较短间隔，
+  // 侧栏后台轮询用较长间隔，避免对每个可见行反复读取。
   const reconciling = new Set<string>();
+  // 每个会话最近一次核对的时间；间隔由调用方按界面信号选择。
   const reconciledAt = new Map<string, number>();
-  const RECONCILE_INTERVAL_MS = 30_000;
   const RECONCILE_RETRY_MS = 10_000;
 
-  async function reconcile(hostId: string, threadId: string): Promise<void> {
+  async function reconcile(
+    hostId: string,
+    threadId: string,
+    optionsForCall: { intervalMs?: number } = {},
+  ): Promise<void> {
     if (disposed) return;
     const key = keyFor(hostId, threadId);
     const client = options.getClient(hostId);
     if (!client?.requestThreadProjection || !client.readThreadTurnState) return;
     if (excluded.has(key) || reconciling.has(key)) return;
+    const intervalMs = optionsForCall.intervalMs ?? INTERRUPTED_RECONCILE_INTERVAL_MS;
     const checkedAt = reconciledAt.get(key);
     const now = Date.now();
-    if (checkedAt !== undefined && now - checkedAt < RECONCILE_INTERVAL_MS) return;
+    if (checkedAt !== undefined && now - checkedAt < intervalMs) return;
     // 高频界面扫描只做内存限流；到点后才解析持久化队列。
     readStorage();
     reconciledAt.set(key, now);
@@ -293,7 +303,7 @@ export function createInterruptedQueue(options: {
       });
     } catch {
       // 浏览会话时的读取失败不写入队列；连接或会话稍后可用时再重试。
-      reconciledAt.set(key, Date.now() - RECONCILE_INTERVAL_MS + RECONCILE_RETRY_MS);
+      reconciledAt.set(key, Date.now() - intervalMs + RECONCILE_RETRY_MS);
     } finally {
       reconciling.delete(key);
     }

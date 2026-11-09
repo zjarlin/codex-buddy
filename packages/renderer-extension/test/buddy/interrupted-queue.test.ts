@@ -139,6 +139,20 @@ describe("interrupted event queue", () => {
     expect(f.client.readThreadTurnState).not.toHaveBeenCalled();
   });
 
+  it("honours the caller's reconcile interval for background sidebar polling", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await f.queue.reconcile("local", "one", { intervalMs: 180_000 });
+    expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(1);
+    // 未到后台间隔时，轮询重扫不会重复读取。
+    vi.advanceTimersByTime(179_000);
+    await f.queue.reconcile("local", "one", { intervalMs: 180_000 });
+    expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1_000);
+    await f.queue.reconcile("local", "one", { intervalMs: 180_000 });
+    expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reconcile running, completed, external or superseded turns", async () => {
     const f = fixture();
     f.client.readThreadTurnState.mockResolvedValueOnce({

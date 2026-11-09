@@ -4,6 +4,9 @@ import { assertNativeCodexThread, isMissingNativeThreadError } from "../renderer
 
 export const INTERRUPTED_QUEUE_STORAGE_KEY = "codexhost.interrupted-queue.v1";
 export const AUTO_RESUME_MAX_ATTEMPTS = 3;
+/** 后台发现全量中断的最短间隔；手动补录不受此限制。 */
+export const INTERRUPTED_DISCOVERY_INTERVAL_MS = 120_000;
+const DISCOVERY_RETRY_MS = 30_000;
 /** 打开会话时的核对间隔：迟到的终态通知要尽快补上。 */
 export const INTERRUPTED_RECONCILE_INTERVAL_MS = 30_000;
 /** 侧栏后台核对间隔：没有打开会话时也要发现停下且可继续的会话。 */
@@ -455,6 +458,39 @@ export function createInterruptedQueue(options: {
     }
   }
 
+  // 全量发现只用来补“事件和界面都看不到”的会话：跳过运行中、外部 Harness、
+  // 已处理回合和本轮扫描期间被其他窗口改过的记录，不覆盖更新的事件状态。
+  async function importInterrupted(hostId: string, client: RendererModelClient): Promise<number> {
+    const scan = client.buddyInterrupted;
+    if (!scan) throw new Error("当前连接无法补录历史中断。");
+    readStorage();
+    const before = new Map(entries);
+    const result = await scan.call(client);
+    if (disposed || options.getClient(hostId) !== client) return 0;
+    readStorage();
+    const running = new Set(result.runningThreadIds);
+    for (const entry of result.threads) {
+      const key = keyFor(hostId, entry.threadId);
+      if (
+        entry.owner !== "codex" ||
+        running.has(entry.threadId) ||
+        excluded.has(key) ||
+        entries.get(key) !== before.get(key)
+      )
+        continue;
+      const previous = entries.get(key);
+      if (
+        previous?.status === "archived" ||
+        previous?.status === "vanished" ||
+        previous?.previousTurnIds?.includes(entry.turnId) ||
+        (previous?.turnId === entry.turnId && previous.status === "completed")
+      )
+        continue;
+      put({ ...entry, hostId });
+    }
+    return result.unreadable;
+  }
+
   async function act(
     entry: InterruptedQueueEntry,
     action: "resume" | "archive",
@@ -551,6 +587,9 @@ export function createInterruptedQueue(options: {
   return {
     refresh,
     reconcile,
+    hosts(): string[] {
+      return [...new Set(options.getHostIds())];
+    },
     list(hostId: string): InterruptedQueueEntry[] {
       return [...entries.values()]
         .filter(
@@ -578,35 +617,35 @@ export function createInterruptedQueue(options: {
     async importHistory(hostId: string): Promise<number> {
       const client = options.getClient(hostId);
       if (!client?.buddyInterrupted) throw new Error("当前连接无法补录历史中断。");
-      readStorage();
-      const before = new Map(entries);
-      const result = await client.buddyInterrupted();
-      if (disposed || options.getClient(hostId) !== client) return 0;
-      readStorage();
-      const running = new Set(result.runningThreadIds);
-      for (const entry of result.threads) {
-        const key = keyFor(hostId, entry.threadId);
-        if (
-          entry.owner !== "codex" ||
-          running.has(entry.threadId) ||
-          excluded.has(key) ||
-          entries.get(key) !== before.get(key)
-        )
-          continue;
-        const previous = entries.get(key);
-        if (
-          previous?.status === "archived" ||
-          previous?.status === "vanished" ||
-          previous?.previousTurnIds?.includes(entry.turnId) ||
-          (previous?.turnId === entry.turnId && previous.status === "completed")
-        )
-          continue;
-        put({ ...entry, hostId });
+      return importInterrupted(hostId, client);
+    },
+    /**
+     * 后台发现：与手动补录共享同一套幂等规则，但按 Host 限流且吞掉失败。
+     * 未渲染、未打开、也没收到终态通知的会话只能靠这条路径补进队列。
+     */
+    async discover(hostId: string): Promise<void> {
+      const client = options.getClient(hostId);
+      if (!client?.buddyInterrupted || discovering.has(hostId)) return;
+      const checkedAt = discoveredAt.get(hostId);
+      const now = Date.now();
+      if (checkedAt !== undefined && now - checkedAt < INTERRUPTED_DISCOVERY_INTERVAL_MS) return;
+      discovering.add(hostId);
+      discoveredAt.set(hostId, now);
+      try {
+        await importInterrupted(hostId, client);
+      } catch {
+        // 后台发现失败不打扰用户，也不能一直等到下个完整周期才重试。
+        discoveredAt.set(
+          hostId,
+          Date.now() - INTERRUPTED_DISCOVERY_INTERVAL_MS + DISCOVERY_RETRY_MS,
+        );
+      } finally {
+        discovering.delete(hostId);
       }
-      return result.unreadable;
     },
     dispose() {
       disposed = true;
+      discovering.clear();
       for (const binding of bindings.values()) binding.stop();
       bindings.clear();
       listeners.clear();

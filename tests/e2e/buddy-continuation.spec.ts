@@ -103,6 +103,7 @@ const bundle = await build({
     globalThis.archiveThread=()=>notify({method:'thread/archived',params:{threadId:'thread'}});
     const initial=globalThis.interrupted?.threads[0];
     globalThis.emitTurn(initial?.status??globalThis.threadStatus,initial?.turnId??'failed');
+    globalThis.queue = queue;
     globalThis.sidebar = installSidebarContinuation({queue,getClient,getLocale:()=> 'zh-CN'});
 
   `,
@@ -249,7 +250,7 @@ for (const mode of ["unsupported", "missing", "failed"]) {
     const resume = page.locator("[data-buddy-resume]");
     await expect(resume).toHaveCount(1);
     expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(0);
-    expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(0);
+    const discovered = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
     await resume.click();
     await expect(resume).toBeDisabled();
     await page.evaluate(() => {
@@ -260,21 +261,34 @@ for (const mode of ["unsupported", "missing", "failed"]) {
     expect(await page.evaluate(() => Reflect.get(globalThis, "calls"))).toEqual([
       ["thread", "failed"],
     ]);
+    // 恢复操作本身不触发补录/发现；自动发现失败时更不能挡住恢复。
+    expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(discovered);
   });
 }
 
-test("startup, elapsed time, focus and DOM refresh never scan history", async ({ page }) => {
+test("background discovery is rate limited instead of scanning on every refresh", async ({
+  page,
+}) => {
   await page.clock.install();
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });
   await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
-  await page.clock.runFor(60_000);
+  // 启动即做一次全量发现，用于补上客户端闪退期间漏掉的终态通知；
+  // 之后每 30 秒的可见轮询都落在限流窗口内，不再追加扫描。
+  await page.clock.runFor(95_000);
+  const started = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
+  expect(started).toBe(1);
+  // 聚焦和重绘同样不绕过限流，也不逐行读取。
+  await page.clock.runFor(10_000);
   await page.evaluate(() => {
     window.dispatchEvent(new Event("focus"));
     Reflect.get(globalThis, "sidebar").refresh();
   });
-  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(1);
   expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(0);
+  // 120 秒处的轮询跨过发现间隔后再扫一次，150 秒又落回限流窗口。
+  await page.clock.runFor(60_000);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(2);
 });
 
 test("background polling finds a row that stopped without a terminal event", async ({ page }) => {
@@ -335,6 +349,46 @@ test("background polling finds a row that stopped without a terminal event", asy
   await page.clock.runFor(95_000);
   await expect(row).toHaveAttribute("data-buddy-sidebar-state", "failed");
   await expect(row.locator("[data-buddy-resume]")).toHaveCount(1);
+});
+
+test("discovery queues a session the sidebar never rendered", async ({ page }) => {
+  await page.clock.install();
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  // 侧栏里没有任何其它会话的行：这条漏掉的会话既不在 DOM 里，也没有终态通知可用。
+  await page.evaluate(() => {
+    document.body.replaceChildren();
+    Reflect.set(globalThis, "interrupted", {
+      threads: [
+        {
+          threadId: "unrendered",
+          turnId: "unrendered-turn",
+          title: "未渲染的中断会话",
+          status: "interrupted",
+          owner: "codex",
+        },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+  });
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "queue")
+        .list("local")
+        .map((entry: { threadId: string }) => entry.threadId),
+    ),
+  ).not.toContain("unrendered");
+  // 跨过发现间隔后，轮询让 Host 全量扫描一次并把会话补进队列。
+  await page.clock.runFor(130_000);
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "queue")
+        .list("local")
+        .map((entry: { threadId: string }) => entry.threadId),
+    ),
+  ).toContain("unrendered");
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBeGreaterThan(0);
 });
 
 test("sidebar recovery matches native thread ids inside host-prefixed rows", async ({ page }) => {

@@ -2,6 +2,7 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import {
   INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS,
+  INTERRUPTED_DISCOVERY_INTERVAL_MS,
   INTERRUPTED_RECONCILE_INTERVAL_MS,
   type InterruptedQueue,
   type InterruptedQueueEntry,
@@ -24,8 +25,10 @@ const marker = "data-buddy-sidebar-recovery";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
 const stateMarker = "data-buddy-sidebar-state";
 const activeAttribute = "data-app-action-sidebar-thread-active";
-// 侧栏后台核对：只读已经渲染的行，不遍历历史。官方三角说明界面已经提示需要处理，
-// 转圈则可能是“客户端以为还在跑、Host 早已停下且不会再发终态”，两者都要核对。
+// 侧栏后台核对：逐行核对已经渲染的行，另外按更低频率让 Host 全量发现一次。
+// 官方三角说明界面已经提示需要处理，转圈则可能是“客户端以为还在跑、Host 早已停下
+// 且不会再发终态”，两者都要核对；侧栏被过滤、折叠或根本没滚到的会话不会渲染成行，
+// 只靠逐行扫描永远发现不了，因此还需要一条不依赖 DOM 的发现通道。
 const BACKGROUND_POLL_MS = 30_000;
 const BACKGROUND_CONCURRENCY = 3;
 // 每轮只新增少量核对，避免一次重扫把所有可见行同时打给 Host。
@@ -38,6 +41,8 @@ const BACKGROUND_IDLE_SPACING_MS = 60_000;
 const ATTENTION_RECONCILE_MS = INTERRUPTED_RECONCILE_INTERVAL_MS;
 const RUNNING_RECONCILE_MS = 60_000;
 const IDLE_RECONCILE_MS = INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS;
+// 全量发现的轮询周期与队列自身的限流一致，可见时才会真正发出请求。
+const DISCOVERY_POLL_MS = INTERRUPTED_DISCOVERY_INTERVAL_MS;
 interface BackgroundCheck {
   hostId: string;
   threadId: string;
@@ -86,6 +91,7 @@ export function installSidebarContinuation(options: {
   const backgroundWaiting = new Map<string, BackgroundCheck>();
   // 轮转游标：每轮从上次停下的行继续抽样，避免总是核对列表最上面的几条。
   let backgroundCursor = 0;
+  let discoveryCursor = 0;
   let idleSampledAt = Date.now();
   let disposed = false;
   let scheduled = false;
@@ -250,6 +256,17 @@ export function installSidebarContinuation(options: {
     }
     runBackground();
   }
+  // 全量发现独立于 DOM：侧栏被过滤、折叠或滚动不到时，那些会话根本没有行，
+  // 逐行扫描永远看不到它们。这里按 Host 轮转，每次只发一个 Host 的请求。
+  function discoverAll(): void {
+    if (disposed || document.hidden) return;
+    const hosts = options.queue.hosts();
+    if (hosts.length === 0) return;
+    const hostId = hosts[discoveryCursor % hosts.length];
+    discoveryCursor = (discoveryCursor + 1) % hosts.length;
+    if (!options.getClient(hostId)?.buddyInterrupted) return;
+    void options.queue.discover(hostId);
+  }
   // 侧栏后台核对：先排三角/转圈的行，再按游标轮转抽样空闲行。
   // 请求并发受限，其余行留在等待队列里由槽位释放后继续发出。
   function runBackground(): void {
@@ -304,17 +321,21 @@ export function installSidebarContinuation(options: {
     test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
     onMutate: () => schedule(),
   });
-  // DOM 变化只重画本地队列；只有窗口可见时按周期重扫已挂载的行，
-  // 交给队列按各自间隔核对，不读取未渲染的会话或历史。
+  // DOM 变化只重画本地队列；窗口可见时按周期重扫已挂载的行交给队列核对。
+  // 另外单独按更低频率做全量发现，覆盖从来没有渲染成行的会话。
   const poll = createVisiblePoll(document, BACKGROUND_POLL_MS, schedule);
+  const discovery = createVisiblePoll(document, DISCOVERY_POLL_MS, discoverAll);
   poll.setActive(true);
+  discovery.setActive(true);
   schedule();
+  discoverAll();
   return {
     refresh,
     dispose() {
       disposed = true;
       backgroundWaiting.clear();
       poll.dispose();
+      discovery.dispose();
       stopObserving();
       stopQueue();
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {

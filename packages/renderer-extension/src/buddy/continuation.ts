@@ -1,7 +1,14 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
-import type { InterruptedQueue, InterruptedQueueEntry } from "./interrupted-queue.js";
+import {
+  INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS,
+  INTERRUPTED_RECONCILE_INTERVAL_MS,
+  type InterruptedQueue,
+  type InterruptedQueueEntry,
+} from "./interrupted-queue.js";
 import type { RendererModelClient } from "../renderer-model-client.js";
+import { sidebarThreadNativeStatus } from "../renderer-sidebar-thread-status.js";
+import { createVisiblePoll } from "../renderer-visible-poll.js";
 import { mutationAffectsElements } from "../renderer-dom-mutations.js";
 import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import {
@@ -17,6 +24,27 @@ const marker = "data-buddy-sidebar-recovery";
 const recoverableMarker = "data-buddy-sidebar-recoverable";
 const stateMarker = "data-buddy-sidebar-state";
 const activeAttribute = "data-app-action-sidebar-thread-active";
+// 侧栏后台核对：只读已经渲染的行，不遍历历史。官方三角说明界面已经提示需要处理，
+// 转圈则可能是“客户端以为还在跑、Host 早已停下且不会再发终态”，两者都要核对。
+const BACKGROUND_POLL_MS = 30_000;
+const BACKGROUND_CONCURRENCY = 3;
+// 每轮只新增少量核对，避免一次重扫把所有可见行同时打给 Host。
+const BACKGROUND_ATTENTION_BUDGET = 8;
+const BACKGROUND_IDLE_BUDGET = 6;
+// 空闲行没有“需要处理”的界面信号，抽样按固定节奏推进，避免 DOM 变动放大请求。
+const BACKGROUND_IDLE_SPACING_MS = 60_000;
+// 三角说明用户已经看到异常，核对最勤；残留转圈其次；其余空闲行最慢。
+// 未读（蓝点）只是“结果已交付”，不算异常，落回空闲抽样。
+const ATTENTION_RECONCILE_MS = INTERRUPTED_RECONCILE_INTERVAL_MS;
+const RUNNING_RECONCILE_MS = 60_000;
+const IDLE_RECONCILE_MS = INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS;
+interface BackgroundCheck {
+  hostId: string;
+  threadId: string;
+  intervalMs: number;
+  /** 三角或转圈：界面看起来还没结束，优先核对并可占用本轮的紧急名额。 */
+  urgent: boolean;
+}
 // 覆盖原生状态槽的视觉内容，卸载时保留 React 管理的原始节点。
 const style = `
 [${recoverableMarker}]{background:color-mix(in srgb,#d99000 9%,transparent)!important;box-shadow:inset 3px 0 0 #d99000!important}
@@ -51,6 +79,14 @@ export function installSidebarContinuation(options: {
     HTMLElement,
     { slot: HTMLElement; button: HTMLButtonElement; key: string; client: RendererModelClient }
   >();
+  let backgroundInFlight = 0;
+  // 本轮扫出的待核对行；每轮重扫时重建，避免累积已消失的行。
+  let backgroundQueue: BackgroundCheck[] = [];
+  // 受并发限制尚未发出的行，等槽位空出后继续，不丢到下个轮询周期。
+  const backgroundWaiting = new Map<string, BackgroundCheck>();
+  // 轮转游标：每轮从上次停下的行继续抽样，避免总是核对列表最上面的几条。
+  let backgroundCursor = 0;
+  let idleSampledAt = Date.now();
   let disposed = false;
   let scheduled = false;
   const chinese = () => options.getLocale() === "zh-CN";
@@ -101,6 +137,7 @@ export function installSidebarContinuation(options: {
     scheduled = false;
     if (disposed) return;
     const snapshots = new Map<string, Map<string, InterruptedThread>>();
+    backgroundQueue = [];
     const active = options.getActiveThread?.() ?? null;
     const rows = new Set(document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR));
     for (const row of mounted.keys()) {
@@ -120,14 +157,30 @@ export function installSidebarContinuation(options: {
         snapshots.set(hostId, threads);
       }
       const thread = threads.get(threadId);
-      // 原生选中行变化时补查该会话，覆盖客户端闪退或重连期间错过的终态通知。
-      if (
-        (active
+      // 补查该会话，覆盖客户端闪退或重连期间错过的终态通知。选中行立即核对；
+      // 未打开的行在后台按间隔核对，否则“停下但没收到终态”的会话永远不进队列。
+      if (!thread) {
+        const selected = active
           ? active.hostId === hostId && active.threadId === threadId
-          : row.getAttribute(activeAttribute) === "true") &&
-        !thread
-      )
-        void options.queue.reconcile(hostId, threadId);
+          : row.getAttribute(activeAttribute) === "true";
+        if (selected) {
+          void options.queue.reconcile(hostId, threadId);
+        } else {
+          const native = sidebarThreadNativeStatus(row);
+          // 转圈不代表还在运行：客户端可能一直没收到终态，只能靠核对确认；
+          // 其余空闲行按低频抽样，保证闪退或漏掉终态时也能被发现。
+          backgroundQueue.push({
+            hostId,
+            threadId,
+            intervalMs: native.error
+              ? ATTENTION_RECONCILE_MS
+              : native.running
+                ? RUNNING_RECONCILE_MS
+                : IDLE_RECONCILE_MS,
+            urgent: native.error || native.running,
+          });
+        }
+      }
       decorate(row, false, thread?.status);
       const title = row.querySelector("[data-thread-title-trigger]");
       const slot = title?.previousElementSibling;
@@ -195,7 +248,50 @@ export function installSidebarContinuation(options: {
         entry.button.setAttribute("aria-label", statusLabel);
       }
     }
+    runBackground();
   }
+  // 侧栏后台核对：先排三角/转圈的行，再按游标轮转抽样空闲行。
+  // 请求并发受限，其余行留在等待队列里由槽位释放后继续发出。
+  function runBackground(): void {
+    if (disposed || document.hidden) return;
+    const rows = backgroundQueue;
+    backgroundQueue = [];
+    if (rows.length > 0) {
+      const attention = rows.filter((item) => item.urgent);
+      const idle = rows.filter((item) => !item.urgent);
+      const chosen = attention.slice(0, BACKGROUND_ATTENTION_BUDGET);
+      const now = Date.now();
+      if (idle.length > 0 && now - idleSampledAt >= BACKGROUND_IDLE_SPACING_MS) {
+        idleSampledAt = now;
+        const start = backgroundCursor % idle.length;
+        const take = Math.min(idle.length, BACKGROUND_IDLE_BUDGET);
+        for (let offset = 0; offset < take; offset += 1)
+          chosen.push(idle[(start + offset) % idle.length] as (typeof idle)[number]);
+        backgroundCursor = start + take;
+      }
+      for (const item of chosen)
+        backgroundWaiting.set(JSON.stringify([item.hostId, item.threadId]), item);
+    }
+    // 侧栏里已经消失的行不再补查，避免等待队列一直保留过期会话。
+    const live = new Set(rows.map((item) => JSON.stringify([item.hostId, item.threadId])));
+    for (const key of backgroundWaiting.keys()) if (!live.has(key)) backgroundWaiting.delete(key);
+    pumpBackground();
+  }
+  function pumpBackground(): void {
+    if (disposed || document.hidden) return;
+    for (const [key, item] of backgroundWaiting) {
+      if (backgroundInFlight >= BACKGROUND_CONCURRENCY) return;
+      backgroundWaiting.delete(key);
+      backgroundInFlight += 1;
+      void options.queue
+        .reconcile(item.hostId, item.threadId, { intervalMs: item.intervalMs })
+        .finally(() => {
+          backgroundInFlight -= 1;
+          pumpBackground();
+        });
+    }
+  }
+
   const refresh = () => schedule();
   const stopQueue = options.queue.subscribe(schedule);
   const stopObserving = getDomMutationHub(document).subscribe({
@@ -208,12 +304,17 @@ export function installSidebarContinuation(options: {
     test: (record) => mutationAffectsElements(record, SIDEBAR_THREAD_ROW_SELECTOR),
     onMutate: () => schedule(),
   });
-  // DOM 变化只重画本地队列，不读取历史或按时间重试。
+  // DOM 变化只重画本地队列；只有窗口可见时按周期重扫已挂载的行，
+  // 交给队列按各自间隔核对，不读取未渲染的会话或历史。
+  const poll = createVisiblePoll(document, BACKGROUND_POLL_MS, schedule);
+  poll.setActive(true);
   schedule();
   return {
     refresh,
     dispose() {
       disposed = true;
+      backgroundWaiting.clear();
+      poll.dispose();
       stopObserving();
       stopQueue();
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {

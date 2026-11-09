@@ -277,6 +277,66 @@ test("startup, elapsed time, focus and DOM refresh never scan history", async ({
   expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(0);
 });
 
+test("background polling finds a row that stopped without a terminal event", async ({ page }) => {
+  await page.clock.install();
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  // 未打开的行：客户端仍显示转圈，但 Host 已经停下，且不会再收到终态通知。
+  await page.evaluate(() => {
+    document.body.replaceChildren();
+    const row = document.createElement("div");
+    const attrs = {
+      "data-app-action-sidebar-thread-row": "",
+      "data-app-action-sidebar-thread-host-id": "local",
+      "data-app-action-sidebar-thread-id": "local:unopened",
+      "data-app-action-sidebar-thread-active": "false",
+    };
+    for (const [key, value] of Object.entries(attrs)) row.setAttribute(key, value);
+    row.innerHTML =
+      '<div class="w-4 shrink-0"><span role="status" aria-label="处理中" data-native-status>!</span></div><div data-thread-title-trigger><span data-thread-title>未打开的中断会话</span></div>';
+    Object.defineProperty(row, "__reactFiber$fixture", {
+      value: {
+        memoizedProps: {
+          conversationId: "local:unopened",
+          dataAttributes: attrs,
+          statusState: { type: "loading", unread: false, unreadCount: 0 },
+        },
+        return: null,
+      },
+    });
+    document.body.append(row);
+    // 后台核对需要读取标题与归属，才能在侧栏补出恢复按钮。
+    Reflect.set(globalThis, "sidebarClient", {
+      ...Reflect.get(globalThis, "sidebarClient"),
+      requestThreadProjection: async (method, params) => ({
+        thread: {
+          id: params.threadId,
+          name: "未打开的中断会话",
+          modelProvider: "openai",
+          cliVersion: "fixture",
+          status: { type: "idle" },
+        },
+      }),
+    });
+    Reflect.set(globalThis, "running", true);
+    Reflect.set(globalThis, "turnId", "unopened-turn");
+    Reflect.get(globalThis, "sidebar").refresh();
+  });
+  const row = page.locator("[data-app-action-sidebar-thread-row]");
+  // 首次核对时会话仍在运行，队列不会记录它；界面继续显示原生转圈。
+  await page.clock.runFor(1_000);
+  expect(await row.getAttribute("data-buddy-sidebar-state")).toBeNull();
+  // 会话在后台停下，但没有 turn/completed：只有轮询能发现。
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "running", false);
+    Reflect.set(globalThis, "threadStatus", "failed");
+  });
+  // 转圈行的核对间隔是 60 秒：多跑一轮确保跨过限流边界。
+  await page.clock.runFor(95_000);
+  await expect(row).toHaveAttribute("data-buddy-sidebar-state", "failed");
+  await expect(row.locator("[data-buddy-resume]")).toHaveCount(1);
+});
+
 test("sidebar recovery matches native thread ids inside host-prefixed rows", async ({ page }) => {
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });

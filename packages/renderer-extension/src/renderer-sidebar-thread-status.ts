@@ -12,9 +12,11 @@ export interface SidebarThreadNativeStatus {
   running: boolean;
   /** 有未读结果，且不是执行中（执行中由 running 表达）。 */
   unread: boolean;
+  /** 原生行显示需要处理的状态（侧栏三角形）；可用于核对未打开会话是否停下。 */
+  error: boolean;
 }
 
-const IDLE: SidebarThreadNativeStatus = { running: false, unread: false };
+const IDLE: SidebarThreadNativeStatus = { running: false, unread: false, error: false };
 
 // Host 侧恢复标记：running 表示 Host 已收到且尚未结束的原生回合。
 const RECOVERY_ATTRIBUTE = "data-buddy-sidebar-state";
@@ -80,13 +82,14 @@ export function sidebarThreadNativeStatus(row: HTMLElement): SidebarThreadNative
 
   const recovery = row.getAttribute(RECOVERY_ATTRIBUTE);
   if (recovery === "running") {
-    const status = { running: true, unread: false };
+    const status = { running: true, unread: false, error: false };
     statusCache.set(row, { fiber, fingerprint, status });
     return status;
   }
 
   let running = false;
   let unread = false;
+  let error = false;
   for (const ancestor of committedReactAncestors(fiber).slice(0, 12)) {
     const props = record(ancestor.memoizedProps);
     const attributes = record(props?.dataAttributes);
@@ -99,9 +102,13 @@ export function sidebarThreadNativeStatus(row: HTMLElement): SidebarThreadNative
       continue;
     const status = record(props?.statusState);
     if (status?.type === "loading") running = true;
+    else if (status?.type === "error") error = true;
     else if (status?.unread === true) unread = true;
   }
-  const result = running ? { running: true, unread: false } : unread ? { running, unread } : IDLE;
+  // 执行中优先；否则保留“需要处理”和未读两个独立信号，调用方不能把它们互相当替代。
+  const result = running
+    ? { running: true, unread: false, error: false }
+    : { running: false, unread, error };
   statusCache.set(row, { fiber, fingerprint, status: result });
   return result;
 }

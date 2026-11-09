@@ -16,8 +16,6 @@ export interface SidebarThreadNativeStatus {
   error: boolean;
 }
 
-const IDLE: SidebarThreadNativeStatus = { running: false, unread: false, error: false };
-
 // Host 侧恢复标记：running 表示 Host 已收到且尚未结束的原生回合。
 const RECOVERY_ATTRIBUTE = "data-buddy-sidebar-state";
 

@@ -262,8 +262,10 @@ export function installSidebarContinuation(options: {
     if (disposed || document.hidden) return;
     const hosts = options.queue.hosts();
     if (hosts.length === 0) return;
-    const hostId = hosts[discoveryCursor % hosts.length];
-    discoveryCursor = (discoveryCursor + 1) % hosts.length;
+    const index = discoveryCursor % hosts.length;
+    const hostId = hosts[index];
+    discoveryCursor = (index + 1) % hosts.length;
+    if (hostId === undefined) return;
     if (!options.getClient(hostId)?.buddyInterrupted) return;
     void options.queue.discover(hostId);
   }

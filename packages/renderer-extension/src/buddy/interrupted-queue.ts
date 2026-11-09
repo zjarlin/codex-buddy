@@ -58,7 +58,8 @@ const interrupted = (status: unknown): status is Status =>
   status === "failed" || status === "interrupted" || status === "cancelled";
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-// 队列只消费通知。历史扫描仅由用户主动补录触发，启动与连接重绑都不读取历史。
+// 队列消费通知，并由可见窗口低频全量发现补上漏掉终态通知的会话；
+// 打开会话时另有单会话核对。启动和连接重绑本身不扫描历史。
 export function createInterruptedQueue(options: {
   getHostIds(): string[];
   getManager(hostId: string): Partial<NotificationManager> | null;
@@ -193,6 +194,10 @@ export function createInterruptedQueue(options: {
   const reconciling = new Set<string>();
   // 每个会话最近一次核对的时间；间隔由调用方按界面信号选择。
   const reconciledAt = new Map<string, number>();
+  // 后台发现按 Host 限流：一次全量核对会读取多个会话并可能调用 Laya，
+  // 不能因为窗口重绘或存储事件被反复触发。
+  const discovering = new Set<string>();
+  const discoveredAt = new Map<string, number>();
   const RECONCILE_RETRY_MS = 10_000;
 
   async function reconcile(

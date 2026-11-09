@@ -41,8 +41,9 @@ const BACKGROUND_IDLE_SPACING_MS = 60_000;
 const ATTENTION_RECONCILE_MS = INTERRUPTED_RECONCILE_INTERVAL_MS;
 const RUNNING_RECONCILE_MS = 60_000;
 const IDLE_RECONCILE_MS = INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS;
-// 全量发现的轮询周期与队列自身的限流一致，可见时才会真正发出请求。
-const DISCOVERY_POLL_MS = INTERRUPTED_DISCOVERY_INTERVAL_MS;
+// 发现轮询的周期要比队列的限流间隔略长：两者相同时，定时器落在边界上会因
+// 几毫秒的先后差被判定为“还没到间隔”，整轮扫描被跳过。
+const DISCOVERY_POLL_MS = INTERRUPTED_DISCOVERY_INTERVAL_MS + 5_000;
 interface BackgroundCheck {
   hostId: string;
   threadId: string;

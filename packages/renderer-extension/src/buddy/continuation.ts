@@ -261,7 +261,7 @@ export function installSidebarContinuation(options: {
   // 逐行扫描永远看不到它们。这里按 Host 轮转，每轮只发固定几个 Host 的请求，
   // 避免一次把全部 Host 的全量核对压到同一个时刻。
   function discoverAll(): void {
-    if (disposed || document.hidden) return;
+    if (disposed) return;
     const hosts = options.queue.hosts();
     if (hosts.length === 0) return;
     for (let sent = 0; sent < Math.min(DISCOVERY_HOSTS_PER_ROUND, hosts.length); sent += 1) {
@@ -328,11 +328,12 @@ export function installSidebarContinuation(options: {
     onMutate: () => schedule(),
   });
   // DOM 变化只重画本地队列；窗口可见时按周期重扫已挂载的行交给队列核对。
-  // 另外单独按更低频率做全量发现，覆盖从来没有渲染成行的会话。
+  // 全量发现不跟随窗口可见性：锁屏、最小化或从来没有点开的会话也要按周期核对，
+  // 否则只有用户回到窗口时才可能发现已经停下的会话。隐藏时 Electron 会降频定时器，
+  // 但请求仍会发出。
   const poll = createVisiblePoll(document, BACKGROUND_POLL_MS, schedule);
-  const discovery = createVisiblePoll(document, DISCOVERY_POLL_MS, discoverAll);
+  const discovery = setInterval(discoverAll, DISCOVERY_POLL_MS);
   poll.setActive(true);
-  discovery.setActive(true);
   schedule();
   discoverAll();
   return {
@@ -341,7 +342,7 @@ export function installSidebarContinuation(options: {
       disposed = true;
       backgroundWaiting.clear();
       poll.dispose();
-      discovery.dispose();
+      clearInterval(discovery);
       stopObserving();
       stopQueue();
       for (const row of document.querySelectorAll<HTMLElement>(SIDEBAR_THREAD_ROW_SELECTOR)) {

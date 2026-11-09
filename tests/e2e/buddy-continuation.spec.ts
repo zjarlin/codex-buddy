@@ -92,7 +92,20 @@ const bundle = await build({
     let notify;
     const manager={addNotificationCallback:(_methods,callback)=>{notify=callback;return ()=>{};}};
     const getClient=host=>host===globalThis.activeHost?globalThis.sidebarClient:null;
-    const queue=createInterruptedQueue({storage:{getItem:()=>null,setItem:()=>{}},getHostIds:()=>['local'],getManager:()=>manager,getClient});
+    const hosts=()=>globalThis.hostIds ?? ['local'];
+    // 测试用的按 Host 记账：真实实现里同一个 Host 始终返回同一个客户端。
+    // 包装后的客户端按 Host 固定复用，否则队列会把它当成连接重绑。
+    const hostClients=new Map();
+    const anyClient=host=>{
+      if(!hosts().includes(host)) return null;
+      if(!globalThis.recordHostScans) return globalThis.sidebarClient;
+      if(!hostClients.has(host)) hostClients.set(host,{...globalThis.sidebarClient,buddyInterrupted:async(...args)=>{
+        globalThis.scannedHosts.push(host);
+        return globalThis.sidebarClient.buddyInterrupted(...args);
+      }});
+      return hostClients.get(host);
+    };
+    const queue=createInterruptedQueue({storage:{getItem:()=>null,setItem:()=>{}},getHostIds:hosts,getManager:()=>manager,getClient:anyClient});
     queue.refresh();
     globalThis.emitTurn=(status,turnId)=>{
       globalThis.turnId=turnId;
@@ -104,7 +117,7 @@ const bundle = await build({
     const initial=globalThis.interrupted?.threads[0];
     globalThis.emitTurn(initial?.status??globalThis.threadStatus,initial?.turnId??'failed');
     globalThis.queue = queue;
-    globalThis.sidebar = installSidebarContinuation({queue,getClient,getLocale:()=> 'zh-CN'});
+    globalThis.sidebar = installSidebarContinuation({queue,getClient:anyClient,getLocale:()=> 'zh-CN'});
 
   `,
     resolveDir: path.resolve(import.meta.dirname, "../.."),
@@ -273,21 +286,22 @@ test("background discovery is rate limited instead of scanning on every refresh"
   await page.setContent("<body></body>");
   await page.addScriptTag({ content: browserBundle });
   await expect(page.locator("[data-buddy-resume]")).toHaveCount(1);
-  // 启动即做一次全量发现，用于补上客户端闪退期间漏掉的终态通知；
-  // 之后每 30 秒的可见轮询都落在限流窗口内，不再追加扫描。
-  await page.clock.runFor(95_000);
+  // 启动即做一次全量发现，用于补上客户端闪退期间漏掉的终态通知。
+  await page.clock.runFor(5_000);
   const started = await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"));
   expect(started).toBe(1);
-  // 聚焦和重绘同样不绕过限流，也不逐行读取。
-  await page.clock.runFor(10_000);
+  // 聚焦和重绘不触发全量发现，也不逐行读取。
   await page.evaluate(() => {
     window.dispatchEvent(new Event("focus"));
     Reflect.get(globalThis, "sidebar").refresh();
   });
   expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(1);
   expect(await page.evaluate(() => Reflect.get(globalThis, "statusCalls"))).toBe(0);
-  // 120 秒处的轮询跨过发现间隔后再扫一次，150 秒又落回限流窗口。
-  await page.clock.runFor(60_000);
+  // 同一个 Host 在队列的限流窗口内不会被重复扫描。
+  await page.clock.runFor(30_000);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(1);
+  // 跨过 120 秒窗口后，下一轮发现再扫一次。
+  await page.clock.runFor(100_000);
   expect(await page.evaluate(() => Reflect.get(globalThis, "interruptedCalls"))).toBe(2);
 });
 
@@ -349,6 +363,32 @@ test("background polling finds a row that stopped without a terminal event", asy
   await page.clock.runFor(95_000);
   await expect(row).toHaveAttribute("data-buddy-sidebar-state", "failed");
   await expect(row.locator("[data-buddy-resume]")).toHaveCount(1);
+});
+
+test("discovery rotates hosts instead of scanning all of them at once", async ({ page }) => {
+  await page.clock.install();
+  await page.setContent("<body></body>");
+  await page.addScriptTag({ content: browserBundle });
+  // 四个 Host：每轮最多压两个 Host 的全量核对，多轮之内转完一圈。
+  await page.evaluate(() => {
+    Reflect.set(globalThis, "scannedHosts", []);
+    Reflect.set(globalThis, "hostIds", ["local", "two", "three", "four"]);
+    Reflect.set(globalThis, "recordHostScans", true);
+  });
+  const scanned = () => page.evaluate(() => Reflect.get(globalThis, "scannedHosts"));
+  const rounds: string[][] = [];
+  for (let round = 0; round < 3; round += 1) {
+    const before = (await scanned()).length;
+    await page.clock.runFor(65_000);
+    const all = await scanned();
+    rounds.push(all.slice(before));
+    // 单轮最多扫两个 Host，不会把全部 Host 同时压给 Host 端。
+    expect(rounds[round]?.length).toBeLessThanOrEqual(2);
+  }
+  // 三轮之内每个 Host 都被扫到，且不会总停在前两个 Host 上。
+  const flat = rounds.flat();
+  expect([...new Set(flat)].sort()).toEqual(["four", "local", "three", "two"]);
+  expect(rounds.at(-1)).not.toEqual(rounds[0]);
 });
 
 test("discovery queues a session the sidebar never rendered", async ({ page }) => {

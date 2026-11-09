@@ -2,7 +2,6 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import {
   INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS,
-  INTERRUPTED_DISCOVERY_INTERVAL_MS,
   INTERRUPTED_RECONCILE_INTERVAL_MS,
   type InterruptedQueue,
   type InterruptedQueueEntry,
@@ -41,9 +40,10 @@ const BACKGROUND_IDLE_SPACING_MS = 60_000;
 const ATTENTION_RECONCILE_MS = INTERRUPTED_RECONCILE_INTERVAL_MS;
 const RUNNING_RECONCILE_MS = 60_000;
 const IDLE_RECONCILE_MS = INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS;
-// 发现轮询的周期要比队列的限流间隔略长：两者相同时，定时器落在边界上会因
-// 几毫秒的先后差被判定为“还没到间隔”，整轮扫描被跳过。
-const DISCOVERY_POLL_MS = INTERRUPTED_DISCOVERY_INTERVAL_MS + 5_000;
+// 发现轮询每轮扫两个 Host：全量核对一个 Host 要读全部未归档会话（远端实测
+// 7–11 秒），串行扫完全部 Host 会让漏检会话等上十几分钟。
+const DISCOVERY_POLL_MS = 60_000;
+const DISCOVERY_HOSTS_PER_ROUND = 2;
 interface BackgroundCheck {
   hostId: string;
   threadId: string;
@@ -258,17 +258,20 @@ export function installSidebarContinuation(options: {
     runBackground();
   }
   // 全量发现独立于 DOM：侧栏被过滤、折叠或滚动不到时，那些会话根本没有行，
-  // 逐行扫描永远看不到它们。这里按 Host 轮转，每次只发一个 Host 的请求。
+  // 逐行扫描永远看不到它们。这里按 Host 轮转，每轮只发固定几个 Host 的请求，
+  // 避免一次把全部 Host 的全量核对压到同一个时刻。
   function discoverAll(): void {
     if (disposed || document.hidden) return;
     const hosts = options.queue.hosts();
     if (hosts.length === 0) return;
-    const index = discoveryCursor % hosts.length;
-    const hostId = hosts[index];
-    discoveryCursor = (index + 1) % hosts.length;
-    if (hostId === undefined) return;
-    if (!options.getClient(hostId)?.buddyInterrupted) return;
-    void options.queue.discover(hostId);
+    for (let sent = 0; sent < Math.min(DISCOVERY_HOSTS_PER_ROUND, hosts.length); sent += 1) {
+      const index = discoveryCursor % hosts.length;
+      const hostId = hosts[index];
+      discoveryCursor = (index + 1) % hosts.length;
+      if (hostId === undefined) continue;
+      if (!options.getClient(hostId)?.buddyInterrupted) continue;
+      void options.queue.discover(hostId);
+    }
   }
   // 侧栏后台核对：先排三角/转圈的行，再按游标轮转抽样空闲行。
   // 请求并发受限，其余行留在等待队列里由槽位释放后继续发出。

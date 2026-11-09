@@ -7,6 +7,9 @@ export const AUTO_RESUME_MAX_ATTEMPTS = 3;
 /** 后台发现全量中断的最短间隔；手动补录不受此限制。 */
 export const INTERRUPTED_DISCOVERY_INTERVAL_MS = 120_000;
 const DISCOVERY_RETRY_MS = 30_000;
+// 发现轮询与限流间隔不是整数倍关系，定时器也可能比整点早几毫秒触发；
+// 留一点容差，免得多轮扫描都卡在“还差几毫秒”上被整轮丢弃。
+const DISCOVERY_CLOCK_TOLERANCE_MS = 5_000;
 /** 打开会话时的核对间隔：迟到的终态通知要尽快补上。 */
 export const INTERRUPTED_RECONCILE_INTERVAL_MS = 30_000;
 /** 侧栏后台核对间隔：没有打开会话时也要发现停下且可继续的会话。 */
@@ -633,7 +636,11 @@ export function createInterruptedQueue(options: {
       if (!client?.buddyInterrupted || discovering.has(hostId)) return;
       const checkedAt = discoveredAt.get(hostId);
       const now = Date.now();
-      if (checkedAt !== undefined && now - checkedAt < INTERRUPTED_DISCOVERY_INTERVAL_MS) return;
+      if (
+        checkedAt !== undefined &&
+        now - checkedAt < INTERRUPTED_DISCOVERY_INTERVAL_MS - DISCOVERY_CLOCK_TOLERANCE_MS
+      )
+        return;
       discovering.add(hostId);
       discoveredAt.set(hostId, now);
       try {

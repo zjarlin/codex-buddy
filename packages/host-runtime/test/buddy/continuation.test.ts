@@ -595,6 +595,78 @@ describe("interrupted conversations", () => {
     expect(f.classifier).not.toHaveBeenCalled();
   });
 
+  it("enqueues a recent systemError thread whose latest turn already completed", async () => {
+    const f = layaFixture({ status: "completed", threadStatus: "systemError" });
+    await expect(f.service.list()).resolves.toMatchObject({
+      threads: [{ threadId: "thread", turnId: "turn", status: "failed" }],
+    });
+    expect(f.classifier).not.toHaveBeenCalled();
+  });
+
+  it("leaves a systemError thread older than three days out of the queue", async () => {
+    const f = layaFixture({
+      status: "completed",
+      threadStatus: "systemError",
+      updatedAt: Math.floor(Date.now() / 1000) - 4 * 24 * 60 * 60,
+    });
+    expect((await f.service.list()).threads).toEqual([]);
+  });
+
+  it("continues a queued systemError thread without asking Laya again", async () => {
+    const f = layaFixture({ status: "completed", threadStatus: "systemError" });
+    await expect(f.service.list()).resolves.toMatchObject({ threads: [{ status: "failed" }] });
+    await expect(f.service.continue("thread", "turn")).resolves.toBe("continued");
+    expect(f.classifier).not.toHaveBeenCalled();
+    expect(f.request).toHaveBeenCalledWith(
+      "turn/start",
+      expect.objectContaining({ threadId: "thread" }),
+    );
+  });
+
+  it("spends the classification budget only on new verdicts", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const threads = Array.from({ length: 70 }, (_, index) => ({
+      id: `thread-${index}`,
+      name: `Thread ${index}`,
+      updatedAt: now - index,
+    }));
+    const turn = {
+      id: "turn",
+      status: "completed",
+      items: [{ type: "commandExecution", status: "completed", command: "npm run build" }],
+    };
+    const request = vi.fn<NativeRequest>(async (method, params) => {
+      if (method === "thread/list") return { result: { data: threads, nextCursor: null } };
+      if (method === "thread/read")
+        return { result: { thread: { name: params.threadId, status: { type: "idle" } } } };
+      if (method === "thread/turns/list")
+        return {
+          result: {
+            data: [params.itemsView === "full" ? turn : { id: "turn", status: "completed" }],
+          },
+        };
+      return { result: {} };
+    });
+    const classifier = vi.fn<InterruptedTurnClassifier>(async () => true);
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+      classifier,
+    );
+
+    const firstScan = await service.list();
+    const first = classifier.mock.calls.length;
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(threads.length);
+    expect(firstScan.threads).toHaveLength(first);
+
+    // 第二轮先复用上一轮的结论，剩下的会话才轮到 Laya；预算按真实调用计算，
+    // 不会因为同一批靠前的会话反复命中缓存而永远轮不到后面。
+    expect((await service.list()).threads).toHaveLength(threads.length);
+    expect(classifier).toHaveBeenCalledTimes(threads.length);
+  });
+
   it("classifies a completed turn that ends in a failed command", async () => {
     const f = layaFixture({
       status: "completed",

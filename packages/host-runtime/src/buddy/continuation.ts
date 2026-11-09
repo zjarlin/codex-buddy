@@ -83,11 +83,21 @@ function staleInProgress(thread: Record<string, unknown>, turn: Record<string, u
   );
 }
 
+// 官方侧栏的三角直接来自 threadRuntimeStatus.systemError：线程已经停下，输入区仍可继续。
+// 这是 Host 自己给出的终态，和 failed 回合一样确定，不需要再判断 Assistant 结尾。
+function systemErrorStatus(thread: Record<string, unknown>): RecoverableStatus | null {
+  return object(thread.status).type === "systemError" ? "failed" : null;
+}
+
 function recoverableStatus(
   thread: Record<string, unknown>,
   turn: Record<string, unknown>,
 ): RecoverableStatus | null {
-  return explicitStatus(turn) ?? (staleInProgress(thread, turn) ? "interrupted" : null);
+  const explicit = explicitStatus(turn);
+  if (explicit !== null) return explicit;
+  // 回合没写完时仍是“中断”，系统错误只说明线程停下了。
+  if (staleInProgress(thread, turn)) return "interrupted";
+  return systemErrorStatus(thread);
 }
 
 function threadTitle(thread: Record<string, unknown>, fallback: string): string {
@@ -289,15 +299,15 @@ export class InterruptedConversations {
     turnId: string,
     thread: Record<string, unknown>,
     turn: Record<string, unknown>,
-  ): Promise<boolean | null> {
-    if (!this.classifier) return null;
+  ): Promise<{ value: boolean | null; classified: boolean }> {
+    if (!this.classifier) return { value: null, classified: false };
     const key = `${threadId}\u0000${turnId}`;
     const cached = this.#verdicts.get(key);
     if (
       cached &&
       Date.now() - cached.at < (cached.verdict === null ? FAILED_VERDICT_TTL_MS : VERDICT_TTL_MS)
     ) {
-      return cached.verdict;
+      return { value: cached.verdict, classified: false };
     }
     let verdict: boolean | null = null;
     try {
@@ -305,7 +315,7 @@ export class InterruptedConversations {
       const items = Array.isArray(turn.items) ? turn.items : [];
       if (items.length === 0) {
         const full = await this.#read(threadId, { items: true });
-        if (object(full.turn).id !== turnId) return null;
+        if (object(full.turn).id !== turnId) return { value: null, classified: false };
         evidenceTurn = full.turn;
       }
       verdict = await this.classifier({
@@ -324,7 +334,7 @@ export class InterruptedConversations {
       const oldest = this.#verdicts.keys().next().value;
       if (oldest !== undefined) this.#verdicts.delete(oldest);
     }
-    return verdict;
+    return { value: verdict, classified: true };
   }
 
   async archiveCompleted(threadId: string): Promise<ThreadArchiveCompletedResult> {
@@ -400,6 +410,9 @@ export class InterruptedConversations {
           metadata.updatedAt ?? (typeof thread.updatedAt === "number" ? thread.updatedAt : null);
         const recent = updatedAt === null || updatedAt >= cutoff;
         const stale = staleInProgress(thread, turn);
+        // 系统错误同样是确定的终态，不该再交给 Laya 猜结尾；只补最近活跃的会话，
+        // 避免把很早以前的系统错误重新翻出来。回合没写完时仍按中断处理。
+        if (recent && !stale && systemErrorStatus(thread) !== null) return interrupted("failed");
         const completedLike = turn.status === "completed" || turn.status === "succeeded";
         if (!this.classifier || !recent || classifications >= MAX_CLASSIFICATIONS) {
           return stale ? interrupted("interrupted") : { kind: "done" as const };
@@ -413,11 +426,15 @@ export class InterruptedConversations {
           evidence = full.turn;
           if (clearlyCompleted(evidence)) return { kind: "done" as const };
         }
-        classifications += 1;
         const verdict = await this.#classify(metadata.id, turn.id, thread, evidence);
-        if (verdict === true) return interrupted("interrupted");
+        // 命中缓存的判断不消耗本轮预算，否则每轮都会重新占满同样的名额，
+        // 排在后面的会话永远轮不到 Laya，只能等用户点开才被发现。
+        if (verdict.classified) classifications += 1;
+        if (verdict.value === true) return interrupted("interrupted");
         // Laya 不可用或证据不足时，只保留官方 stale inProgress 兜底。
-        return verdict === null && stale ? interrupted("interrupted") : { kind: "done" as const };
+        return verdict.value === null && stale
+          ? interrupted("interrupted")
+          : { kind: "done" as const };
       } catch {
         // 单个历史不可读不阻断其他会话，并明确返回遗漏数量。
         return { kind: "unreadable" as const };
@@ -458,7 +475,7 @@ export class InterruptedConversations {
         if (object(full.turn).id !== turnId) throw new Error("会话状态已改变，请刷新列表。");
         if (clearlyCompleted(full.turn)) throw new Error("会话状态已改变，请刷新列表。");
         // Laya 明确判定已交付时同样停止；判断不可用不阻断续接，官方输入区此时本来可写。
-        if ((await this.#classify(threadId, turnId, thread, full.turn)) === false)
+        if ((await this.#classify(threadId, turnId, thread, full.turn)).value === false)
           throw new Error("会话状态已改变，请刷新列表。");
       };
       await verify();

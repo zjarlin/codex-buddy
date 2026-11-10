@@ -10,7 +10,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   const element = document.createElement(tag);
   for (const [name, value] of Object.entries(attributes)) {
     if (value === undefined || value === false) continue;
-    if (name === "className") element.className = value;
+    if (name === "className") element.className = value === true ? "" : value;
     else element.setAttribute(name, value === true ? "" : value);
   }
   for (const child of children) {

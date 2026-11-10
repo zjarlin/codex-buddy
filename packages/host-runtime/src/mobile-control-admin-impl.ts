@@ -3,7 +3,11 @@ import type { MobilePairingStatus } from "@codexhost/shared-contracts";
 import { MobilePairingStore, mobilePairingStatePath } from "./mobile-pairing.js";
 import { startMobileControlServer } from "./mobile-control-server.js";
 import type { MobileControlAdmin } from "./mobile-control-admin.js";
-import type { MobileControlSession, MobileControlSessionStreams } from "./mobile-control-server.js";
+import type {
+  MobileControlServer,
+  MobileControlSession,
+  MobileControlSessionStreams,
+} from "./mobile-control-server.js";
 
 export interface MobileControlRuntimeOptions {
   environment: NodeJS.ProcessEnv;

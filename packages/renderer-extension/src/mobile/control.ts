@@ -259,6 +259,7 @@ export function startMobileControl(document: Document, options: MobileControlOpt
         "section",
         {},
         h(
+          document,
           "div",
           { class: "row" },
           h(document, "h2", {}, "会话"),

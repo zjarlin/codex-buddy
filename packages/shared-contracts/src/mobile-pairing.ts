@@ -37,7 +37,7 @@ export const mobilePairingInviteSchema = z.strictObject({
   origin: z
     .string()
     .max(2048)
-    .regex(/^http:\/\/[^/?#\s]+(?::\d{1,5})?\/?$/u),
+    .regex(/^http:\/\/[^/?#\s@]+(?::\d{1,5})?\/?$/u),
   invite: z.string().regex(/^[0-9a-f]{64}$/u),
   expiresAt: z.number().int().positive(),
 });

@@ -142,6 +142,7 @@ function sidebarRow(
   } as const;
   const row = {
     click: vi.fn(),
+    querySelector: () => null,
     closest: (selector: string) =>
       selector === "[data-sidebar-project-container-id]" ? projectContainer : null,
     getAttribute: (name: string) => attributes[name as keyof typeof attributes] ?? null,

@@ -18,6 +18,7 @@ function root(...projects: ReturnType<typeof project>[]): ParentNode {
     querySelectorAll: () =>
       projects.map((group) => ({
         __reactFiber$test: { memoizedProps: { group } },
+        querySelector: () => null,
         getAttribute: (name: string) =>
           name === "data-sidebar-project-kind"
             ? group.projectKind

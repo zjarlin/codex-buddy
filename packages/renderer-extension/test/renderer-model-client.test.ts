@@ -796,6 +796,7 @@ describe("Renderer fixed Model request client", () => {
       "getProjectTabs",
       "getProjectTools",
       "getThreadFolders",
+      "getThreadGoal",
       "getThreadTerminalSettings",
       "importHarnessSession",
       "importRemoteProject",

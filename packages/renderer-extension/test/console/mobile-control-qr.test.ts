@@ -32,7 +32,7 @@ function decodeMask(modules: boolean[][]): { mask: number | null; valid: boolean
     if (((remainder >>> index) & 1) !== 0) remainder ^= 0x537 << (index - 10);
   }
   return {
-    mask: (expected >>> 3) & 0x7,
+    mask: expected & 0x7,
     valid: (remainder & 0x3ff) === data && ((expected >>> 3) & 0x3) === 0,
   };
 }

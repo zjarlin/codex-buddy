@@ -17,6 +17,7 @@ function project(overrides = {}) {
 function row(group: ReturnType<typeof project>, fiber: object = { memoizedProps: { group } }) {
   return {
     __reactFiber$test: fiber,
+    querySelector: () => null,
     getAttribute: (name: string) =>
       name === "data-sidebar-project-kind"
         ? group.projectKind

@@ -43,7 +43,7 @@ describe("MobilePairingStore", () => {
     const state = await readFile(file, "utf8");
     expect(state).not.toContain(credential.token);
     expect(state).not.toContain(invite.secret);
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect((await stat(file)).mode & 0o777).toBe(0o600);
   });
 
   it("expires invites and client pairings", async () => {

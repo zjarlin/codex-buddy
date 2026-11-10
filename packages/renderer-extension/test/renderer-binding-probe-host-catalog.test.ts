@@ -84,6 +84,10 @@ vi.mock("../src/renderer-sidebar-thread-align.js", () => ({
   installRendererSidebarThreadAlign: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
 }));
 
+vi.mock("../src/renderer-sidebar-goal-badges.js", () => ({
+  installRendererSidebarGoalBadges: () => ({ refresh: vi.fn(), dispose: vi.fn() }),
+}));
+
 vi.mock("../src/renderer-sidebar-status-filter.js", () => ({
   installRendererSidebarStatusFilter: (options: { getLocale(): "zh-CN" | "en" }) => {
     testState.localeReads.push(options.getLocale());

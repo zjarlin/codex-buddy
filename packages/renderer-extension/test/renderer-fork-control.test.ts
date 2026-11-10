@@ -438,6 +438,7 @@ describe("Renderer external Thread Fork control", () => {
       }),
     } as unknown as HTMLElement;
     const container = {
+      getAttribute: () => null,
       contains: (element: Node) => element === targetHeader,
       querySelector: (selector: string) =>
         selector === "[data-app-action-sidebar-project-row]" ? targetHeader : null,
@@ -460,6 +461,7 @@ describe("Renderer external Thread Fork control", () => {
       click: vi.fn(),
     } as unknown as HTMLElement;
     const otherContainer = {
+      getAttribute: () => null,
       contains: () => false,
       querySelector: (selector: string) =>
         selector === "[data-app-action-sidebar-project-row]" ? otherHeader : null,

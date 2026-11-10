@@ -14,7 +14,7 @@
 
 本机项目省略号按钮的下拉菜单在“在 Finder 中显示”（或系统文件管理器入口）之后提供“复制绝对路径”“在终端中打开”和“用 VS Code 打开”。保留现有置顶、编辑、归档和移除操作；远程项目不显示这些本机入口。系统原生右键菜单保持现有行为。
 
-复制使用 Desktop Renderer 的剪贴板写入系统剪贴板，并保留完整绝对路径。终端与 VS Code 通过本机 Host 请求启动：终端复用用户已选择的终端类型，在项目目录启动交互式 shell，不续接 Codex 会话；VS Code 使用 `code --new-window <path>` 在新窗口打开，不替换当前已打开的工作区；macOS 开启窗口原生 Tab 时该窗口显示为新标签页。Windows 上同时识别 PATH 中的 `code` 与常见安装目录。启动失败在界面中显示，可重新点击尝试。
+复制使用 Desktop Renderer 的剪贴板写入系统剪贴板，并保留完整绝对路径。终端与 VS Code 通过本机 Host 请求启动：终端复用用户已选择的终端类型，在项目目录启动交互式 shell，不续接 Codex 会话；VS Code 使用 `code --new-window <path>` 在新窗口打开，不替换当前已打开的工作区。CLI 没有把目录开成 macOS 原生窗口标签的参数：`window.nativeTabs` 只作用于 VS Code 自己创建的标签页（内部走 `addTabbedWindow`），所以需要合并成标签页时使用 Window 菜单的“合并所有窗口”。Windows 上同时识别 PATH 中的 `code` 与常见安装目录。启动失败在界面中显示，可重新点击尝试。
 
 ## 项目分类 Tab
 

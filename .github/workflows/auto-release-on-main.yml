@@ -33,11 +33,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Setup npm
         run: npm install --global --prefer-offline npm@11.8.0
 
       - name: Install dependencies
+        env:
+          npm_config_registry: https://registry.npmjs.org
         run: npm ci --prefer-offline
 
       - name: Compute next version and generate release notes

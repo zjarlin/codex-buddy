@@ -283,6 +283,8 @@ export function expectedNpmPackagePaths(target) {
     "app/console-web.js",
     "app/desktop-controller.mjs",
     "app/host-runtime.mjs",
+    "app/mobile-web.css",
+    "app/mobile-web.js",
     "app/renderer-extension.js",
     ...preinstalledHarnessPluginPaths(),
     "licenses/Anthropic-SDK-LICENSE.txt",
@@ -1026,6 +1028,7 @@ export async function validateNpmPackage({ packageRoot, target, root }) {
         "app/console-server.mjs",
         "app/console-web.js",
         "app/desktop-controller.mjs",
+        "app/mobile-web.js",
         "app/renderer-extension.js",
       ].includes(file.relative)
     ) {
@@ -1227,6 +1230,16 @@ export async function prepareNpmPackage({
     path.join(root, "packages", "renderer-extension", "dist", "console.js"),
     path.join(packageRoot, "app", "console-web.js"),
     "console page Bundle",
+  );
+  await copyReleaseFile(
+    path.join(root, "packages", "renderer-extension", "dist", "mobile.js"),
+    path.join(packageRoot, "app", "mobile-web.js"),
+    "mobile page Bundle",
+  );
+  await copyReleaseFile(
+    path.join(root, "packages", "renderer-extension", "dist", "mobile.css"),
+    path.join(packageRoot, "app", "mobile-web.css"),
+    "mobile page stylesheet",
   );
   await writeDistributionMetadata(path.join(packageRoot, "app", "codexhost-distribution.json"), {
     version: packageVersion,

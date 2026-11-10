@@ -51,7 +51,7 @@ describe("thread workspace", () => {
       sshAuthority: "okm252",
     });
     expect(spawnApplication.mock.calls[0]?.[1]).toEqual([
-      "--reuse-window",
+      "--new-window",
       "--folder-uri",
       "vscode-remote://ssh-remote+okm252/remote-only/project%20%231",
     ]);
@@ -77,7 +77,7 @@ describe("thread workspace", () => {
       unknown,
     ];
     expect(command).toBe(code);
-    expect(arguments_).toEqual(["--reuse-window", await realpath(directory)]);
+    expect(arguments_).toEqual(["--new-window", await realpath(directory)]);
     expect(result).toEqual({ workspace: await realpath(directory), application: "vscode" });
   });
 
@@ -97,7 +97,7 @@ describe("thread workspace", () => {
 
     expect(spawnApplication.mock.calls[0]?.[0]).toBe(code);
     expect(spawnApplication.mock.calls[0]?.[1]).toEqual([
-      "--reuse-window",
+      "--new-window",
       await realpath(directory),
     ]);
     expect(result).toEqual({ workspace: await realpath(directory), application: "vscode" });

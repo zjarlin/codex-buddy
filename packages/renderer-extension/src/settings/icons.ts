@@ -32,6 +32,7 @@ import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import RotateCcw from "lucide/dist/esm/icons/rotate-ccw.mjs";
 import Route from "lucide/dist/esm/icons/route.mjs";
 import Settings from "lucide/dist/esm/icons/settings.mjs";
+import Smartphone from "lucide/dist/esm/icons/smartphone.mjs";
 import Stethoscope from "lucide/dist/esm/icons/stethoscope.mjs";
 import Star from "lucide/dist/esm/icons/star.mjs";
 import TriangleAlert from "lucide/dist/esm/icons/triangle-alert.mjs";
@@ -64,6 +65,7 @@ export const RENDERER_SETTINGS_ICON_NAMES = [
   "gateway",
   "updates",
   "schedules",
+  "mobile-control",
   "about",
   "info",
   "external-link",
@@ -124,6 +126,7 @@ const iconNodes = {
   gateway: Network,
   updates: CircleArrowUp,
   schedules: CalendarClock,
+  "mobile-control": Smartphone,
   about: Info,
   info: Info,
   "external-link": ExternalLink,

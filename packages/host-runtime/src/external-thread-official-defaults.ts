@@ -11,6 +11,8 @@ import type { JsonObject } from "@codexhost/protocol-core";
 const EMPTY_RESULTS: ReadonlyMap<string, () => JsonObject> = new Map([
   ["thread/attachment/list", () => ({ data: [], nextCursor: null })],
   ["thread/settings/update", () => ({})],
+  // A Codex goal belongs to the official runtime; an external Harness Thread has none.
+  ["thread/goal/get", () => ({ goal: null })],
 ]);
 
 export function externalThreadEmptyOfficialResult(method: string): JsonObject | undefined {

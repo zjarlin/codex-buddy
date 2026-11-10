@@ -59,6 +59,7 @@ import {
 } from "./local-host-state.js";
 import { ModelPriceCatalog, defaultModelPriceDirectory } from "./model-prices.js";
 import { UsageStatistics } from "./usage-statistics.js";
+import { startMobileControlAdmin } from "./mobile-control-admin-impl.js";
 
 const STOCK_CODEX_PATH_ENV = "CODEXHOST_STOCK_CODEX_PATH";
 export const MANAGED_REMOTE_APP_SERVER_PROCESS_TITLE = "codexhost remote app-server listener";
@@ -305,11 +306,55 @@ export async function runHostRuntime(input: {
           accountControl: official.accountControl,
         };
         if (!remoteControlPlan) {
+          const mappingStore = createProductionExternalThreadStore(delegationEnvironment);
+          let mobileControl: Awaited<ReturnType<typeof startMobileControlAdmin>> | undefined;
           try {
-            const host = new AppServerHost({
+            await mappingStore.initialize();
+            const common = {
+              stockCodexPath,
+              environment: delegationEnvironment,
+              ...shared,
+              ...installedHarnessPluginOptions(delegationEnvironment, false, input.hostRuntimeUrl),
+              mappingStore,
+              closeMappingStoreOnExit: false,
               ...(runtimeMaintenance ? { runtimeMaintenance } : {}),
               modelPrices,
               usageStatistics,
+            };
+            if (consoleOpener) {
+              mobileControl = await startMobileControlAdmin({
+                environment: delegationEnvironment,
+                ...(consoleEntry ? { appDirectory: path.dirname(consoleEntry) } : {}),
+                diagnosticOutput: process.stderr,
+                createSession: ({ input: desktopInput, output: desktopOutput }) =>
+                  new AppServerHost({
+                    ...common,
+                    arguments: [],
+                    desktopInput,
+                    desktopOutput,
+                    diagnosticOutput: process.stderr,
+                    ...(process.platform !== "win32"
+                      ? {
+                          sharedThreads: new SharedThreadBridge({
+                            connect: () => connectSharedThreads(delegationEnvironment),
+                            delegateCreates: false,
+                            diagnose: (error) =>
+                              process.stderr.write(
+                                `codexhost mobile shared Threads: ${String(error)}\n`,
+                              ),
+                          }),
+                        }
+                      : {}),
+                  }),
+              }).catch((error: unknown) => {
+                process.stderr.write(
+                  `codexhost Host Runtime: phone control unavailable: ${error instanceof Error ? error.message : String(error)}\n`,
+                );
+                return undefined;
+              });
+            }
+            const host = new AppServerHost({
+              ...common,
               ...(process.platform !== "win32"
                 ? {
                     sharedThreads: new SharedThreadBridge({
@@ -321,15 +366,12 @@ export async function runHostRuntime(input: {
                   }
                 : {}),
               buddyRouting: true,
-              stockCodexPath,
               arguments: input.arguments,
-              environment: delegationEnvironment,
-              ...shared,
-              ...installedHarnessPluginOptions(delegationEnvironment, false, input.hostRuntimeUrl),
               onDelegationApi,
               ...(updateCoordinator ? { updateCoordinator } : {}),
               ...(autoUpdate ? { autoUpdate } : {}),
               ...(consoleOpener ? { consoleOpener } : {}),
+              ...(mobileControl ? { mobileControl } : {}),
             });
             autoUpdate?.start();
             return await runWithConsoleControl(
@@ -338,8 +380,16 @@ export async function runHostRuntime(input: {
               delegationEnvironment,
             );
           } finally {
-            await official.close();
-            autoUpdate?.dispose();
+            await mobileControl?.close().catch(() => undefined);
+            try {
+              await official.close();
+            } finally {
+              try {
+                await mappingStore.close();
+              } finally {
+                autoUpdate?.dispose();
+              }
+            }
           }
         }
         const mappingStore = createProductionExternalThreadStore(delegationEnvironment);

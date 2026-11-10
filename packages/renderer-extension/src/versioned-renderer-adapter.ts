@@ -1201,6 +1201,14 @@ export function installCurrentRendererAdapter(): {
       usageSubscription.subscribe(listener),
     listThreadOwnership: (input: ThreadOwnershipListParams) =>
       currentModelClient().listThreadOwnership(input),
+    getThreadGoal: (
+      threadId: string,
+      options?: Parameters<NonNullable<RendererModelClient["getThreadGoal"]>>[1],
+    ) => {
+      const client = currentModelClient();
+      if (!client.getThreadGoal) throw new Error("Thread goal inspection is unavailable");
+      return client.getThreadGoal(threadId, options);
+    },
     selectThreadModel: (input: ThreadModelSelectParams) =>
       currentModelClient().selectThreadModel(input),
     selectThreadThinking: (input: ThreadThinkingSelectParams) =>

@@ -133,6 +133,7 @@ import {
   installRendererSidebarAgentIcons,
   SIDEBAR_THREAD_ROW_SELECTOR,
 } from "./renderer-sidebar-agent-icons.js";
+import { installRendererSidebarGoalBadges } from "./renderer-sidebar-goal-badges.js";
 import { installRendererSidebarStatusFilter } from "./renderer-sidebar-status-filter.js";
 import { installRendererSidebarThreadAlign } from "./renderer-sidebar-thread-align.js";
 import { installRendererThreadReturn } from "./renderer-thread-return.js";
@@ -966,6 +967,10 @@ export function installRendererBindingProbe(
         : undefined;
     },
     getLocalAgent: localAgentForSidebarThread,
+  });
+  const sidebarGoalBadges = installRendererSidebarGoalBadges({
+    getClient: (hostId) => modelClientForHost(hostId),
+    getLocale: rendererLocale,
   });
   const interruptedQueue = createInterruptedQueue({
     getHostIds: () => {
@@ -1906,6 +1911,7 @@ export function installRendererBindingProbe(
         renderMounted(mounted);
         if (mounted.ownershipStatus !== "error") void refreshCommands(mounted);
         sidebarAgentIcons.refresh();
+        sidebarGoalBadges.refresh();
         // Ownership can already contain Usage, but only usage inspection tells
         // us whether this (possibly unknown) plugin also supplies account quota.
         if (mounted.ownershipStatus !== "error") void refreshThreadUsage(mounted);
@@ -1964,6 +1970,7 @@ export function installRendererBindingProbe(
       void loadThreadOwnership(mounted);
     }
     sidebarAgentIcons.refresh();
+    sidebarGoalBadges.refresh();
     return true;
   };
 
@@ -2785,6 +2792,7 @@ export function installRendererBindingProbe(
         void refreshCommands(mounted);
       }
       sidebarAgentIcons.refresh();
+      sidebarGoalBadges.refresh();
       return switched;
     } catch {
       adapterStatus = {
@@ -2980,6 +2988,7 @@ export function installRendererBindingProbe(
           );
           controller.setEnabledAgents(enabledAgents);
           sidebarAgentIcons.refresh();
+          sidebarGoalBadges.refresh();
           for (const mounted of mountedByComposer.values()) {
             if (mounted.hostId === hostId || hostId === "local") renderMounted(mounted);
           }
@@ -3155,6 +3164,7 @@ export function installRendererBindingProbe(
       void loadThreadOwnership(mounted);
     }
     if (changed) sidebarAgentIcons.refresh();
+    sidebarGoalBadges.refresh();
   };
 
   function reconcileHarnessAvailabilityHost(retryDraftUsage = false): void {
@@ -3205,6 +3215,7 @@ export function installRendererBindingProbe(
     }
     // A reconnect can replace the client without changing the Composer's Host ID.
     if (connectionsChanged) sidebarAgentIcons.refresh();
+    sidebarGoalBadges.refresh();
     const hostId = activeModelHostId();
     if (
       !hostId ||
@@ -3509,6 +3520,7 @@ export function installRendererBindingProbe(
     }
     renderMounted(mounted);
     sidebarAgentIcons.refresh();
+    sidebarGoalBadges.refresh();
     if (threadIdFromComposerModelTarget(modelTarget) && !inherited) {
       void loadThreadOwnership(mounted);
     } else if (
@@ -3883,6 +3895,7 @@ export function installRendererBindingProbe(
       }
     }
     sidebarAgentIcons.refresh();
+    sidebarGoalBadges.refresh();
     reconcileHarnessAvailabilityHost();
     gitSidebar.syncContext();
     gitBranchControl.refreshContext();
@@ -3907,6 +3920,7 @@ export function installRendererBindingProbe(
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
       sidebarAgentIcons.refresh();
+      sidebarGoalBadges.refresh();
       void refreshHarnessAvailabilityForHost("local");
       void refreshHarnessAvailability();
     }
@@ -4312,6 +4326,7 @@ export function installRendererBindingProbe(
       harnessAvailabilityByHost.clear();
       activeAvailabilityHostId = "local";
       sidebarAgentIcons.refresh();
+      sidebarGoalBadges.refresh();
       void refreshHarnessAvailabilityForHost("local");
       reconcileHarnessAvailabilityHost();
       void loadCodexAccounts();
@@ -4382,6 +4397,7 @@ export function installRendererBindingProbe(
       sidebarThreadAlign.dispose();
       delegationMention?.dispose();
       sidebarAgentIcons.dispose();
+      sidebarGoalBadges.dispose();
       gitSidebar.dispose();
       gitBranchControl.dispose();
       gitWorkflowControl.dispose();

@@ -117,7 +117,7 @@ async function vscodeInvocation(
   const uri = options.sshAuthority
     ? `vscode-remote://ssh-remote+${encodeURIComponent(options.sshAuthority)}${workspace.split("/").map(encodeURIComponent).join("/")}`
     : null;
-  const arguments_ = uri ? ["--reuse-window", "--folder-uri", uri] : ["--reuse-window", workspace];
+  const arguments_ = uri ? ["--new-window", "--folder-uri", uri] : ["--new-window", workspace];
   const code =
     options.platform === "win32"
       ? await windowsCode(options.environment, options.platform)

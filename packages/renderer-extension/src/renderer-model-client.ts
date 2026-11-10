@@ -352,6 +352,7 @@ import {
   threadModelSelectParamsSchema,
   threadPermissionModeSelectParamsSchema,
   threadThinkingSelectParamsSchema,
+  threadGoalGetResultSchema,
   threadOwnershipListParamsSchema,
   threadOwnershipListResultSchema,
   threadUsageInspectionParamsSchema,
@@ -371,6 +372,7 @@ import {
   type HarnessInspectParams,
   type HarnessWebUiOpenParams,
   type HarnessModelSelectionState,
+  type ThreadGoal,
   type ThreadInspection,
   type ThreadInspectionParams,
   type ThreadCommandExecuteParams,
@@ -435,6 +437,7 @@ export const THREAD_MODEL_SELECT_METHOD = "codexhost/thread/model/select";
 export const THREAD_THINKING_SELECT_METHOD = "codexhost/thread/thinking/select";
 export const THREAD_PERMISSION_MODE_SELECT_METHOD = "codexhost/thread/permission-mode/select";
 export const THREAD_OWNERSHIP_LIST_METHOD = "codexhost/thread/ownership/list";
+export const THREAD_GOAL_GET_METHOD = "thread/goal/get";
 export const THREAD_USAGE_INSPECT_METHOD = "codexhost/thread/usage/inspect";
 export const THREAD_USAGE_UPDATED_METHOD = "codexhost/thread/usage/updated";
 export const THREAD_TOKEN_USAGE_UPDATED_METHOD = "thread/tokenUsage/updated";
@@ -719,6 +722,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     input: ThreadOwnershipListParams,
     options?: RendererRequestOptions,
   ): Promise<ThreadOwnershipListResult>;
+  /** Native Codex Thread goal; external Harness Threads report no goal. */
+  getThreadGoal?(threadId: string, options?: RendererRequestOptions): Promise<ThreadGoal | null>;
   inspectThreadUsage(input: ThreadUsageInspectionParams): Promise<ThreadUsageInspection>;
   subscribeThreadUsage?(listener: (update: ThreadUsageInspection) => void): () => void;
   selectThreadModel(input: ThreadModelSelectParams): Promise<HarnessModelSelectionState>;
@@ -1761,6 +1766,20 @@ export function createRendererModelClient(
     inspectHarnessCommands,
     inspectThreadCommands,
     executeThreadCommand,
+    async getThreadGoal(
+      threadId: string,
+      options?: RendererRequestOptions,
+    ): Promise<ThreadGoal | null> {
+      const value =
+        options === undefined
+          ? await manager.sendRequest(THREAD_GOAL_GET_METHOD, { threadId })
+          : await manager.sendRequest(THREAD_GOAL_GET_METHOD, { threadId }, options);
+      const result = threadGoalGetResultSchema.parse(value);
+      if (result.goal !== null && result.goal.threadId !== threadId) {
+        throw new Error("Thread goal does not match the requested Thread");
+      }
+      return result.goal;
+    },
     async listThreadOwnership(
       input: ThreadOwnershipListParams,
       options?: RendererRequestOptions,

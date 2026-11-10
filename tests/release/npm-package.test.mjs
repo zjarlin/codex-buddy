@@ -952,6 +952,8 @@ describe("npm package release", () => {
       expect(paths).not.toContain("libexec/codexhost-node-repl");
       expect(paths).toContain("libexec/codexhost-updater");
       expect(paths).toContain("app/codexhost-distribution.json");
+      expect(paths).toContain("app/mobile-web.js");
+      expect(paths).toContain("app/mobile-web.css");
       await mkdir(path.join(root, "runtime"), { recursive: true });
       await writeFile(path.join(root, "runtime/node"), "unexpected");
       await expect(

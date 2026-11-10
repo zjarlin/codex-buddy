@@ -215,6 +215,12 @@ import {
   consoleOpenResultSchema,
 } from "@codexhost/shared-contracts";
 import {
+  MOBILE_PAIRING_INVITE_METHOD,
+  MOBILE_PAIRING_REVOKE_METHOD,
+  MOBILE_PAIRING_STATUS_METHOD,
+  mobilePairingRevokeParamsSchema,
+} from "@codexhost/shared-contracts";
+import {
   DELEGATION_MENTION_PATH_PREFIX,
   threadTerminalSettingsSchema,
   IDLE_RELEASE_SETTINGS_METHOD,
@@ -494,6 +500,7 @@ import {
   writeWorkspaceFile,
 } from "./workspace-files.js";
 import type { HostConsoleOpener } from "./console-opener.js";
+import type { MobileControlAdmin } from "./mobile-control-admin.js";
 
 const CONSOLE_REQUEST_TIMEOUT_MS = 120_000;
 
@@ -632,6 +639,8 @@ export interface AppServerHostOptions {
   runtimeMaintenance?: RuntimeMaintenance;
   /** Present only on the local Host started by the Launcher. */
   consoleOpener?: HostConsoleOpener;
+  /** LAN phone control; present only on the local Host started by the Launcher. */
+  mobileControl?: MobileControlAdmin;
   onDelegationApi?: (api: DelegationControlRegistration) => (() => void) | undefined;
   /** Shared by all Hosts of one runtime; defaults to the bundled snapshot only. */
   modelPrices?: ModelPriceCatalog;
@@ -1679,6 +1688,13 @@ export class AppServerHost {
     if (method === CONSOLE_REMOTE_CONNECTIONS_METHOD) {
       return requestDesktopRemoteConnections(this.#options.environment ?? process.env, params);
     }
+    if (
+      method === MOBILE_PAIRING_STATUS_METHOD ||
+      method === MOBILE_PAIRING_INVITE_METHOD ||
+      method === MOBILE_PAIRING_REVOKE_METHOD
+    ) {
+      return this.#handleMobilePairingConsole(method, params);
+    }
     if (method === REMOTE_SSH_SETUP_METHOD) timeoutMs = Math.max(timeoutMs, 330_000);
     const parsed = jsonRpcRequestSchema.safeParse({
       id: `${this.#consoleRequestPrefix}${++this.#nextConsoleRequest}`,
@@ -1716,6 +1732,32 @@ export class AppServerHost {
     } finally {
       clearTimeout(timer);
       this.#consoleReplies.delete(id);
+    }
+  }
+
+  async #handleMobilePairingConsole(method: string, params: unknown): Promise<ConsoleHostReply> {
+    const admin = this.#options.mobileControl;
+    if (!admin) {
+      return {
+        error: {
+          code: -32090,
+          message: "Phone control is available on the local Launcher-started Host only",
+        },
+      };
+    }
+    try {
+      if (method === MOBILE_PAIRING_STATUS_METHOD) {
+        return { result: (await admin.status()) as JsonValue };
+      }
+      if (method === MOBILE_PAIRING_INVITE_METHOD) {
+        return { result: (await admin.invite()) as JsonValue };
+      }
+      const parsed = mobilePairingRevokeParamsSchema.safeParse(params);
+      if (!parsed.success) return { error: { code: -32602, message: "Invalid Client identity" } };
+      await admin.revoke(parsed.data.clientId);
+      return { result: { revoked: true } };
+    } catch (error) {
+      return { error: { code: -32092, message: errorMessage(error).slice(0, 500) } };
     }
   }
 

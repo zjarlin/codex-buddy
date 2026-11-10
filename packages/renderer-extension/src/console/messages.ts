@@ -288,6 +288,38 @@ const ENGLISH = {
       priceInvalid: "{field} price must be a non-negative number.",
     },
   },
+  mobileControl: {
+    label: "Phone control",
+    description:
+      "Scan a QR code from a phone on the same LAN to read and continue Threads, send messages, and answer approvals. Each phone pairs as its own Client and can be revoked here at any time.",
+    trustNote:
+      "The phone page is served by this computer over plain HTTP on your local network. Use it only on Wi-Fi you trust: anyone who can intercept that traffic could read the Thread content. Do not pair a shared or borrowed browser.",
+    create: "Create pairing QR",
+    creating: "Creating…",
+    refresh: "Refresh",
+    inviteTitle: "Pair a phone",
+    inviteNote:
+      "The QR code expires in 5 minutes and admits one phone. Scan it with the phone camera, name the device, then confirm the pairing on the phone.",
+    inviteExpired: "This QR code has expired. Create a new one.",
+    inviteMissing: "Create a QR code to pair a phone.",
+    openLink: "Open the pairing page on this computer",
+    clientsTitle: "Paired phones",
+    clientsNote:
+      "Each phone keeps a separate credential. Revoking it drops its connection immediately; the code expires after 30 days without use. Up to {max} phones.",
+    noClients: "No phone is paired yet.",
+    connected: "Online",
+    offline: "Offline",
+    lastSeen: "Last active {time}",
+    pairedAt: "Paired {time}",
+    revoke: "Revoke",
+    revoking: "Revoking…",
+    revokeConfirm: "Revoke this phone? Its connection closes immediately.",
+    unavailable:
+      "Phone control is available only from the local codexhost console while the Host is running.",
+    failure: "Phone pairing failed",
+    copied: "Pairing link copied",
+    copyLink: "Copy link",
+  },
 };
 
 type ConsoleMessages = typeof ENGLISH;
@@ -569,6 +601,37 @@ const CHINESE: ConsoleMessages = {
       priceRequired: "{field}单价为必填。",
       priceInvalid: "{field}单价必须是非负数字。",
     },
+  },
+  mobileControl: {
+    label: "手机控制",
+    description:
+      "在同一局域网内用手机扫码，即可读取和继续会话、发送消息并处理审批。每台手机都有独立凭据，可随时在这里撤销。",
+    trustNote:
+      "手机页面由本机通过局域网明文 HTTP 提供。只在你信任的 Wi-Fi 上使用：能截获该流量的人可能读到会话内容；不要在共用或借用的浏览器上配对。",
+    create: "生成配对二维码",
+    creating: "正在生成…",
+    refresh: "刷新",
+    inviteTitle: "配对新手机",
+    inviteNote:
+      "二维码 5 分钟内有效，且只能配对一台手机。用手机相机扫码，填写设备名称，然后在手机上确认配对。",
+    inviteExpired: "二维码已过期，请重新生成。",
+    inviteMissing: "生成二维码后即可配对手机。",
+    openLink: "在本机打开配对页面",
+    clientsTitle: "已配对手机",
+    clientsNote:
+      "每台手机保存独立凭据。撤销后连接会立即断开；连续 30 天未使用会自动过期。最多 {max} 台。",
+    noClients: "还没有配对手机。",
+    connected: "在线",
+    offline: "离线",
+    lastSeen: "最近活动 {time}",
+    pairedAt: "配对时间 {time}",
+    revoke: "撤销",
+    revoking: "正在撤销…",
+    revokeConfirm: "撤销这台手机？它的连接会立即断开。",
+    unavailable: "手机控制仅在本地 codexhost 控制台、且 Host 正在运行时可用。",
+    failure: "手机配对失败",
+    copied: "配对链接已复制",
+    copyLink: "复制链接",
   },
 };
 

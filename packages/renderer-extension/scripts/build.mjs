@@ -10,6 +10,7 @@ const entries = [
   { entry: "src/probe-entry.ts", format: "iife", outfile: "dist/renderer-binding-probe.js" },
   { entry: "src/audit-entry.ts", format: "iife", outfile: "dist/contract-audit.js" },
   { entry: "src/console-entry.ts", format: "iife", outfile: "dist/console.js" },
+  { entry: "src/mobile-entry.ts", format: "iife", outfile: "dist/mobile.js" },
 ];
 
 for (const { entry, format, outfile } of entries) {
@@ -25,3 +26,14 @@ for (const { entry, format, outfile } of entries) {
     outfile,
   });
 }
+
+// The phone page links its stylesheet; it is not imported into the script bundle.
+await build({
+  absWorkingDir: packageRoot,
+  entryPoints: ["src/mobile/mobile.css"],
+  bundle: true,
+  platform: "browser",
+  format: "esm",
+  target: "es2024",
+  outfile: "dist/mobile.css",
+});

@@ -37,6 +37,7 @@
 
 | 文档 | 内容与阅读时机 |
 | --- | --- |
+| [`platforms/mobile/mobile-pairing.md`](platforms/mobile/mobile-pairing.md) | 手机扫码配对、局域网控制边界、客户端区分、撤销与开源部署方式；修改手机控制时阅读。 |
 | [`product/aio-web.md`](product/aio-web.md) | AIO 网页复用原版 Renderer、设备发现、独立原生窗口与版本兼容边界。 |
 | [`product/git-workspace.md`](product/git-workspace.md) | VS Code 式 Git 侧栏、递归子模块、独立提交与图表、官方审查转发及项目空闲推送；维护 Git 界面时阅读。 |
 | [`product/workspace-files.md`](product/workspace-files.md) | 官方文件区域放在对话左侧、文件树与编辑器复用，以及保留的 Host 文件接口；维护文件浏览器时阅读。 |
@@ -45,6 +46,7 @@
 | [`product/thread-auto-archive.md`](product/thread-auto-archive.md) | 长期未使用 Thread 的自动归档设置、时间依据、安全边界和官方/外部 Harness 归档语义。 |
 | [`product/thread-question-titles.md`](product/thread-question-titles.md) | 会话名称按最后一次用户提问截取、原生与 External Harness 的持久化路径、附件正文提取及自动标题禁用边界。 |
 | [`product/sidebar-thread-context.md`](product/sidebar-thread-context.md) | 标题栏显示当前会话的项目名、左侧树自动对齐到当前会话；维护侧栏定位体验时阅读。 |
+| [`product/goal-thread-badges.md`](product/goal-thread-badges.md) | 目标模式会话在侧栏显示按 Goal 状态着色的徽标；维护 Goal 区分或侧栏装饰时阅读。 |
 
 ## Harness 专项
 

@@ -304,6 +304,8 @@ export function expectedPayloadPaths(target) {
     "app/console-web.js",
     "app/desktop-controller.mjs",
     "app/host-runtime.mjs",
+    "app/mobile-web.css",
+    "app/mobile-web.js",
     "app/renderer-extension.js",
     ...preinstalledHarnessPluginPaths(),
     "licenses/Node.js-LICENSE.txt",
@@ -375,6 +377,7 @@ export async function validatePayload({ payloadRoot, target, root }) {
         "app/console-server.mjs",
         "app/console-web.js",
         "app/desktop-controller.mjs",
+        "app/mobile-web.js",
         "app/renderer-extension.js",
       ].includes(file.relative)
     ) {
@@ -487,6 +490,16 @@ export async function prepareReleasePayload({ target, root = repositoryRoot }) {
     path.join(root, "packages", "renderer-extension", "dist", "console.js"),
     path.join(payloadRoot, "app", "console-web.js"),
     "console page Bundle",
+  );
+  await copyReleaseFile(
+    path.join(root, "packages", "renderer-extension", "dist", "mobile.js"),
+    path.join(payloadRoot, "app", "mobile-web.js"),
+    "mobile page Bundle",
+  );
+  await copyReleaseFile(
+    path.join(root, "packages", "renderer-extension", "dist", "mobile.css"),
+    path.join(payloadRoot, "app", "mobile-web.css"),
+    "mobile page stylesheet",
   );
   await writeDistributionMetadata(path.join(payloadRoot, "app", "codexhost-distribution.json"), {
     version,

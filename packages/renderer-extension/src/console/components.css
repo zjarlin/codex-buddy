@@ -278,3 +278,106 @@
 .console-notice[hidden] {
   display: none;
 }
+
+/* Phone pairing: the QR stays scannable at the panel's full width. */
+.console-mobile {
+  display: grid;
+  gap: 12px;
+}
+
+.console-mobile-trust {
+  max-width: 82ch;
+}
+
+.console-mobile-invite {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+}
+
+.console-mobile-qr {
+  display: grid;
+  place-items: center;
+  width: 248px;
+  height: 248px;
+  padding: 8px;
+  background: #fff;
+  border-radius: 12px;
+}
+
+.console-mobile-qr svg {
+  display: block;
+  width: 232px;
+  height: 232px;
+}
+
+.console-mobile-invite__copy {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.console-mobile-countdown {
+  font-variant-numeric: tabular-nums;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.console-mobile-url {
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  color: var(--settings-muted);
+  font-size: 11px;
+  background: var(--settings-surface);
+  border-radius: 8px;
+}
+
+.console-mobile-clients {
+  display: grid;
+  gap: 8px;
+}
+
+.console-mobile-client {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 6px 16px;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--settings-surface);
+  border-radius: 10px;
+}
+
+.console-mobile-client__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.console-mobile-client__identity strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-mobile-client__meta {
+  display: grid;
+  gap: 2px;
+  color: var(--settings-muted);
+  font-size: 11px;
+}
+
+@media (max-width: 720px) {
+  .console-mobile-invite {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .console-mobile-qr {
+    justify-self: center;
+  }
+
+  .console-mobile-client {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

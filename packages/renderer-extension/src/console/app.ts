@@ -149,7 +149,10 @@ export function startConsoleApp(document: Document): void {
     undefined,
     undefined,
     (method, params) => manager.sendRequest(method, params),
+    (method, params) => manager.sendRequest(method, params),
   );
+  const mobileControl = settingsPages.find((page) => page.id === "mobile-control");
+  if (!mobileControl) throw new Error("Phone control page is unavailable");
   const navigate = (pageId: string): void => {
     window.location.hash = pageId;
   };
@@ -173,6 +176,7 @@ export function startConsoleApp(document: Document): void {
         ),
         hostPage(required(settingsPages, "remote-connections"), messages, state),
         hostPage(required(settingsPages, "accounts"), messages, state),
+        hostPage(mobileControl, messages, state),
         hostPage(required(settingsPages, "session-import"), messages, state),
         hostPage(required(settingsPages, "usage-statistics"), messages, state),
         hostPage(required(settingsPages, "team-usage"), messages, state),

@@ -60,6 +60,7 @@ export * from "./account-credits-presentation.js";
 export * from "./model-price-overrides.js";
 export * from "./usage-statistics.js";
 export * from "./team-usage.js";
+export * from "./mobile-pairing.js";
 export * from "./thread-prewarm.js";
 export * from "./thread-questions.js";
 export {
@@ -165,6 +166,12 @@ export {
   threadWorkspaceOpenResultSchema,
 } from "./thread-workspace.js";
 export type { ThreadWorkspaceOpenParams, ThreadWorkspaceOpenResult } from "./thread-workspace.js";
+export {
+  threadGoalGetResultSchema,
+  threadGoalSchema,
+  threadGoalStatusSchema,
+} from "./thread-goal.js";
+export type { ThreadGoal, ThreadGoalGetResult, ThreadGoalStatus } from "./thread-goal.js";
 export {
   PROJECT_TERMINAL_OPEN_METHOD,
   PROJECT_WORKSPACE_OPEN_METHOD,

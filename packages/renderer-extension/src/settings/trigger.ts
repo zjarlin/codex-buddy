@@ -18,6 +18,8 @@ const SETTINGS_APPLICATION_HEADER_SELECTOR = 'header[data-pip-obstacle="app-shel
 const SETTINGS_HEADER_SLOT_SELECTOR = ':scope > [data-test-id="header-shell-slot"]';
 const SETTINGS_HEADER_NATIVE_ACTION_GROUP_SELECTOR =
   ':scope > [data-app-shell-header-obstacle="true"]';
+/** 原生标题容器；注入控件不能插进这里与标题文字争用同一格。 */
+const SETTINGS_HEADER_TITLE_CONTENT_ATTRIBUTE = "data-app-shell-titlebar-content";
 const SETTINGS_RAIL_SELECTOR = "nav[data-app-navigation-rail]";
 const SETTINGS_RAIL_DESTINATION_SELECTOR = "[data-sidebar-destination]";
 const UPDATE_ACCENT = "#3b82f6";
@@ -128,13 +130,28 @@ function measuredBounds(element: Element): RendererSettingsBounds {
   };
 }
 
-function findNativeHeaderActionGroup(header: HTMLElement): HTMLElement | null {
-  const surface = header.querySelector<HTMLElement>(SETTINGS_HEADER_SURFACE_SELECTOR);
-  if (!surface) return null;
+function isNativeTitleContent(element: HTMLElement): boolean {
+  for (let node: HTMLElement | null = element; node; node = node.parentElement) {
+    if (node.hasAttribute(SETTINGS_HEADER_TITLE_CONTENT_ATTRIBUTE)) return true;
+  }
+  return false;
+}
+
+/**
+ * 尾部原生动作组。标题容器同样带 `data-app-shell-header-obstacle`，因此必须按
+ * 渲染后的右边缘挑选，而不是 DOM 顺序：否则没有尾部动作的页面会把标题容器当成
+ * 锚点。
+ */
+function findNativeHeaderActionGroup(surface: HTMLElement): HTMLElement | null {
   const groups = [
     ...surface.querySelectorAll<HTMLElement>(SETTINGS_HEADER_NATIVE_ACTION_GROUP_SELECTOR),
-  ];
-  return groups.at(-1) ?? null;
+  ]
+    .filter((group) => !isNativeTitleContent(group))
+    .filter((group) => measuredBounds(group).width > 0);
+  return (
+    groups.toSorted((left, right) => measuredBounds(right).right - measuredBounds(left).right)[0] ??
+    null
+  );
 }
 
 export function findRendererSettingsHeaderInsertionPoint(
@@ -146,9 +163,10 @@ export function findRendererSettingsHeaderInsertionPoint(
   const headerBounds = measuredBounds(header);
   if (headerBounds.width <= 0 || headerBounds.height <= 0) return null;
 
-  const nativeActionGroup = findNativeHeaderActionGroup(header);
-  if (nativeActionGroup?.parentElement) {
-    return { parent: nativeActionGroup.parentElement, before: nativeActionGroup };
+  const surface = header.querySelector<HTMLElement>(SETTINGS_HEADER_SURFACE_SELECTOR);
+  const nativeActionGroup = surface ? findNativeHeaderActionGroup(surface) : null;
+  if (surface && nativeActionGroup?.parentElement === surface) {
+    return { parent: surface, before: nativeActionGroup };
   }
 
   const endSlot = [...header.querySelectorAll<HTMLElement>(SETTINGS_HEADER_SLOT_SELECTOR)]

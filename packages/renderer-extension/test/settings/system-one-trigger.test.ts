@@ -40,6 +40,9 @@ class FakeHeaderElement {
   appendChild(child: FakeHeaderElement): FakeHeaderElement {
     return this.insertBefore(child, null);
   }
+  hasAttribute(name: string): boolean {
+    return this.attributes.has(name);
+  }
   contains(node: FakeHeaderElement | null): boolean {
     if (!node) return false;
     if (node === this) return true;
@@ -106,13 +109,16 @@ interface FakeHeader {
   header: FakeHeaderElement;
   startSlot: FakeHeaderElement;
   surface: FakeHeaderElement;
+  titleContent: FakeHeaderElement;
   pageHeader: FakeHeaderElement;
   actionGroup: FakeHeaderElement | null;
   endSlot: FakeHeaderElement;
 }
 
-// Mirrors Codex Desktop 0.153.4: both shell slots carry the obstacle attribute, and the native
-// action group is the trailing obstacle child of the header context menu surface.
+// Mirrors current Codex Desktop: both shell slots and the titlebar content container carry the
+// obstacle attribute, and the native action group is the trailing end-aligned obstacle child of
+// the header context menu surface. The title content comes first in DOM order, so DOM position
+// alone cannot identify the trailing group.
 function createFakeHeader(options: { nativeActions: boolean }): FakeHeader {
   const header = new FakeHeaderElement(0, 1510);
   const startSlot = new FakeHeaderElement(0, 216);
@@ -120,9 +126,13 @@ function createFakeHeader(options: { nativeActions: boolean }): FakeHeader {
   startSlot.setAttribute("data-app-shell-header-obstacle", "true");
   const surface = new FakeHeaderElement(216, 1119);
   surface.setAttribute("data-testid", "app-shell-header-context-menu-surface");
+  const titleContent = new FakeHeaderElement(223, 900);
+  titleContent.setAttribute("data-app-shell-header-obstacle", "true");
+  titleContent.setAttribute("data-app-shell-titlebar-content", "true");
   const pageHeader = new FakeHeaderElement(223, 1071);
   pageHeader.setAttribute("data-app-shell-page-header", "true");
-  surface.append(pageHeader);
+  titleContent.append(pageHeader);
+  surface.append(titleContent);
   let actionGroup: FakeHeaderElement | null = null;
   if (options.nativeActions) {
     actionGroup = new FakeHeaderElement(1299, 31);
@@ -133,7 +143,7 @@ function createFakeHeader(options: { nativeActions: boolean }): FakeHeader {
   endSlot.setAttribute("data-test-id", "header-shell-slot");
   endSlot.setAttribute("data-app-shell-header-obstacle", "true");
   header.append(startSlot, surface, endSlot);
-  return { header, startSlot, surface, pageHeader, actionGroup, endSlot };
+  return { header, startSlot, surface, titleContent, pageHeader, actionGroup, endSlot };
 }
 
 function stubHeaderDocument(current: () => FakeHeaderElement): Document {
@@ -188,7 +198,7 @@ describe("System One model header control", () => {
       await Promise.resolve();
 
       expect(control.root).not.toBeNull();
-      expect(shell.surface.children).toEqual([shell.pageHeader, control.root, shell.actionGroup]);
+      expect(shell.surface.children).toEqual([shell.titleContent, control.root, shell.actionGroup]);
       const select = control.root?.children[1] as unknown as FakeHeaderElement;
       expect(select.value).toBe("typesafe/jev");
       select.value = "laya";
@@ -198,6 +208,51 @@ describe("System One model header control", () => {
       expect(buddyConfigure).toHaveBeenCalledWith(
         expect.objectContaining({ systemOneModel: "laya" }),
       );
+      control.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the control out of the native title content when no trailing action group exists", async () => {
+    const shell = createFakeHeader({ nativeActions: false });
+    const document = stubHeaderDocument(() => shell.header);
+    const client = {
+      buddyStatus: vi.fn(async () => ({
+        settings: {
+          enabled: true,
+          privateMode: false,
+          role: "auto",
+          bypass: true,
+          jev: true,
+          systemOneModel: "typesafe/jev",
+          executorModel: null,
+        },
+        models: [],
+        decisions: [],
+        jevKeyConfigured: false,
+        jevBaseUrl: null,
+      })),
+    } as unknown as RendererModelClient;
+
+    try {
+      const control = installSystemOneModelHeaderControl({
+        getClient: () => client,
+        getLocale: () => "zh-CN",
+        ownerDocument: document,
+      });
+      await Promise.resolve();
+
+      // 标题容器自身带 obstacle 属性；它不能成为插入锚点，否则注入控件会与标题
+      // 文字争用同一格并叠字。没有尾部动作组时回退到尾部槽位。
+      expect(shell.titleContent.children).toEqual([shell.pageHeader]);
+      expect(shell.surface.children).toEqual([shell.titleContent]);
+      expect(shell.header.children).toEqual([
+        shell.startSlot,
+        shell.surface,
+        control.root,
+        shell.endSlot,
+      ]);
       control.dispose();
     } finally {
       vi.unstubAllGlobals();

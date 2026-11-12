@@ -142,6 +142,43 @@ describe("interrupted conversations", () => {
     expect(request.mock.calls.map(([method]) => method)).not.toContain("turn/start");
   });
 
+  it("refuses automatic resume of a turn whose history cannot be decrypted", async () => {
+    const request = vi.fn<NativeRequest>(async (method) => {
+      if (method === "thread/read")
+        return {
+          result: {
+            thread: {
+              status: { type: "idle" },
+              turns: [
+                {
+                  id: "turn",
+                  status: "failed",
+                  error: {
+                    message:
+                      "stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.",
+                  },
+                },
+              ],
+            },
+          },
+        };
+      if (method === "turn/start") return { result: { turn: { id: "continued" } } };
+      return { result: {} };
+    });
+    const service = new InterruptedConversations(
+      request,
+      () => false,
+      async () => true,
+    );
+    await expect(service.continue("thread", "turn", { automatic: true })).rejects.toThrow(
+      "无法解密",
+    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("thread/resume");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("turn/start");
+    // 手动入口保留：用户可能已经压缩过历史，Host 不替他判断历史是否已经可读。
+    await expect(service.continue("thread", "turn")).resolves.toBe("continued");
+  });
+
   it("scans every official page so older failed turns are not hidden", async () => {
     const request = vi.fn<NativeRequest>(async (method, params) => {
       if (method === "thread/list") {

@@ -1,4 +1,5 @@
 import {
+  isUndecryptableHistoryError,
   nativeContinuationPrompt,
   type BuddyInterrupted,
   type ThreadArchiveCompletedResult,
@@ -473,6 +474,11 @@ export class InterruptedConversations {
       model?: string;
       collaborationMode?: JsonObject;
       context?: JsonObject;
+      /**
+       * 自动恢复提交的续接。历史无法解密时自动重放只会得到同一个错误，因此直接拒绝；
+       * 手动入口必须保留：用户可能已经压缩过历史，此时同一回合的错误记录仍然存在。
+       */
+      automatic?: boolean;
     },
   ): Promise<string> {
     if (this.#pending.has(threadId)) throw new Error("该会话正在续接，请勿重复点击。");
@@ -485,6 +491,10 @@ export class InterruptedConversations {
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
         if (turn.id !== turnId) throw new Error("会话状态已改变，请刷新列表。");
+        // 同一段历史再次发送仍会被服务端拒绝解密；自动续接直接拒绝，避免把失败回合
+        // 反复重放成新一轮。手动入口放行，由用户决定先压缩历史还是新建会话。
+        if (options?.automatic && isUndecryptableHistoryError(object(turn.error)))
+          throw new Error("该回合的历史无法解密，自动续接会重复同一失败；请先压缩历史或新建会话。");
         if (recoverableStatus(thread, turn) !== null) return;
         // 官方状态不明确时补读完整尾项：以 Assistant 文本交付且无残留错误的回合才算明确完成。
         const full = await this.#read(threadId, { items: true });

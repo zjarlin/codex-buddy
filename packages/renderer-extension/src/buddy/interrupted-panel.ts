@@ -29,13 +29,14 @@ const messages = {
     resumeAllHint: "按顺序恢复当前连接下列表中的所有中断会话。",
     autoResume: "网关恢复后自动续接",
     autoResumeHint:
-      "中断队列非空时检查网关 /ready（不可用时回退 /health）；恢复后自动逐条续接。已取消的会话不自动续接，同一回合最多自动尝试 3 次。",
+      "中断队列非空时检查网关 /ready（不可用时回退 /health）；恢复后自动逐条续接。已取消的会话不自动续接；同一会话连续自动续接最多 3 次，历史无法解密的回合只保留手动入口。",
     autoWaiting: (count: number) => `网关未就绪；恢复后会自动续接 ${count} 条中断会话。`,
     autoRunning: (count: number) => `网关已恢复，正在自动续接 ${count} 条中断会话。`,
     autoFallback: "主网关不可用，备用供应商可用；续接会按现有故障接续顺序切换。",
     autoReady: (count: number) =>
       `网关已就绪；仍有 ${count} 条中断会话等待下一次自动尝试或手动恢复。`,
-    autoExhausted: (count: number) => `${count} 条会话已自动尝试 3 次，仍保留在队列中。`,
+    autoExhausted: (count: number) =>
+      `${count} 条会话已连续自动续接 3 次（或历史无法解密），仍保留在队列中，可手动恢复。`,
     autoUnsupported: "当前 Host 不支持自动续接所需的健康检查或续接接口，只能手动恢复。",
     autoResumeFailed: "自动续接失败",
     resumeWithModel: "以某模型 ID 继续",
@@ -74,7 +75,7 @@ const messages = {
     resumeAllHint: "Resume all interrupted conversations listed on this connection, one by one.",
     autoResume: "Resume after gateway recovers",
     autoResumeHint:
-      "While the interruption queue is non-empty, probe the gateway /ready endpoint (falling back to /health); resume queued chats one by one after recovery. Cancelled chats are never resumed automatically, and each turn is tried at most 3 times.",
+      "While the interruption queue is non-empty, probe the gateway /ready endpoint (falling back to /health); resume queued chats one by one after recovery. Cancelled chats are never resumed automatically; a chat gets at most 3 consecutive automatic resumes, and turns whose history cannot be decrypted keep only the manual entry.",
     autoWaiting: (count: number) =>
       `Gateway not ready; ${count} interrupted chat${count === 1 ? "" : "s"} will resume after recovery.`,
     autoRunning: (count: number) =>
@@ -84,7 +85,7 @@ const messages = {
     autoReady: (count: number) =>
       `Gateway ready; ${count} interrupted chat${count === 1 ? "" : "s"} can be retried automatically or manually.`,
     autoExhausted: (count: number) =>
-      `${count} chat${count === 1 ? "" : "s"} exhausted 3 automatic attempts and remain queued.`,
+      `${count} chat${count === 1 ? "" : "s"} used 3 consecutive automatic resumes (or hit undecryptable history) and remain queued for manual recovery.`,
     autoUnsupported:
       "This Host lacks the health check or continuation interface needed for automatic resume; use manual resume.",
     autoResumeFailed: "Automatic resume failed",

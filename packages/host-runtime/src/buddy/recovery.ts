@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { isUndecryptableHistoryError } from "@codexhost/shared-contracts";
 
 interface RecoveryState {
   model: string;
@@ -102,6 +103,18 @@ export class AutomaticRecovery {
       return;
     }
     if (state.contextOnly) {
+      this.cancel(threadId);
+      return;
+    }
+    // 服务端解不开历史里的加密推理/工具输出时，重放同一份历史只会再次失败；
+    // 换模也一样，因为负载仍是那段历史。交给用户先用原生压缩或新会话处理。
+    if (isUndecryptableHistoryError(error)) {
+      this.options.report(
+        threadId,
+        "历史里的加密推理或工具输出无法解密，已停止自动续接；请先用原生压缩或新建会话，Host 不改写历史。",
+        state.model,
+        true,
+      );
       this.cancel(threadId);
       return;
     }

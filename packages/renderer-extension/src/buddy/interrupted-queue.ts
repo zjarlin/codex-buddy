@@ -1,8 +1,13 @@
-import type { BuddyInterrupted } from "@codexhost/shared-contracts";
+import { isUndecryptableHistoryError, type BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient, RendererThreadTurnState } from "../renderer-model-client.js";
 import { assertNativeCodexThread, isMissingNativeThreadError } from "../renderer-native-thread.js";
 
 export const INTERRUPTED_QUEUE_STORAGE_KEY = "codexhost.interrupted-queue.v1";
+/**
+ * 同一会话连续自动续接的上限。续接提交本身会创建新回合；若按回合计数，
+ * 每次失败的新回合都会拿到全新预算，确定性失败就会无限自我续接。
+ * 因此预算跟着会话累积，只有回合正常完成才清零。
+ */
 export const AUTO_RESUME_MAX_ATTEMPTS = 3;
 /** 后台发现全量中断的最短间隔；手动补录不受此限制。 */
 export const INTERRUPTED_DISCOVERY_INTERVAL_MS = 120_000;
@@ -32,8 +37,10 @@ export interface InterruptedQueueEntry {
   turnId: string;
   title: string;
   status: Status;
-  /** 自动续接已提交的次数；手动恢复不增加。达到上限后只保留手动入口。 */
-  autoResumeAttempts?: number;
+  /** 连续自动续接已提交的次数；手动恢复不增加。达到上限后只保留手动入口。 */
+  autoResumeAttempts?: number | undefined;
+  /** 确定性失败：自动续接不再尝试该回合，只保留手动入口。显式 `undefined` 表示解除。 */
+  autoResumeBlocked?: "undecryptable-history" | undefined;
 }
 type SettledStatus = "active" | "completed" | "archived" | "vanished";
 interface QueueRecord extends Omit<InterruptedQueueEntry, "status"> {
@@ -113,6 +120,10 @@ export function createInterruptedQueue(options: {
               entry.autoResumeAttempts >= 0
                 ? Math.floor(entry.autoResumeAttempts)
                 : undefined,
+            autoResumeBlocked:
+              entry.autoResumeBlocked === "undecryptable-history"
+                ? "undecryptable-history"
+                : undefined,
             previousTurnIds: Array.isArray(entry.previousTurnIds)
               ? entry.previousTurnIds
                   .filter((id): id is string => typeof id === "string")
@@ -134,6 +145,16 @@ export function createInterruptedQueue(options: {
     if (previous && previous.turnId !== entry.turnId) previousTurnIds.add(previous.turnId);
     const next = {
       ...entry,
+      // 续接会创建新回合；预算必须跟着会话走，否则每个新回合都会拿到全新额度。
+      // 只有回合正常完成（`put` 显式传 0）才清零。
+      autoResumeAttempts: entry.autoResumeAttempts ?? previous?.autoResumeAttempts,
+      // 阻断只针对具体回合；换了回合就不再沿用，调用方显式给出（含 `undefined`）时以调用方为准。
+      autoResumeBlocked:
+        "autoResumeBlocked" in entry
+          ? entry.autoResumeBlocked
+          : previous !== undefined && previous.turnId === entry.turnId
+            ? previous.autoResumeBlocked
+            : undefined,
       previousTurnIds: [...previousTurnIds].slice(-64),
       updatedAt: Math.max(Date.now(), (entries.get(key)?.updatedAt ?? 0) + 1),
     };
@@ -155,13 +176,30 @@ export function createInterruptedQueue(options: {
     emit();
     return next;
   }
+  // 预算与阻断都不按时间过期：确定性失败不会因为等待而变成可重放的历史。
+  function exhausted(entry: InterruptedQueueEntry | QueueRecord): boolean {
+    return (
+      entry.autoResumeBlocked !== undefined ||
+      (entry.autoResumeAttempts ?? 0) >= AUTO_RESUME_MAX_ATTEMPTS
+    );
+  }
   const same = (entry: InterruptedQueueEntry | QueueRecord) => {
     readStorage();
     const current = entries.get(keyFor(entry.hostId, entry.threadId));
     return current?.turnId === entry.turnId && interrupted(current.status);
   };
+  // 离开队列的记录只改终态：调用方手里的条目可能是提交前的快照，
+  // 把它的预算写回去会覆盖本轮已经累加的次数，因此这里只传身份与状态，
+  // 由 `put` 从当前记录继承预算，交给下一回合结束或用户新发回合清空。
   const remove = (entry: InterruptedQueueEntry | QueueRecord, status: SettledStatus) => {
-    if (same(entry)) put({ ...entry, status });
+    if (!same(entry)) return;
+    put({
+      hostId: entry.hostId,
+      threadId: entry.threadId,
+      turnId: entry.turnId,
+      title: entry.title,
+      status,
+    });
   };
   // 会话已被删除或 rollout 丢失时无法再恢复或归档；保留墓碑，避免迟到通知重新入队。
   // 用户主动操作时由面板展示清理结果，后台核对时在这里留下原因。
@@ -234,7 +272,15 @@ export function createInterruptedQueue(options: {
       }
       if (!state.turnId) return;
       // 同一回合已有记录：原生 completed 不代表已经交付，保留原有的中断判断。
-      if (previous && interrupted(previous.status) && previous.turnId === state.turnId) return;
+      if (previous && interrupted(previous.status) && previous.turnId === state.turnId) {
+        // 升级前入队的记录可能还没标记阻断；补上后自动续接不会再重放这段历史。
+        if (
+          previous.autoResumeBlocked === undefined &&
+          isUndecryptableHistoryError(state.turnError)
+        )
+          put({ ...previous, autoResumeBlocked: "undecryptable-history" });
+        return;
+      }
       // 会话已经进入新回合，旧回合的中断记录不再可恢复。
       const stale = previous && interrupted(previous.status) ? previous : null;
       const dropStale = () => {
@@ -311,6 +357,10 @@ export function createInterruptedQueue(options: {
         turnId: state.turnId,
         title: (text(thread.name) || text(thread.preview) || threadId).slice(0, 160),
         status,
+        // 打开会话时补录的条目同样要记住“重放不会成功”，否则自动续接会再试一轮。
+        ...(isUndecryptableHistoryError(state.turnError)
+          ? { autoResumeBlocked: "undecryptable-history" as const }
+          : {}),
       });
     } catch {
       // 浏览会话时的读取失败不写入队列；连接或会话稍后可用时再重试。
@@ -421,6 +471,8 @@ export function createInterruptedQueue(options: {
     const base = { hostId, threadId, turnId, title: previous?.title || threadId };
     if (event.method === "turn/started") {
       if (previous?.turnId === turnId) return;
+      // 续接提交与用户新发消息都会产生新回合，队列无法区分来源；预算因此继续累计，
+      // 只有回合正常完成才清零。上一回合的阻断换成新回合后失效（用户可能已压缩历史）。
       put({ ...base, status: "active" });
     } else if (event.method === "turn/completed") {
       // 新回合开始后的旧终态，以及已经处理的同回合通知，都不能重新入队。
@@ -432,7 +484,21 @@ export function createInterruptedQueue(options: {
         return;
       if (!interrupted(turn.status) && turn.status !== "completed" && turn.status !== "succeeded")
         return;
-      const next = put({ ...base, status: interrupted(turn.status) ? turn.status : "completed" });
+      // 正常结束说明历史已可用，清空预算与阻断；失败回合若无法解密，则交给手动入口。
+      const next = interrupted(turn.status)
+        ? put({
+            ...base,
+            status: turn.status,
+            ...(isUndecryptableHistoryError(turn.error)
+              ? { autoResumeBlocked: "undecryptable-history" as const }
+              : {}),
+          })
+        : put({
+            ...base,
+            status: "completed",
+            autoResumeAttempts: 0,
+            autoResumeBlocked: undefined,
+          });
       if (interrupted(next.status)) void enrich(next, manager);
     }
   }
@@ -512,8 +578,9 @@ export function createInterruptedQueue(options: {
       const current = entries.get(key);
       if (!current || current.turnId !== entry.turnId || !interrupted(current.status))
         throw new Error("队列中的会话状态已改变。");
-      if ((current.autoResumeAttempts ?? 0) >= AUTO_RESUME_MAX_ATTEMPTS)
-        throw new Error("自动续接次数已达上限，请手动恢复。");
+      if (current.autoResumeBlocked !== undefined)
+        throw new Error("历史无法解密，自动续接已停止；请先压缩历史或新建会话后手动继续。");
+      if (exhausted(current)) throw new Error("自动续接次数已达上限，请手动恢复。");
     }
     if (pending.has(key)) throw new Error("该会话正在处理中，请勿重复操作。");
     const client = options.getClient(entry.hostId);
@@ -561,6 +628,17 @@ export function createInterruptedQueue(options: {
         remove(entry, "completed");
         throw new Error("会话已运行或最新回合已改变，已移出中断队列。");
       }
+      // 补录的条目可能没有错误文本，提交前再读一次这个回合的失败原因：
+      // 同一段历史重放不会变得可解密，自动入口直接停止，不再消耗一次请求。
+      if (source === "auto" && isUndecryptableHistoryError(state.turnError)) {
+        readStorage();
+        const current = entries.get(key);
+        if (current && current.turnId === entry.turnId && interrupted(current.status))
+          put({ ...current, autoResumeBlocked: "undecryptable-history" });
+        throw new Error("历史无法解密，自动续接已停止；请先压缩历史或新建会话后手动继续。");
+      }
+      // 先记账再提交：提交产生的新回合若再失败，不会重新拿满自动额度。
+      // 手动恢复不消耗预算，也不解除阻断；阻断只绑在这一回合，新回合开始时自然失效。
       if (source === "auto" && action === "resume") {
         readStorage();
         const current = entries.get(key);
@@ -578,11 +656,24 @@ export function createInterruptedQueue(options: {
           ).then(() => undefined),
         );
       } else {
-        await submit(
-          model
-            ? (client.buddyContinue?.(entry.threadId, entry.turnId, model) ?? Promise.resolve())
-            : (client.buddyContinue?.(entry.threadId, entry.turnId) ?? Promise.resolve()),
-        );
+        try {
+          await submit(
+            model
+              ? (client.buddyContinue?.(entry.threadId, entry.turnId, model) ?? Promise.resolve())
+              : (client.buddyContinue?.(entry.threadId, entry.turnId) ?? Promise.resolve()),
+          );
+        } catch (failure) {
+          // 提交被服务端明确拒绝为“历史无法解密”时记在这个回合上：自动入口不再重放，
+          // 手动入口仍然保留，由用户决定先压缩历史还是新建会话。
+          if (isUndecryptableHistoryError(message(failure))) {
+            readStorage();
+            const current = entries.get(key);
+            if (current && current.turnId === entry.turnId && interrupted(current.status))
+              put({ ...current, autoResumeBlocked: "undecryptable-history" });
+            throw new Error("历史无法解密，续接会重复同一失败；请先压缩历史或新建会话后继续。");
+          }
+          throw failure;
+        }
       }
       if (!disposed && options.getClient(entry.hostId) === client)
         remove(entry, action === "archive" ? "archived" : "completed");

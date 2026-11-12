@@ -116,6 +116,60 @@ describe("automatic interrupted resume", () => {
     f.auto.dispose();
   });
 
+  it("keeps the exhausted budget across the turns created by continuation", async () => {
+    vi.useFakeTimers();
+    const candidates = [entry("limited", { autoResumeAttempts: AUTO_RESUME_MAX_ATTEMPTS - 1 })];
+    const f = fixture(candidates);
+    f.probe.mockImplementation(async () => health(true));
+    f.resume.mockImplementation(async () => {
+      // 续接提交会换一个 turnId，并在新一轮里再次失败；预算继续累计。
+      candidates.splice(
+        0,
+        1,
+        entry("limited", {
+          turnId: "continued-turn",
+          autoResumeAttempts: AUTO_RESUME_MAX_ATTEMPTS,
+        }),
+      );
+    });
+
+    f.auto.update();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.resume).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(AUTO_RESUME_PROBE_INTERVAL_MS);
+    expect(f.resume).toHaveBeenCalledTimes(1);
+    expect(f.states.at(-1)).toMatchObject({ pending: 0, exhausted: 1 });
+    f.auto.dispose();
+  });
+
+  it("does not renew the budget just because time passed", async () => {
+    vi.useFakeTimers();
+    const candidates = [entry("limited", { autoResumeAttempts: AUTO_RESUME_MAX_ATTEMPTS })];
+    const f = fixture(candidates);
+    f.probe.mockImplementation(async () => health(true));
+
+    f.auto.update();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
+    f.auto.update();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.resume).not.toHaveBeenCalled();
+    f.auto.dispose();
+  });
+
+  it("never auto-resumes a turn whose history cannot be decrypted", async () => {
+    vi.useFakeTimers();
+    const f = fixture([entry("broken", { autoResumeBlocked: "undecryptable-history" })]);
+    f.probe.mockImplementation(async () => health(true));
+
+    f.auto.update();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.probe).not.toHaveBeenCalled();
+    expect(f.resume).not.toHaveBeenCalled();
+    expect(f.states.at(-1)).toMatchObject({ pending: 0, exhausted: 1 });
+    f.auto.dispose();
+  });
+
   it("stops polling when the Host reports no health support", async () => {
     vi.useFakeTimers();
     const f = fixture([entry("one")]);

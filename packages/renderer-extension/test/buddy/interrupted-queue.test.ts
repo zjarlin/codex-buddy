@@ -82,10 +82,14 @@ function fixture(storage = memoryStorage()) {
     turnId = `${id}-turn`,
     status = "failed",
     host = "local",
+    error?: unknown,
   ) => {
     const target = managers.get(host);
     if (!target) throw new Error("Missing manager");
-    target.emit(method, { threadId: id, turn: { id: turnId, status } });
+    target.emit(method, {
+      threadId: id,
+      turn: { id: turnId, status, ...(error ? { error } : {}) },
+    });
   };
   const first = (host = "local") => {
     const entry = queue.list(host)[0];
@@ -729,7 +733,167 @@ describe("interrupted event queue", () => {
     expect(f.queue.list("local")).toEqual([]);
   });
 
-  it("counts automatic resume attempts per turn and keeps manual recovery available", async () => {
+  it("keeps the automatic budget across the turns created by continuation", async () => {
+    const f = fixture();
+    let latest = "one-turn";
+    f.client.readThreadTurnState.mockImplementation(async () => ({
+      running: false,
+      status: "failed" as const,
+      turnId: latest,
+      turnStatus: "failed",
+    }));
+    f.emit("turn/completed", "one", latest, "failed");
+    await settle();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await f.queue.resume(f.first(), undefined, { auto: true });
+      latest = `continued-${attempt}`;
+      // 续接提交本身会创建新回合；预算必须跟着会话继续累计。
+      f.emit("turn/started", "one", latest);
+      f.emit("turn/completed", "one", latest, "failed");
+      await settle();
+      expect(f.first()).toMatchObject({ turnId: latest, autoResumeAttempts: attempt });
+    }
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("上限");
+    // 手动恢复不计入自动预算。
+    await f.queue.resume(f.first());
+    expect(f.client.buddyContinue).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps the automatic budget exhausted until a turn completes normally", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    let latest = "one-turn";
+    let turnStatus: "failed" | "completed" = "failed";
+    f.client.readThreadTurnState.mockImplementation(async () => ({
+      running: false,
+      // 原生状态按“仍是中断”读取；正常完成由 turnStatus 表达，预算只跟着它清零。
+      status: "failed",
+      turnId: latest,
+      turnStatus,
+    }));
+    f.emit("turn/completed", "one", latest, "failed");
+    await settle();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await f.queue.resume(f.first(), undefined, { auto: true });
+      latest = `continued-${attempt}`;
+      f.emit("turn/started", "one", latest);
+      f.emit("turn/completed", "one", latest, "failed");
+      await settle();
+    }
+    // 等待不会让确定性失败变成可重放的历史。
+    vi.advanceTimersByTime(24 * 60 * 60_000);
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("上限");
+
+    // 回合正常完成才重新开始计数：之后的另一次中断仍能得到自动尝试。
+    latest = "finished-turn";
+    turnStatus = "completed";
+    f.emit("turn/started", "one", latest);
+    f.emit("turn/completed", "one", latest, "completed");
+    await settle();
+    expect(f.queue.list("local")).toEqual([]);
+    latest = "later-turn";
+    turnStatus = "failed";
+    f.emit("turn/completed", "one", latest, "failed");
+    await settle();
+    expect(f.first().turnId).toBe(latest);
+    expect(f.first().autoResumeAttempts ?? 0).toBe(0);
+  });
+
+  it("marks an already queued turn when reconcile reads an undecryptable history error", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    expect(f.first().autoResumeBlocked).toBeUndefined();
+    // 升级前入队的记录没有错误文本；打开会话核对时用原生错误补上阻断。
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "one-turn",
+      turnStatus: "failed",
+      turnError: "upstream could not be decrypted or parsed",
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+  });
+
+  it("stops automatic resume when the failed turn's history cannot be decrypted", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed", "local", {
+      message:
+        "stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.",
+    });
+    await settle();
+    expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    // 时间不会解除阻断：同一段历史重放多少次都还是同一个错误。
+    vi.advanceTimersByTime(24 * 60 * 60_000);
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    // 手动入口不受阻断限制：用户可能已经压缩过历史，是否可读由这次请求自己回答。
+    f.client.buddyContinue.mockRejectedValueOnce(new Error("gateway down"));
+    await expect(f.queue.resume(f.first())).rejects.toThrow("gateway down");
+    expect(f.client.buddyContinue).toHaveBeenCalledTimes(1);
+    expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
+  });
+
+  it("blocks automatic resume when the freshly read turn says its history cannot be decrypted", async () => {
+    const f = fixture();
+    // 补录的条目可能只有回合 ID：提交前读到的错误文本同样要能阻止自动重放。
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "one-turn",
+      turnStatus: "failed",
+      turnError: "encrypted reasoning content belongs to another upstream account",
+    });
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    expect(f.first().autoResumeBlocked).toBeUndefined();
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+    expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
+    // 手动入口不受影响，也不解除阻断：用户可能先压缩历史，是否可读由这次请求回答。
+    f.client.buddyContinue.mockRejectedValueOnce(new Error("gateway down"));
+    await expect(f.queue.resume(f.first())).rejects.toThrow("gateway down");
+    expect(f.client.buddyContinue).toHaveBeenCalledTimes(1);
+    expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
+  });
+
+  it("keeps an undecryptable turn queued even when native marks it completed", async () => {
+    const f = fixture();
+    // 原生把带解密错误的回合标成 completed 时，不能当作“历史已可用”清空预算。
+    f.emit("turn/completed", "one", "one-turn", "completed", "local", {
+      message: "encrypted reasoning content belongs to another upstream account",
+    });
+    await settle();
+    expect(f.first()).toMatchObject({
+      turnId: "one-turn",
+      status: "failed",
+      autoResumeBlocked: "undecryptable-history",
+    });
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+  });
+
+  it("records undecryptable history reported by the continuation request itself", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    f.client.buddyContinue.mockRejectedValueOnce(
+      new Error(
+        "stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.",
+      ),
+    );
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
+    // 阻断后的第二次自动续接不再发出请求。
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    expect(f.client.buddyContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts automatic resume attempts and keeps manual recovery available", async () => {
     const f = fixture();
     f.emit("turn/completed", "one", "one-turn", "failed");
     await settle();

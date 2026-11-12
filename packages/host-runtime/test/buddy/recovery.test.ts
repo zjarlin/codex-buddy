@@ -210,6 +210,32 @@ describe("automatic recovery", () => {
   it.each([
     {
       message:
+        "stream disconnected before completion: Encrypted function output content could not be decrypted or decoded.",
+      codexErrorInfo: "other",
+    },
+    { message: "encrypted reasoning content belongs to another upstream account" },
+    { message: "upstream could not be decrypted or parsed" },
+  ])("stops retrying history that cannot be decrypted: %j", async (error) => {
+    const f = fixture();
+    f.service.started("thread", "turn");
+    f.service.completed("thread", "turn", "failed", error);
+    await flush();
+    expect(f.wait).not.toHaveBeenCalled();
+    expect(f.resume).not.toHaveBeenCalled();
+    expect(f.nextModel).not.toHaveBeenCalled();
+    expect(f.report).toHaveBeenLastCalledWith(
+      "thread",
+      expect.stringContaining("无法解密"),
+      "cheap-a",
+      true,
+    );
+    expect(f.service.pending).toBe(false);
+    expect(f.service.started("thread", "next")).toBe(false);
+  });
+
+  it.each([
+    {
+      message:
         "stream disconnected before completion: [StringParam] [input[9].name] [invalid_string] Invalid 'input[9].name': string does not match pattern. Expected a string that matches the pattern '^[a-zA-Z0-9_-]+$'.",
       codexErrorInfo: "other",
     },

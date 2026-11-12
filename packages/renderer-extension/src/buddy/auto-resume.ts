@@ -48,17 +48,23 @@ export function createAutoResume(options: AutoResumeOptions) {
   let lastSignature = "";
   let retry = false;
 
+  // 续接提交本身会创建新回合；预算跟着会话累计，不进队列的候选也不能绕过上限。
   const eligible = (): InterruptedQueueEntry[] =>
     options
       .candidates()
       .filter(
-        (entry) => entry.status !== "cancelled" && (entry.autoResumeAttempts ?? 0) < maxAttempts,
+        (entry) =>
+          entry.status !== "cancelled" &&
+          entry.autoResumeBlocked === undefined &&
+          (entry.autoResumeAttempts ?? 0) < maxAttempts,
       );
   const exhausted = (): number =>
     options
       .candidates()
       .filter(
-        (entry) => entry.status !== "cancelled" && (entry.autoResumeAttempts ?? 0) >= maxAttempts,
+        (entry) =>
+          entry.status !== "cancelled" &&
+          (entry.autoResumeBlocked !== undefined || (entry.autoResumeAttempts ?? 0) >= maxAttempts),
       ).length;
   const snapshot = (): AutoResumeState => ({
     enabled: supported && options.enabled(),

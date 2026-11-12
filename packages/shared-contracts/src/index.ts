@@ -276,6 +276,7 @@ export type {
 export * from "./harness-launch-settings.js";
 export * from "./harness-installation.js";
 export { codexhostErrorSchema } from "./errors.js";
+export { isUndecryptableHistoryError } from "./continuation-failure.js";
 export {
   codexAccountUsageParamsSchema,
   codexAccountUsageResultSchema,

@@ -465,6 +465,8 @@ export interface RendererThreadTurnState {
   turnId: string | null;
   /** 最新回合的原始状态；用于区分 unknown 与明确 completed。 */
   turnStatus?: string | null;
+  /** 最新回合的失败原因；中断队列用它识别重放也不会成功的历史。 */
+  turnError?: string;
 }
 
 type NativeGitWorkflowState = {
@@ -1547,11 +1549,15 @@ export function createRendererModelClient(
       if (nativeThreadStatusType(thread) === "active") {
         return { running: true, status: null, turnId: null, turnStatus: null };
       }
+      const error = isRecord(turn?.error) ? turn.error : null;
+      const turnError = typeof error?.message === "string" ? error.message : "";
       return {
         running: false,
         status: nativeThreadTurnStatus(thread, turn),
         turnId: typeof turn?.id === "string" ? turn.id : null,
         turnStatus: typeof turn?.status === "string" ? turn.status : null,
+        // 只有带失败原因的回合才多这个字段，健康回合的读取结果保持原样。
+        ...(turnError ? { turnError } : {}),
       };
     },
     buddyContinue: async (threadId: string, turnId: string, model?: string) => {

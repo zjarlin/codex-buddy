@@ -121,6 +121,7 @@ export class BuddyRouter {
           signal,
           model,
           context,
+          automatic: true,
           ...(typeof mode.mode === "string"
             ? {
                 collaborationMode: {

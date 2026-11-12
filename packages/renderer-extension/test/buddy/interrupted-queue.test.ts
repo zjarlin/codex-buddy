@@ -763,12 +763,13 @@ describe("interrupted event queue", () => {
     vi.useFakeTimers();
     const f = fixture();
     let latest = "one-turn";
-    let status: "failed" | "completed" = "failed";
+    let turnStatus: "failed" | "completed" = "failed";
     f.client.readThreadTurnState.mockImplementation(async () => ({
       running: false,
-      status,
+      // 原生状态按“仍是中断”读取；正常完成由 turnStatus 表达，预算只跟着它清零。
+      status: "failed",
       turnId: latest,
-      turnStatus: status,
+      turnStatus,
     }));
     f.emit("turn/completed", "one", latest, "failed");
     await settle();
@@ -785,13 +786,13 @@ describe("interrupted event queue", () => {
 
     // 回合正常完成才重新开始计数：之后的另一次中断仍能得到自动尝试。
     latest = "finished-turn";
-    status = "completed";
+    turnStatus = "completed";
     f.emit("turn/started", "one", latest);
     f.emit("turn/completed", "one", latest, "completed");
     await settle();
     expect(f.queue.list("local")).toEqual([]);
     latest = "later-turn";
-    status = "failed";
+    turnStatus = "failed";
     f.emit("turn/completed", "one", latest, "failed");
     await settle();
     expect(f.first().turnId).toBe(latest);

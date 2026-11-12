@@ -1124,6 +1124,8 @@ export function installRendererBindingProbe(
   const gitCache = new RendererGitCache();
   const gitSidebar = installRendererGitSidebar({
     cache: gitCache,
+    openConflictThread: (threadId, hostId) =>
+      openSidebarThread(hostThreadIdSchema.parse(threadId), { hostId }),
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
     getRemoteProjectsClient: () => {
       const current = activeGitContext();

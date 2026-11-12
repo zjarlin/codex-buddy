@@ -289,6 +289,9 @@ const { outputFiles } = await build({
           }
         });
         const control = installRendererGitSidebar({
+          openConflictThread: async (threadId, hostId) => {
+            calls.push(["open-conflict", threadId, hostId]);
+          },
           getContext: () => ({
             ...activeContext,
             modelCatalog: globalThis.gitSidebarFixture?.modelCatalog,
@@ -1232,6 +1235,83 @@ test("ignores late conflict errors after the selected chat changes", async ({ pa
   await root.screenshot({ path: testInfo.outputPath("new-chat-unaffected.png") });
 });
 
+for (const mode of ["existing-chat", "draft", "linked"] as const) {
+  test(`opens an independent conflict chat from the continue button (${mode})`, async ({
+    page,
+  }) => {
+    await page.route("http://localhost/git-sidebar-test", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><html><body></body></html>",
+      }),
+    );
+    await setup(page);
+    await page.evaluate(
+      ({ mode }) => {
+        const f = Reflect.get(globalThis, "gitSidebarFixture");
+        f.status.operation = "merge";
+        f.status.conflicts = ["src/app.ts"];
+        f.status.submodules = [];
+        f.client.listGitRepositories = async () => ({
+          project: "/repo",
+          repositories: [
+            { path: "/repo", primary: true },
+            { path: "/linked", primary: false },
+          ],
+        });
+        f.client.linkGitRepository = async () => {
+          throw new Error("Unused");
+        };
+        f.client.unlinkGitRepository = async () => {
+          throw new Error("Unused");
+        };
+        f.client.inspectGitStatus = async (input: { repository?: string }) => ({
+          ...structuredClone(f.status),
+          workspace: input.repository ?? "/repo",
+        });
+        f.client.createThread = (cwd: string) => {
+          f.calls.push(["create-conflict", cwd]);
+          return new Promise<string>((resolve) => {
+            f.finishCreation = () => resolve("conflict-chat");
+          });
+        };
+        f.client.sendThreadMessage = async (threadId: string, prompt: string) => {
+          f.calls.push(["ai-conflict", threadId, prompt]);
+          return "conflict-turn";
+        };
+        f.setContext(mode === "draft" ? null : "thread-1", { ...f.client }, "remote-host", "/repo");
+      },
+      { mode },
+    );
+    const root = page.locator("[data-codexhost-git-sidebar]");
+    await root.locator("[data-codexhost-git-sidebar-commits]").click();
+    if (mode === "linked") {
+      await root.getByRole("combobox", { name: "操作仓库" }).selectOption("/linked");
+    }
+    const button = root.locator("[data-codexhost-git-sidebar-merge-continue]");
+    await expect(button).toBeEnabled();
+    await button.click();
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    await expect(root.getByText("正在创建独立的冲突解决会话…", { exact: true })).toBeVisible();
+    await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").finishCreation());
+    await expect(
+      root.getByText("已在独立会话启动 AI 冲突解决，请查看会话中的执行结果。"),
+    ).toBeVisible();
+    const calls = await page.evaluate(() => Reflect.get(globalThis, "gitSidebarFixture").calls);
+    const conflictCalls = calls.filter(([kind]: string[]) => kind.endsWith("conflict"));
+    const cwd = mode === "linked" ? "/linked" : "/repo";
+    expect(conflictCalls).toEqual([
+      ["create-conflict", cwd],
+      ["ai-conflict", "conflict-chat", expect.stringContaining(`"repository":"${cwd}"`)],
+      ["open-conflict", "conflict-chat", "remote-host"],
+    ]);
+    expect(conflictCalls[1][2]).toContain("本次只完成拉取同步和冲突解决，不推送");
+    expect(calls.some(([kind]: string[]) => kind === "mergeContinue")).toBe(false);
+    await expect(button).toBeEnabled();
+  });
+}
+
 test("pulls and syncs from the sidebar and surfaces an in-progress merge", async ({ page }) => {
   await page.route("http://localhost/git-sidebar-test", (route) =>
     route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }),
@@ -1257,7 +1337,9 @@ test("pulls and syncs from the sidebar and surfaces an in-progress merge", async
   const banner = root.locator("[data-codexhost-git-sidebar-conflict]");
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("1 个冲突文件待解决");
-  await expect(root.locator("[data-codexhost-git-sidebar-merge-continue]")).toBeDisabled();
+  await expect(root.locator("[data-codexhost-git-sidebar-merge-continue]")).toBeEnabled();
+  await root.locator("[data-codexhost-git-sidebar-merge-continue]").click();
+  await expect(root.getByRole("status")).toContainText("当前连接不支持创建冲突解决会话");
   await page.evaluate(() => {
     const fixture = Reflect.get(globalThis, "gitSidebarFixture");
     fixture.status.operation = null;

@@ -1,3 +1,4 @@
+import { createWorkspaceThread } from "./renderer-workspace-thread.js";
 import {
   PROVIDER_ROUTING_METHOD,
   providerRoutingParamsSchema,
@@ -704,6 +705,8 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     method: "thread/list" | "thread/turns/list" | "thread/read" | "thread/archive",
     params: unknown,
   ): Promise<unknown>;
+  /** 通过当前 Host 的原生入口创建持久会话，沿用服务端默认模型与权限。 */
+  createThread?(cwd: string): Promise<string>;
   /** Send one user message into an existing Thread and return the new Turn id.
    * Uses the same native `turn/start` path the Composer and turn actions use, so
    * official Threads and Host-projected external Harness Threads share one route. */
@@ -1702,6 +1705,12 @@ export function createRendererModelClient(
       params: unknown,
     ): Promise<unknown> {
       return manager.sendRequest(method, params);
+    },
+    async createThread(cwd: string): Promise<string> {
+      return createWorkspaceThread(
+        (method, params) => manager.sendRequest(method, params, { priority: "interactive" }),
+        cwd,
+      );
     },
     async sendThreadMessage(threadId: string, text: string, model?: string): Promise<string> {
       const response = await manager.sendRequest(

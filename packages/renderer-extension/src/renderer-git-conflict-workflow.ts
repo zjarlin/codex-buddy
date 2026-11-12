@@ -19,9 +19,39 @@ export async function startGitConflictWorkflow(
   pushAfterMerge: boolean,
 ): Promise<string> {
   if (!threadId || !client.sendThreadMessage) {
-    return `同步产生冲突，${status.conflicts.length} 个文件待解决；请在已有聊天中启动 AI 解决并继续。`;
+    return `同步产生冲突，${status.conflicts.length} 个文件待解决；点击“解决并继续”新建 AI 会话。`;
   }
-  const prompt = [
+  await client.sendThreadMessage(threadId, gitConflictPrompt(status, pushAfterMerge));
+  return "同步产生冲突，已在当前聊天启动 AI 解决工作流，请查看回合结果。";
+}
+
+// 显式点击创建独立会话；异步创建期间切换上下文时不发送任务或抢回导航。
+export async function startGitConflictThread(
+  client: Pick<RendererModelClient, "createThread" | "sendThreadMessage">,
+  status: GitWorkspaceStatus,
+  openThread: (threadId: string) => Promise<void>,
+  isCurrent: () => boolean,
+): Promise<string> {
+  if (!client.createThread || !client.sendThreadMessage) {
+    throw new Error("当前连接不支持创建冲突解决会话，请重新连接后重试。");
+  }
+  if (!isCurrent()) throw new Error("仓库或连接已切换，未创建会话。");
+  const threadId = await client.createThread(status.workspace);
+  try {
+    if (!isCurrent()) throw new Error("仓库或连接已切换，未发送解决任务。");
+    await client.sendThreadMessage(threadId, gitConflictPrompt(status, false));
+    if (!isCurrent()) throw new Error("仓库或连接已切换，未自动打开会话。");
+    await openThread(threadId);
+  } catch (error) {
+    throw new Error(
+      `冲突解决会话已创建（${threadId}）：${error instanceof Error ? error.message : String(error)} 请查看该会话。`,
+    );
+  }
+  return "已在独立会话启动 AI 冲突解决，请查看会话中的执行结果。";
+}
+
+function gitConflictPrompt(status: GitWorkspaceStatus, pushAfterMerge: boolean): string {
+  return [
     "执行 Git 冲突解决工作流。拉取同步已经产生真实文件冲突，只处理下面指定的仓库。",
     "先核对实际仓库、当前分支和进行中的合并／变基，读取真实冲突内容，保留双方意图后编辑冲突文件、暂存并完成当前操作。",
     "保留其他未提交、未暂存和未跟踪改动，不创建无关提交，不修改其他仓库，不强制推送、不变基，不改变原生权限、审批或规划模式。",
@@ -38,6 +68,4 @@ export async function startGitConflictWorkflow(
       conflicts: status.conflicts,
     }),
   ].join("\n");
-  await client.sendThreadMessage(threadId, prompt);
-  return "同步产生冲突，已在当前聊天启动 AI 解决工作流，请查看回合结果。";
 }

@@ -250,6 +250,7 @@ describe("Renderer external Thread Fork control", () => {
       timeoutMs: 60_000,
     });
 
+    await settle();
     rows = [local];
     const notify = callbacks[0];
     if (!notify) throw new Error("Sidebar observer was not installed");
@@ -279,6 +280,7 @@ describe("Renderer external Thread Fork control", () => {
       timeoutMs: 60_000,
     });
 
+    await settle();
     abort.abort();
 
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });

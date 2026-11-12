@@ -22,6 +22,7 @@ const { outputFiles } = await build({
     contents: `
       import { PendingConfirmationsModel, PENDING_CONFIRMATIONS_STORAGE_KEY } from "./packages/renderer-extension/src/pending-confirmations-state.ts";
       import { installRendererPendingConfirmations } from "./packages/renderer-extension/src/renderer-pending-confirmations.ts";
+      import { openRendererThread } from "./packages/renderer-extension/src/renderer-fork-control.ts";
       import { installRendererThreadReturn } from "./packages/renderer-extension/src/renderer-thread-return.ts";
       import { createRendererSpeechAnnouncer } from "./packages/renderer-extension/src/renderer-speech.ts";
       import { readRendererSpeechEnabled } from "./packages/renderer-extension/src/renderer-speech-preference.ts";
@@ -37,7 +38,7 @@ const { outputFiles } = await build({
         return audio;
       };
 
-      globalThis.setupPendingConfirmations = (hostId = "local", clear = true) => {
+      globalThis.setupPendingConfirmations = (hostId = "local", clear = true, config = {}) => {
         if (clear) localStorage.clear();
         document.body.innerHTML = \`
           <aside id="app-shell-sidebar">
@@ -74,6 +75,34 @@ const { outputFiles } = await build({
             }
           });
         }
+        const navigation = [];
+        if (config.nativeNavigation) {
+          const page = document.createElement("main");
+          page.setAttribute("data-app-shell-active-page", "true");
+          document.body.append(page);
+          const setRoute = (path) => {
+            const url = new URL(path, location.href);
+            page.__reactFiber$fixture = { memoizedProps: {}, return: {
+              memoizedProps: { value: { navigationType: "PUSH", location: {
+                pathname: url.pathname, search: url.search,
+              } } },
+            } };
+          };
+          setRoute("/local/thread-a?hostId=" + encodeURIComponent(hostId));
+          globalThis.nativeNavigationBus = {
+            handlers: new Map([["navigate-to-route", new Set()]]),
+            dispatchHostMessage(message) {
+              navigation.push(message);
+              if (config.failNavigation) throw Error("Navigation unavailable");
+              if (!config.holdNavigation) setRoute(message.path);
+            },
+          };
+          config.setRoute = setRoute;
+          const preload = document.createElement("link");
+          preload.rel = "modulepreload";
+          preload.href = "/assets/native-navigation.js";
+          document.head.append(preload);
+        }
         const callbacks = [];
         const requests = [];
         const opened = [];
@@ -89,6 +118,7 @@ const { outputFiles } = await build({
           inspectThread: async () => ({ owner: "codex", locked: true }),
           requestThreadProjection: async (method, params) => {
             requests.push([method, params]);
+            if (method === "thread/archive" && config.archiveError) throw Error(config.archiveError);
             return {};
           },
           sendThreadMessage: async (threadId, text, model) => {
@@ -164,6 +194,7 @@ const { outputFiles } = await build({
           getLocale: () => "zh-CN",
           openThread: async (threadId, options) => {
             opened.push([threadId, options.hostId, options.project]);
+            if (config.nativeNavigation) return openRendererThread(threadId, options);
             for (const row of document.querySelectorAll("[data-app-action-sidebar-thread-row]")) {
               row.dataset.appActionSidebarThreadActive = String(row.dataset.appActionSidebarThreadId === options.hostId + ":" + threadId);
             }
@@ -171,6 +202,8 @@ const { outputFiles } = await build({
         });
         globalThis.pendingConfirmations = {
           control,
+          config,
+          navigation,
           threadReturn,
           returnTargets,
           callbacks,
@@ -239,12 +272,17 @@ if (!bundle) throw new Error("Pending confirmation fixture bundle is unavailable
 test.beforeEach(async ({ context }) => {
   await context.route("https://codexhost.test/**", (route) =>
     route.fulfill(
-      route.request().url().endsWith("/fixture.js")
-        ? { contentType: "application/javascript", body: bundle }
-        : {
-            contentType: "text/html",
-            body: '<!doctype html><style>:root{color-scheme:light dark}</style><body></body><script src="/fixture.js"></script>',
-          },
+      route.request().url().endsWith("/assets/native-navigation.js")
+        ? {
+            contentType: "application/javascript",
+            body: "export const bus = globalThis.nativeNavigationBus;",
+          }
+        : route.request().url().endsWith("/fixture.js")
+          ? { contentType: "application/javascript", body: bundle }
+          : {
+              contentType: "text/html",
+              body: '<!doctype html><style>:root{color-scheme:light dark}</style><body></body><script src="/fixture.js"></script>',
+            },
     ),
   );
 });
@@ -440,6 +478,118 @@ test("view action opens the source conversation and keeps the modal non-modal", 
     [["thread-b", "local", "Project"]],
   );
   await expect(page.locator("[data-codexhost-pending-confirmations]")).toBeHidden();
+});
+
+for (const hostId of ["local", "ssh:build host"]) {
+  test(`subagent result without a sidebar row opens on ${hostId} and waits for arrival`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+    });
+    await page.goto("https://codexhost.test/");
+    await page.evaluate((hostId) => {
+      Reflect.get(globalThis, "setupPendingConfirmations")(hostId, true, {
+        nativeNavigation: true,
+        holdNavigation: true,
+      });
+      Reflect.get(globalThis, "pendingConfirmations").complete(
+        "subagent:child",
+        "child-turn",
+        "子会话结果。",
+      );
+    }, hostId);
+    const modal = page.locator("[data-codexhost-pending-confirmations]");
+    await modal.getByRole("button", { name: "查看结果" }).click();
+    const path = `/local/subagent%3Achild?${new URLSearchParams({ hostId })}`;
+    await expect
+      .poll(() => page.evaluate(() => Reflect.get(globalThis, "pendingConfirmations").navigation))
+      .toEqual([{ type: "navigate-to-route", path }]);
+    await expect(modal).toBeVisible();
+    // 同 ID 的其他 Host、后台页都不能确认此次导航成功。
+    await page.evaluate((path) => {
+      const fixture = Reflect.get(globalThis, "pendingConfirmations");
+      fixture.config.setRoute(path);
+      document.querySelector("main")?.setAttribute("data-app-shell-active-page", "false");
+    }, path);
+    await expect(modal).toBeVisible();
+    await page.evaluate(() => {
+      const fixture = Reflect.get(globalThis, "pendingConfirmations");
+      fixture.config.setRoute("/local/subagent%3Achild?hostId=other");
+      document.querySelector("main")?.setAttribute("data-app-shell-active-page", "true");
+    });
+    await expect(modal).toBeVisible();
+    await page.evaluate(
+      (path) => Reflect.get(globalThis, "pendingConfirmations").config.setRoute(path),
+      path,
+    );
+    await expect(modal).toBeHidden();
+    expect(
+      await page.evaluate(
+        () => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].state,
+      ),
+    ).toBe("confirmed");
+  });
+}
+
+test("subagent navigation failure keeps the unread result", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "setupPendingConfirmations")("local", true, {
+      nativeNavigation: true,
+      failNavigation: true,
+    });
+    Reflect.get(globalThis, "pendingConfirmations").complete("child", "turn", "子会话结果。");
+  });
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await modal.getByRole("button", { name: "查看结果" }).click();
+  await expect(modal).toContainText("无法打开");
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].state,
+    ),
+  ).toBe("pending");
+});
+
+test("subagent archive without a sidebar row retains failures and confirms only success", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(document, "hasFocus", { configurable: true, value: () => true });
+  });
+  await page.goto("https://codexhost.test/");
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "setupPendingConfirmations")("ssh:build", true, {
+      archiveError: "Archive unavailable",
+    });
+    Reflect.get(globalThis, "pendingConfirmations").complete("child", "turn", "子会话结果。");
+  });
+  const modal = page.locator("[data-codexhost-pending-confirmations]");
+  await modal.getByRole("button", { name: "归档", exact: true }).click();
+  await expect(modal).toContainText("归档失败");
+  expect(
+    await page.evaluate(
+      () => Reflect.get(globalThis, "pendingConfirmations").state().entries[0].state,
+    ),
+  ).toBe("pending");
+  await page.evaluate(() => {
+    Reflect.get(globalThis, "pendingConfirmations").config.archiveError = "";
+  });
+  await modal.getByRole("button", { name: "归档", exact: true }).click();
+  await expect(modal).toBeHidden();
+  expect(
+    await page.evaluate(() =>
+      Reflect.get(globalThis, "pendingConfirmations").requests.filter(
+        ([method]: [string]) => method === "thread/archive",
+      ),
+    ),
+  ).toEqual([
+    ["thread/archive", { threadId: "child" }],
+    ["thread/archive", { threadId: "child" }],
+  ]);
 });
 
 test("a newer Turn replaces the old pending item and repeated completion stays idempotent", async ({

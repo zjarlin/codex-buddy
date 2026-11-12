@@ -6,6 +6,7 @@ import {
   type HostTurnId,
 } from "@codexhost/shared-contracts";
 
+import { openCodexThreadRoute } from "./codex-thread-navigation.js";
 import { rowProject } from "./project-tabs/native-binding.js";
 import type { RendererModelClient } from "./renderer-model-client.js";
 import {
@@ -177,7 +178,7 @@ function isViewing(
 // 点击原生行后，右侧可能还在读取线程；若立刻确认完成提醒，用户会看到卡片消失而
 // 会话仍在转圈。只在调用方提供当前会话判定时，把「成为当前查看的会话」当作打开
 // 成功；未提供时保持旧语义，避免其他导航入口多出等待。
-export function openRendererThread(
+export async function openRendererThread(
   threadId: HostThreadId,
   options: {
     hostId?: string;
@@ -194,6 +195,17 @@ export function openRendererThread(
     current.click();
     if (!options.activeThread) return Promise.resolve();
     return waitForActiveThread(threadId, options);
+  }
+  // 子会话没有侧栏行；原生路由按 Host 与 Thread 身份直接定位。
+  if (
+    options.hostId &&
+    (await openCodexThreadRoute(threadId, {
+      hostId: options.hostId,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.activeThread ? { activeThread: options.activeThread } : {}),
+    }))
+  ) {
+    return;
   }
   return new Promise((resolve, reject) => {
     let settled = false;

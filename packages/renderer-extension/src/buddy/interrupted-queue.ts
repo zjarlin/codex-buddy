@@ -485,20 +485,24 @@ export function createInterruptedQueue(options: {
       if (!interrupted(turn.status) && turn.status !== "completed" && turn.status !== "succeeded")
         return;
       // 正常结束说明历史已可用，清空预算与阻断；失败回合若无法解密，则交给手动入口。
+      // 原生也可能把带着解密错误的回合标成 completed；这种回合同样不能自动重放，
+      // 按 Host 扫描时的分类记作 failed（不可重试错误即 failed），避免它被重新入队后
+      // 又拿一份全新预算。
+      const undecryptable = isUndecryptableHistoryError(turn.error);
       const next = interrupted(turn.status)
         ? put({
             ...base,
             status: turn.status,
-            ...(isUndecryptableHistoryError(turn.error)
-              ? { autoResumeBlocked: "undecryptable-history" as const }
-              : {}),
+            ...(undecryptable ? { autoResumeBlocked: "undecryptable-history" as const } : {}),
           })
-        : put({
-            ...base,
-            status: "completed",
-            autoResumeAttempts: 0,
-            autoResumeBlocked: undefined,
-          });
+        : undecryptable
+          ? put({ ...base, status: "failed", autoResumeBlocked: "undecryptable-history" })
+          : put({
+              ...base,
+              status: "completed",
+              autoResumeAttempts: 0,
+              autoResumeBlocked: undefined,
+            });
       if (interrupted(next.status)) void enrich(next, manager);
     }
   }

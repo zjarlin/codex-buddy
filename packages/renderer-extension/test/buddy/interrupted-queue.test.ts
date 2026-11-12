@@ -860,6 +860,22 @@ describe("interrupted event queue", () => {
     expect(f.first().autoResumeBlocked).toBe("undecryptable-history");
   });
 
+  it("keeps an undecryptable turn queued even when native marks it completed", async () => {
+    const f = fixture();
+    // 原生把带解密错误的回合标成 completed 时，不能当作“历史已可用”清空预算。
+    f.emit("turn/completed", "one", "one-turn", "completed", "local", {
+      message: "encrypted reasoning content belongs to another upstream account",
+    });
+    await settle();
+    expect(f.first()).toMatchObject({
+      turnId: "one-turn",
+      status: "failed",
+      autoResumeBlocked: "undecryptable-history",
+    });
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("无法解密");
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+  });
+
   it("records undecryptable history reported by the continuation request itself", async () => {
     const f = fixture();
     f.emit("turn/completed", "one", "one-turn", "failed");

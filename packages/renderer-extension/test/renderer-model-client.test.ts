@@ -1321,6 +1321,18 @@ describe("Renderer fixed Model request client", () => {
           status: { type: "idle" },
           turns: [{ id: "turn-3", status: "completed" }],
         },
+      })
+      .mockResolvedValueOnce({
+        thread: {
+          status: { type: "idle" },
+          turns: [
+            {
+              id: "turn-4",
+              status: "failed",
+              error: { message: "stream disconnected: encrypted reasoning cannot be decrypted" },
+            },
+          ],
+        },
       });
     const client = createRendererModelClient([{ sendRequest }]);
     if (!client?.readThreadTurnState) throw new Error("Thread turn reader was not created");
@@ -1348,6 +1360,14 @@ describe("Renderer fixed Model request client", () => {
       status: null,
       turnId: "turn-3",
       turnStatus: "completed",
+    });
+    // 失败原因随回合一起读出；健康回合不带这个字段，避免已有的精确断言与调用方失效。
+    await expect(client.readThreadTurnState("thread-5")).resolves.toEqual({
+      running: false,
+      status: "failed",
+      turnId: "turn-4",
+      turnStatus: "failed",
+      turnError: "stream disconnected: encrypted reasoning cannot be decrypted",
     });
     expect(sendRequest).toHaveBeenNthCalledWith(2, "thread/read", {
       threadId: "thread-2",

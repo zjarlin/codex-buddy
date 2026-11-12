@@ -7,6 +7,7 @@ import {
   sessionDraftCleanup,
   sessionDraftImageCount,
   sessionDraftImages,
+  sessionDraftImagesUploading,
 } from "../src/renderer-session-targets.js";
 
 function emptyDocument(size = 3) {
@@ -139,6 +140,14 @@ describe("session draft image attachments", () => {
     expect(sessionAttachmentSignature(composer)).toEqual(before);
     // 显示地址被替换、又读不到原始字节时，目标收图确认仍按原生图片数进行。
     expect(sessionDraftImageCount(composer)).toBe(1);
+  });
+
+  it("reports a target image still uploading as not ready to send", () => {
+    const draftImage = { ...nativeImage(), uploadStatus: "uploading" };
+    const uploading = imageDraft({}, draftImage);
+    // 云模式下 Desktop 在图片上传完成前禁用发送按钮，只能等它落成临时文件。
+    expect(sessionDraftImagesUploading(uploading.composer)).toBe(true);
+    expect(sessionDraftImagesUploading(imageDraft().composer)).toBe(false);
   });
 
   it("notices a removed attachment in the draft fingerprint", () => {

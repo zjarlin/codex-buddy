@@ -88,6 +88,8 @@ interface DraftAttachmentState {
   images: SessionDraftImage[];
   /** 图片、文件、长文本、应用截图、评论等附件以外的草稿内容项数。 */
   others: number;
+  /** 原生是否仍在把图片落成临时文件/上传；此时发送按钮不可用。 */
+  uploading: boolean;
 }
 
 /** Desktop 26.1029 的附件托盘同时持有图片、文件、长文本、应用截图和评论等独立状态。 */
@@ -156,12 +158,14 @@ function draftAttachmentState(props: Record<string, unknown>): DraftAttachmentSt
   if (!Array.isArray(images)) return null;
   const ids: string[] = [];
   const parsed: SessionDraftImage[] = [];
+  let uploading = false;
   // `src` 被预览流程换成本地资源地址后仍要能识别图片身份，因此 id 与可重建
   // 字节分开判断：读不出字节的图片也占着草稿，只是不能被转移。
   let readable = true;
   for (const value of images) {
     const image = record(value);
     const id = image?.id;
+    if (image?.uploadStatus === "uploading") uploading = true;
     const source = imageSource(image);
     if (typeof id !== "string") {
       readable = false;
@@ -192,7 +196,7 @@ function draftAttachmentState(props: Record<string, unknown>): DraftAttachmentSt
   for (const value of [props.chromeExtensionPageSelection, props.pullRequestMergeConflict]) {
     others += value === null || value === undefined ? 0 : 1;
   }
-  return { ids, images: parsed, others };
+  return { ids, images: parsed, others, uploading };
 }
 
 /**
@@ -247,6 +251,11 @@ export function sessionDraftImages(composer: Element): SessionDraftImage[] | nul
  */
 export function sessionDraftImageCount(composer: Element): number | null {
   return sessionDraftAttachmentState(composer)?.ids.length ?? null;
+}
+
+/** 目标是否仍在上传图片；原生在这期间禁用发送按钮。 */
+export function sessionDraftImagesUploading(composer: Element): boolean {
+  return sessionDraftAttachmentState(composer)?.uploading ?? false;
 }
 
 function decodeSessionImage(image: SessionDraftImage): {

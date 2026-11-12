@@ -13,6 +13,7 @@ import {
   sessionAttachmentSignature,
   sessionDraftCleanup,
   sessionDraftImageCount,
+  sessionDraftImagesUploading,
   sessionDraftText,
   sessionProjects,
 } from "./renderer-session-targets.js";
@@ -171,10 +172,13 @@ export function createSessionRouting<M extends SessionComposer>(options: {
           throw new Error("无法搬移图片附件，来源草稿已保留");
         }
         const started = Date.now();
-        const accepted = () => sessionDraftImageCount(target.composer) === images.length;
+        const accepted = () =>
+          sessionDraftImageCount(target.composer) === images.length &&
+          !sessionDraftImagesUploading(target.composer);
         while (!accepted()) {
-          if (Date.now() - started >= 5_000) {
-            throw new Error("目标会话未接受图片附件，来源草稿已保留");
+          // 云模式下 Desktop 还要把图片上传完才允许发送，给足登记时间。
+          if (Date.now() - started >= 15_000) {
+            throw new Error("目标会话图片附件尚未就绪，来源草稿已保留");
           }
           await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
         }

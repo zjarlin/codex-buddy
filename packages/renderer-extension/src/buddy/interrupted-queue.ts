@@ -39,7 +39,7 @@ export interface InterruptedQueueEntry {
   status: Status;
   /** 连续自动续接已提交的次数；手动恢复不增加。达到上限后只保留手动入口。 */
   autoResumeAttempts?: number | undefined;
-  /** 确定性失败：自动续接不再尝试该回合，只保留手动入口。显式 `undefined` 表示解除。 */
+  /** 确定性失败：自动续接不再尝试该回合，只保留手动入口；回合结束或更换后自动消失。 */
   autoResumeBlocked?: "undecryptable-history" | undefined;
 }
 type SettledStatus = "active" | "completed" | "archived" | "vanished";
@@ -148,13 +148,15 @@ export function createInterruptedQueue(options: {
       // 续接会创建新回合；预算必须跟着会话走，否则每个新回合都会拿到全新额度。
       // 只有回合正常完成（`put` 显式传 0）才清零。
       autoResumeAttempts: entry.autoResumeAttempts ?? previous?.autoResumeAttempts,
-      // 阻断只针对具体回合；换了回合就不再沿用，调用方显式给出（含 `undefined`）时以调用方为准。
+      // 阻断绑在“这个仍然中断的回合”上：换回合、完成、归档或清理后自动消失。
+      // 这样读标题之类的后续写入不会把刚记下的阻断清掉，也不需要调用方显式解除。
       autoResumeBlocked:
-        "autoResumeBlocked" in entry
-          ? entry.autoResumeBlocked
-          : previous !== undefined && previous.turnId === entry.turnId
-            ? previous.autoResumeBlocked
-            : undefined,
+        entry.autoResumeBlocked === "undecryptable-history" ||
+        (interrupted(entry.status) &&
+          previous?.turnId === entry.turnId &&
+          previous.autoResumeBlocked === "undecryptable-history")
+          ? "undecryptable-history"
+          : undefined,
       previousTurnIds: [...previousTurnIds].slice(-64),
       updatedAt: Math.max(Date.now(), (entries.get(key)?.updatedAt ?? 0) + 1),
     };
@@ -497,12 +499,7 @@ export function createInterruptedQueue(options: {
           })
         : undecryptable
           ? put({ ...base, status: "failed", autoResumeBlocked: "undecryptable-history" })
-          : put({
-              ...base,
-              status: "completed",
-              autoResumeAttempts: 0,
-              autoResumeBlocked: undefined,
-            });
+          : put({ ...base, status: "completed", autoResumeAttempts: 0 });
       if (interrupted(next.status)) void enrich(next, manager);
     }
   }

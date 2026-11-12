@@ -673,7 +673,6 @@ for (const config of [{ targetDraft: "Unsent target draft" }, { attachment: true
 
 test("image draft moves to another conversation instead of being refused", async ({ page }) => {
   await setup(page, { existing: true, imageAttachment: true });
-  const editor = page.getByRole("textbox", { name: "Message" });
   await transfer(page).click();
   await page.getByRole("button", { name: /Existing discussion/ }).click();
   await expect.poll(() => sends(page)).toHaveLength(1);

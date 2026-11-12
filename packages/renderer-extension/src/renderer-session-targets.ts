@@ -123,7 +123,7 @@ const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 
 function imageType(dataUrl: string): string {
-  return /^data:([a-z0-9.+-]+);base64,/iu.exec(dataUrl)?.[1].toLowerCase() ?? "";
+  return /^data:([a-z0-9.+-]+);base64,/iu.exec(dataUrl)?.[1]?.toLowerCase() ?? "";
 }
 
 function attachmentRow(composer: Element): Element | null {
@@ -248,7 +248,10 @@ export function sessionDraftImageCount(composer: Element): number | null {
   return sessionDraftAttachmentState(composer)?.ids.length ?? null;
 }
 
-function decodeSessionImage(image: SessionDraftImage): { type: string; bytes: Uint8Array } {
+function decodeSessionImage(image: SessionDraftImage): {
+  type: string;
+  bytes: Uint8Array<ArrayBuffer>;
+} {
   const type = imageType(image.dataUrl);
   const data = /^data:[a-z0-9.+-]+;base64,([A-Za-z0-9+/]*={0,2})$/iu.exec(image.dataUrl)?.[1] ?? "";
   if (!IMAGE_EXTENSIONS[type] || !data || data.length % 4 !== 0) {

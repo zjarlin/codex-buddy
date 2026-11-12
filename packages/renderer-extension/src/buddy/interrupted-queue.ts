@@ -155,7 +155,7 @@ export function createInterruptedQueue(options: {
         (interrupted(entry.status) &&
           previous?.turnId === entry.turnId &&
           previous.autoResumeBlocked === "undecryptable-history")
-          ? "undecryptable-history"
+          ? ("undecryptable-history" as const)
           : undefined,
       previousTurnIds: [...previousTurnIds].slice(-64),
       updatedAt: Math.max(Date.now(), (entries.get(key)?.updatedAt ?? 0) + 1),

@@ -55,21 +55,22 @@ const nativeImage = () => ({ id: "image-1", src: imageDataUrl, filename: "image-
 const transferImage = { id: "image-1", dataUrl: imageDataUrl, filename: "image-1.png" };
 
 function imageDraft(extraProps: Record<string, unknown> = {}, draftImage = nativeImage()) {
+  const fiber: { memoizedProps: Record<string, unknown>; return: null } = {
+    memoizedProps: { imageAttachments: [draftImage], ...extraProps },
+    return: null,
+  };
   const row = {
     childElementCount: 1,
     textContent: "",
     isConnected: true,
-    __reactFiber$test: {
-      memoizedProps: { imageAttachments: [draftImage], ...extraProps },
-      return: null,
-    },
+    __reactFiber$test: fiber,
   };
   // 原生移除入口会同时更新磁贴与 `imageAttachments`。
-  const removeImage = extraProps.onRemoveImage as ((id: string) => void) | undefined;
-  if (removeImage) {
-    extraProps.onRemoveImage = (id: string) => {
+  const removeImage = fiber.memoizedProps.onRemoveImage;
+  if (typeof removeImage === "function") {
+    fiber.memoizedProps.onRemoveImage = (id: string) => {
       removeImage(id);
-      row.__reactFiber$test.memoizedProps.imageAttachments = [];
+      fiber.memoizedProps.imageAttachments = [];
       row.childElementCount = 0;
     };
   }

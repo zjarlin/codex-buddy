@@ -123,7 +123,8 @@ const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 
 function imageType(dataUrl: string): string {
-  return /^data:([a-z0-9.+-]+);base64,/iu.exec(dataUrl)?.[1]?.toLowerCase() ?? "";
+  // MIME 子类型本身含 `/`（`image/png`），字符类必须收录，否则所有图片都会被判为不可读。
+  return /^data:([a-z0-9.+\/-]+);base64,/iu.exec(dataUrl)?.[1]?.toLowerCase() ?? "";
 }
 
 function attachmentRow(composer: Element): Element | null {
@@ -253,7 +254,8 @@ function decodeSessionImage(image: SessionDraftImage): {
   bytes: Uint8Array<ArrayBuffer>;
 } {
   const type = imageType(image.dataUrl);
-  const data = /^data:[a-z0-9.+-]+;base64,([A-Za-z0-9+/]*={0,2})$/iu.exec(image.dataUrl)?.[1] ?? "";
+  const data =
+    /^data:[a-z0-9.+\/-]+;base64,([A-Za-z0-9+/]*={0,2})$/iu.exec(image.dataUrl)?.[1] ?? "";
   if (!IMAGE_EXTENSIONS[type] || !data || data.length % 4 !== 0) {
     throw new Error("来源图片附件无法读取，草稿已保留");
   }
@@ -349,7 +351,7 @@ async function pendingImageCount(
       else setTimeout(resolve, 0);
     });
   }
-  return sessionDraftImageCount(composer) ?? 0;
+  return sessionDraftImageCount(composer) ?? 1;
 }
 
 /**

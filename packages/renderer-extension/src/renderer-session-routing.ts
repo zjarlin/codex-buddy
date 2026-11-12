@@ -9,7 +9,10 @@ import { showSessionPicker } from "./renderer-session-picker.js";
 import {
   assertTransferableSessionDraft,
   hasSessionAttachments,
+  pasteSessionImages,
+  sessionAttachmentSignature,
   sessionDraftCleanup,
+  sessionDraftImageCount,
   sessionDraftText,
   sessionProjects,
 } from "./renderer-session-targets.js";
@@ -75,15 +78,12 @@ export function createSessionRouting<M extends SessionComposer>(options: {
     const cwd = readWorkspace();
     const modelTarget = JSON.stringify(mounted.modelTarget);
     const editor = mounted.composer.querySelector<HTMLElement>(EDITOR_SELECTOR);
+    // 图片磁贴会异步补上预览地址，草稿指纹只比对附件身份，避免自我误判为已修改。
     const draftFingerprint = () =>
       JSON.stringify([
         editor?.innerHTML,
         editor?.tagName === "TEXTAREA" ? (editor as HTMLTextAreaElement).value : null,
-        [
-          ...mounted.composer.querySelectorAll(
-            "[data-composer-attachments-row], [data-appshot-attachment]",
-          ),
-        ].map((element) => element.outerHTML),
+        sessionAttachmentSignature(mounted.composer),
       ]);
     const abort = new AbortController();
     sessionPickerControllers.add(abort);
@@ -107,14 +107,15 @@ export function createSessionRouting<M extends SessionComposer>(options: {
         throw new Error("会话已变化，请重新选择");
       }
       const message = sessionDraftText(editor);
-      if (!allowEmpty && !message.trim()) {
+      if (!allowEmpty && !message.trim() && !hasSessionAttachments(mounted.composer)) {
         throw new Error("请输入消息后再发送");
       }
-      assertTransferableSessionDraft(mounted.composer, editor);
+      const images = assertTransferableSessionDraft(mounted.composer, editor);
       return {
         message,
+        images,
         fingerprint: draftFingerprint(),
-        clearSource: sessionDraftCleanup(editor),
+        clearSource: sessionDraftCleanup(editor, mounted.composer, images),
       };
     };
     const waitForTarget = (matches: (target: M) => boolean): Promise<M> =>
@@ -147,7 +148,7 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       if (!isCurrent() || draftFingerprint() !== draft.fingerprint) {
         throw new Error("会话或草稿已变化，请重新选择");
       }
-      const { message, clearSource } = draft;
+      const { message, images, clearSource } = draft;
       await open();
       const target = await waitForTarget(matches);
       // Desktop 可能复用输入框；切到目标后，不能将目标正文当成来源草稿校验。
@@ -162,7 +163,23 @@ export function createSessionRouting<M extends SessionComposer>(options: {
       ) {
         throw new Error("目标会话已有草稿，未覆盖或发送任何内容");
       }
-      if (!insertNativeTextAtSelection(targetEditor, () => message)) {
+      // 先让目标输入框用自己的粘贴处理登记图片，再写入正文；顺序反过来会让
+      // 正文被后续粘贴事件的选区变化挤走。Desktop 经临时文件异步登记图片，
+      // 目标草稿确认收下全部图片后才写正文，否则保留来源草稿。
+      if (images.length > 0) {
+        if (!pasteSessionImages(targetEditor, images)) {
+          throw new Error("无法搬移图片附件，来源草稿已保留");
+        }
+        const started = Date.now();
+        const accepted = () => sessionDraftImageCount(target.composer) === images.length;
+        while (!accepted()) {
+          if (Date.now() - started >= 5_000) {
+            throw new Error("目标会话未接受图片附件，来源草稿已保留");
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+        }
+      }
+      if (message && !insertNativeTextAtSelection(targetEditor, () => message)) {
         throw new Error("无法填入目标会话，来源草稿已保留");
       }
       // 等待原生编辑器更新发送按钮，再使用目标自身的配置发送。
@@ -185,8 +202,13 @@ export function createSessionRouting<M extends SessionComposer>(options: {
             reject(new Error("连接已变化，请核对目标会话发送结果"));
             return;
           }
-          if (targetEditor.isConnected && !sessionDraftText(targetEditor).trim()) {
-            clearSource();
+          const settled =
+            !sessionDraftText(targetEditor).trim() &&
+            // 只有图片的草稿没有正文可判断，改看附件是否被提交清空。
+            (message.trim().length > 0 || !hasSessionAttachments(target.composer));
+          if (targetEditor.isConnected && settled) {
+            // 目标已发出，来源清理失败不应把成功报成失败；残留草稿可继续编辑。
+            void clearSource().catch(() => undefined);
             resolve();
             return;
           }

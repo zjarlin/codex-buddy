@@ -21,6 +21,7 @@ const { outputFiles } = await build({
       let busyTarget = false;
       globalThis.sends = [];
       globalThis.drafts = {};
+      globalThis.draftImages = {};
       globalThis.rankings = [];
       globalThis.targetReads = 0;
       globalThis.nativeRequests = [];
@@ -62,16 +63,76 @@ const { outputFiles } = await build({
       });
       document.querySelector('#background-prewarm').addEventListener('click', () => publishWorkspace('/workspace/official-app'));
       document.querySelector('#switch-host').addEventListener('click', () => { hostId = 'ssh:another'; });
+      const imageSource = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==';
       function mount(threadId, workspace) {
         cwd = workspace;
         publishWorkspace(config.staleWorkspace ? '/workspace/official-app' : cwd);
         const draftKey = threadId ?? 'draft-' + (++serial);
         const composerThreadId = config.scopedCurrentThreadId && threadId ? hostId + ':' + threadId : threadId;
+        // 附件只挂在来源草稿上；目标会话必须保持空白才允许转移。
+        const sourceDraft = threadId !== targetId;
+        const attachedText = sourceDraft && config.attachment && !config.imageAttachment ? 'attached.txt' : null;
+        const images = sourceDraft && config.imageAttachment
+          ? [{ id: 'image-' + draftKey, src: imageSource, filename: 'image-1.png', previewSrc: imageSource }]
+          : [];
         main.innerHTML = '<div data-codex-composer-root style="position:relative;border:1px solid #555;padding:12px">' +
           (threadId ? '<div data-above-composer-portal data-above-composer-conversation-id="' + composerThreadId + '"></div>' : '') +
           '<div data-codex-composer contenteditable="true" role="textbox" aria-label="Message" style="min-height:60px;white-space:pre-wrap"></div>' +
-          (config.attachment ? '<div data-composer-attachments-row>attached.txt</div>' : '') +
           '<div><button id="location" type="button">Project location</button><button id="send" type="submit">Send</button></div></div>';
+        const root = main.querySelector('[data-codex-composer-root]');
+        const controls = main.querySelector('#location').parentElement;
+        // 原生托盘只在有附件时渲染；这里同样按需插入和移除，避免空托盘被当成草稿。
+        let row = null;
+        const attachmentRow = () => {
+          if (!attachedText && images.length === 0) {
+            row?.remove();
+            row = null;
+            return null;
+          }
+          if (row) return row;
+          row = document.createElement('div');
+          row.setAttribute('data-composer-attachments-row', '');
+          controls.before(row);
+          return row;
+        };
+        const renderAttachments = () => {
+          globalThis.draftImages[draftKey] = images.length;
+          const element = attachmentRow();
+          if (!element) return;
+          if (attachedText) {
+            element.textContent = attachedText;
+            element.__reactFiber$fixture = { memoizedProps: { imageAttachments: [] }, return: null };
+            return;
+          }
+          element.replaceChildren();
+          for (const image of images) {
+            const tile = document.createElement('div');
+            const preview = document.createElement('img');
+            preview.setAttribute('src', image.src);
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.setAttribute('aria-label', 'Remove ' + image.filename);
+            remove.textContent = 'x';
+            remove.addEventListener('click', () => {
+              images.splice(images.indexOf(image), 1);
+              renderAttachments();
+            });
+            tile.append(preview, remove);
+            element.append(tile);
+          }
+          element.__reactFiber$fixture = {
+            memoizedProps: {
+              imageAttachments: images,
+              onRemoveImage: id => {
+                const index = images.findIndex(image => image.id === id);
+                if (index >= 0) images.splice(index, 1);
+                renderAttachments();
+              },
+            },
+            return: null,
+          };
+        };
+        renderAttachments();
         if (!config.missingWorkspace) main.querySelector('#location').__reactFiber$fixture = { memoizedProps: locationProps(), return: null };
         const editor = main.querySelector('[contenteditable]');
         editor.innerText = globalThis.drafts[draftKey] ?? (threadId === targetId ? config.targetDraft ?? '' : '');
@@ -85,9 +146,22 @@ const { outputFiles } = await build({
         ] } }, return: null };
         editor.addEventListener('input', () => { state.doc = makeDoc(editor.innerText); save(state.doc); });
         editor.addEventListener('input', () => { if (!editor.innerText.trim()) editor.innerText = ''; });
+        root.addEventListener('paste', event => {
+          const files = Array.from(event.clipboardData?.files ?? []);
+          if (files.length === 0) return;
+          event.preventDefault();
+          for (const file of files) {
+            images.push({ id: 'image-' + draftKey + '-' + images.length, src: imageSource, filename: file.name, previewSrc: imageSource });
+          }
+          renderAttachments();
+        });
         document.querySelector('#send').addEventListener('click', () => {
-          globalThis.sends.push({ hostId, cwd, threadId, text: editor.innerText, attachment: config.attachment ?? false });
-          if (!config.sendFails) { controller.view.dispatch({ text: '' }); }
+          globalThis.sends.push({ hostId, cwd, threadId, text: editor.innerText, attachment: config.attachment ?? false, attachments: row?.childElementCount ?? 0 });
+          if (config.sendFails) return;
+          controller.view.dispatch({ text: '' });
+          // 原生提交后草稿连同附件一起清空。
+          images.length = 0;
+          renderAttachments();
         });
         editor.addEventListener('keydown', event => {
           if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -321,6 +395,7 @@ for (const existing of [false, true]) {
         threadId: existing ? sourceId : null,
         text: "继续这个任务\n保留第二行",
         attachment: false,
+        attachments: 0,
       },
     ]);
     await page.getByRole("textbox", { name: "Message" }).fill("继续这个任务\n保留第二行");
@@ -470,6 +545,7 @@ for (const existing of [false, true]) {
         threadId: existing ? sourceId : null,
         text: "继续这个任务\n保留第二行 补充内容",
         attachment: false,
+        attachments: 0,
       },
     ]);
   });
@@ -594,6 +670,24 @@ for (const config of [{ targetDraft: "Unsent target draft" }, { attachment: true
     );
   });
 }
+
+test("image draft moves to another conversation instead of being refused", async ({ page }) => {
+  await setup(page, { existing: true, imageAttachment: true });
+  const editor = page.getByRole("textbox", { name: "Message" });
+  await transfer(page).click();
+  await page.getByRole("button", { name: /Existing discussion/ }).click();
+  await expect.poll(() => sends(page)).toHaveLength(1);
+  expect((await sends(page))[0]).toMatchObject({
+    threadId: targetId,
+    cwd: "/workspace/other",
+    text: "继续这个任务\n保留第二行",
+    attachments: 1,
+  });
+  await expect(picker(page)).toHaveCount(0);
+  // 来源会话发出后连图片一起清空，不能留下只有图片的半份草稿。
+  expect(await page.evaluate((id) => Reflect.get(globalThis, "drafts")[id], sourceId)).toBe("");
+  expect(await page.evaluate((id) => Reflect.get(globalThis, "draftImages")[id], sourceId)).toBe(0);
+});
 
 test("a target that starts running after listing cannot receive the draft", async ({ page }) => {
   await setup(page, { existing: true });

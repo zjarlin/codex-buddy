@@ -399,7 +399,11 @@ import {
   type RendererRequestOptions,
 } from "./renderer-request-sender.js";
 import { createNativeContinuation } from "./renderer-native-continuation.js";
-import { verifyNativeCodexThread } from "./renderer-native-thread.js";
+import {
+  isArchivedNativeThread,
+  isSubagentNativeThread,
+  verifyNativeCodexThread,
+} from "./renderer-native-thread.js";
 import {
   MODEL_AVAILABILITY_METHOD,
   modelAvailabilityParamsSchema,
@@ -465,6 +469,10 @@ export interface RendererThreadTurnState {
   turnId: string | null;
   /** 最新回合的原始状态；用于区分 unknown 与明确 completed。 */
   turnStatus?: string | null;
+  /** 原生会话已归档：rollout 已移入 archived_sessions，用户已经处理过。 */
+  archived?: boolean;
+  /** 原生 subagent 会话：由父会话派生，不接受直接输入，不参与会话恢复。 */
+  subagent?: boolean;
 }
 
 type NativeGitWorkflowState = {
@@ -1544,14 +1552,21 @@ export function createRendererModelClient(
     },
     readThreadTurnState: async (threadId: string) => {
       const { thread, turn } = await readNativeThreadTurn(threadId);
+      // 归档与 subagent 都是“不该出现在中断队列”的会话属性，随同一次读取带出，
+      // 免得队列为了这两条信息再发一次 thread/read。
+      const kind = {
+        archived: isArchivedNativeThread(thread),
+        subagent: isSubagentNativeThread(thread),
+      };
       if (nativeThreadStatusType(thread) === "active") {
-        return { running: true, status: null, turnId: null, turnStatus: null };
+        return { running: true, status: null, turnId: null, turnStatus: null, ...kind };
       }
       return {
         running: false,
         status: nativeThreadTurnStatus(thread, turn),
         turnId: typeof turn?.id === "string" ? turn.id : null,
         turnStatus: typeof turn?.status === "string" ? turn.status : null,
+        ...kind,
       };
     },
     buddyContinue: async (threadId: string, turnId: string, model?: string) => {

@@ -6,7 +6,7 @@ import {
 } from "../../src/buddy/continuation.js";
 import type { NativeRequest } from "../../src/buddy/native.js";
 
-function fixture() {
+function fixture(options: { source?: Record<string, unknown> } = {}) {
   let status = "failed";
   let threadStatus: string | null = "idle";
   let active = false;
@@ -20,6 +20,7 @@ function fixture() {
             name: "Network failure",
             status: threadStatus === null ? null : { type: threadStatus },
             turns: [{ id: "turn", status }],
+            ...options.source,
           },
         },
       };
@@ -342,6 +343,23 @@ describe("interrupted conversations", () => {
     });
     await expect(f.service.continue("thread", "turn")).rejects.toThrow("仍在运行");
   });
+  it.each([
+    { threadSource: "subagent" },
+    { threadSource: "subAgentThreadSpawn" },
+    { parentThreadId: "parent" },
+    { agentNickname: "Pascal" },
+    { source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } },
+    { canAcceptDirectInput: false },
+  ])("omits a subagent thread (%o) from discovery", async (source) => {
+    const f = fixture({ source });
+    await expect(f.service.list()).resolves.toEqual({
+      threads: [],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    expect(f.request.mock.calls.some(([method]) => method === "thread/archive")).toBe(false);
+  });
+
   it.each(["completed", "succeeded", "unknown"])("excludes and rejects %s", async (status) => {
     const f = fixture();
     f.status(status);

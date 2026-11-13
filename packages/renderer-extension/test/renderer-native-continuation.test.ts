@@ -19,7 +19,10 @@ function missing(method: string, code = -32600) {
   return Object.assign(new Error(`Invalid request: unknown variant \`${method}\``), { code });
 }
 
-function metadata(id = "thread", activity = "idle") {
+function metadata(
+  id = "thread",
+  activity = "idle",
+): Record<string, unknown> & { status: { type: string } } {
   return {
     id,
     name: `Title ${id}`,
@@ -39,7 +42,7 @@ function recoveryClient(client: ReturnType<typeof createRendererModelClient>) {
 function fixture() {
   const state = {
     thread: metadata(),
-    turn: { id: "failed-turn", status: "failed" },
+    turn: { id: "failed-turn", status: "failed" } as Record<string, unknown>,
   };
   const send = vi.fn(async (method: string, params: unknown): Promise<unknown> => {
     if (method.startsWith("codexhost/")) throw missing(method);
@@ -461,6 +464,44 @@ describe("native recovery on connections without Buddy recovery RPCs", () => {
     } finally {
       clients.dispose();
     }
+  });
+
+  it.each([
+    { threadSource: "subagent" },
+    { parentThreadId: "parent" },
+    { agentNickname: "Pascal" },
+    { canAcceptDirectInput: false },
+    { source: { subAgent: { thread_spawn: { parent_thread_id: "parent" } } } },
+  ])("reports a subagent thread from the turn-state read (%o)", async (marker) => {
+    const f = fixture();
+    f.state.thread = { ...metadata("thread"), ...marker };
+    const client = createRendererModelClient([{ sendRequest: f.send }]);
+    if (!client?.readThreadTurnState) throw new Error("Fixture recovery client unavailable");
+    await expect(client.readThreadTurnState("thread")).resolves.toMatchObject({
+      subagent: true,
+    });
+  });
+
+  it("reports archived and subagent threads from the same turn-state read", async () => {
+    const f = fixture();
+    f.state.thread = {
+      ...metadata("thread"),
+      threadSource: "subagent",
+      parentThreadId: "parent",
+      path: "/home/user/.codex/archived_sessions/rollout-thread.jsonl",
+    };
+    const client = createRendererModelClient([{ sendRequest: f.send }]);
+    if (!client?.readThreadTurnState) throw new Error("Fixture recovery client unavailable");
+    await expect(client.readThreadTurnState("thread")).resolves.toMatchObject({
+      archived: true,
+      subagent: true,
+    });
+    // 普通会话只带否定标记，队列据此保留可恢复的中断。
+    f.state.thread = metadata("thread");
+    await expect(client.readThreadTurnState("thread")).resolves.toMatchObject({
+      archived: false,
+      subagent: false,
+    });
   });
 
   it("treats a non-active thread with a leftover inProgress turn as interrupted", async () => {

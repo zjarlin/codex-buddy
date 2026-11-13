@@ -1,6 +1,12 @@
 import type { BuddyInterrupted } from "@codexhost/shared-contracts";
 import type { RendererModelClient, RendererThreadTurnState } from "../renderer-model-client.js";
-import { assertNativeCodexThread, isMissingNativeThreadError } from "../renderer-native-thread.js";
+import {
+  assertNativeCodexThread,
+  isArchivedNativeThread,
+  isMissingNativeThreadError,
+  isSubagentNativeThread,
+} from "../renderer-native-thread.js";
+import { classifyInterruptedRecords, type SweepVerdict } from "./interrupted-sweep.js";
 
 export const INTERRUPTED_QUEUE_STORAGE_KEY = "codexhost.interrupted-queue.v1";
 export const AUTO_RESUME_MAX_ATTEMPTS = 3;
@@ -19,8 +25,8 @@ export const INTERRUPTED_BACKGROUND_RECONCILE_INTERVAL_MS = 180_000;
 export class InterruptedEntryGoneError extends Error {
   readonly threadId: string;
 
-  constructor(threadId: string) {
-    super("会话已不存在，已移出中断队列。");
+  constructor(threadId: string, reason = "会话已不存在，已移出中断队列。") {
+    super(reason);
     this.name = "InterruptedEntryGoneError";
     this.threadId = threadId;
   }
@@ -60,6 +66,15 @@ const text = (value: unknown) => (typeof value === "string" ? value : "");
 const interrupted = (status: unknown): status is Status =>
   status === "failed" || status === "interrupted" || status === "cancelled";
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+// 这些会话永远不参与恢复：临时会话、标题生成、外部 Harness，以及由父会话派生的 subagent。
+// 它们是会话本身的属性，记进 excluded 后连迟到的终态通知也不会再入队。
+// 归档不同：用户可以取消归档，新的中断仍应入队，因此只落墓碑、不进 excluded。
+const ignoredThread = (thread: Record<string, unknown>) =>
+  thread.ephemeral === true ||
+  thread.threadSource === "thread_title" ||
+  thread.modelProvider === "codexhost" ||
+  thread.cliVersion === "codexhost" ||
+  isSubagentNativeThread(thread);
 
 // 队列消费通知，并由可见窗口低频全量发现补上漏掉终态通知的会话；
 // 打开会话时另有单会话核对。启动和连接重绑本身不扫描历史。
@@ -227,6 +242,16 @@ export function createInterruptedQueue(options: {
       if (disposed || options.getClient(hostId) !== client) return;
       readStorage();
       const previous = entries.get(key);
+      // 归档与 subagent 不是“可恢复的中断”：前者用户已经处理过，后者没有独立会话语义。
+      // 这类会话在侧栏里也没有行，只能在这里按原生状态清掉，否则旧记录会永远留着。
+      if (state.subagent || state.archived) {
+        // subagent 是会话的永久属性，记下来挡住之后所有通知；归档可以撤销，
+        // 只落墓碑，用户取消归档后新的中断仍能重新入队。
+        if (state.subagent) excluded.add(key);
+        if (previous && interrupted(previous.status))
+          remove(previous, state.archived ? "archived" : "completed");
+        return;
+      }
       // 记录过的中断已经继续运行：漏掉 turn/started 时，打开会话按原生状态清掉旧记录。
       if (state.running) {
         if (previous && interrupted(previous.status)) remove(previous, "completed");
@@ -284,13 +309,8 @@ export function createInterruptedQueue(options: {
         dropStale();
         return;
       }
-      if (
-        thread.ephemeral === true ||
-        thread.threadSource === "thread_title" ||
-        thread.modelProvider === "codexhost" ||
-        thread.cliVersion === "codexhost"
-      ) {
-        excluded.add(key);
+      if (ignoredThread(thread) || isArchivedNativeThread(thread)) {
+        if (ignoredThread(thread)) excluded.add(key);
         dropStale();
         return;
       }
@@ -343,14 +363,9 @@ export function createInterruptedQueue(options: {
       )
         return;
       const thread = record(value.thread);
-      if (
-        thread.ephemeral === true ||
-        thread.threadSource === "thread_title" ||
-        thread.modelProvider === "codexhost" ||
-        thread.cliVersion === "codexhost"
-      ) {
-        excluded.add(key);
-        put({ ...entry, status: "completed" });
+      if (ignoredThread(thread) || isArchivedNativeThread(thread)) {
+        if (ignoredThread(thread)) excluded.add(key);
+        put({ ...entry, status: isArchivedNativeThread(thread) ? "archived" : "completed" });
         return;
       }
       assertNativeCodexThread(thread, entry.threadId);
@@ -393,14 +408,10 @@ export function createInterruptedQueue(options: {
     readStorage();
     const previous = entries.get(key);
     if (event.method === "thread/started") {
-      if (
-        thread.ephemeral === true ||
-        thread.threadSource === "thread_title" ||
-        thread.modelProvider === "codexhost" ||
-        thread.cliVersion === "codexhost"
-      ) {
-        excluded.add(key);
-        if (previous) put({ ...previous, status: "completed" });
+      const archived = isArchivedNativeThread(thread);
+      if (ignoredThread(thread) || archived) {
+        if (ignoredThread(thread)) excluded.add(key);
+        if (previous) put({ ...previous, status: archived ? "archived" : "completed" });
       }
       return;
     }
@@ -435,6 +446,95 @@ export function createInterruptedQueue(options: {
       const next = put({ ...base, status: interrupted(turn.status) ? turn.status : "completed" });
       if (interrupted(next.status)) void enrich(next, manager);
     }
+  }
+
+  // 队列里可能残留不可恢复的记录：已归档、subagent，或原生 rollout 已经不存在。
+  // 侧栏只为可见会话挂行，subagent 更是从不渲染，单会话核对永远覆盖不到它们，
+  // 因此按连接主动核对一遍并落成墓碑。
+  const sweeping = new Set<string>();
+  const countInterrupted = (hostId: string) =>
+    [...entries.values()].filter((entry) => entry.hostId === hostId && interrupted(entry.status))
+      .length;
+  async function sweep(
+    hostId: string,
+  ): Promise<{ cleared: number; remaining: number; unchecked: number }> {
+    const client = options.getClient(hostId);
+    const readState = client?.readThreadTurnState;
+    if (disposed || !client || !readState || sweeping.has(hostId))
+      return { cleared: 0, remaining: 0, unchecked: 0 };
+    const readTurn = (threadId: string) => readState.call(client, threadId);
+    sweeping.add(hostId);
+    const stillConnected = () => !disposed && options.getClient(hostId) === client;
+    let cleared = 0;
+    try {
+      readStorage();
+      const candidates = [...entries.values()].filter(
+        (entry) => entry.hostId === hostId && interrupted(entry.status),
+      );
+      const { verdicts, unchecked } = await classifyInterruptedRecords(
+        candidates,
+        // 逐条读取沿用核对时的 20 秒上限：卡住的连接只能保留记录，不能卡住整轮清理。
+        (threadId) => readMetadata(readTurn(threadId)),
+        { shouldContinue: stillConnected },
+      );
+      if (!stillConnected()) {
+        // 连接中途断开时不再写存储，但要如实报告还留了多少条，不能显示成已清空。
+        readStorage();
+        return { cleared, remaining: countInterrupted(hostId), unchecked };
+      }
+      for (const { entry, verdict } of verdicts) {
+        // 读不到的条目保留：超时和断连不等于会话消失。
+        if (verdict === "keep" || verdict === "unreadable") continue;
+        if (verdict === "gone") vanished(entry);
+        else {
+          if (verdict === "subagent") excluded.add(keyFor(entry.hostId, entry.threadId));
+          remove(entry, verdict === "archived" ? "archived" : "completed");
+        }
+        cleared += 1;
+      }
+      readStorage();
+      const remaining = countInterrupted(hostId);
+      if (cleared > 0) errors.delete(hostId);
+      return { cleared, remaining, unchecked };
+    } finally {
+      sweeping.delete(hostId);
+      emit();
+    }
+  }
+
+  // 面板只显示当前连接的记录，但残留的不可恢复记录分散在各个 Host 上；
+  // 用户看不到那些行，也就没有入口清理。这里按已连接 Host 逐个核对，
+  // 串行执行，避免一次点击把所有连接同时打满。
+  async function sweepAll(): Promise<{
+    cleared: number;
+    remaining: number;
+    unchecked: number;
+    offline: number;
+    hosts: number;
+  }> {
+    let cleared = 0;
+    let remaining = 0;
+    let unchecked = 0;
+    let hosts = 0;
+    const checked = new Set<string>();
+    for (const hostId of new Set(options.getHostIds())) {
+      if (disposed) break;
+      if (!options.getClient(hostId)?.readThreadTurnState) continue;
+      const result = await sweep(hostId);
+      cleared += result.cleared;
+      remaining += result.remaining;
+      unchecked += result.unchecked;
+      checked.add(hostId);
+      hosts += 1;
+    }
+    if (disposed) return { cleared, remaining, unchecked, offline: 0, hosts };
+    // 未连接或读不到原生状态的 Host 本轮无法核对，这些记录既没清掉也没有原因。
+    // 单独计数，避免面板把“没检查”说成“队列已空”，也不误导用户反复点击。
+    readStorage();
+    const offline = [...entries.values()].filter(
+      (entry) => interrupted(entry.status) && !checked.has(entry.hostId),
+    ).length;
+    return { cleared, remaining, unchecked, offline, hosts };
   }
 
   function refresh(): void {
@@ -477,23 +577,50 @@ export function createInterruptedQueue(options: {
     if (disposed || options.getClient(hostId) !== client) return 0;
     readStorage();
     const running = new Set(result.runningThreadIds);
-    for (const entry of result.threads) {
+    const candidates = result.threads.filter((entry) => {
       const key = keyFor(hostId, entry.threadId);
-      if (
-        entry.owner !== "codex" ||
-        running.has(entry.threadId) ||
-        excluded.has(key) ||
-        entries.get(key) !== before.get(key)
-      )
-        continue;
       const previous = entries.get(key);
-      if (
-        previous?.status === "archived" ||
-        previous?.status === "vanished" ||
-        previous?.previousTurnIds?.includes(entry.turnId) ||
-        (previous?.turnId === entry.turnId && previous.status === "completed")
-      )
+      return (
+        entry.owner === "codex" &&
+        !running.has(entry.threadId) &&
+        !excluded.has(key) &&
+        entries.get(key) === before.get(key) &&
+        previous?.status !== "archived" &&
+        previous?.status !== "vanished" &&
+        !previous?.previousTurnIds?.includes(entry.turnId) &&
+        !(previous?.turnId === entry.turnId && previous.status === "completed")
+      );
+    });
+    // 旧版 Host 的发现接口仍会把 subagent 和已归档会话报成可恢复条目，
+    // 入队前用原生读取确认一次。读不到的照旧入队（等核对时再判），
+    // 本轮没核对到的留到下一轮，避免一次补录把连接打满。
+    const readState = client.readThreadTurnState?.bind(client);
+    const verdicts = new Map<string, SweepVerdict>();
+    if (readState && candidates.length > 0) {
+      const classified = await classifyInterruptedRecords(
+        candidates.map((entry) => ({ threadId: entry.threadId })),
+        (threadId) => readMetadata(readState(threadId)),
+        { shouldContinue: () => !disposed && options.getClient(hostId) === client },
+      );
+      if (disposed || options.getClient(hostId) !== client) return result.unreadable;
+      for (const { entry, verdict } of classified.verdicts) verdicts.set(entry.threadId, verdict);
+    }
+    for (const entry of candidates) {
+      const verdict = verdicts.get(entry.threadId);
+      // 已入队的不可恢复记录同时落成墓碑：否则它们会一直占着每轮核对的名额。
+      const queued = entries.get(keyFor(hostId, entry.threadId));
+      if (verdict === "subagent") {
+        excluded.add(keyFor(hostId, entry.threadId));
+        if (queued && interrupted(queued.status)) remove(queued, "completed");
         continue;
+      }
+      if (verdict === "archived" || verdict === "gone") {
+        if (queued && interrupted(queued.status))
+          remove(queued, verdict === "archived" ? "archived" : "vanished");
+        continue;
+      }
+      // 本轮没核对到的留到下一轮补录，不猜测它是可恢复会话。
+      if (readState && verdict === undefined) continue;
       put({ ...entry, hostId });
     }
     return result.unreadable;
@@ -552,6 +679,19 @@ export function createInterruptedQueue(options: {
         throw failure;
       }
       ensureCurrent();
+      // 已经归档或属于 subagent 的记录不再可操作：前者的 rollout 已移入 archived_sessions，
+      // 原生归档会返回“no rollout found”，后者根本不该进队列。就地落成墓碑并告知原因。
+      if (state.archived || state.subagent) {
+        remove(entry, state.archived ? "archived" : "completed");
+        // 归档请求本来就是要把这条记录移出队列；已经归档就已是想要的结果，不必报错。
+        if (action === "archive") return;
+        throw new InterruptedEntryGoneError(
+          entry.title || entry.threadId,
+          state.archived
+            ? "会话已归档，已移出中断队列。"
+            : "该记录是 subagent 会话，已移出中断队列。",
+        );
+      }
       // Laya 补录的条目在原生状态下可能仍是 completed（结尾没有 Assistant 交付）；
       // 是否真的完成由 Host 续接时再次核对，这里只排除识别不到状态或已换回合的条目。
       const settled =
@@ -572,11 +712,17 @@ export function createInterruptedQueue(options: {
       const submit = (operation: Promise<void>) =>
         bounded(operation, 60_000, "提交结果未知，请先查看该会话状态后再重试。");
       if (action === "archive") {
-        await submit(
-          Promise.resolve(
-            client.requestThreadProjection("thread/archive", { threadId: entry.threadId }),
-          ).then(() => undefined),
-        );
+        try {
+          await submit(
+            Promise.resolve(
+              client.requestThreadProjection("thread/archive", { threadId: entry.threadId }),
+            ).then(() => undefined),
+          );
+        } catch (failure) {
+          // 队列与原生历史短暂不一致时，重新归档会得到“no rollout found”；
+          // 这说明 rollout 已经不在 sessions 里，归档目标已经达成，按成功处理。
+          if (!isMissingNativeThreadError(failure)) throw failure;
+        }
       } else {
         await submit(
           model
@@ -595,6 +741,8 @@ export function createInterruptedQueue(options: {
   return {
     refresh,
     reconcile,
+    sweep,
+    sweepAll,
     hosts(): string[] {
       return [...new Set(options.getHostIds())];
     },

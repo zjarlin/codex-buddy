@@ -1330,24 +1330,32 @@ describe("Renderer fixed Model request client", () => {
       status: "interrupted",
       turnId: "turn-1",
       turnStatus: "interrupted",
+      archived: false,
+      subagent: false,
     });
     await expect(client.readThreadTurnState("thread-2")).resolves.toEqual({
       running: false,
       status: "interrupted",
       turnId: "turn-2",
       turnStatus: "inProgress",
+      archived: false,
+      subagent: false,
     });
     await expect(client.readThreadTurnState("thread-3")).resolves.toEqual({
       running: true,
       status: null,
       turnId: null,
       turnStatus: null,
+      archived: false,
+      subagent: false,
     });
     await expect(client.readThreadTurnState("thread-4")).resolves.toEqual({
       running: false,
       status: null,
       turnId: "turn-3",
       turnStatus: "completed",
+      archived: false,
+      subagent: false,
     });
     expect(sendRequest).toHaveBeenNthCalledWith(2, "thread/read", {
       threadId: "thread-2",
@@ -1380,6 +1388,8 @@ describe("Renderer fixed Model request client", () => {
       status: "cancelled",
       turnId: "turn-legacy",
       turnStatus: "cancelled",
+      archived: false,
+      subagent: false,
     });
     expect(sendRequest).toHaveBeenLastCalledWith("thread/read", {
       threadId: "thread-legacy",

@@ -1,5 +1,5 @@
 import { nativeContinuationPrompt, type BuddyInterrupted } from "@codexhost/shared-contracts";
-import { assertNativeCodexThread } from "./renderer-native-thread.js";
+import { assertNativeCodexThread, isSubagentNativeThread } from "./renderer-native-thread.js";
 
 type InterruptedThread = BuddyInterrupted["threads"][number];
 interface ThreadTurn {
@@ -67,6 +67,8 @@ export function createNativeContinuation(options: {
     if (value.thread?.modelProvider === "codexhost" || value.thread?.cliVersion === "codexhost") {
       return null;
     }
+    // subagent 由父会话派生，不接受直接输入，不属于可恢复会话。
+    if (isSubagentNativeThread(value.thread)) return null;
     assertNativeCodexThread(value.thread, threadId);
     const activity = record(value.thread.status).type;
     // 只接受官方已知状态；无法识别时不能安全地假定会话已经停下。

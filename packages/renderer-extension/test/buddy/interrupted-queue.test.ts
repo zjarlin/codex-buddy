@@ -8,6 +8,7 @@ import {
   createInterruptedQueue,
   INTERRUPTED_QUEUE_STORAGE_KEY,
 } from "../../src/buddy/interrupted-queue.js";
+import { INTERRUPTED_SWEEP_LIMIT } from "../../src/buddy/interrupted-sweep.js";
 
 function memoryStorage() {
   const values = new Map<string, string>();
@@ -489,6 +490,31 @@ describe("interrupted event queue", () => {
     expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(2);
   });
 
+  it("refuses subagent and archived entries that an older Host still reports", async () => {
+    const f = fixture();
+    f.client.buddyInterrupted.mockResolvedValueOnce({
+      threads: [
+        { threadId: "sub", turnId: "sub-turn", title: "sub", owner: "codex", status: "failed" },
+        { threadId: "archived", turnId: "a-turn", title: "a", owner: "codex", status: "failed" },
+        { threadId: "chat", turnId: "chat-turn", title: "chat", owner: "codex", status: "failed" },
+      ],
+      runningThreadIds: [],
+      unreadable: 0,
+    });
+    f.client.readThreadTurnState.mockImplementation(async (id: string) => {
+      if (id === "sub")
+        return { running: false, status: "failed", turnId: "sub-turn", subagent: true };
+      if (id === "archived")
+        return { running: false, status: "failed", turnId: "a-turn", archived: true };
+      return { running: false, status: "failed", turnId: "chat-turn" };
+    });
+    await f.queue.importHistory("local");
+    expect(f.queue.list("local").map((entry) => entry.threadId)).toEqual(["chat"]);
+    // subagent 是永久属性：后续迟到的终态通知也不能把它带回队列。
+    f.emit("turn/completed", "sub", "sub-turn");
+    expect(f.queue.list("local").map((entry) => entry.threadId)).toEqual(["chat"]);
+  });
+
   it("does not import a stale response over a cross-window archive", async () => {
     const a = fixture();
     const b = fixture(a.storage);
@@ -795,6 +821,135 @@ describe("interrupted event queue", () => {
     expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(3);
     await f.queue.discover("remote");
     expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(4);
+  });
+
+  it("never queues subagent sessions and drops the ones it already recorded", async () => {
+    const f = fixture();
+    // 事件路径：thread/started 带 subagent 标记时立刻排除，之后的终态也不能入队。
+    f.managers
+      .get("local")
+      ?.emit("thread/started", { thread: { id: "sub", threadSource: "subagent" } });
+    f.emit("turn/completed", "sub", "sub-turn");
+    await settle();
+    expect(f.queue.list("local")).toEqual([]);
+    expect(f.projection).not.toHaveBeenCalled();
+
+    // 核对路径：已入队的记录读到 subagent 后落成墓碑。
+    f.emit("turn/completed");
+    await settle();
+    expect(f.queue.list("local")).toHaveLength(1);
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "one-turn",
+      subagent: true,
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.queue.list("local")).toEqual([]);
+    f.emit("turn/completed");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("treats an archived native thread as settled instead of recoverable", async () => {
+    const f = fixture();
+    f.emit("turn/completed");
+    await settle();
+    f.client.readThreadTurnState.mockResolvedValueOnce({
+      running: false,
+      status: "failed",
+      turnId: "one-turn",
+      archived: true,
+    });
+    await f.queue.reconcile("local", "one");
+    expect(f.queue.list("local")).toEqual([]);
+    expect(fixture(f.storage).queue.list("local")).toEqual([]);
+  });
+
+  it("treats re-archiving an already archived record as success", async () => {
+    const f = fixture();
+    f.emit("turn/completed");
+    await settle();
+    const entry = f.first();
+    f.projection.mockImplementation(async (method, params) => {
+      if (method === "thread/archive") throw new Error("no rollout found for thread id one");
+      return metadata((params as { threadId: string }).threadId);
+    });
+    await expect(f.queue.archive(entry)).resolves.toBeUndefined();
+    expect(f.queue.list("local")).toEqual([]);
+    expect(f.queue.isPending(entry)).toBe(false);
+    // 归档成功要落墓碑，迟到通知不能把它重新带回队列。
+    expect(JSON.parse(f.storage.getItem(INTERRUPTED_QUEUE_STORAGE_KEY) ?? "[]")).toEqual([
+      expect.objectContaining({ threadId: "one", status: "archived" }),
+    ]);
+    f.emit("turn/completed");
+    expect(f.queue.list("local")).toEqual([]);
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+  });
+
+  it("sweeps archived, subagent and vanished records for one Host only", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "chat", "chat-turn");
+    f.emit("turn/completed", "sub", "sub-turn");
+    f.emit("turn/completed", "done", "done-turn");
+    f.emit("turn/completed", "gone", "gone-turn");
+    f.emit("turn/completed", "remote", "remote-turn", "failed", "remote");
+    await settle();
+    expect(f.queue.list("local")).toHaveLength(4);
+    f.client.readThreadTurnState.mockImplementation(async (id: string) => {
+      if (id === "sub")
+        return { running: false, status: "failed", turnId: `${id}-turn`, subagent: true };
+      if (id === "done")
+        return { running: false, status: "failed", turnId: `${id}-turn`, archived: true };
+      if (id === "gone") throw new Error("no rollout found for thread id gone");
+      return { running: false, status: "failed", turnId: `${id}-turn` };
+    });
+    await expect(f.queue.sweep("local")).resolves.toEqual({
+      cleared: 3,
+      remaining: 1,
+      unchecked: 0,
+    });
+    expect(f.queue.list("local").map((entry) => entry.threadId)).toEqual(["chat"]);
+    // 其它连接的记录不受影响，也不为它发请求。
+    expect(f.queue.list("remote")).toHaveLength(1);
+    expect(f.client.readThreadTurnState).not.toHaveBeenCalledWith("remote");
+  });
+
+  it("sweeps every connected Host and reports records whose Host could not be checked", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "chat", "chat-turn");
+    f.emit("turn/completed", "sub", "sub-turn");
+    f.emit("turn/completed", "remote", "remote-turn", "failed", "remote");
+    await settle();
+    f.client.readThreadTurnState.mockImplementation(async (id: string) => {
+      if (id === "sub")
+        return { running: false, status: "failed", turnId: "sub-turn", subagent: true };
+      return { running: false, status: "failed", turnId: `${id}-turn` };
+    });
+    // remote 断开后不在已连接列表里：它的记录本轮核对不到，必须如实报告。
+    f.clients.delete("remote");
+    await expect(f.queue.sweepAll()).resolves.toEqual({
+      cleared: 1,
+      remaining: 1,
+      unchecked: 0,
+      offline: 1,
+      hosts: 1,
+    });
+    expect(f.queue.list("local").map((entry) => entry.threadId)).toEqual(["chat"]);
+    expect(f.queue.list("remote")).toHaveLength(1);
+  });
+
+  it("reports how many records one sweep pass left unread", async () => {
+    const f = fixture();
+    for (let index = 0; index < INTERRUPTED_SWEEP_LIMIT + 2; index += 1) {
+      f.emit("turn/completed", `chat-${index}`, `chat-${index}-turn`);
+    }
+    await settle();
+    await expect(f.queue.sweep("local")).resolves.toEqual({
+      cleared: 0,
+      remaining: INTERRUPTED_SWEEP_LIMIT + 2,
+      unchecked: 2,
+    });
+    await expect(f.queue.sweep("local")).resolves.toMatchObject({ unchecked: 2 });
   });
 
   it("keeps a queued interruption while the same native turn is still stopped", async () => {

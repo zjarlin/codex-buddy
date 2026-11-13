@@ -11,6 +11,29 @@ export function isMissingNativeThreadError(error: unknown): boolean {
   return MISSING_THREAD.test(text);
 }
 
+// subagent 是主会话派生出的执行单元，不接受直接输入，也没有独立的“继续”语义；
+// 它的失败属于父会话的过程细节，不能当作可恢复的普通会话列进中断队列。
+// `canAcceptDirectInput` 是官方直接给出的同名判断，与其余字段一起作为冗余证据。
+export function isSubagentNativeThread(thread: unknown): boolean {
+  const value = isRecord(thread) ? thread : {};
+  const source = isRecord(value.source) ? value.source : {};
+  if (source.subAgent !== undefined && source.subAgent !== null) return true;
+  if (value.threadSource === "subagent" || value.threadSource === "subAgentThreadSpawn")
+    return true;
+  if (value.canAcceptDirectInput === false) return true;
+  if (typeof value.parentThreadId === "string" && value.parentThreadId.length > 0) return true;
+  return typeof value.agentNickname === "string" && value.agentNickname.length > 0;
+}
+
+// 原生 `thread/read` 不返回归档标记，只把 rollout 移进 archived_sessions；
+// 归档是用户已经处理过的终态，既不能恢复也不该继续留在队列里。
+export function isArchivedNativeThread(thread: unknown): boolean {
+  const value = isRecord(thread) ? thread : {};
+  if (value.archived === true) return true;
+  const path = typeof value.path === "string" ? value.path : "";
+  return /(^|[\\/])archived_sessions([\\/]|$)/.test(path);
+}
+
 // 外部投影保留这两个标记；缺少 Host 方法不能作为原生会话归属的证据。
 export function assertNativeCodexThread(
   thread: unknown,

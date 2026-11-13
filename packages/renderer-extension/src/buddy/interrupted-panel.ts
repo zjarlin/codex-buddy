@@ -2,6 +2,7 @@ import createElement from "lucide/dist/esm/createElement.mjs";
 import ChevronDown from "lucide/dist/esm/icons/chevron-down.mjs";
 import ChevronRight from "lucide/dist/esm/icons/chevron-right.mjs";
 import Play from "lucide/dist/esm/icons/play.mjs";
+import Trash2 from "lucide/dist/esm/icons/trash-2.mjs";
 import RefreshCw from "lucide/dist/esm/icons/refresh-cw.mjs";
 import type { RendererModelClient } from "../renderer-model-client.js";
 import type { ModelShortcutView } from "../renderer-model-shortcuts.js";
@@ -13,6 +14,7 @@ import {
   type InterruptedQueue,
   type InterruptedQueueEntry,
 } from "./interrupted-queue.js";
+import { INTERRUPTED_SWEEP_LIMIT } from "./interrupted-sweep.js";
 
 type InterruptedThread = InterruptedQueueEntry;
 const messages = {
@@ -27,6 +29,30 @@ const messages = {
     resuming: "正在恢复…",
     resumeAll: "一键恢复所有",
     resumeAllHint: "按顺序恢复当前连接下列表中的所有中断会话。",
+    sweep: "清理队列",
+    sweepHint:
+      "按原生状态核对全部已连接 Host 的记录：已归档、subagent 和已不存在的会话移出队列，可恢复的中断保留。",
+    sweeping: "正在清理…",
+    sweepDone: (
+      count: number,
+      remaining: number,
+      unchecked: number,
+      offline: number,
+      hosts: number,
+    ) => {
+      const parts = [count === 0 ? "没有可清理的记录。" : `已清理 ${count} 条不可恢复的记录。`];
+      if (unchecked > 0)
+        parts.push(
+          `每轮每个连接只核对前 ${INTERRUPTED_SWEEP_LIMIT} 条，还有 ${unchecked} 条请再点一次继续。`,
+        );
+      if (offline > 0) parts.push(`另有 ${offline} 条属于本轮未连接的 Host，连接后再清理。`);
+      if (remaining > 0)
+        parts.push(`已核对的 ${hosts} 个 Host 中仍有 ${remaining} 条可恢复的中断。`);
+      else if (unchecked === 0 && offline === 0)
+        parts.push(`队列已清空（检查了 ${hosts} 个 Host）。`);
+      return parts.join("");
+    },
+    sweepFailed: "清理失败",
     autoResume: "网关恢复后自动续接",
     autoResumeHint:
       "中断队列非空时检查网关 /ready（不可用时回退 /health）；恢复后自动逐条续接。已取消的会话不自动续接，同一回合最多自动尝试 3 次。",
@@ -72,6 +98,39 @@ const messages = {
     resuming: "Resuming…",
     resumeAll: "Resume all",
     resumeAllHint: "Resume all interrupted conversations listed on this connection, one by one.",
+    sweep: "Clean up queue",
+    sweepHint:
+      "Check every record on all connected Hosts against native state: archived, subagent and vanished conversations leave the queue; recoverable interruptions stay.",
+    sweeping: "Cleaning up…",
+    sweepDone: (
+      count: number,
+      remaining: number,
+      unchecked: number,
+      offline: number,
+      hosts: number,
+    ) => {
+      const parts = [
+        count === 0
+          ? "Nothing to clean up."
+          : `Removed ${count} unrecoverable record${count === 1 ? "" : "s"}.`,
+      ];
+      if (unchecked > 0)
+        parts.push(
+          `Each connection is checked ${INTERRUPTED_SWEEP_LIMIT} records per pass; click again for the remaining ${unchecked}.`,
+        );
+      if (offline > 0)
+        parts.push(
+          `${offline} record${offline === 1 ? "" : "s"} belong to Hosts that are not connected right now; clean them up after reconnecting.`,
+        );
+      if (remaining > 0)
+        parts.push(
+          `${remaining} recoverable interruption${remaining === 1 ? "" : "s"} remained across ${hosts} checked Host${hosts === 1 ? "" : "s"}.`,
+        );
+      else if (unchecked === 0 && offline === 0)
+        parts.push(`The queue is empty (checked ${hosts} Host${hosts === 1 ? "" : "s"}).`);
+      return parts.join(" ");
+    },
+    sweepFailed: "Cleanup failed",
     autoResume: "Resume after gateway recovers",
     autoResumeHint:
       "While the interruption queue is non-empty, probe the gateway /ready endpoint (falling back to /health); resume queued chats one by one after recovery. Cancelled chats are never resumed automatically, and each turn is tried at most 3 times.",
@@ -165,6 +224,8 @@ function session(client: RendererModelClient | null, hostId: string | null = nul
     accounts: new Map<string, TurnAccountsView>(),
     autoResumeEnabled: readAutoResumeEnabled(),
     auto: null as AutoResumeState | null,
+    sweeping: false,
+    notice: "",
   };
 }
 
@@ -228,6 +289,49 @@ export function createInterruptedPanel(
       return false;
     } finally {
       target.loading = false;
+      if (current(target)) {
+        render();
+        autoResume?.update();
+      }
+    }
+  }
+
+  // 清理只按原生状态判断，不发继续消息；可恢复的中断原样保留。
+  // 面板只列当前连接的记录，但残留记录分散在各 Host 上，因此一次清理覆盖全部已连接 Host。
+  async function sweepQueue(): Promise<boolean> {
+    const target = state;
+    if (
+      !current(target) ||
+      !target.hostId ||
+      !target.client ||
+      target.sweeping ||
+      target.batch ||
+      target.loading
+    ) {
+      return false;
+    }
+    target.sweeping = true;
+    target.notice = "";
+    target.error = "";
+    render();
+    try {
+      const { cleared, remaining, unchecked, offline, hosts } = await queue.sweepAll();
+      if (!current(target)) return true;
+      target.notice = messages[getLocale()].sweepDone(
+        cleared,
+        remaining,
+        unchecked,
+        offline,
+        hosts,
+      );
+      target.threads = queue.list(target.hostId);
+      return true;
+    } catch (failure) {
+      if (current(target))
+        target.error = `${messages[getLocale()].sweepFailed}: ${errorMessage(failure)}`;
+      return false;
+    } finally {
+      target.sweeping = false;
       if (current(target)) {
         render();
         autoResume?.update();
@@ -441,6 +545,7 @@ export function createInterruptedPanel(
       busy: () =>
         state.loading ||
         state.batch ||
+        state.sweeping ||
         state.pending.size > 0 ||
         state.threads.some(queue.isPending),
       candidates: () => (state.hostId ? queue.list(state.hostId) : []),
@@ -461,12 +566,13 @@ export function createInterruptedPanel(
   function render(): void {
     const m = messages[getLocale()];
     // 补录或批量恢复期间自动展开，让用户看到进度；结束后回到用户选择的状态。
-    const expanded = !collapsed || state.batch || state.loading;
+    const expanded = !collapsed || state.batch || state.loading || state.sweeping;
     header.update({
       available: Boolean(state.hostId && state.client?.buddyContinue),
       busy:
         state.loading ||
         state.batch ||
+        state.sweeping ||
         state.pending.size > 0 ||
         state.threads.some(queue.isPending),
       loading: state.loading,
@@ -503,6 +609,8 @@ export function createInterruptedPanel(
       [...state.viewing],
       [...state.failures],
       [...state.accounts],
+      state.sweeping,
+      state.notice,
       collapsed,
     ]);
     if (fingerprint === signature) return;
@@ -562,6 +670,8 @@ export function createInterruptedPanel(
       return;
     }
     if (state.loading) note(m.loading);
+    if (state.sweeping) note(m.sweeping);
+    if (state.notice && !state.sweeping) note(state.notice);
     if (state.error) note(state.error, true);
     const queueError = state.hostId ? queue.problem(state.hostId) : "";
     if (queueError) note(queueError, true);
@@ -585,7 +695,8 @@ export function createInterruptedPanel(
     reload.title = m.refresh;
     reload.setAttribute("aria-label", m.refresh);
     reload.append(createElement(RefreshCw, { width: 14, height: 14, "aria-hidden": "true" }));
-    reload.disabled = state.loading || state.batch || !state.client.buddyInterrupted;
+    reload.disabled =
+      state.loading || state.batch || state.sweeping || !state.client.buddyInterrupted;
     reload.addEventListener("click", () => {
       void refresh();
     });
@@ -599,13 +710,31 @@ export function createInterruptedPanel(
       !state.client.buddyContinue ||
       state.loading ||
       state.batch ||
+      state.sweeping ||
       state.pending.size > 0 ||
       state.threads.some(queue.isPending) ||
       state.threads.length === 0;
     all.addEventListener("click", () => {
       void resumeAll();
     });
-    toolbar.append(reload, all);
+    // 清理靠原生状态判断，不需要续接能力，只要有会话读取即可。
+    const cleanup = document.createElement("button");
+    cleanup.type = "button";
+    cleanup.dataset.buddySweep = "";
+    cleanup.title = m.sweepHint;
+    cleanup.append(createElement(Trash2, { width: 14, height: 14, "aria-hidden": "true" }));
+    cleanup.append(state.sweeping ? m.sweeping : m.sweep);
+    // 当前连接的列表为空也要可用：残留记录常常属于侧栏里没有行的其它 Host。
+    cleanup.disabled =
+      state.sweeping ||
+      state.loading ||
+      state.batch ||
+      state.pending.size > 0 ||
+      state.threads.some(queue.isPending);
+    cleanup.addEventListener("click", () => {
+      void sweepQueue();
+    });
+    toolbar.append(reload, all, cleanup);
     const autoSupported = Boolean(state.client.buddyHealth && state.client.buddyContinue);
     const autoLabel = document.createElement("label");
     autoLabel.className = "buddy-interrupted-auto-resume";

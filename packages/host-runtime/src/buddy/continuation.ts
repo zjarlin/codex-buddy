@@ -102,6 +102,18 @@ function recoverableStatus(
   return systemErrorStatus(thread);
 }
 
+// subagent 由父会话派生，不接受直接输入；它的失败属于父会话的过程细节，
+// 不能作为可恢复的普通会话返回给中断队列。
+function isSubagentThread(thread: Record<string, unknown>): boolean {
+  const source = object(thread.source);
+  if (source.subAgent !== undefined && source.subAgent !== null) return true;
+  if (thread.threadSource === "subagent" || thread.threadSource === "subAgentThreadSpawn")
+    return true;
+  if (thread.canAcceptDirectInput === false) return true;
+  if (typeof thread.parentThreadId === "string" && thread.parentThreadId.length > 0) return true;
+  return typeof thread.agentNickname === "string" && thread.agentNickname.length > 0;
+}
+
 function threadTitle(thread: Record<string, unknown>, fallback: string): string {
   const name = typeof thread.name === "string" ? thread.name : "";
   const preview = typeof thread.preview === "string" ? thread.preview : "";
@@ -400,6 +412,7 @@ export class InterruptedConversations {
       }
       try {
         const { thread, turn } = await this.#read(metadata.id);
+        if (isSubagentThread(thread)) return { kind: "done" as const };
         if (this.busy(metadata.id) || object(thread.status).type === "active") {
           return { kind: "running" as const, threadId: metadata.id };
         }

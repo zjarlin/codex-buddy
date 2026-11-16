@@ -1,5 +1,6 @@
 export const projectTabsStyle = `
 [data-codexhost-project-tab-hidden]{display:none!important}
+[data-codexhost-project-source-hidden]{display:none!important}
 [data-codexhost-project-tabs]{display:flex;align-items:center;gap:4px;min-width:0;flex:0 0 auto;margin:6px 8px 10px;font:12px/18px system-ui,sans-serif;color:var(--color-token-text-primary,inherit)}
 [data-codexhost-project-tabs] [role=group]{display:flex;gap:3px;overflow-x:auto;min-width:0;scrollbar-width:thin}
 [data-codexhost-project-tabs] button{flex-shrink:0;white-space:nowrap;border:0;border-radius:6px;padding:4px 8px;background:transparent;color:inherit;cursor:pointer;font:inherit}
@@ -39,6 +40,15 @@ export const projectTabsStyle = `
 [data-codexhost-project-tabs-dialog] .project-tab-actions{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px}
 [data-codexhost-project-tabs-dialog] .project-tab-destinations{display:flex;flex-direction:column;gap:6px}
 [data-codexhost-project-tabs-dialog] .project-tab-destinations button{text-align:left}
+.project-source-choices{display:flex;flex-direction:column;gap:14px;margin:10px 0}
+.project-source-group{display:flex;flex-direction:column;gap:6px}
+.project-source-group h3{margin:0;font-size:12px;font-weight:600;opacity:.72}
+.project-source-choice{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;padding:8px 10px;text-align:left}
+.project-source-choice[aria-pressed=true]{background:color-mix(in srgb,Highlight 22%,transparent)}
+.project-source-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
+.project-source-copy strong,.project-source-copy span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-source-copy span{font-size:11px;opacity:.68}
+.project-source-scope{flex:none;padding:1px 6px;border-radius:5px;background:color-mix(in srgb,currentColor 12%,transparent);font-size:11px;opacity:.8}
 [data-codexhost-project-tab-move]{cursor:pointer}
 [data-codexhost-project-tab-move]:hover,[data-codexhost-project-tab-move]:focus{background:color-mix(in srgb,currentColor 12%,transparent);outline:none}
 `;

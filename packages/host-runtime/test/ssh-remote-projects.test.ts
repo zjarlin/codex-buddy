@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inspectSshRemoteProjects } from "../src/ssh-remote-projects.js";
@@ -10,6 +12,7 @@ import {
 } from "../src/ssh-remote-projects-worker.js";
 
 const directories: string[] = [];
+const execute = promisify(execFile);
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -18,7 +21,12 @@ afterEach(async () => {
   );
 });
 
-async function hostFixture(apiKey = "remote-secret-key") {
+// 共享索引保存的是远端 Host 上报的 POSIX 根目录，默认 fixture 因此用一个任何
+// 平台都不会解析到的远端路径；需要真实仓库的用例显式传入本机路径。
+const REMOTE_PROJECT_ROOT = "/remote/project";
+const localGitAvailable = process.platform !== "win32";
+
+async function hostFixture(apiKey = "remote-secret-key", projectRoot = REMOTE_PROJECT_ROOT) {
   const root = await mkdtemp(path.join(tmpdir(), "ssh-remote-projects-"));
   directories.push(root);
   const home = path.join(root, ".codex");
@@ -35,7 +43,7 @@ const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
 input.on("line", line => {
   const request = JSON.parse(line);
   if (request.method === "initialize") return send({ id: request.id, result: { userAgent: "fixture" } });
-  if (request.method === "project/list") return send({ id: request.id, result: { data: [{ id: "p1", name: "Shared project", roots: [{ path: "/remote/project" }] }] } });
+  if (request.method === "project/list") return send({ id: request.id, result: { data: [{ id: "p1", name: "Shared project", roots: [{ path: ${JSON.stringify(projectRoot)} }] }] } });
   if (request.method === "thread/list") return send({ id: request.id, result: { data: [{ id: "019ccb31-9520-7120-bc17-556e9a92d860", name: "Shared conversation", updatedAt: 42 }] } });
   send({ id: request.id, result: {} });
 });
@@ -51,6 +59,7 @@ input.on("line", line => {
       CODEXHOST_STOCK_CODEX_PATH: fakeCodexScript,
     },
     data,
+    projectRoot,
   };
 }
 
@@ -61,7 +70,8 @@ describe("SSH remote project metadata", () => {
     expect(snapshot.account.projects).toMatchObject([
       {
         name: "Shared project",
-        roots: ["/remote/project"],
+        roots: [REMOTE_PROJECT_ROOT],
+        origin: null,
         threads: [
           {
             id: "019ccb31-9520-7120-bc17-556e9a92d860",
@@ -79,6 +89,41 @@ describe("SSH remote project metadata", () => {
       account: { id: snapshot.account.id, current: true },
     });
   });
+
+  it.runIf(localGitAvailable)("records the Git origin read from a project root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ssh-remote-project-repo-"));
+    directories.push(root);
+    const projectRoot = path.join(root, "project");
+    await mkdir(projectRoot, { recursive: true });
+    await execute("git", ["init", "--quiet", projectRoot]);
+    await execute("git", [
+      "-C",
+      projectRoot,
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:company/iot-platform.git",
+    ]);
+    const fixture = await hostFixture("remote-secret-key", projectRoot);
+    const snapshot = await syncRemoteProjectsOnHost(fixture.environment);
+    expect(snapshot.account.projects[0]).toMatchObject({
+      roots: [projectRoot],
+      origin: "git@github.com:company/iot-platform.git",
+    });
+  });
+
+  it.runIf(localGitAvailable)(
+    "records no origin for projects that are not Git repositories",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "ssh-remote-project-plain-"));
+      directories.push(root);
+      const plain = path.join(root, "plain");
+      await mkdir(plain, { recursive: true });
+      const fixture = await hostFixture("remote-secret-key", plain);
+      const snapshot = await syncRemoteProjectsOnHost(fixture.environment);
+      expect(snapshot.account.projects[0]).toMatchObject({ roots: [plain], origin: null });
+    },
+  );
 
   it("isolates metadata for different auth identities", async () => {
     const fixture = await hostFixture("first-key");

@@ -24,6 +24,15 @@ const zh = {
   searchHint: "↑↓ 选择 · Enter 切换 · Esc 关闭",
   searchEmpty: "没有匹配的 Tab",
   current: "当前",
+  sourceTitle: "保留哪个项目来源",
+  sourceHint:
+    "这些项目指向同一个 Git 仓库。隐藏其他来源不会删除项目或会话；已下线的来源会自动让位。",
+  sourceLocal: "本机",
+  sourceRemote: "SSH",
+  sourceChoose: "保留",
+  sourceLater: "稍后决定",
+  sourceChosen: "已保留",
+  sourceNoGit: "没有 Git 来源，按项目名匹配",
 };
 const en: typeof zh = {
   all: "Projects",
@@ -51,6 +60,15 @@ const en: typeof zh = {
   searchHint: "↑↓ select · Enter switch · Esc close",
   searchEmpty: "No matching tabs",
   current: "Current",
+  sourceTitle: "Choose the project source to keep",
+  sourceHint:
+    "These projects point to the same Git repository. Hiding other sources does not delete projects or chats; offline sources yield automatically.",
+  sourceLocal: "Local",
+  sourceRemote: "SSH",
+  sourceChoose: "Keep",
+  sourceLater: "Decide later",
+  sourceChosen: "Kept",
+  sourceNoGit: "No Git origin; matched by project name",
 };
 export function projectTabsMessages(locale: string): typeof zh {
   return locale === "zh-CN" ? zh : en;

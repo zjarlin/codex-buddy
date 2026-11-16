@@ -15,9 +15,21 @@ import {
   withProjectTabs,
 } from "./model.js";
 import {
+  ProjectSourceControl,
+  type ProjectOriginClient,
+  type ProjectSourceGroupState,
+} from "./source-control.js";
+import {
+  PROJECT_SOURCE_DEFERRED_KEY,
+  PROJECT_SOURCE_RETENTION_KEY,
+  projectSourceId,
+} from "./source-model.js";
+import { hiddenProjectSourceIds } from "../renderer-project-sources.js";
+import {
   PROJECT_CREATE_SELECTOR,
   PROJECT_ROW_SELECTOR,
   projectMenu,
+  projectPaths,
   rowProject,
   threadProject,
   type ThreadProjectTarget,
@@ -34,6 +46,7 @@ import { projectTabsStyle } from "./styles.js";
 
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const HIDDEN = "data-codexhost-project-tab-hidden";
+const SOURCE_HIDDEN = "data-codexhost-project-source-hidden";
 const MOVE = "data-codexhost-project-tab-move";
 const MENU_ITEMS = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]';
 const SIDEBAR_THREAD_ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
@@ -55,6 +68,10 @@ export interface RendererProjectTabsControl {
 export function installProjectTabs(options: {
   getLocale(): string;
   getClient?(): ProjectTabsPersistenceClient | null;
+  /** 当前 Host 是否仍连接；缺省视为可用。 */
+  isHostAvailable?(hostId: string): boolean;
+  /** 读取本地或 SSH 工作区的 Git 来源。缺省时只按项目名去重。 */
+  getSourceClient?(hostId: string): ProjectOriginClient | null;
 }): RendererProjectTabsControl {
   const styles = document.createElement("style");
   styles.textContent = projectTabsStyle;
@@ -119,6 +136,7 @@ export function installProjectTabs(options: {
   error.setAttribute("role", "alert");
   error.hidden = true;
   const hiddenRows = new Set<HTMLElement>();
+  const sourceHiddenRows = new Set<HTMLElement>();
   const menus = new Map<HTMLElement, { anchor: HTMLElement; item: HTMLElement }>();
   let loadedClient: Required<ProjectTabsPersistenceClient> | null = null;
   let loadingClient: Required<ProjectTabsPersistenceClient> | null = null;
@@ -128,6 +146,157 @@ export function installProjectTabs(options: {
   // 用户刚做的选择。
   let pendingHostConfig: { revision: number; config: ProjectTabsConfig } | null = null;
   const collapseRecents = createRecentSectionCollapse();
+  const sourceControl = new ProjectSourceControl({
+    // Storage 在禁用 cookie 的窗口里可能连读取 getter 都抛错；此时只丢失
+    // 跨重启记忆，当前会话仍按实时 origin 去重。
+    storage: (() => {
+      try {
+        return window.localStorage;
+      } catch {
+        return { getItem: () => null, setItem: () => undefined };
+      }
+    })(),
+    getClient: (hostId) => options.getSourceClient?.(hostId) ?? null,
+    onUpdate: () => refresh(),
+  });
+  const projectSources = (
+    rowProjects: readonly { row: HTMLElement; project: SidebarProject | null }[],
+  ): ProjectSourceGroupState[] => {
+    // 连接状态与来源客户端都来自原生路由发现（会回溯 React Fiber）；同一次刷新里
+    // 每个 Host 只解析一次，避免按项目行重复做同一份全页发现。
+    const availability = new Map<string, boolean>();
+    const clients = new Map<string, ProjectOriginClient | null>();
+    const hostAvailable = (hostId: string): boolean => {
+      const cached = availability.get(hostId);
+      if (cached !== undefined) return cached;
+      const value = options.isHostAvailable?.(hostId) ?? true;
+      availability.set(hostId, value);
+      return value;
+    };
+    const sourceClient = (hostId: string): ProjectOriginClient | null => {
+      if (clients.has(hostId)) return clients.get(hostId) ?? null;
+      const value = options.getSourceClient?.(hostId) ?? null;
+      clients.set(hostId, value);
+      return value;
+    };
+    const candidates = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        hostId: string;
+        scope: "local" | "remote";
+        paths: Set<string>;
+        available: boolean;
+      }
+    >();
+    for (const { project } of rowProjects) {
+      if (!project) continue;
+      const id = projectSourceId(project);
+      const hostId = project.projectKind === "local" ? "local" : (project.hostId ?? "");
+      if (!hostId) continue;
+      const scope = project.projectKind;
+      const paths = projectPaths(project);
+      const available = scope === "local" ? true : hostAvailable(hostId);
+      const current = candidates.get(id);
+      if (current) {
+        for (const path of paths) current.paths.add(path);
+        current.available ||= available;
+      } else {
+        candidates.set(id, {
+          id,
+          name: project.label,
+          hostId,
+          scope,
+          paths: new Set(paths),
+          available,
+        });
+      }
+    }
+    return sourceControl.update(
+      [...candidates.values()].map((candidate) => ({
+        ...candidate,
+        paths: [...candidate.paths],
+      })),
+      sourceClient,
+    ).groups;
+  };
+  const openSourceChoices = (groups: readonly ProjectSourceGroupState[]): void => {
+    if (!groups.length || dialog || disposed) return;
+    const m = projectTabsMessages(options.getLocale());
+    const pending = [...groups];
+    let settled = false;
+    const picker = openProjectDialog(m.sourceTitle, () => {
+      if (dialog === picker) dialog = null;
+      // 关闭（包括 Escape）与“稍后决定”一样只推迟当前来源集合的询问，
+      // 避免用户已经看过对话框后仍按帧重复弹出。
+      if (!settled) {
+        for (const group of pending) {
+          sourceControl.defer(
+            group.key,
+            group.available.map((source) => source.id),
+          );
+        }
+      }
+      refresh();
+    });
+    dialog = picker;
+    const hint = document.createElement("p");
+    hint.textContent = m.sourceHint;
+    const choices = document.createElement("div");
+    choices.className = "project-source-choices";
+    const render = (): void => {
+      choices.replaceChildren();
+      for (const group of pending) {
+        const section = document.createElement("section");
+        section.className = "project-source-group";
+        const heading = document.createElement("h3");
+        heading.textContent = group.sources[0]?.name ?? group.key;
+        section.append(heading);
+        for (const source of group.available) {
+          const choice = button(source.name, () => {
+            sourceControl.choose(group.key, source.id);
+            pending.splice(pending.indexOf(group), 1);
+            if (pending.length === 0) picker.close();
+            else render();
+          });
+          choice.className = "project-source-choice";
+          // 同名仓库的多个副本常常同名，可访问名称带上 Host 才能区分。
+          choice.setAttribute("aria-label", `${m.sourceChoose} ${source.name} · ${source.hostId}`);
+          const scope = document.createElement("span");
+          scope.className = "project-source-scope";
+          scope.textContent = source.scope === "local" ? m.sourceLocal : m.sourceRemote;
+          const copy = document.createElement("span");
+          copy.className = "project-source-copy";
+          const name = document.createElement("strong");
+          name.textContent = source.name;
+          const detail = document.createElement("span");
+          detail.textContent = [source.hostId, ...source.paths].join(" · ");
+          copy.append(name, detail);
+          choice.append(scope, copy);
+          section.append(choice);
+        }
+        choices.append(section);
+      }
+    };
+    const actions = document.createElement("div");
+    actions.className = "project-tab-actions";
+    actions.append(
+      button(m.sourceLater, () => {
+        settled = true;
+        for (const group of pending) {
+          sourceControl.defer(
+            group.key,
+            group.available.map((source) => source.id),
+          );
+        }
+        picker.close();
+      }),
+    );
+    render();
+    picker.append(hint, choices, actions);
+    picker.showModal();
+  };
 
   const persistenceClient = (): Required<ProjectTabsPersistenceClient> | null => {
     const client = options.getClient?.();
@@ -249,6 +418,22 @@ export function installProjectTabs(options: {
     const project = projectForThread(input);
     // 未解析到归属时保持当前分类，调用方补查元数据后再重试。
     if (!project) return null;
+    // 用户明确打开某个副本的会话就是选择该来源：若它正被去重隐藏，
+    // 先把它设为保留项，避免“点了会话却看不到项目行”。
+    const rowProjects = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)].map(
+      (row) => ({ row, project: rowProject(row) }),
+    );
+    const group = projectSources(rowProjects).find((candidate) =>
+      candidate.sources.some((source) => source.id === projectSourceId(project)),
+    );
+    if (
+      group &&
+      group.selected?.id !== projectSourceId(project) &&
+      group.available.some((source) => source.id === projectSourceId(project))
+    ) {
+      sourceControl.choose(group.key, projectSourceId(project));
+      refresh();
+    }
     const selected = projectTab(config, project);
     if (selected !== config.selected) select(selected);
     return project?.label ?? null;
@@ -427,7 +612,7 @@ export function installProjectTabs(options: {
       }
     })();
   };
-  const refresh = (): void => {
+  function refresh(): void {
     if (disposed) {
       return;
     }
@@ -520,10 +705,29 @@ export function installProjectTabs(options: {
         hiddenRows.delete(row);
       }
     }
+    for (const row of sourceHiddenRows) {
+      if (!row.isConnected || !rows.includes(row)) {
+        row.removeAttribute(SOURCE_HIDDEN);
+        sourceHiddenRows.delete(row);
+      }
+    }
+    const sourceGroups = projectSources(rowProjects);
+    const hiddenSources = new Set<string>();
+    for (const group of sourceGroups) {
+      for (const id of hiddenProjectSourceIds(group)) hiddenSources.add(id);
+    }
+    const pendingChoices = sourceGroups.filter(
+      (group) =>
+        group.needsChoice &&
+        !sourceControl.isDeferred(
+          group.key,
+          group.available.map((source) => source.id),
+        ),
+    );
     let matched = 0;
     for (const { row, project } of rowProjects) {
-      const hidden = project !== null && projectTab(config, project) !== config.selected;
-      if (hidden) {
+      const tabHidden = project !== null && projectTab(config, project) !== config.selected;
+      if (tabHidden) {
         if (!row.hasAttribute(HIDDEN)) {
           row.setAttribute(HIDDEN, "");
         }
@@ -531,20 +735,39 @@ export function installProjectTabs(options: {
       } else {
         row.removeAttribute(HIDDEN);
         hiddenRows.delete(row);
-        matched += 1;
       }
+      const sourceHidden = project !== null && hiddenSources.has(projectSourceId(project));
+      if (sourceHidden) {
+        if (!row.hasAttribute(SOURCE_HIDDEN)) {
+          row.setAttribute(SOURCE_HIDDEN, "");
+        }
+        sourceHiddenRows.add(row);
+      } else {
+        row.removeAttribute(SOURCE_HIDDEN);
+        sourceHiddenRows.delete(row);
+      }
+      if (!tabHidden && !sourceHidden) matched += 1;
     }
     if (empty.textContent !== m.empty) {
       empty.textContent = m.empty;
     }
     empty.hidden = matched > 0;
+    // 每个来源组只在可用来源集合变化后询问一次；用户选择“稍后决定”或
+    // 已有保留项时不再重复弹窗。多个仓库合并在同一个对话框里处理。
+    //
+    // origin 是逐个异步读取的：只读到部分来源时，尚未返回的副本还按项目名独立
+    // 分组，此时弹窗会少列来源，用户推迟后还会因来源集合补齐而立刻再次弹出。
+    // 等这批读取有结论再询问；读取失败或超时会按行独立显示，不会无限等待。
+    if (!dialog && pendingChoices.length > 0 && !sourceControl.pendingOrigins()) {
+      openSourceChoices(pendingChoices);
+    }
     const detail = failure ? m.failed + String(failure) : "";
     if (error.textContent !== detail) {
       error.textContent = detail;
     }
     error.hidden = !failure;
     refreshMenus();
-  };
+  }
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && pendingCreate.current()) {
@@ -595,7 +818,16 @@ export function installProjectTabs(options: {
     }
   };
   const onStorage = (event: StorageEvent): void => {
-    if (event.key !== PROJECT_TABS_STORAGE_KEY && event.key !== null) {
+    // 另一个窗口改了保留来源：按它重新分组即可，不重读项目 Tab 配置。
+    if (
+      event.key === PROJECT_SOURCE_RETENTION_KEY ||
+      event.key === PROJECT_SOURCE_DEFERRED_KEY ||
+      event.key === null
+    ) {
+      refresh();
+      return;
+    }
+    if (event.key !== PROJECT_TABS_STORAGE_KEY) {
       return;
     }
     dialog?.close();
@@ -709,8 +941,12 @@ export function installProjectTabs(options: {
       document.removeEventListener("click", onProjectCreateClick, true);
       window.removeEventListener("storage", onStorage);
       dialog?.close();
+      sourceControl.dispose();
       for (const row of hiddenRows) {
         row.removeAttribute(HIDDEN);
+      }
+      for (const row of sourceHiddenRows) {
+        row.removeAttribute(SOURCE_HIDDEN);
       }
       for (const entry of menus.values()) {
         entry.item.remove();

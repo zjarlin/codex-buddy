@@ -11,11 +11,11 @@ const { outputFiles } = await build({
     contents: `
       import { installProjectTabs } from "./packages/renderer-extension/src/project-tabs/index.ts";
       import { installRendererProjectActions } from "./packages/renderer-extension/src/renderer-project-actions.ts";
-      globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null, threads = false } = {}) => {
+      globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null, threads = false, sourceProjects = null, origins = null, unavailableHosts = [] } = {}) => {
         document.documentElement.lang = "zh-CN";
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
         document.body.innerHTML = '<style>body{margin:0;font:14px/1.5 system-ui;background:light-dark(#fff,#202020);color:light-dark(#222,#eee)}aside{width:310px;padding:12px;background:light-dark(#fafafa,#252525);min-height:100vh;box-sizing:border-box}h2{font-size:14px;color:#888;margin:8px}button{color:inherit;cursor:pointer}section>div[role=listitem]{padding:10px 8px}.row{display:flex;gap:8px}.row>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row button{border:0;background:transparent}.thread{margin:8px 0 4px 22px;color:#888}nav{display:flex;gap:5px;padding:8px}nav button{border:1px solid #8885;border-radius:5px;padding:4px 8px;background:transparent}[role=menu]{position:fixed;top:170px;left:100px;z-index:10;background:light-dark(#fff,#292929);padding:6px;border:1px solid #8884;border-radius:8px;min-width:180px;box-shadow:0 4px 18px #0002}[role=menuitem]{padding:5px 8px;border-radius:4px}[role=menuitem]:focus{background:#8883;outline:none}footer{padding:12px;display:flex;gap:4px;flex-wrap:wrap}</style><aside id="app-shell-sidebar"><h2>项目</h2><nav><button id="all">全部</button><button id="active">进行中</button></nav><section id="projects"></section><footer><button id="create" data-app-action-sidebar-project-create>创建项目</button><button id="rename">重命名公司项目</button><button id="rerender">重新渲染项目</button><button id="dispose">卸载扩展</button><button id="restart">重新安装扩展</button></footer></aside>';
-        const projects = [
+        const projects = sourceProjects ?? [
           { projectKind: "remote", hostId: "office", projectId: "one", label: "remote_company_okmy-scada" },
           { projectKind: "remote", hostId: "office", projectId: "two", label: "remote_zjarlin_codex-host" },
           { projectKind: "remote", hostId: "home", projectId: "one", label: "remote_company_official-app" },
@@ -152,8 +152,22 @@ const { outputFiles } = await build({
           },
         };
         globalThis.delayedHost = false;
+        const originFor = (hostId, cwd) => origins?.[hostId + ":" + cwd] ?? null;
+        const sourceClient = (hostId) => ({
+          inspectGitOrigin: async ({ cwd }) => {
+            const remote = originFor(hostId, cwd);
+            if (remote instanceof Error) throw remote;
+            return { remote };
+          },
+        });
         const projectTabsOptions = () => ({
           getLocale: () => "zh-CN",
+          ...(origins
+            ? {
+                getSourceClient: (hostId) => sourceClient(hostId),
+                isHostAvailable: (hostId) => !unavailableHosts.includes(hostId),
+              }
+            : {}),
           ...(persistentHost
             ? { getClient: () => (globalThis.delayedHost ? null : hostClient) }
             : {}),
@@ -216,6 +230,9 @@ async function setup(
     width?: number;
     recent?: "expanded" | "collapsed" | "late";
     threads?: boolean;
+    sourceProjects?: unknown[];
+    origins?: Record<string, string | null>;
+    unavailableHosts?: string[];
   } = {},
 ) {
   await page.setViewportSize({ width: options.width ?? 960, height: 760 });
@@ -805,4 +822,147 @@ test("storage errors are visible and failed saves keep the form open", async ({ 
   await expect(dialog.getByRole("alert")).toContainText("Storage unavailable");
   await page.screenshot({ path: info.outputPath("storage-error.png") });
   await expect(dialog).toBeVisible();
+});
+
+const sourceProjects = [
+  {
+    projectKind: "remote",
+    hostId: "macmini-lan",
+    projectId: "iot",
+    label: "remote_macmini_iot",
+    path: "/srv/iot",
+    rootPaths: ["/srv/iot"],
+  },
+  {
+    projectKind: "remote",
+    hostId: "okm252",
+    projectId: "iot",
+    label: "remote_okm252_iot",
+    path: "/srv/iot",
+    rootPaths: ["/srv/iot"],
+  },
+  {
+    projectKind: "local",
+    projectId: "iot",
+    label: "iot-platform",
+    path: "/home/me/iot",
+    rootPaths: ["/home/me/iot"],
+  },
+];
+
+test("keeps only the online SSH source when the previous host is down", async ({ page }) => {
+  await setup(page, {
+    sourceProjects,
+    origins: {
+      "macmini-lan:/srv/iot": "git@github.com:company/iot-platform.git",
+      "okm252:/srv/iot": "https://github.com/company/iot-platform.git",
+      "local:/home/me/iot": "git@github.com:company/iot-platform.git",
+    },
+    unavailableHosts: ["macmini-lan"],
+  });
+  await expect(page.getByRole("dialog", { name: "保留哪个项目来源" })).toHaveCount(0);
+  const visible = page.locator('[data-sidebar-project-container-id="project:iot"]:visible');
+  await expect(visible).toHaveCount(1);
+  await expect(visible).toHaveAttribute("aria-label", "remote_okm252_iot");
+});
+
+test("asks once when several remote sources are online and remembers the choice", async ({
+  page,
+}, info) => {
+  await setup(page, {
+    sourceProjects,
+    origins: {
+      "macmini-lan:/srv/iot": "git@github.com:company/iot-platform.git",
+      "okm252:/srv/iot": "https://github.com/company/iot-platform.git",
+      "local:/home/me/iot": "git@github.com:company/iot-platform.git",
+    },
+  });
+  const dialog = page.getByRole("dialog", { name: "保留哪个项目来源" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".project-source-choice")).toHaveCount(3);
+  await page.screenshot({ path: info.outputPath("project-source-choice.png") });
+  await dialog.getByRole("button", { name: "保留 remote_okm252_iot · okm252" }).click();
+  await expect(dialog).toHaveCount(0);
+  const visible = page.locator('[data-sidebar-project-container-id="project:iot"]:visible');
+  await expect(visible).toHaveCount(1);
+  await expect(visible).toHaveAttribute("aria-label", "remote_okm252_iot");
+  await page.getByRole("button", { name: "重新安装扩展", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(visible).toHaveCount(1);
+  expect(await page.evaluate(() => localStorage.getItem("codexhost.project-sources.v1"))).toContain(
+    "git:github.com/company/iot-platform",
+  );
+});
+
+test("remembers a deferred choice until the available sources change", async ({ page }) => {
+  await setup(page, {
+    sourceProjects,
+    origins: {
+      "macmini-lan:/srv/iot": "git@github.com:company/iot-platform.git",
+      "okm252:/srv/iot": "https://github.com/company/iot-platform.git",
+      "local:/home/me/iot": "git@github.com:company/iot-platform.git",
+    },
+  });
+  const dialog = page.getByRole("dialog", { name: "保留哪个项目来源" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "稍后决定" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.locator('[data-sidebar-project-container-id="project:iot"]:visible'),
+  ).toHaveCount(3);
+  await page.getByRole("button", { name: "重新安装扩展", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("groups projects without Git by name and keeps distinct Git repositories apart", async ({
+  page,
+}) => {
+  const projects = [
+    {
+      projectKind: "remote",
+      hostId: "one",
+      projectId: "a",
+      label: "shared-tools",
+      path: "/one/tools",
+      rootPaths: ["/one/tools"],
+    },
+    {
+      projectKind: "remote",
+      hostId: "two",
+      projectId: "b",
+      label: "shared-tools",
+      path: "/two/tools",
+      rootPaths: ["/two/tools"],
+    },
+    {
+      projectKind: "remote",
+      hostId: "one",
+      projectId: "c",
+      label: "app",
+      path: "/one/app",
+      rootPaths: ["/one/app"],
+    },
+    {
+      projectKind: "remote",
+      hostId: "two",
+      projectId: "d",
+      label: "app",
+      path: "/two/app",
+      rootPaths: ["/two/app"],
+    },
+  ];
+  await setup(page, {
+    sourceProjects: projects,
+    origins: {
+      "one:/one/tools": null,
+      "two:/two/tools": null,
+      "one:/one/app": "git@github.com:company/app.git",
+      "two:/two/app": "git@github.com:personal/app.git",
+    },
+  });
+  const dialog = page.getByRole("dialog", { name: "保留哪个项目来源" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator(".project-source-choice")).toHaveCount(2);
+  await dialog.getByRole("button", { name: "稍后决定" }).click();
+  await expect(page.locator("[data-sidebar-project-container-id]:visible")).toHaveCount(4);
 });

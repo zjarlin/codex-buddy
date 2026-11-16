@@ -28,6 +28,23 @@ function asProject(value: unknown): SidebarProject | null {
   return project as unknown as SidebarProject;
 }
 
+/**
+ * 原生项目把工作目录放在可能不可枚举或继承的字段上；按属性读取，避免
+ * 展开对象时丢掉 `threadKeys` 等原生绑定依赖的成员。
+ *
+ * `path` 是项目的主目录，`rootPaths` 是它的全部根目录；主目录排在最前，
+ * 来源身份以它为准，附加根目录只用来排除“一个项目里放了多个仓库”的歧义。
+ */
+export function projectPaths(project: SidebarProject): string[] {
+  const path: unknown = Reflect.get(project, "path");
+  const primary = typeof path === "string" && path !== "" ? path : null;
+  const roots: unknown = Reflect.get(project, "rootPaths");
+  const values = Array.isArray(roots)
+    ? roots.filter((entry): entry is string => typeof entry === "string" && entry !== "")
+    : [];
+  return [...new Set([...(primary ? [primary] : []), ...values])];
+}
+
 // 侧栏刷新由观察者驱动，可能按帧反复执行；Fiber 回溯是全量刷新里最贵的部分。
 // 同一节点在身份属性和标签都没变时给出同一个项目，避免每帧重复回溯。
 const projectsByRow = new WeakMap<

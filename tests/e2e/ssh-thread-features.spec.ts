@@ -17,15 +17,25 @@ const { outputFiles } = await build({
       import { rendererSettingsMessages } from './packages/renderer-extension/src/settings/localization.ts';
       import { mountRendererSettingsShell } from './packages/renderer-extension/src/settings/shell.ts';
       globalThis.calls = [];
+      globalThis.reads = [];
       let active = 'local';
       let finishConfigure;
-      const clients = Object.fromEntries(['local', 'remote-ssh-discovered:fixture'].map(hostId => {
+      // 原生 SSH 服务没有 codexhost 扩展方法；用它复现“Host 连接不支持”的真实形态。
+      const nativeHost = 'remote-ssh-discovered:native';
+      const clients = Object.fromEntries(['local', 'remote-ssh-discovered:fixture', nativeHost].map(hostId => {
         const snapshot = { settings: { enabled: true, privateMode: false, bypass: true, role: 'auto', executorModel: null }, models: [], decisions: [] };
         let recovered = false;
+        const native = hostId === nativeHost;
         const client = {
-          requestThreadProjection:async(method,{threadId})=>({thread:{id:threadId,name:hostId,modelProvider:'openai',cliVersion:'fixture'}}),
+          requestThreadProjection:async(method,{threadId})=>{
+            if (method === 'thread/read') globalThis.reads.push({hostId, threadId});
+            return {thread:{id:threadId,cwd:'/remote/project',name:hostId,modelProvider:'openai',cliVersion:'fixture'}};
+          },
           readThreadTurnState:async()=>({running:false,turnId:'failed',status:'interrupted'}),
-          threadOpenTarget: async threadId => {
+          threadOpenTarget: native ? async () => {
+            const error = Object.assign(new Error('codexhost/thread/open-target is unsupported on this Host connection'), { code: -32601 });
+            throw error;
+          } : async threadId => {
             globalThis.calls.push({hostId, method:'target',threadId});
             return {workspace:'/remote/project',codexPath:'/remote/bin/codex',codexHome:'/root/.codex'};
           },
@@ -83,7 +93,7 @@ if (!bundle) throw new Error("SSH fixture bundle missing");
 test.beforeEach(async ({ page }) => {
   await page.setContent(`<body style="background:#191b20;color:#eee;color-scheme:dark;font:14px system-ui;padding:24px">
     <button id="switch-host">Switch to SSH</button><button id="finish">Complete local request</button>
-    ${["local", "remote-ssh-discovered:fixture"]
+    ${["local", "remote-ssh-discovered:fixture", "remote-ssh-discovered:native"]
       .map(
         (host) => `<div
       data-app-action-sidebar-thread-row data-app-action-sidebar-thread-host-id="${host}"
@@ -114,22 +124,66 @@ test("SSH terminal and workspace use the local desktop and remote thread metadat
   await expect(page.getByRole("menu")).toHaveCount(0);
   const calls = await page.evaluate(() => Reflect.get(globalThis, "calls"));
   expect(calls.filter((call: { method: string }) => call.method === "target")).toHaveLength(2);
-  for (const method of ["terminal", "workspace"]) {
-    expect(calls.find((call: { method: string }) => call.method === method)).toMatchObject({
-      hostId: "local",
-      method,
-      params: {
-        threadId: "same-id",
-        remote: {
-          hostId: "remote-ssh-discovered:fixture",
-          workspace: "/remote/project",
-          codexHome: "/root/.codex",
-          codexPath: "/remote/bin/codex",
-        },
+  expect(calls.find((call: { method: string }) => call.method === "terminal")).toMatchObject({
+    hostId: "local",
+    method: "terminal",
+    params: {
+      threadId: "same-id",
+      remote: {
+        hostId: "remote-ssh-discovered:fixture",
+        workspace: "/remote/project",
+        codexHome: "/root/.codex",
+        codexPath: "/remote/bin/codex",
       },
-    });
-  }
+    },
+  });
+  // 编辑器只需目录：远端 Codex 入口不进入图形应用参数。
+  expect(calls.find((call: { method: string }) => call.method === "workspace")).toMatchObject({
+    hostId: "local",
+    method: "workspace",
+    params: {
+      threadId: "same-id",
+      remote: { hostId: "remote-ssh-discovered:fixture", workspace: "/remote/project" },
+    },
+  });
   await page.screenshot({ path: "test-results/ssh-thread-actions-after.png" });
+});
+
+test("native SSH thread opens terminal and VS Code without codexhost RPCs", async ({ page }) => {
+  const row = page.locator(
+    '[data-app-action-sidebar-thread-host-id="remote-ssh-discovered:native"]',
+  );
+  await row.hover();
+  await row.locator("[data-codexhost-thread-actions-trigger]").click();
+  await page.getByRole("menuitem", { name: "从终端打开" }).click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await row.hover();
+  await row.locator("[data-codexhost-thread-actions-trigger]").click();
+  await page.getByRole("menuitem", { name: /VS Code/ }).click();
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  const calls = await page.evaluate(() => Reflect.get(globalThis, "calls"));
+  const reads = await page.evaluate(() => Reflect.get(globalThis, "reads"));
+  // 原生服务没有 open-target：工作区回退到 thread/read，且不提示“不支持”。
+  expect(calls.filter((call: { method: string }) => call.method === "target")).toHaveLength(0);
+  // 中断队列先读取一次，两个菜单动作各读取一次。
+  const nativeReads = reads.filter(
+    (read: { hostId: string }) => read.hostId === "remote-ssh-discovered:native",
+  );
+  expect(nativeReads).toHaveLength(3);
+  expect(calls.find((call: { method: string }) => call.method === "terminal")).toMatchObject({
+    hostId: "local",
+    params: {
+      threadId: "same-id",
+      remote: { hostId: "remote-ssh-discovered:native", workspace: "/remote/project" },
+    },
+  });
+  expect(calls.find((call: { method: string }) => call.method === "workspace")).toMatchObject({
+    hostId: "local",
+    params: {
+      threadId: "same-id",
+      remote: { hostId: "remote-ssh-discovered:native", workspace: "/remote/project" },
+    },
+  });
 });
 
 test("interrupted SSH thread resumes only on its owning Host", async ({ page }) => {

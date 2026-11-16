@@ -163,6 +163,8 @@ Git 侧栏的「共享项目」按当前 SSH Host 读取远端 Codex 原生项�
 
 官方 Codex 会话菜单的“从终端打开”在 Desktop 所在机器打开所选终端，使用 Desktop 已保存的 SSH 连接，再以远端工作目录、Codex 可执行文件和 CODEX_HOME 执行 `codex resume`。远端无需图形终端；本机需有 SSH 客户端。“在 VS Code 中打开”在本机使用 Remote SSH 打开远端目录；需要 VS Code Remote SSH 扩展。单独指定密钥文件的连接应先配置 SSH 别名，确保 VS Code 使用同一密钥。
 
+这两个入口在原生 SSH 服务和远端 codexhost Host 上都可用。工作目录来自会话本身：远端 codexhost 通过 `codexhost/thread/open-target` 返回，原生服务则由 `thread/read` 返回同一个 `cwd`。缺少该 RPC 时，本机 Host 用固定探测脚本经同一保存连接解析 Codex 可执行文件和 `CODEX_HOME`（一次远端往返，经远端登录 shell 执行，缺少 bash 时退回 POSIX `sh`）：先取 `CODEXHOST_STOCK_CODEX_PATH`，再在登录 shell 的 PATH 上找 `codex`／`codex-cli`，然后检查常见安装位置，`CODEX_HOME` 缺省为 `${CODEX_HOME:-$HOME/.codex}`。会话目录不是绝对路径时直接报错，不猜测；连接不可达、远端缺少 Codex 命令行与缺少 `CODEX_HOME` 分别提示。两种路径都拒绝外部 Harness 会话：只有官方 Codex 线程可以用 CLI 续接。
+
 终端偏好、Desktop 更新和桌面应用入口属于本机。外部 Harness 保留自身原生能力，不能用 Codex CLI 恢复。远程 Windows 仍不受支持。
 
 `npx -y codex-buddy sync` 只同步模型配置，不会替换持续运行的原生服务。如果配置目录已有 `auto`，但菜单缺失或扩展接口不可用，需要在现有任务结束后启动远程 Buddy Host 并重新连接。运行中的任务应先完成，避免服务切换中断执行。

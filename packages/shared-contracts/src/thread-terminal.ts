@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { hostThreadIdSchema } from "./ids.js";
-import { remoteThreadOpenTargetSchema } from "./thread-open-target.js";
+import { remoteThreadTerminalTargetSchema } from "./thread-open-target.js";
 
 export const THREAD_TERMINAL_OPEN_METHOD = "codexhost/thread/terminal/open";
 export const THREAD_TERMINAL_LIST_METHOD = "codexhost/thread/terminal/list";
@@ -48,7 +48,7 @@ export const threadTerminalOpenParamsSchema = z
   .object({
     threadId: hostThreadIdSchema,
     terminalId: threadTerminalIdSchema.optional(),
-    remote: remoteThreadOpenTargetSchema.optional(),
+    remote: remoteThreadTerminalTargetSchema.optional(),
   })
   .strict();
 export type ThreadTerminalOpenParams = z.infer<typeof threadTerminalOpenParamsSchema>;

@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { inspectSshRemoteProjects } from "../src/ssh-remote-projects.js";
@@ -10,6 +12,7 @@ import {
 } from "../src/ssh-remote-projects-worker.js";
 
 const directories: string[] = [];
+const execute = promisify(execFile);
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -25,6 +28,17 @@ async function hostFixture(apiKey = "remote-secret-key") {
   const data = path.join(root, "codexhost-data");
   await mkdir(home, { recursive: true });
   await writeFile(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: apiKey }));
+  const projectRoot = path.join(root, "project");
+  await mkdir(projectRoot, { recursive: true });
+  await execute("git", ["init", "--quiet", projectRoot]);
+  await execute("git", [
+    "-C",
+    projectRoot,
+    "remote",
+    "add",
+    "origin",
+    "git@github.com:company/iot-platform.git",
+  ]);
   const fakeCodexScript = path.join(root, "fake-codex.mjs");
   await writeFile(
     fakeCodexScript,
@@ -35,7 +49,7 @@ const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
 input.on("line", line => {
   const request = JSON.parse(line);
   if (request.method === "initialize") return send({ id: request.id, result: { userAgent: "fixture" } });
-  if (request.method === "project/list") return send({ id: request.id, result: { data: [{ id: "p1", name: "Shared project", roots: [{ path: "/remote/project" }] }] } });
+  if (request.method === "project/list") return send({ id: request.id, result: { data: [{ id: "p1", name: "Shared project", roots: [{ path: ${JSON.stringify(projectRoot)} }] }] } });
   if (request.method === "thread/list") return send({ id: request.id, result: { data: [{ id: "019ccb31-9520-7120-bc17-556e9a92d860", name: "Shared conversation", updatedAt: 42 }] } });
   send({ id: request.id, result: {} });
 });
@@ -51,6 +65,7 @@ input.on("line", line => {
       CODEXHOST_STOCK_CODEX_PATH: fakeCodexScript,
     },
     data,
+    projectRoot,
   };
 }
 
@@ -61,7 +76,8 @@ describe("SSH remote project metadata", () => {
     expect(snapshot.account.projects).toMatchObject([
       {
         name: "Shared project",
-        roots: ["/remote/project"],
+        roots: [fixture.projectRoot],
+        origin: "git@github.com:company/iot-platform.git",
         threads: [
           {
             id: "019ccb31-9520-7120-bc17-556e9a92d860",
@@ -78,6 +94,24 @@ describe("SSH remote project metadata", () => {
     expect(await inspectRemoteProjectsOnHost(fixture.environment)).toMatchObject({
       account: { id: snapshot.account.id, current: true },
     });
+  });
+
+  it("records no origin for projects that are not Git repositories", async () => {
+    const fixture = await hostFixture();
+    const plain = path.join(path.dirname(fixture.projectRoot), "plain");
+    await mkdir(plain, { recursive: true });
+    // 复用同一 Worker，只替换项目根目录以覆盖“目录存在但没有 Git”的分支。
+    const script = path.join(
+      path.dirname(fixture.environment.CODEXHOST_STOCK_CODEX_PATH ?? ""),
+      "fake-codex-plain.mjs",
+    );
+    const source = await readFile(fixture.environment.CODEXHOST_STOCK_CODEX_PATH ?? "", "utf8");
+    await writeFile(script, source.replaceAll(fixture.projectRoot, plain), { mode: 0o700 });
+    const snapshot = await syncRemoteProjectsOnHost({
+      ...fixture.environment,
+      CODEXHOST_STOCK_CODEX_PATH: script,
+    });
+    expect(snapshot.account.projects[0]).toMatchObject({ roots: [plain], origin: null });
   });
 
   it("isolates metadata for different auth identities", async () => {

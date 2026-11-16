@@ -1,10 +1,12 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import {
+  normalizeProjectOrigin,
   remoteProjectsSnapshotSchema,
   type RemoteProject,
   type RemoteProjectAccount,
@@ -16,6 +18,9 @@ const METADATA_FILE = "shared-projects.json";
 const METADATA_VERSION = 1;
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const APP_SERVER_TIMEOUT_MS = 30_000;
+const GIT_ORIGIN_TIMEOUT_MS = 5_000;
+const GIT_ORIGIN_CONCURRENCY = 4;
+const execute = promisify(execFile);
 
 interface RemoteProjectMetadataDocument {
   version: 1;
@@ -291,12 +296,51 @@ class AppServerClient {
   }
 }
 
+async function readRootOrigin(
+  root: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string | null> {
+  try {
+    const { stdout } = await execute(
+      "git",
+      ["-C", root, "config", "--local", "--get", "remote.origin.url"],
+      {
+        env: environment,
+        timeout: GIT_ORIGIN_TIMEOUT_MS,
+        maxBuffer: 8 * 1024,
+        windowsHide: true,
+      },
+    );
+    const origin = stdout.trim();
+    // 带凭据或无法识别的来源不进入共享索引，Renderer 会退回项目名。
+    return origin && normalizeProjectOrigin(origin) ? origin : null;
+  } catch {
+    // 没有 Git、目录已删除或 Git 不可用都表示“没有可共享的仓库身份”。
+    return null;
+  }
+}
+
+/** 多根目录项目只有在所有可识别来源指向同一仓库时才共享身份。 */
+function projectOrigin(
+  roots: readonly string[],
+  origins: ReadonlyMap<string, string | null>,
+): string | null {
+  const values = roots.map((root) => origins.get(root) ?? null);
+  const distinct = new Set(
+    values.flatMap((origin) => {
+      const identity = normalizeProjectOrigin(origin);
+      return identity ? [identity] : [];
+    }),
+  );
+  return distinct.size === 1 ? (values.find(Boolean) ?? null) : null;
+}
+
 async function listProjects(environment: NodeJS.ProcessEnv): Promise<RemoteProjectCandidate[]> {
   const command = await codExExecutable(environment);
   const client = new AppServerClient(command, environment);
   try {
     await client.initialize();
-    const projects: RemoteProjectCandidate[] = [];
+    const discovered: { id: string; project: AppServerRecord; roots: string[] }[] = [];
     let cursor: string | null = null;
     do {
       const response = object(
@@ -312,31 +356,53 @@ async function listProjects(environment: NodeJS.ProcessEnv): Promise<RemoteProje
         const project = object(raw) as AppServerRecord | null;
         const id = project ? projectId(project) : null;
         if (!project || !id) continue;
-        const roots = projectRoots(project.roots);
-        const threadsById = new Map<string, RemoteProject["threads"][number]>();
-        for (const summary of await listThreads(client, { projectId: id })) {
-          threadsById.set(summary.id, summary);
-        }
-        if (roots.length > 0) {
-          for (const summary of await listThreads(client, { cwd: roots })) {
-            threadsById.set(summary.id, summary);
-          }
-        }
-        projects.push({
-          key: createHash("sha256")
-            .update("codexhost-remote-project-v1\0")
-            .update(roots.length > 0 ? roots.join("\0") : `${project.name ?? id}\0`)
-            .digest("hex")
-            .slice(0, 16),
-          name: typeof project.name === "string" && project.name.trim() ? project.name : id,
-          roots,
-          threads: [...threadsById.values()].sort(
-            (left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id),
-          ),
-        });
+        discovered.push({ id, project, roots: projectRoots(project.roots) });
       }
       cursor = typeof response?.nextCursor === "string" ? response.nextCursor : null;
     } while (cursor);
+
+    // 同一目录可能出现在多个项目中；每个 root 只读取一次，限制并发避免
+    // 大项目列表在远端瞬间拉起数百个 Git 进程。
+    const origins = new Map<string, string | null>();
+    const queue = [...new Set(discovered.flatMap(({ roots }) => roots))];
+    let next = 0;
+    await Promise.all(
+      Array.from({ length: Math.min(GIT_ORIGIN_CONCURRENCY, queue.length) }, async () => {
+        while (next < queue.length) {
+          const root = queue[next++];
+          if (root) origins.set(root, await readRootOrigin(root, environment));
+        }
+      }),
+    );
+
+    const projects: RemoteProjectCandidate[] = [];
+    for (const { id, project, roots } of discovered) {
+      const origin = projectOrigin(roots, origins);
+      const name = typeof project.name === "string" && project.name.trim() ? project.name : id;
+      const threadsById = new Map<string, RemoteProject["threads"][number]>();
+      for (const summary of await listThreads(client, { projectId: id })) {
+        threadsById.set(summary.id, summary);
+      }
+      if (roots.length > 0) {
+        for (const summary of await listThreads(client, { cwd: roots })) {
+          threadsById.set(summary.id, summary);
+        }
+      }
+      const identity = normalizeProjectOrigin(origin);
+      projects.push({
+        key: createHash("sha256")
+          .update("codexhost-remote-project-v1\0")
+          .update(identity ? `git:${identity}` : roots.length > 0 ? roots.join("\0") : name)
+          .digest("hex")
+          .slice(0, 16),
+        name,
+        roots,
+        origin,
+        threads: [...threadsById.values()].sort(
+          (left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id),
+        ),
+      });
+    }
     return projects;
   } finally {
     client.close();

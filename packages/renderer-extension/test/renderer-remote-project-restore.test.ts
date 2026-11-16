@@ -6,6 +6,7 @@ const project: RemoteProject = {
   key: "fedcba9876543210",
   name: "Shared project",
   roots: ["/remote/project"],
+  origin: null,
   threads: [
     {
       id: "019ccb31-9520-7120-bc17-556e9a92d860",

@@ -9,6 +9,7 @@ import {
   localWorkspacePrepareParamsSchema,
   localWorkspacePrepareResultSchema,
   hostThreadIdSchema,
+  normalizeProjectOrigin,
 } from "@codexhost/shared-contracts";
 import {
   captureLocalWorkspaceContext,
@@ -361,6 +362,7 @@ export function installRendererLocalWorkspace(options: {
           key: localThreadId.replaceAll("-", "").slice(0, 16),
           name: prepared.path.split(/[\\/]/u).filter(Boolean).at(-1) ?? snapshot.title,
           roots: [prepared.path],
+          origin: normalizeProjectOrigin(snapshot.remote) ? snapshot.remote : null,
           threads: [{ id: localThreadId, name: snapshot.title, updatedAt: Date.now() }],
         });
         status.textContent = copy.complete;

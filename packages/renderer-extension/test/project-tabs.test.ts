@@ -9,6 +9,7 @@ import {
   withProjectTabs,
   type SidebarProject,
 } from "../src/project-tabs/model.js";
+import { projectPaths } from "../src/project-tabs/native-binding.js";
 
 const project: SidebarProject = {
   projectKind: "remote",
@@ -125,5 +126,25 @@ describe("project tab classification", () => {
     ]) {
       expect(() => parseProjectTabs(raw)).toThrow();
     }
+  });
+});
+
+describe("native project roots", () => {
+  const native = (value: Record<string, unknown>): SidebarProject =>
+    value as unknown as SidebarProject;
+
+  it("keeps the primary path first and de-duplicates extra roots", () => {
+    expect(
+      projectPaths(
+        native({ path: "/work/app", rootPaths: ["/work/app", "/work/shared", "/work/app"] }),
+      ),
+    ).toEqual(["/work/app", "/work/shared"]);
+  });
+  it("reads inherited roots and tolerates projects without a path", () => {
+    const prototype = { rootPaths: ["/srv/app"] };
+    expect(projectPaths(native(Object.create(prototype)))).toEqual(["/srv/app"]);
+    expect(projectPaths(native({ path: "/srv/app" }))).toEqual(["/srv/app"]);
+    expect(projectPaths(native({}))).toEqual([]);
+    expect(projectPaths(native({ path: "", rootPaths: [null, 1, ""] }))).toEqual([]);
   });
 });

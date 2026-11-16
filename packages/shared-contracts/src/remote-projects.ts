@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { normalizeProjectOrigin } from "./project-origin.js";
+
 export const REMOTE_PROJECTS_INSPECT_METHOD = "codexhost/ssh/projects/inspect";
 export const REMOTE_PROJECTS_SYNC_METHOD = "codexhost/ssh/projects/sync";
 
@@ -16,6 +18,17 @@ export const remoteProjectSchema = z
     key: z.string().regex(/^[a-f0-9]{16}$/u),
     name: z.string().trim().min(1).max(200),
     roots: z.array(remoteProjectPathSchema).min(1).max(100),
+    // 同一仓库在不同主机或本地克隆之间共享身份；没有 Git 来源时保持 null。
+    origin: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2048)
+      .nullable()
+      .default(null)
+      .refine((origin) => origin === null || normalizeProjectOrigin(origin) !== null, {
+        message: "Git origin must be a credential-free remote",
+      }),
     threads: z.array(remoteProjectThreadSchema).max(10_000),
   })
   .strict();

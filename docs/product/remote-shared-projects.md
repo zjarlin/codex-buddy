@@ -4,11 +4,11 @@
 
 ## 同步来源
 
-「同步当前身份」由本机 Host 经已有的 SSH 连接，在远端 `CODEX_HOME/auth.json` 所在主机启动固定 Worker。Worker 使用远端原生 Codex app-server 读取 `project/list` 与这些项目下的 `thread/list`，然后把项目名称、远端绝对根目录、Thread ID、标题和更新时间写成项目索引。
+「同步当前身份」由本机 Host 经已有的 SSH 连接，在远端 `CODEX_HOME/auth.json` 所在主机启动固定 Worker。Worker 使用远端原生 Codex app-server 读取 `project/list` 与这些项目下的 `thread/list`，并为每个项目根目录读取 `git config --local --get remote.origin.url`；然后把项目名称、远端绝对根目录、Git 来源、Thread ID、标题和更新时间写成项目索引。
 
-身份标签使用 `auth.json` 中 API Key 的 SHA-256 短摘要，不保存或返回 API Key。多个身份在同一主机上的索引互相隔离；「共享项目」页会聚合所有已同步身份，同一远端根目录的项目可被当前或未来的身份看见。
+身份标签使用 `auth.json` 中 API Key 的 SHA-256 短摘要，不保存或返回 API Key。多个身份在同一主机上的索引互相隔离；「共享项目」页会聚合所有已同步身份，同一 Git 仓库（按主机与仓库路径识别，忽略协议和用户名）或同一远端根目录的项目合并为一项，可被当前或未来的身份看见。没有 Git 来源的项目保持 `origin: null`，不会被同名但不同仓库的项目误合并。
 
-索引默认位于远端 `CODEXHOST_DATA_DIR/codexhost-remote-projects/shared-projects.json`；未设置 `CODEXHOST_DATA_DIR` 时使用 `CODEX_HOME/.codexhost/codexhost-remote-projects/shared-projects.json`。目录权限 `0700`，文件权限 `0600`。索引不含凭据、Prompt、源码、未提交文件或本机路径。
+索引默认位于远端 `CODEXHOST_DATA_DIR/codexhost-remote-projects/shared-projects.json`；未设置 `CODEXHOST_DATA_DIR` 时使用 `CODEX_HOME/.codexhost/codexhost-remote-projects/shared-projects.json`。目录权限 `0700`，文件权限 `0600`。索引不含凭据、Prompt、源码或未提交文件；带凭据的 Git 来源不会写入索引。
 
 ## 一键恢复
 

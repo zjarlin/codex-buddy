@@ -806,6 +806,7 @@ describe("Renderer fixed Model request client", () => {
       "inspectGitContent",
       "inspectGitDiff",
       "inspectGitLog",
+      "inspectGitOrigin",
       "inspectGitStatus",
       "inspectGitWorkflow",
       "inspectHarness",

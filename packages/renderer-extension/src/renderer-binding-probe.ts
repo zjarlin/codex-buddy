@@ -1254,6 +1254,11 @@ export function installRendererBindingProbe(
   const projectTabs = installProjectTabs({
     getLocale: rendererLocale,
     getClient: () => localClient ?? modelClientForHost("local"),
+    isHostAvailable: (hostId) => hostId === "local" || modelClientForHost(hostId) !== null,
+    getSourceClient: (hostId) =>
+      hostId === "local"
+        ? (localClient ?? modelClientForHost("local"))
+        : modelClientForHost(hostId),
   });
   revealThreadInProjectTab = projectTabs.revealThread;
   projectTools = installProjectTools({

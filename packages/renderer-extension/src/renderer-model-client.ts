@@ -108,6 +108,8 @@ import {
   GIT_STAGE_METHOD,
   GIT_UNSTAGE_METHOD,
   GIT_COMMIT_METHOD,
+  GIT_ORIGIN_METHOD,
+  gitOriginResultSchema,
   GIT_PUSH_METHOD,
   GIT_MESSAGE_MODEL_METHOD,
   GIT_MESSAGE_GENERATE_METHOD,
@@ -602,6 +604,7 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
   runGitWorkflow?(input: GitWorkflowParams): Promise<GitWorkflowSnapshot>;
   inspectTurnActions?(input: TurnActionsInspectParams): Promise<TurnActionsSnapshot>;
   executeTurnAction?(input: TurnActionExecuteParams): Promise<TurnActionInvocation>;
+  inspectGitOrigin?(input: { cwd: string }): Promise<{ remote: string | null }>;
   inspectGitStatus?(input: GitWorkspaceParams): Promise<GitWorkspaceStatus>;
   inspectGitDiff?(input: GitDiffParams): Promise<GitDiffResult>;
   inspectGitContent?(input: GitContentParams): Promise<GitContentResult>;
@@ -1199,6 +1202,10 @@ export function createRendererModelClient(
         if (!(error instanceof RendererMethodUnavailableError)) throw error;
         return runNativeGitWorkflow(params);
       }
+    },
+    async inspectGitOrigin(input: { cwd: string }): Promise<{ remote: string | null }> {
+      const params = gitWorkspaceParamsSchema.parse({ cwd: input.cwd });
+      return gitOriginResultSchema.parse(await manager.sendRequest(GIT_ORIGIN_METHOD, params));
     },
     async inspectGitStatus(input: GitWorkspaceParams): Promise<GitWorkspaceStatus> {
       const params = gitWorkspaceParamsSchema.parse(input);

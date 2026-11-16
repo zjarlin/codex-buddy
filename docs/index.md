@@ -160,7 +160,7 @@
 | [`product/project-sync.md`](product/project-sync.md) | 项目清单同步、远程聊天切回本地、目录克隆与上下文复用。 |
 | [`product/persistent-local-host.md`](product/persistent-local-host.md) | 本地工作区常驻 Host：Desktop 重启不结束后台 Host，不需要 SSH 或反向组网；启用、停止、升级和文件边界。 |
 | [`product/remote-shared-projects.md`](product/remote-shared-projects.md) | SSH 主机共享项目发现、身份隔离与原生项目／会话恢复。 |
-| [`product/project-actions.md`](product/project-actions.md) | 项目快捷 URL 与启停脚本、项目分类 Tab、前缀规则、会话文件夹与在文件夹中新建会话，以及 Doubao 桌面客户端入口。 |
+| [`product/project-actions.md`](product/project-actions.md) | 项目快捷 URL 与启停脚本、Git 来源去重与保留选择、项目分类 Tab、前缀规则、会话文件夹与在文件夹中新建会话，以及 Doubao 桌面客户端入口。 |
 | [`architecture/renderer-performance.md`](architecture/renderer-performance.md) | 注入层 DOM 扫描范围、可见性轮询、重复渲染抑制与性能回归证据；修改高频 Renderer 路径时阅读。 |
 
 ## 平台、进程与远程运行

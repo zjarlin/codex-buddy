@@ -21,24 +21,18 @@ afterEach(async () => {
   );
 });
 
-async function hostFixture(apiKey = "remote-secret-key") {
+// 共享索引保存的是远端 Host 上报的 POSIX 根目录，默认 fixture 因此用一个任何
+// 平台都不会解析到的远端路径；需要真实仓库的用例显式传入本机路径。
+const REMOTE_PROJECT_ROOT = "/remote/project";
+const localGitAvailable = process.platform !== "win32";
+
+async function hostFixture(apiKey = "remote-secret-key", projectRoot = REMOTE_PROJECT_ROOT) {
   const root = await mkdtemp(path.join(tmpdir(), "ssh-remote-projects-"));
   directories.push(root);
   const home = path.join(root, ".codex");
   const data = path.join(root, "codexhost-data");
   await mkdir(home, { recursive: true });
   await writeFile(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: apiKey }));
-  const projectRoot = path.join(root, "project");
-  await mkdir(projectRoot, { recursive: true });
-  await execute("git", ["init", "--quiet", projectRoot]);
-  await execute("git", [
-    "-C",
-    projectRoot,
-    "remote",
-    "add",
-    "origin",
-    "git@github.com:company/iot-platform.git",
-  ]);
   const fakeCodexScript = path.join(root, "fake-codex.mjs");
   await writeFile(
     fakeCodexScript,
@@ -76,8 +70,8 @@ describe("SSH remote project metadata", () => {
     expect(snapshot.account.projects).toMatchObject([
       {
         name: "Shared project",
-        roots: [fixture.projectRoot],
-        origin: "git@github.com:company/iot-platform.git",
+        roots: [REMOTE_PROJECT_ROOT],
+        origin: null,
         threads: [
           {
             id: "019ccb31-9520-7120-bc17-556e9a92d860",
@@ -96,23 +90,40 @@ describe("SSH remote project metadata", () => {
     });
   });
 
-  it("records no origin for projects that are not Git repositories", async () => {
-    const fixture = await hostFixture();
-    const plain = path.join(path.dirname(fixture.projectRoot), "plain");
-    await mkdir(plain, { recursive: true });
-    // 复用同一 Worker，只替换项目根目录以覆盖“目录存在但没有 Git”的分支。
-    const script = path.join(
-      path.dirname(fixture.environment.CODEXHOST_STOCK_CODEX_PATH ?? ""),
-      "fake-codex-plain.mjs",
-    );
-    const source = await readFile(fixture.environment.CODEXHOST_STOCK_CODEX_PATH ?? "", "utf8");
-    await writeFile(script, source.replaceAll(fixture.projectRoot, plain), { mode: 0o700 });
-    const snapshot = await syncRemoteProjectsOnHost({
-      ...fixture.environment,
-      CODEXHOST_STOCK_CODEX_PATH: script,
+  it.runIf(localGitAvailable)("records the Git origin read from a project root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ssh-remote-project-repo-"));
+    directories.push(root);
+    const projectRoot = path.join(root, "project");
+    await mkdir(projectRoot, { recursive: true });
+    await execute("git", ["init", "--quiet", projectRoot]);
+    await execute("git", [
+      "-C",
+      projectRoot,
+      "remote",
+      "add",
+      "origin",
+      "git@github.com:company/iot-platform.git",
+    ]);
+    const fixture = await hostFixture("remote-secret-key", projectRoot);
+    const snapshot = await syncRemoteProjectsOnHost(fixture.environment);
+    expect(snapshot.account.projects[0]).toMatchObject({
+      roots: [projectRoot],
+      origin: "git@github.com:company/iot-platform.git",
     });
-    expect(snapshot.account.projects[0]).toMatchObject({ roots: [plain], origin: null });
   });
+
+  it.runIf(localGitAvailable)(
+    "records no origin for projects that are not Git repositories",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "ssh-remote-project-plain-"));
+      directories.push(root);
+      const plain = path.join(root, "plain");
+      await mkdir(plain, { recursive: true });
+      const fixture = await hostFixture("remote-secret-key", plain);
+      const snapshot = await syncRemoteProjectsOnHost(fixture.environment);
+      expect(snapshot.account.projects[0]).toMatchObject({ roots: [plain], origin: null });
+    },
+  );
 
   it("isolates metadata for different auth identities", async () => {
     const fixture = await hostFixture("first-key");

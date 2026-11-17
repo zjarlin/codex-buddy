@@ -259,6 +259,7 @@ import { managedDelegationSkillReference } from "./delegation-skill.js";
 import { AccountRateLimits } from "./codex-runtime/account-rate-limits.js";
 import { listThreadTerminals, openProjectTerminal, openThreadTerminal } from "./thread-terminal.js";
 import { desktopSshConnection } from "./desktop-ssh-connection.js";
+import { sshThreadCodexRuntime } from "./ssh-thread-runtime.js";
 import { openProjectWorkspace, openThreadWorkspace } from "./thread-workspace.js";
 import { createLauncherDoubaoOpener } from "./launcher-url-opener.js";
 import { ThreadTerminalSettingsStore } from "./thread-terminal-settings.js";
@@ -5271,18 +5272,21 @@ export class AppServerHost {
       }
       const cwd = remote?.workspace ?? (await this.#gitWorkspaceForThread(params.data.threadId));
       const settings = await this.#threadTerminalSettings.load();
+      // 原生 SSH 服务不提供 Codex 运行环境；只有缺省时才在远端解析，
+      // 已有值（codexhost 远端）保持原样。
+      const sshCodex = remote ? await sshThreadCodexRuntime(remote, ssh, environment) : null;
       const result = await openThreadTerminal(
         cwd,
         params.data.threadId,
-        remote?.codexPath ?? this.#options.stockCodexPath,
+        sshCodex?.codexPath ?? this.#options.stockCodexPath,
         params.data.terminalId ?? settings.terminalId ?? "system-default",
         {
           environment,
-          ...(remote && ssh
+          ...(remote && ssh && sshCodex
             ? {
                 ssh: {
                   arguments: ssh.arguments,
-                  codexHome: remote.codexHome,
+                  codexHome: sshCodex.codexHome,
                   workspace: remote.workspace,
                 },
               }

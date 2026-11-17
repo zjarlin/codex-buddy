@@ -1,14 +1,14 @@
 import { z } from "zod";
 
 import { hostThreadIdSchema } from "./ids.js";
-import { remoteThreadOpenTargetSchema } from "./thread-open-target.js";
+import { remoteThreadWorkspaceSchema } from "./thread-open-target.js";
 
 export const THREAD_WORKSPACE_OPEN_METHOD = "codexhost/thread/workspace/open";
 
 export const threadWorkspaceOpenParamsSchema = z
   .object({
     threadId: hostThreadIdSchema,
-    remote: remoteThreadOpenTargetSchema.optional(),
+    remote: remoteThreadWorkspaceSchema.optional(),
   })
   .strict();
 export type ThreadWorkspaceOpenParams = z.infer<typeof threadWorkspaceOpenParamsSchema>;

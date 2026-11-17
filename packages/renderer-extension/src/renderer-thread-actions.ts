@@ -5,12 +5,14 @@ import Copy from "lucide/dist/esm/icons/copy.mjs";
 import Ellipsis from "lucide/dist/esm/icons/ellipsis.mjs";
 import Terminal from "lucide/dist/esm/icons/terminal.mjs";
 import {
+  THREAD_OPEN_TARGET_METHOD,
   hostThreadIdSchema,
+  type RemoteThreadTerminalTarget,
   type ThreadTerminalDescriptor,
-  type RemoteThreadOpenTarget,
 } from "@codexhost/shared-contracts";
 
 import type { RendererModelClient } from "./renderer-model-client.js";
+import { isUnsupportedMethod } from "./renderer-request-sender.js";
 import type { ThreadFolderThreadMenu } from "./thread-folders/index.js";
 import { mutationAffectsElements } from "./renderer-dom-mutations.js";
 import { getDomMutationHub } from "./renderer-mutation-hub.js";
@@ -184,13 +186,59 @@ export function installRendererThreadActions(options: {
     }
   };
 
-  // 会话资料由所属 Host 确认；图形应用始终在 Desktop 所在机器启动。
+  /**
+   * 远程会话的工作区由所属 Host 确认；终端与 VS Code 始终在 Desktop 所在机器启动。
+   * codexhost 远端提供 `open-target`，同时给出 Codex 运行环境；原生 SSH 服务没有该 RPC，
+   * 但原生 `thread/read` 已返回会话目录，终端目标因此可以只带工作区，
+   * 由本机 Host 经同一 SSH 连接解析 Codex 入口。
+   */
+  const remoteTarget = async (
+    hostId: string,
+    threadId: string,
+  ): Promise<RemoteThreadTerminalTarget | null> => {
+    const owner = options.getClient(hostId);
+    if (!owner) return null;
+    if (owner.threadOpenTarget) {
+      try {
+        return { ...(await owner.threadOpenTarget(threadId)), hostId };
+      } catch (error) {
+        // 只有“该连接不认识这个方法”才降级；真正的失败照常上报。
+        if (!isUnsupportedMethod(error, THREAD_OPEN_TARGET_METHOD)) throw error;
+      }
+    }
+    if (!owner.requestThreadProjection) return null;
+    const response = await owner.requestThreadProjection("thread/read", {
+      threadId,
+      includeTurns: false,
+    });
+    const thread =
+      response && typeof response === "object" && "thread" in response
+        ? (response as { thread?: unknown }).thread
+        : null;
+    if (!thread || typeof thread !== "object") return null;
+    const { id, cwd, modelProvider, cliVersion } = thread as {
+      id?: unknown;
+      cwd?: unknown;
+      modelProvider?: unknown;
+      cliVersion?: unknown;
+    };
+    // 只接受该会话自己的目录；读回别的会话时不据此启动终端或编辑器。
+    if (id !== threadId) return null;
+    // 外部 Harness 会话保留自身原生能力，不能用 Codex CLI 续接；Host 的
+    // open-target 本来就拒绝它们，降级路径必须给出同样的结论而不是报“读不到目录”。
+    if (modelProvider === "codexhost" || cliVersion === "codexhost") {
+      throw new Error("只有官方 Codex 线程可以在终端或 VS Code 中打开。");
+    }
+    // 路径原样交给本机 Host；这里只确认它是绝对 POSIX 路径。
+    return typeof cwd === "string" && cwd.startsWith("/") ? { workspace: cwd, hostId } : null;
+  };
+
   const desktopTarget = async (
     hostId: string,
     threadId: string,
   ): Promise<{
     client: RendererModelClient;
-    remote?: RemoteThreadOpenTarget;
+    remote?: RemoteThreadTerminalTarget;
     isCurrent(): boolean;
   }> => {
     const owner = options.getClient(hostId);
@@ -199,11 +247,10 @@ export function installRendererThreadActions(options: {
     const isCurrent = () =>
       !disposed && options.getClient(hostId) === owner && options.getClient("local") === local;
     if (hostId === "local") return { client: local, isCurrent };
-    if (!owner.threadOpenTarget)
-      throw new Error("远程 Host 尚不支持终端续接，请更新远程 Codex Buddy。");
-    const target = await owner.threadOpenTarget(threadId);
+    const remote = await remoteTarget(hostId, threadId);
     if (!isCurrent()) throw new Error("连接已变化，请重新打开会话菜单。");
-    return { client: local, remote: { ...target, hostId }, isCurrent };
+    if (!remote) throw new Error("无法确认远程会话的工作区，请打开该会话后重试。");
+    return { client: local, remote, isCurrent };
   };
 
   const closeMenu = (): void => {
@@ -302,9 +349,12 @@ export function installRendererThreadActions(options: {
       const target = await desktopTarget(hostId, threadId);
       if (!target.isCurrent()) throw new Error("连接已变化，请重新打开会话菜单。");
       if (!target.client.openThreadWorkspace) throw new Error("本机 VS Code 入口不可用。");
+      // 编辑器只需目录；远端 Codex 入口不进入图形应用的参数。
       await target.client.openThreadWorkspace({
         threadId: hostThreadIdSchema.parse(threadId),
-        ...(target.remote ? { remote: target.remote } : {}),
+        ...(target.remote
+          ? { remote: { workspace: target.remote.workspace, hostId: target.remote.hostId } }
+          : {}),
       });
       if (openRow === row) closeMenu();
     } catch (failure) {

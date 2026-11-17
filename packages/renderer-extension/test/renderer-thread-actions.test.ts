@@ -466,6 +466,172 @@ describe("renderer thread actions", () => {
     installed.dispose();
   });
 
+  it("resolves a native SSH session through thread/read when the Host has no open-target", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({
+      workspace: "/remote/repo",
+      terminal: "ghostty",
+      mode: "resume",
+    }));
+    const remote = clientWith(async () => {
+      throw new Error("must not start a remote GUI");
+    });
+    // 原生 SSH 服务没有 codexhost 扩展方法；真实客户端会带 -32601 拒绝。
+    remote.threadOpenTarget = vi.fn(async () => {
+      throw Object.assign(new Error("codexhost/thread/open-target is unsupported"), {
+        code: -32601,
+      });
+    });
+    const projection = vi.fn(async () => ({ thread: { id: "thread-a", cwd: "/remote/repo" } }));
+    Object.assign(remote, { requestThreadProjection: projection });
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : id === hostId ? remote : null),
+      getLocale: () => "zh-CN",
+      terminalPreference: preference("ghostty"),
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(portal.querySelector("button"), "terminal action").dispatch("click");
+    await settle();
+    expect(projection).toHaveBeenCalledWith("thread/read", {
+      threadId: "thread-a",
+      includeTurns: false,
+    });
+    expect(remote.openThreadTerminal).not.toHaveBeenCalled();
+    // 原生 SSH 拿不到远端 Codex 入口；由本机 Host 经同一连接解析。
+    expect(local.openThreadTerminal).toHaveBeenCalledWith({
+      threadId: "thread-a",
+      terminalId: "ghostty",
+      remote: { workspace: "/remote/repo", hostId },
+    });
+    installed.dispose();
+  });
+
+  it("opens a native SSH workspace in VS Code without a Codex resume environment", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({}));
+    const remote = clientWith(async () => ({}));
+    delete (remote as { threadOpenTarget?: unknown }).threadOpenTarget;
+    Object.assign(remote, {
+      requestThreadProjection: vi.fn(async () => ({
+        thread: { id: "thread-a", cwd: "/remote/repo" },
+      })),
+    });
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : id === hostId ? remote : null),
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(
+      portal.querySelector("[data-codexhost-thread-actions-open-vscode]"),
+      "VS Code item was not rendered",
+    ).dispatch("click");
+    await settle();
+    expect(local.openThreadWorkspace).toHaveBeenCalledWith({
+      threadId: "thread-a",
+      remote: { workspace: "/remote/repo", hostId },
+    });
+    expect(remote.openThreadWorkspace).not.toHaveBeenCalled();
+    installed.dispose();
+  });
+
+  it("does not use a workspace read back for a different thread", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({}));
+    const remote = clientWith(async () => ({}));
+    delete (remote as { threadOpenTarget?: unknown }).threadOpenTarget;
+    Object.assign(remote, {
+      requestThreadProjection: vi.fn(async () => ({
+        thread: { id: "thread-b", cwd: "/remote/other" },
+      })),
+    });
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : id === hostId ? remote : null),
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(portal.querySelector("button"), "terminal action").dispatch("click");
+    await settle();
+    const error = required(
+      portal.querySelector("[data-codexhost-thread-actions-error]"),
+      "error element was not rendered",
+    );
+    expect(error.textContent).toContain("无法确认远程会话的工作区");
+    expect(local.openThreadTerminal).not.toHaveBeenCalled();
+    installed.dispose();
+  });
+
+  it("reports a native SSH thread with no absolute workspace instead of guessing", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({}));
+    const remote = clientWith(async () => ({}));
+    delete (remote as { threadOpenTarget?: unknown }).threadOpenTarget;
+    Object.assign(remote, {
+      requestThreadProjection: vi.fn(async () => ({ thread: { id: "thread-a", cwd: "repo" } })),
+    });
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : id === hostId ? remote : null),
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(portal.querySelector("button"), "terminal action").dispatch("click");
+    await settle();
+    const error = required(
+      portal.querySelector("[data-codexhost-thread-actions-error]"),
+      "error element was not rendered",
+    );
+    expect(error.textContent).toContain("无法确认远程会话的工作区");
+    expect(local.openThreadTerminal).not.toHaveBeenCalled();
+    installed.dispose();
+  });
+
+  it("refuses to resume an external Harness session through the native fallback", async () => {
+    const document_ = installFakeBrowser();
+    const hostId = "remote-ssh-discovered:okm252";
+    const row = sidebarRow(document_, hostId, "thread-a");
+    const local = clientWith(async () => ({}));
+    const remote = clientWith(async () => ({}));
+    delete (remote as { threadOpenTarget?: unknown }).threadOpenTarget;
+    Object.assign(remote, {
+      // 外部 Harness 会话由 Host 投影为 codexhost 提供方；它没有 Codex rollout，
+      // 用 CLI 续接只会失败或恢复错东西。
+      requestThreadProjection: vi.fn(async () => ({
+        thread: {
+          id: "thread-a",
+          cwd: "/remote/repo",
+          modelProvider: "codexhost",
+          cliVersion: "codexhost",
+        },
+      })),
+    });
+    const installed = installRendererThreadActions({
+      getClient: (id) => (id === "local" ? local : id === hostId ? remote : null),
+      getLocale: () => "zh-CN",
+    });
+    installed.refresh();
+    const portal = await openRowMenu(row, document_);
+    required(portal.querySelector("button"), "terminal action").dispatch("click");
+    await settle();
+    const error = required(
+      portal.querySelector("[data-codexhost-thread-actions-error]"),
+      "error element was not rendered",
+    );
+    expect(error.textContent).toContain("只有官方 Codex 线程");
+    expect(local.openThreadTerminal).not.toHaveBeenCalled();
+    installed.dispose();
+  });
+
   it("opens with the installed default terminal selected in Settings", async () => {
     const document_ = installFakeBrowser();
     const row = sidebarRow(document_, "local", "thread-a");

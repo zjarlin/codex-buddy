@@ -189,7 +189,10 @@ export async function readGitCredentialHelper(
       clearTimeout(timer);
       resolve(code === 0 ? stdout : null);
     });
-    child.stdin?.end(input);
+    // 助手可能在读到输入前就退出（例如凭据不存在）：写入会被内核拒绝，
+    // 那是“没有可用凭据”，不是需要冒泡给调用方的错误。
+    child.stdin?.on("error", () => undefined);
+    if (child.stdin && !child.stdin.destroyed) child.stdin.end(input);
   });
   if (!output) return null;
   const fields = new Map<string, string>();

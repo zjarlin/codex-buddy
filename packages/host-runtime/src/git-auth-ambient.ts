@@ -8,6 +8,8 @@ import type { GitAuthSource } from "@codexhost/shared-contracts";
 
 const execute = promisify(execFile);
 const CLI_TIMEOUT_MS = 5_000;
+// 凭据助手可能等待交互或不可达的钥匙串服务；它只是“可复用”的来源之一，不能拖住调用方。
+const HELPER_TIMEOUT_MS = 2_000;
 
 export interface AmbientCredential {
   source: Exclude<GitAuthSource, "stored">;
@@ -162,7 +164,7 @@ export async function readGitCredentialHelper(
     let child: ReturnType<typeof spawn>;
     try {
       child = spawn("git", ["credential", "fill"], {
-        env: { ...environment, GIT_TERMINAL_PROMPT: "0" },
+        env: { ...environment, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" },
         stdio: ["pipe", "pipe", "ignore"],
         windowsHide: true,
       });
@@ -174,7 +176,7 @@ export async function readGitCredentialHelper(
     const timer = setTimeout(() => {
       child.kill();
       resolve(null);
-    }, CLI_TIMEOUT_MS);
+    }, HELPER_TIMEOUT_MS);
     child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
       if (stdout.length > 64 * 1024) child.kill();
@@ -213,6 +215,10 @@ export async function detectAmbientCredential(
   host: string,
   webUrl: URL,
   environment: NodeJS.ProcessEnv,
+  options: {
+    /** SSH 远端用不上 HTTP 凭据，跳过可能阻塞的凭据助手查询。 */
+    skipCredentialHelper?: boolean;
+  } = {},
 ): Promise<AmbientCredential | null> {
   const normalized = host.toLowerCase();
   // 配置文件先读：它是 gh 自己的权威状态，且不依赖子进程；令牌存在钥匙串时
@@ -253,5 +259,5 @@ export async function detectAmbientCredential(
       detail: "glab 命令行登录态",
     };
   }
-  return readGitCredentialHelper(host, webUrl, environment);
+  return options.skipCredentialHelper ? null : readGitCredentialHelper(host, webUrl, environment);
 }

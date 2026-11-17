@@ -193,7 +193,10 @@ export class GitAuth {
 
   async #ambient(host: string, target: GitRemoteTarget): Promise<AmbientCredential | null> {
     try {
-      return await detectAmbientCredential(host, this.#webUrl(target), this.environment);
+      return await detectAmbientCredential(host, this.#webUrl(target), this.environment, {
+        // SSH 远端不接受 HTTP 凭据，查询凭据助手只会白等。
+        skipCredentialHelper: target.transport === "ssh",
+      });
     } catch {
       return null;
     }
@@ -462,8 +465,11 @@ export class GitAuth {
         record.token,
       );
     }
+    // SSH 远端只认密钥：命令行的 HTTPS 令牌对它没有意义，不查询也就不必等待。
     const ambient =
-      record?.method === "https-token" ? null : await this.#ambient(target.host, target);
+      record?.method === "https-token" || target.transport === "ssh"
+        ? null
+        : await this.#ambient(target.host, target);
     if (ambient && target.transport !== "ssh") {
       return withCredential(
         base,

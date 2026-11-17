@@ -7,6 +7,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { detectAmbientCredential } from "../src/git-auth-ambient.js";
 import { withCredential, withHttpsToken, withSshIdentity } from "../src/git-auth-credentials.js";
 import { gitRemoteTarget } from "../src/git-auth-detect.js";
 import { GitAuth } from "../src/git-auth.js";
@@ -358,5 +359,46 @@ describe("GitAuth injection", () => {
     expect(injected.GIT_CONFIG_VALUE_0 ?? "").toContain(
       Buffer.from("zjarlin:gho_from_cli").toString("base64"),
     );
+  });
+
+  it("does not consult the credential helper for SSH remotes", async () => {
+    const directory = await home();
+    const bin = path.join(directory, "bin");
+    const marker = path.join(directory, "helper-called");
+    await import("node:fs/promises").then((fs) => fs.mkdir(bin, { recursive: true }));
+    // 假的 git 只记录自己被调用：凭据助手会走 `git credential fill`，真去查钥匙串可能挂住。
+    await writeFile(
+      path.join(bin, "git"),
+      `#!/bin/sh\n: > ${JSON.stringify(marker).slice(1, -1)}\nprintf 'username=cli\\npassword=token\\n'\n`,
+      { mode: 0o755 },
+    );
+    const environment = { PATH: bin, GH_CONFIG_DIR: path.join(directory, "gh") };
+    const webUrl = new URL("https://github.com");
+    expect(
+      await detectAmbientCredential("github.com", webUrl, environment, {
+        skipCredentialHelper: true,
+      }),
+    ).toBeNull();
+    expect(
+      await import("node:fs/promises").then((fs) =>
+        fs.access(marker).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    ).toBe(false);
+    // 对照组确认夹具真的会触发助手，否则上面的断言没有意义。
+    expect(await detectAmbientCredential("github.com", webUrl, environment)).toMatchObject({
+      source: "git-credential",
+      token: "token",
+    });
+
+    const repositoryPath = await repository("git@github.com:zjarlin/codex-buddy.git");
+    const git = new GitWorkspace({ PATH: process.env.PATH });
+    const auth = new GitAuth(directory, { PATH: process.env.PATH }, git);
+    const injected = await auth.environmentFor(repositoryPath, ["push"], {
+      PATH: process.env.PATH,
+    });
+    expect(injected.GIT_CONFIG_COUNT).toBeUndefined();
   });
 });

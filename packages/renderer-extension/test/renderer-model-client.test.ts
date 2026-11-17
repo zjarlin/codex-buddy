@@ -801,6 +801,7 @@ describe("Renderer fixed Model request client", () => {
       "importHarnessSession",
       "importRemoteProject",
       "inspectCodexAccountUsage",
+      "inspectGitAuth",
       "inspectGitCommit",
       "inspectGitCommitDiff",
       "inspectGitContent",
@@ -850,6 +851,7 @@ describe("Renderer fixed Model request client", () => {
       "pushProjectSyncGit",
       "readAutoModelRoutes",
       "readDelegationThread",
+      "readGitSshKey",
       "readThreadActivity",
       "readThreadTurnState",
       "readTurnAccounts",
@@ -877,6 +879,8 @@ describe("Renderer fixed Model request client", () => {
       "setThreadFolders",
       "setThreadTerminalSettings",
       "setupSsh",
+      "signInGitAuth",
+      "signOutGitAuth",
       "stageGitPaths",
       "startUpdate",
       "subscribeCodexAccounts",
@@ -894,6 +898,7 @@ describe("Renderer fixed Model request client", () => {
       "unstageGitPaths",
       "updateGitSubmodule",
       "updateRemote",
+      "verifyGitAuth",
       "writeWorkspaceFile",
     ]);
 

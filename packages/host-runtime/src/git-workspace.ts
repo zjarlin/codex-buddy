@@ -65,7 +65,7 @@ function localizedGitError(detail: string): string {
       detail,
     )
   ) {
-    return "Git 认证失败，请检查凭据或远程仓库访问权限。";
+    return "Git 认证失败：请在设置 → Git 账号中登录该远端主机，或确认账号有仓库访问权限。";
   }
   if (
     /could not resolve host|unable to access|Failed to connect|Connection timed out|network is unreachable/iu.test(
@@ -488,6 +488,13 @@ function parseCommitFiles(statusOutput: string, numberOutput: string): GitCommit
 export class GitWorkspace {
   #queue: Promise<unknown> = Promise.resolve();
   readonly #mutations = new Map<string, Promise<unknown>>();
+  #credentials:
+    | ((
+        cwd: string,
+        arguments_: readonly string[],
+        environment: NodeJS.ProcessEnv,
+      ) => Promise<NodeJS.ProcessEnv>)
+    | undefined;
 
   constructor(
     private readonly environment: NodeJS.ProcessEnv = process.env,
@@ -512,10 +519,76 @@ export class GitWorkspace {
     return absolute;
   }
 
-  #run(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult> {
+  /**
+   * 网络类命令由外层提供登录态。提供者只读取远端主机和命令动词，
+   * 不能递归调用 `#run`，否则读取远端本身会再次请求凭据。
+   */
+  useCredentials(
+    resolve: (
+      cwd: string,
+      arguments_: readonly string[],
+      environment: NodeJS.ProcessEnv,
+    ) => Promise<NodeJS.ProcessEnv>,
+  ): void {
+    this.#credentials = resolve;
+  }
+
+  async #run(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult> {
+    if (this.runtime) return this.runtime.run(cwd, arguments_);
+    const environment = this.#credentials
+      ? await this.#credentials(cwd, arguments_, this.environment)
+      : this.environment;
+    return runGit(cwd, arguments_, environment);
+  }
+
+  #runUncredentialed(cwd: string, arguments_: readonly string[]): Promise<GitCommandResult> {
     return this.runtime
       ? this.runtime.run(cwd, arguments_)
       : runGit(cwd, arguments_, this.environment);
+  }
+
+  /** 仓库声明的全部远端地址；登录态按这些地址识别主机。 */
+  async remotes(cwd: string): Promise<string[]> {
+    const workspace = this.#absoluteWorkspace(cwd);
+    try {
+      const result = await this.#runUncredentialed(workspace, [
+        "config",
+        "--local",
+        "--get-regexp",
+        String.raw`^remote\..*\.url$`,
+      ]);
+      return result.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim().split(/\s+/u).slice(1).join(" "))
+        .filter(Boolean);
+    } catch (error) {
+      if (isMissingGitRepository(error)) return [];
+      throw error;
+    }
+  }
+
+  /** 推送与拉取使用的远端，优先上游跟踪的远程，其次 origin。 */
+  async remoteUrl(cwd: string): Promise<string | null> {
+    const workspace = this.#absoluteWorkspace(cwd);
+    const branch = await this.#runUncredentialed(workspace, [
+      "rev-parse",
+      "--abbrev-ref",
+      "--symbolic-full-name",
+      "@{upstream}",
+    ]).catch(() => null);
+    const upstreamRemote = branch?.stdout.trim().split("/")[0];
+    for (const remote of [upstreamRemote, "origin"]) {
+      if (!remote) continue;
+      const result = await this.#runUncredentialed(workspace, [
+        "config",
+        "--local",
+        "--get",
+        `remote.${remote}.url`,
+      ]).catch(() => null);
+      const url = result?.stdout.trim();
+      if (url) return url;
+    }
+    return (await this.remotes(workspace))[0] ?? null;
   }
 
   async realpath(directory: string): Promise<string> {
@@ -607,7 +680,13 @@ export class GitWorkspace {
     if (this.runtime) {
       await this.#run(base, arguments_);
     } else {
-      await runGit(base, arguments_, { ...this.environment, GIT_TERMINAL_PROMPT: "0" });
+      const environment = {
+        ...(this.#credentials
+          ? await this.#credentials(base, ["clone", "--", remote, directory], this.environment)
+          : this.environment),
+        GIT_TERMINAL_PROMPT: "0",
+      };
+      await runGit(base, arguments_, environment);
     }
     if (!(await this.root(target))) {
       throw new GitWorkspaceError(`克隆完成但无法读取仓库：${target}`);

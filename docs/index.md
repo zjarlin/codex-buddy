@@ -40,6 +40,7 @@
 | [`platforms/mobile/mobile-pairing.md`](platforms/mobile/mobile-pairing.md) | 手机扫码配对、局域网控制边界、客户端区分、撤销与开源部署方式；修改手机控制时阅读。 |
 | [`product/aio-web.md`](product/aio-web.md) | AIO 网页复用原版 Renderer、设备发现、独立原生窗口与版本兼容边界。 |
 | [`product/git-workspace.md`](product/git-workspace.md) | VS Code 式 Git 侧栏、递归子模块、独立提交与图表、官方审查转发及项目空闲推送；维护 Git 界面时阅读。 |
+| [`product/git-accounts.md`](product/git-accounts.md) | GitHub／Gitee／GitLab 远端登录态、令牌与 SSH 密钥存储、Git 命令凭据注入及侧栏登录入口；排查推送认证失败时阅读。 |
 | [`product/workspace-files.md`](product/workspace-files.md) | 官方文件区域放在对话左侧、文件树与编辑器复用，以及保留的 Host 文件接口；维护文件浏览器时阅读。 |
 | [`product/pending-confirmations.md`](product/pending-confirmations.md) | 会话完成后的待确认队列、中央卡片、已读/归档动作、重启对账与语音播报开关；维护完成提醒时阅读。 |
 | [`product/thread-reminders.md`](product/thread-reminders.md) | 会话定时提醒的入口、一次性与周期性调度、到点卡片、稍后提醒与存储边界；维护提醒功能时阅读。 |

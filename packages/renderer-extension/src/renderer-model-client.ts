@@ -6,6 +6,28 @@ import {
   type ProviderRoutingSnapshot,
 } from "@codexhost/shared-contracts";
 import {
+  GIT_AUTH_STATUS_METHOD,
+  GIT_AUTH_SIGN_IN_METHOD,
+  GIT_AUTH_SIGN_OUT_METHOD,
+  GIT_AUTH_SSH_KEY_METHOD,
+  GIT_AUTH_VERIFY_METHOD,
+  gitAuthStatusParamsSchema,
+  gitAuthStatusSchema,
+  gitAuthSignInParamsSchema,
+  gitAuthSignOutParamsSchema,
+  gitSshKeyParamsSchema,
+  gitSshKeyResultSchema,
+  gitAuthVerifyParamsSchema,
+  gitAuthResultSchema,
+  type GitAuthResult,
+  type GitAuthSignInParams,
+  type GitAuthStatus,
+  type GitAuthStatusParams,
+  type GitSshKeyParams,
+  type GitSshKeyResult,
+  type GitAuthVerifyParams,
+} from "@codexhost/shared-contracts";
+import {
   TURN_ACTIONS_INSPECT_METHOD,
   TURN_ACTION_EXECUTE_METHOD,
   nativeGitWorkflowPrompt,
@@ -593,6 +615,11 @@ export interface RendererModelClient extends Partial<RendererSessionImportClient
     input?: Omit<RemoteProjectsSyncParams, "hostId">,
   ): Promise<RemoteProjectsSnapshot>;
   importRemoteProject?(project: RemoteProject): Promise<void>;
+  inspectGitAuth?(input?: GitAuthStatusParams): Promise<GitAuthStatus>;
+  signInGitAuth?(input: GitAuthSignInParams): Promise<GitAuthResult>;
+  signOutGitAuth?(input: { host: string; cwd?: string }): Promise<GitAuthStatus>;
+  readGitSshKey?(input: GitSshKeyParams): Promise<GitSshKeyResult>;
+  verifyGitAuth?(input: GitAuthVerifyParams): Promise<GitAuthResult>;
   listGitRepositories?(input: GitRepositoriesParams): Promise<GitRepositories>;
   listGitRepositoryDirectories?(
     input: GitRepositoryDirectoriesParams,
@@ -1202,6 +1229,28 @@ export function createRendererModelClient(
         if (!(error instanceof RendererMethodUnavailableError)) throw error;
         return runNativeGitWorkflow(params);
       }
+    },
+    async inspectGitAuth(input: GitAuthStatusParams = {}): Promise<GitAuthStatus> {
+      const params = gitAuthStatusParamsSchema.parse(input);
+      return gitAuthStatusSchema.parse(await manager.sendRequest(GIT_AUTH_STATUS_METHOD, params));
+    },
+    async signInGitAuth(input: GitAuthSignInParams): Promise<GitAuthResult> {
+      const params = gitAuthSignInParamsSchema.parse(input);
+      return gitAuthResultSchema.parse(await manager.sendRequest(GIT_AUTH_SIGN_IN_METHOD, params));
+    },
+    async signOutGitAuth(input: { host: string; cwd?: string }): Promise<GitAuthStatus> {
+      const params = gitAuthSignOutParamsSchema.parse(input);
+      return gitAuthStatusSchema.parse(await manager.sendRequest(GIT_AUTH_SIGN_OUT_METHOD, params));
+    },
+    async readGitSshKey(input: GitSshKeyParams): Promise<GitSshKeyResult> {
+      const params = gitSshKeyParamsSchema.parse(input);
+      return gitSshKeyResultSchema.parse(
+        await manager.sendRequest(GIT_AUTH_SSH_KEY_METHOD, params),
+      );
+    },
+    async verifyGitAuth(input: GitAuthVerifyParams): Promise<GitAuthResult> {
+      const params = gitAuthVerifyParamsSchema.parse(input);
+      return gitAuthResultSchema.parse(await manager.sendRequest(GIT_AUTH_VERIFY_METHOD, params));
     },
     async inspectGitOrigin(input: { cwd: string }): Promise<{ remote: string | null }> {
       const params = gitWorkspaceParamsSchema.parse({ cwd: input.cwd });

@@ -243,6 +243,30 @@ interface RepositoryGroup {
   read?: boolean;
 }
 
+/** Git 认证失败的典型输出；只有这类提示才把用户引向 Git 账号设置。 */
+const GIT_AUTH_FAILURE =
+  /认证失败|could not read Username|Authentication failed|Permission denied|publickey|access denied/iu;
+
+export function isGitAuthFailure(value: string | null | undefined): boolean {
+  return Boolean(value && GIT_AUTH_FAILURE.test(value));
+}
+
+export interface GitSettingsShell {
+  openSettings(opener?: HTMLElement, pageId?: string): boolean;
+}
+
+export interface GitSettingsShellView {
+  __codexhostSettingsShellV1?: GitSettingsShell;
+}
+
+/** 设置外壳由 Renderer 安装；侧栏只通过这一个入口打开 Git 账号页。 */
+export function openGitAccountsSettings(
+  view: GitSettingsShellView | null | undefined,
+  opener: HTMLElement,
+): boolean {
+  return view?.__codexhostSettingsShellV1?.openSettings(opener, "git-accounts") ?? false;
+}
+
 export function installRendererGitSidebar(options: {
   getContext(): RendererGitContext;
   cache?: RendererGitCache;
@@ -347,6 +371,9 @@ export function installRendererGitSidebar(options: {
     .codexhost-git-commit-actions button[data-primary="true"] { grid-column:1 / -1; grid-row:1; color:white; background:#007acc; border-color:#007acc; }
     ${gitScmStyles}
     .codexhost-git-notice { min-height:0; margin:0; padding:6px 10px; color:var(--text-link,inherit); font-size:10px; line-height:1.4; overflow-wrap:anywhere; }
+    .codexhost-git-notice-row { display:flex; align-items:center; gap:8px; }
+    .codexhost-git-notice-row > .codexhost-git-notice { flex:1 1 auto; min-width:0; }
+    .codexhost-git-notice-action { flex:0 0 auto; margin-right:10px; padding:2px 8px; color:var(--text-link,inherit); background:transparent; border:1px solid currentColor; border-radius:999px; font-size:10px; line-height:1.4; cursor:pointer; }
   `;
   const shell = document.createElement("div");
   shell.className = "codexhost-git-shell";
@@ -546,6 +573,18 @@ export function installRendererGitSidebar(options: {
   notice.className = "codexhost-git-notice";
   notice.setAttribute("role", "status");
   notice.hidden = true;
+  // 认证失败时给出唯一的后续动作：打开 Git 账号设置，而不是让用户去猜命令行。
+  const authAction = document.createElement("button");
+  authAction.type = "button";
+  authAction.className = "codexhost-git-notice-action";
+  authAction.textContent = "去登录";
+  authAction.hidden = true;
+  authAction.addEventListener("click", () => {
+    openGitAccountsSettings(document.defaultView, authAction);
+  });
+  const noticeRow = document.createElement("div");
+  noticeRow.className = "codexhost-git-notice-row";
+  noticeRow.append(notice, authAction);
   commitBox.append(messageRow, commitActions, modelOptions);
   const repositoryGroupsRoot = document.createElement("div");
   repositoryGroupsRoot.className = "codexhost-git-repository-groups";
@@ -578,7 +617,7 @@ export function installRendererGitSidebar(options: {
   warnings.setAttribute("role", "status");
   warnings.setAttribute("data-codexhost-git-warnings", "v1");
   warnings.hidden = true;
-  panel.append(head, warnings, conflictBanner, notice, workspace, graphBar, history);
+  panel.append(head, warnings, conflictBanner, noticeRow, workspace, graphBar, history);
   shell.append(rail, panel);
   shadow.append(style, shell);
 
@@ -1394,6 +1433,9 @@ export function installRendererGitSidebar(options: {
         ? "此连接未提供 Git 服务。请在工作区所在设备安装并启动同版本的 codexhost 远程服务，然后重新连接。"
         : (workspaceError?.message ?? value);
     notice.hidden = !notice.textContent;
+    // 只有真正的认证失败才提示登录；网络或分支问题不能引导用户去填令牌。
+    authAction.hidden = !isGitAuthFailure(notice.textContent);
+    noticeRow.hidden = notice.hidden && authAction.hidden;
   };
 
   const repositorySelector = createGitRepositorySelector({

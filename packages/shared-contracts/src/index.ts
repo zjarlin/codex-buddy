@@ -737,6 +737,7 @@ export {
   type GitWorkflowSnapshot,
 } from "./git-workflow.js";
 export * from "./git-repositories.js";
+export * from "./git-auth.js";
 export * from "./auto-model-routes.js";
 
 export {

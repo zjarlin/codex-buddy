@@ -34,6 +34,16 @@ import {
   GIT_REPOSITORY_UNLINK_METHOD,
   GIT_REPOSITORY_DIRECTORIES_METHOD,
   GIT_REPOSITORY_CLONE_METHOD,
+  GIT_AUTH_STATUS_METHOD,
+  GIT_AUTH_SIGN_IN_METHOD,
+  GIT_AUTH_SIGN_OUT_METHOD,
+  GIT_AUTH_SSH_KEY_METHOD,
+  GIT_AUTH_VERIFY_METHOD,
+  gitAuthStatusParamsSchema,
+  gitAuthSignInParamsSchema,
+  gitAuthSignOutParamsSchema,
+  gitSshKeyParamsSchema,
+  gitAuthVerifyParamsSchema,
   gitRepositoriesParamsSchema,
   gitWorkflowParamsSchema,
   gitRepositoryLinkParamsSchema,
@@ -494,6 +504,7 @@ import {
   GitWorkspace,
   GitWorkspaceError,
 } from "./git-workspace.js";
+import { GitAuth } from "./git-auth.js";
 import {
   listWorkspaceFiles,
   readWorkspaceFile,
@@ -970,6 +981,7 @@ export class AppServerHost {
   #delegationCoordinator: HarnessDelegationCoordinator;
   #sessionImportRequests: SessionImportRequests | undefined;
   readonly #gitWorkspace = new GitWorkspace();
+  #gitAuth!: GitAuth;
   readonly #gitRepositoryLinks: GitRepositoryLinks;
   readonly #sshGit: SshGitWorkspaces;
   readonly #gitWorkflow: ProjectGitWorkflow;
@@ -1134,6 +1146,10 @@ export class AppServerHost {
       diagnose: (error) => this.#diagnose(error),
     });
     this.#sshGit = new SshGitWorkspaces(permanentHome, environment);
+    this.#gitAuth = new GitAuth(permanentHome, environment, this.#gitWorkspace);
+    this.#gitWorkspace.useCredentials((cwd, arguments_, base) =>
+      this.#gitAuth.environmentFor(cwd, arguments_, base),
+    );
     this.#gitRepositoryLinks = new GitRepositoryLinks(
       permanentHome,
       (cwd) => this.#gitWorkspace.root(cwd),
@@ -2632,6 +2648,16 @@ export class AppServerHost {
     }
     if (request.method === SSH_GIT_METHOD) {
       this.#dispatchDesktopRequest(() => this.#handleSshGitRequest(request));
+      return;
+    }
+    if (
+      request.method === GIT_AUTH_STATUS_METHOD ||
+      request.method === GIT_AUTH_SIGN_IN_METHOD ||
+      request.method === GIT_AUTH_SIGN_OUT_METHOD ||
+      request.method === GIT_AUTH_SSH_KEY_METHOD ||
+      request.method === GIT_AUTH_VERIFY_METHOD
+    ) {
+      this.#dispatchDesktopRequest(() => this.#handleGitAuthRequest(request));
       return;
     }
     if (
@@ -5075,6 +5101,14 @@ export class AppServerHost {
     return input.cwd;
   }
 
+  /** 认证请求只接受当前 Host 上的绝对目录；目录本身不要求是 Git 仓库。 */
+  async #gitAuthCwd(cwd: string): Promise<string> {
+    if (!path.isAbsolute(cwd)) {
+      throw new GitWorkspaceError("请输入当前 Host 上项目的绝对路径。");
+    }
+    return cwd;
+  }
+
   async #resolveGitWorkspace(
     input: GitWorkspaceTarget & {
       repository?: string | undefined;
@@ -5540,6 +5574,45 @@ export class AppServerHost {
       );
     } catch (error) {
       await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 20_000)));
+    }
+  }
+
+  /** 五个认证方法共用一次工作区解析，未带 cwd 时只返回已保存与可发现的主机。 */
+  async #handleGitAuthRequest(request: JsonRpcRequest): Promise<void> {
+    try {
+      if (request.method === GIT_AUTH_STATUS_METHOD) {
+        const params = gitAuthStatusParamsSchema.parse(request.params ?? {});
+        const cwd = params.cwd ? await this.#gitAuthCwd(params.cwd) : undefined;
+        const status = await this.#gitAuth.status(cwd ? { cwd } : {});
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(status) }));
+        return;
+      }
+      if (request.method === GIT_AUTH_SSH_KEY_METHOD) {
+        const params = gitSshKeyParamsSchema.parse(request.params);
+        const result = await this.#gitAuth.sshKey(params.host, params.create);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+      if (request.method === GIT_AUTH_SIGN_IN_METHOD) {
+        const params = gitAuthSignInParamsSchema.parse(request.params);
+        const cwd = params.cwd ? await this.#gitAuthCwd(params.cwd) : undefined;
+        const result = await this.#gitAuth.signIn({ ...params, ...(cwd ? { cwd } : {}) });
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+        return;
+      }
+      if (request.method === GIT_AUTH_SIGN_OUT_METHOD) {
+        const params = gitAuthSignOutParamsSchema.parse(request.params);
+        const cwd = params.cwd ? await this.#gitAuthCwd(params.cwd) : undefined;
+        const status = await this.#gitAuth.signOut(params.host, cwd ?? undefined);
+        await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(status) }));
+        return;
+      }
+      const params = gitAuthVerifyParamsSchema.parse(request.params);
+      const cwd = params.cwd ? await this.#gitAuthCwd(params.cwd) : undefined;
+      const result = await this.#gitAuth.verify(params.host, cwd ?? undefined);
+      await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(result) }));
+    } catch (error) {
+      await this.#writer.json(rpcError(request, -32094, errorMessage(error).slice(0, 2000)));
     }
   }
 

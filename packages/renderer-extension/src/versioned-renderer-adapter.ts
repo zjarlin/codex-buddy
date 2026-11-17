@@ -1030,6 +1030,31 @@ export function installCurrentRendererAdapter(): {
       return client.cloneGitRepository(input);
     },
 
+    inspectGitAuth: (input: Parameters<NonNullable<RendererModelClient["inspectGitAuth"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.inspectGitAuth) throw new Error("Git remote accounts are unavailable");
+      return client.inspectGitAuth(input);
+    },
+    signInGitAuth: (input: Parameters<NonNullable<RendererModelClient["signInGitAuth"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.signInGitAuth) throw new Error("Git remote sign-in is unavailable");
+      return client.signInGitAuth(input);
+    },
+    signOutGitAuth: (input: Parameters<NonNullable<RendererModelClient["signOutGitAuth"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.signOutGitAuth) throw new Error("Git remote sign-out is unavailable");
+      return client.signOutGitAuth(input);
+    },
+    readGitSshKey: (input: Parameters<NonNullable<RendererModelClient["readGitSshKey"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.readGitSshKey) throw new Error("Git SSH key is unavailable");
+      return client.readGitSshKey(input);
+    },
+    verifyGitAuth: (input: Parameters<NonNullable<RendererModelClient["verifyGitAuth"]>>[0]) => {
+      const client = currentModelClient();
+      if (!client.verifyGitAuth) throw new Error("Git remote verification is unavailable");
+      return client.verifyGitAuth(input);
+    },
     inspectGitStatus: (
       input: Parameters<NonNullable<RendererModelClient["inspectGitStatus"]>>[0],
     ) => {

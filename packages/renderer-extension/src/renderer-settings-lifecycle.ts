@@ -16,6 +16,7 @@ import {
   type RendererConnectionDiagnostics,
   type RendererCodexAccountClient,
   type ProjectSyncClient,
+  type GitAccountsClient,
   type RendererUpdateClient,
 } from "./settings/pages.js";
 import type {
@@ -43,6 +44,7 @@ export interface RendererSettingsLifecycleOptions {
   getSessionImportClient?(hostId?: string): RendererSessionImportClient | null;
   getLoadedSessionsClient?(): LoadedSessionsClient | null;
   getProjectSyncClient?(): ProjectSyncClient | null;
+  getGitAccountsClient?(): GitAccountsClient | null;
   getEmergencyProviderClient?(): EmergencyProviderClient | null;
   getBuddyClient?(): RendererModelClient | null;
   getThreadTerminalClient?(): RendererThreadTerminalClient | null;
@@ -117,6 +119,8 @@ export function installRendererSettingsLifecycle(
           }
         : undefined,
       options.requestTeamUsage,
+      undefined,
+      options.getGitAccountsClient ?? (() => null),
     );
     const nextShell = installRendererSettingsShell(definitions, messages, ownerWindow.document, {
       onOpenChange(open) {

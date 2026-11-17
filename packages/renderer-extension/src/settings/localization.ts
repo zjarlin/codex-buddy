@@ -335,6 +335,42 @@ export interface RendererSettingsMessages {
     unavailable: string;
     failure: string;
   };
+  readonly gitAccounts: {
+    title: string;
+    description: string;
+    loading: string;
+    empty: string;
+    unavailable: string;
+    signedIn: string;
+    reused: string;
+    signedOut: string;
+    signedOutNotice: string;
+    signIn: string;
+    signOut: string;
+    verify: string;
+    verifiedAt: string;
+    cancel: string;
+    working: string;
+    tokenLabel: string;
+    tokenHint: string;
+    tokenRequired: string;
+    usernameLabel: string;
+    usernameHint: string;
+    openTokenPage: string;
+    viewSshKey: string;
+    enableSshKey: string;
+    sshKeyTitle: string;
+    sshKeyHint: string;
+    sshKeyReady: string;
+    sshKeyMissing: string;
+    sshKeyUnavailable: string;
+    fingerprint: string;
+    fingerprintUnavailable: string;
+    openKeysPage: string;
+    copyKey: string;
+    copied: string;
+    close: string;
+  };
   readonly aboutConsole: string;
   readonly aboutConsoleOpen: string;
   readonly aboutConsoleOpening: string;
@@ -721,6 +757,45 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     unavailable: "Local Host is unavailable.",
     failure: "Project sync failed",
   }),
+  gitAccounts: Object.freeze({
+    title: "Git accounts",
+    description:
+      "Sign in once per remote host, and every Git push, pull, sync and clone from this Host reuses it. Tokens stay on this Host and are never sent to the browser.",
+    loading: "Reading remote hosts…",
+    empty: "This project does not use a Git remote host yet.",
+    unavailable: "This Host does not provide Git account access.",
+    signedIn: "Signed in",
+    reused: "Reusing an existing sign-in",
+    signedOut: "Not signed in",
+    signedOutNotice:
+      "The saved Git account was removed. Existing command-line sign-ins are untouched.",
+    signIn: "Sign in",
+    signOut: "Sign out",
+    verify: "Verify",
+    verifiedAt: "Verified",
+    cancel: "Cancel",
+    working: "Working…",
+    tokenLabel: "Access token",
+    tokenHint:
+      "Paste a token with repository read and write scope. It is stored on this Host only.",
+    tokenRequired: "Enter an access token first.",
+    usernameLabel: "Username (optional)",
+    usernameHint: "Defaults to the platform's token account",
+    openTokenPage: "Create a token",
+    viewSshKey: "SSH key",
+    enableSshKey: "Use SSH",
+    sshKeyTitle: "SSH public key",
+    sshKeyHint: "Add this public key to the platform account that owns the repository.",
+    sshKeyReady: "An SSH key is available for this Host.",
+    sshKeyMissing: "No SSH key has been created yet.",
+    sshKeyUnavailable: "The SSH key could not be read.",
+    fingerprint: "Fingerprint",
+    fingerprintUnavailable: "Fingerprint unavailable",
+    openKeysPage: "Add the key",
+    copyKey: "Copy",
+    copied: "Public key copied.",
+    close: "Close",
+  }),
   aboutConsole:
     "The codexhost console runs outside Codex Desktop. It shows startup diagnostics and logs, and can update codexhost even when Codex cannot start.",
   aboutConsoleOpen: "Open console",
@@ -733,6 +808,7 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
     appearance: "General",
     accounts: "Accounts",
     "project-sync": "Projects",
+    "git-accounts": "Git accounts",
     "session-import": "Session Import",
     "usage-statistics": "Usage statistics",
     "team-usage": "Team usage",
@@ -1103,6 +1179,43 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     unavailable: "本地 Host 不可用。",
     failure: "项目同步失败",
   }),
+  gitAccounts: Object.freeze({
+    title: "Git 账号",
+    description:
+      "每个远端主机登录一次，本机 Host 发起的推送、拉取、同步与克隆都会复用该登录态。令牌只保存在本机，不会发送到浏览器。",
+    loading: "正在读取远端主机…",
+    empty: "当前项目还没有使用任何 Git 远端主机。",
+    unavailable: "当前 Host 不提供 Git 账号能力。",
+    signedIn: "已登录",
+    reused: "复用已有登录态",
+    signedOut: "未登录",
+    signedOutNotice: "已删除本产品保存的 Git 账号；命令行的登录态不受影响。",
+    signIn: "登录",
+    signOut: "退出",
+    verify: "验证",
+    verifiedAt: "已验证",
+    cancel: "取消",
+    working: "处理中…",
+    tokenLabel: "访问令牌",
+    tokenHint: "粘贴具备仓库读写权限的令牌；令牌只保存在本机 Host。",
+    tokenRequired: "请先填写访问令牌。",
+    usernameLabel: "用户名（可选）",
+    usernameHint: "默认使用平台的令牌账号",
+    openTokenPage: "创建令牌",
+    viewSshKey: "SSH 公钥",
+    enableSshKey: "改用 SSH",
+    sshKeyTitle: "SSH 公钥",
+    sshKeyHint: "把这段公钥添加到拥有该仓库的平台账号。",
+    sshKeyReady: "本机已有可用的 SSH 密钥。",
+    sshKeyMissing: "尚未生成 SSH 密钥。",
+    sshKeyUnavailable: "无法读取 SSH 密钥。",
+    fingerprint: "指纹",
+    fingerprintUnavailable: "指纹不可用",
+    openKeysPage: "添加公钥",
+    copyKey: "复制",
+    copied: "公钥已复制。",
+    close: "关闭",
+  }),
   aboutConsole:
     "codexhost 控制台独立于 Codex Desktop 运行，可以查看启动诊断和日志；即使 Codex 无法启动，也能在控制台更新 codexhost。",
   aboutConsoleOpen: "打开控制台",
@@ -1115,6 +1228,7 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
     appearance: "通用",
     accounts: "账号",
     "project-sync": "项目",
+    "git-accounts": "Git 账号",
     "session-import": "会话导入",
     "usage-statistics": "用量统计",
     "team-usage": "团队用量",

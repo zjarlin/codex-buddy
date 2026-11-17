@@ -170,6 +170,7 @@ import {
 import { loadCodexNativeServices } from "./codex-native-services.js";
 import { openCodexSchedules } from "./codex-schedule-navigation.js";
 import { openRendererThread } from "./renderer-fork-control.js";
+import type { GitAccountsClient } from "./settings/git-accounts-page.js";
 import type {
   RendererConnectionDiagnostics,
   RendererConnectionSnapshot,
@@ -1122,6 +1123,26 @@ export function installRendererBindingProbe(
     return null;
   };
   const gitCache = new RendererGitCache();
+  const gitAccountsClientForLocalHost = (): GitAccountsClient | null => {
+    const client = localClient ?? modelClientForHost("local");
+    const { inspectGitAuth, signInGitAuth, signOutGitAuth, readGitSshKey, verifyGitAuth } =
+      client ?? {};
+    if (!inspectGitAuth || !signInGitAuth || !signOutGitAuth || !readGitSshKey || !verifyGitAuth) {
+      return null;
+    }
+    // 只有本机项目的绝对路径能作为远端主机发现来源；远端项目路径属于另一台机器。
+    const cwd = activeGitContext();
+    const projectCwd = cwd?.hostId === "local" ? (cwd.projectCwd ?? cwd.cwd) : undefined;
+    const scoped = <T extends object>(input: T): T =>
+      projectCwd ? { ...input, cwd: projectCwd } : input;
+    return {
+      inspectGitAuth: (input) => inspectGitAuth(scoped(input ?? {})),
+      signInGitAuth: (input) => signInGitAuth(scoped(input)),
+      signOutGitAuth: (input) => signOutGitAuth(scoped(input)),
+      readGitSshKey,
+      verifyGitAuth: (input) => verifyGitAuth(scoped(input)),
+    };
+  };
   const gitSidebar = installRendererGitSidebar({
     cache: gitCache,
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
@@ -1201,6 +1222,9 @@ export function installRendererBindingProbe(
     // Team figures always come from the local Host, which pulls its paired members itself.
     requestTeamUsage: (method, params) => usageStatistics.request(method, params, "local"),
     getProjectSyncClient: () => projectSyncClientForLocalHost(),
+    // 账号保存、密钥生成与凭据注入都发生在运行本 Host 的机器上；远端 SSH 项目的 Git
+    // 命令在远端执行、使用远端自己的 SSH 身份，因此这里只读取本机 Host。
+    getGitAccountsClient: () => gitAccountsClientForLocalHost(),
     // 更新页读取本机安装版本；Composer 指向远端 SSH Host 时不能把本机版本请求路由过去。
     getUpdateClient: () => localClient ?? modelClientForHost("local"),
     getAccountClient: () => modelControl,

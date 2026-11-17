@@ -63,6 +63,9 @@ describe("Renderer settings localization", () => {
     expect(english.speechAnnouncementTitle).toBe("Speak the result when a conversation finishes");
     expect(chinese.pageLabels.about).toBe("关于");
     expect(chinese.pageLabels["session-import"]).toBe("会话导入");
+    expect(chinese.pageLabels["git-accounts"]).toBe("Git 账号");
+    expect(english.pageLabels["git-accounts"]).toBe("Git accounts");
+    expect(chinese.gitAccounts.tokenRequired).toBe("请先填写访问令牌。");
     expect(chinese.sessionImportAvailabilityNote).toContain("可选 Harness 来自当前 Host");
     expect(chinese.sessionImportAvailabilityNote).toContain("先在原生客户端关闭该会话再导入");
     expect(chinese.sessionImportAvailabilityNote).toContain("避免同时写入");
@@ -94,6 +97,7 @@ describe("Renderer settings localization", () => {
       "账号",
       "路由",
       "项目",
+      "Git 账号",
       "会话导入",
       "用量统计",
       "团队用量",

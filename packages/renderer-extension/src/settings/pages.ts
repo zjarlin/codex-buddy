@@ -49,6 +49,7 @@ import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { createReleaseNotesElement } from "./release-notes.js";
 import { createAccountsSettingsPage, type RendererCodexAccountClient } from "./accounts-page.js";
 import { createProjectSyncPage, type ProjectSyncClient } from "./project-sync-page.js";
+import { createGitAccountsSettingsPage, type GitAccountsClient } from "./git-accounts-page.js";
 import { type EmergencyProviderClient } from "../renderer-model-client.js";
 import {
   createHarnessSchedulesPage,
@@ -95,6 +96,7 @@ export const DEFAULT_RENDERER_SETTINGS_PAGE_IDS = [
   "accounts",
   "routing",
   "project-sync",
+  "git-accounts",
   "session-import",
   "usage-statistics",
   "team-usage",
@@ -116,6 +118,7 @@ export interface RendererUpdateClient {
 }
 
 export type { ProjectSyncClient } from "./project-sync-page.js";
+export type { GitAccountsClient } from "./git-accounts-page.js";
 
 function panelIconName(view: string): RendererSettingsIconName {
   if (view === "failed" || view === "error") return "alert";
@@ -808,6 +811,7 @@ export function createDefaultRendererSettingsPages(
   requestTeamUsage: TeamUsageRequest = () =>
     Promise.reject(new Error("Local Host connection is unavailable")),
   requestMobileControl?: MobileControlRequest,
+  getGitAccountsClient: () => GitAccountsClient | null = () => null,
 ): readonly RendererSettingsPageDefinition[] {
   // 保留既有调用方的参数位置；旧应急入口合并到多供应商页面。
   void getEmergencyProviderClient;
@@ -827,6 +831,7 @@ export function createDefaultRendererSettingsPages(
       : []),
     createRoutingSettingsPage(messages, getBuddyClient),
     createProjectSyncPage(messages, getProjectSyncClient),
+    createGitAccountsSettingsPage(messages, getGitAccountsClient),
     ...(harnessSchedules ? [createHarnessSchedulesPage(messages, harnessSchedules)] : []),
     createSessionImportSettingsPage(
       messages,
@@ -858,6 +863,7 @@ export function createDefaultRendererSettingsRegistry(
   usageStatisticsHosts?: RendererUsageStatisticsHostsProvider,
   requestTeamUsage?: TeamUsageRequest,
   requestMobileControl?: MobileControlRequest,
+  getGitAccountsClient?: () => GitAccountsClient | null,
 ): RendererSettingsPageRegistry {
   return createRendererSettingsPageRegistry(
     createDefaultRendererSettingsPages(
@@ -878,6 +884,7 @@ export function createDefaultRendererSettingsRegistry(
       undefined,
       requestTeamUsage,
       requestMobileControl,
+      getGitAccountsClient,
     ),
   );
 }

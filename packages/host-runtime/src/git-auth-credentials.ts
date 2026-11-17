@@ -56,6 +56,12 @@ export function withHttpsToken(
   ]);
 }
 
+/** GIT_SSH_COMMAND 由 shell 解析：Windows 反斜杠会被当成转义，统一成正斜杠再引用。 */
+function shellPath(file: string): string {
+  const normalized = file.replaceAll("\\", "/");
+  return `"${normalized.replaceAll('"', '\\"')}"`;
+}
+
 export function withSshIdentity(
   environment: NodeJS.ProcessEnv,
   identityFile: string,
@@ -64,7 +70,7 @@ export function withSshIdentity(
 ): NodeJS.ProcessEnv {
   // 不覆盖用户自己的 GIT_SSH_COMMAND：已有的保持原样，只补一个身份。
   const base = environment.GIT_SSH_COMMAND?.trim() || "ssh";
-  const identity = `${base} -i ${JSON.stringify(identityFile)}`;
+  const identity = `${base} -i ${shellPath(identityFile)}`;
   return {
     ...environment,
     GIT_SSH_COMMAND: exclusive ? `${identity} -o IdentitiesOnly=yes` : identity,

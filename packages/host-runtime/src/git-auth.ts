@@ -163,7 +163,8 @@ export class GitAuth {
       hasSshRemote: ssh,
     };
     if (record) {
-      const ambient = await this.#ambient(host, target);
+      // 本产品账号存在时不再查询命令行凭据：结果只展示已保存账号，省掉每次
+      // 状态读取都要跑的 gh/glab 探测与凭据助手子进程。
       return {
         ...base,
         state: "signed-in",
@@ -177,7 +178,7 @@ export class GitAuth {
           createdAt: record.createdAt,
           verifiedAt: record.verifiedAt,
         },
-        ambientDetail: ambient?.detail ?? null,
+        ambientDetail: null,
       };
     }
     const ambient = await this.#ambient(host, target);

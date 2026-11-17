@@ -22,6 +22,11 @@ afterEach(async () => {
   }
 });
 
+/** GIT_SSH_COMMAND 内部把 Windows 路径统一成正斜杠，断言用同一形式。 */
+function shellPath(file: string): string {
+  return file.replaceAll("\\", "/");
+}
+
 /** 夹具地址固定可解析；取不到就直接失败，避免在断言里藏非空断言。 */
 function remoteTarget(value: string) {
   const parsed = gitRemoteTarget(value);
@@ -224,7 +229,7 @@ describe("GitAuth injection", () => {
       GIT_SSH_COMMAND: "ssh -F /tmp/custom",
     });
     expect(environment.GIT_SSH_COMMAND).toContain("ssh -F /tmp/custom");
-    expect(environment.GIT_SSH_COMMAND).toContain(path.join(keyDirectory, "id_ed25519"));
+    expect(environment.GIT_SSH_COMMAND).toContain(shellPath(path.join(keyDirectory, "id_ed25519")));
     expect(environment.GIT_SSH_COMMAND).not.toContain("IdentitiesOnly");
   });
 
@@ -238,7 +243,8 @@ describe("GitAuth injection", () => {
     const host = hostNamed(status, "github.com");
     expect(host.provider).toBe("github");
     expect(host.hasSshRemote).toBe(true);
-    expect(host.repositories).toContain(repositoryPath);
+    // 仓库根目录取真实路径：Windows 8.3 短名与 macOS 的 /private 前缀都会变。
+    expect(host.repositories).toContain(await git.realpath(repositoryPath));
   });
 
   it("merges HTTPS and SSH remotes of one host into a web-addressable entry", async () => {
@@ -260,7 +266,7 @@ describe("GitAuth injection", () => {
     expect(status.hosts.filter((entry) => entry.host === "github.com")).toHaveLength(1);
     expect(host.webUrl).toBe("https://github.com");
     expect(host.hasSshRemote).toBe(true);
-    expect(new Set(host.repositories)).toEqual(new Set([repositoryPath]));
+    expect(new Set(host.repositories)).toEqual(new Set([await git.realpath(repositoryPath)]));
   });
 
   it("keeps a saved host visible after the project stops referencing it", async () => {

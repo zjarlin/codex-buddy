@@ -871,6 +871,10 @@ export function installRendererBindingProbe(
     if (!modelControl) return null;
     return modelControl.currentHostId ? modelControl.currentHostId(composer) : "local";
   };
+  // 同一文档里可以同时挂载多个 Composer，文档级路由无法唯一确定 Host，所以
+  // 按被操作的那个 Composer 解析归属；已确认的归属只在路由暂时不可解析时兜底。
+  const composerHostId = (mounted: MountedComposer): string | null =>
+    activeModelHostId(mounted.composer) ?? mounted.hostId;
   const controllerTarget = (target: readonly unknown[] | null, hostId: string | null) =>
     scopedComposerTarget(target, hostId);
   // 右侧当前正在查看的会话：标题栏项目名与左侧树滚动对齐共用同一个判定。
@@ -2291,7 +2295,7 @@ export function installRendererBindingProbe(
       await selectExternalModel(mounted, modelId);
       return;
     }
-    const hostId = mounted.hostId ?? activeModelHostId();
+    const hostId = composerHostId(mounted);
     const client = hostId ? modelClientForHost(hostId) : null;
     if (!client) throw new Error("Model selection connection is unavailable");
     const target = JSON.stringify(mounted.modelTarget);
@@ -2299,7 +2303,7 @@ export function installRendererBindingProbe(
       mounted.composer.isConnected &&
       mountedByComposer.get(mounted.composer) === mounted &&
       controller.get(mounted.composer).agent === "codex" &&
-      activeModelHostId() === hostId &&
+      composerHostId(mounted) === hostId &&
       JSON.stringify(mounted.modelTarget) === target;
     const binding = nativeModelBinding(mounted.control.nativeModelControl?.element ?? null);
     if (
@@ -3388,15 +3392,14 @@ export function installRendererBindingProbe(
       if (!composer.isConnected || !mounted) return undefined;
       const generation = ++modelRefreshGeneration;
       const agent = controller.get(composer).agent;
-      const hostId = mounted.hostId ?? activeModelHostId();
+      const hostId = composerHostId(mounted);
       const target = JSON.stringify(mounted.modelTarget);
       const isCurrent = (): boolean =>
         composer.isConnected &&
         mountedByComposer.get(composer) === mounted &&
         modelRefreshGeneration === generation &&
         controller.get(composer).agent === agent &&
-        activeModelHostId() === hostId &&
-        (mounted.hostId ?? activeModelHostId()) === hostId &&
+        composerHostId(mounted) === hostId &&
         JSON.stringify(mounted.modelTarget) === target;
       const before =
         (agent === "codex"

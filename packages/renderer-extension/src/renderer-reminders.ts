@@ -1,5 +1,6 @@
 import createElement from "lucide/dist/esm/createElement.mjs";
 import AlarmClock from "lucide/dist/esm/icons/alarm-clock.mjs";
+import BellOff from "lucide/dist/esm/icons/bell-off.mjs";
 import Check from "lucide/dist/esm/icons/check.mjs";
 import Eye from "lucide/dist/esm/icons/eye.mjs";
 import Timer from "lucide/dist/esm/icons/timer.mjs";
@@ -48,6 +49,8 @@ function messages(locale: Locale) {
         open: "打开会话",
         snooze: "稍后 10 分钟",
         dismiss: "知道了",
+        stop: "不再提醒",
+        stopHint: "停用这条提醒，之后不再弹出",
         close: "关闭",
         openFailed: "无法打开该会话，请从侧栏重试。",
         repeat: "周期提醒",
@@ -67,6 +70,8 @@ function messages(locale: Locale) {
         cancel: "取消",
         existing: "该会话的提醒",
         none: "还没有提醒。",
+        resume: "恢复",
+        stopped: "已停用",
         remove: "删除",
         invalidMessage: "请填写提醒内容。",
         invalidTime: "请选择晚于当前时间的提醒时刻。",
@@ -80,6 +85,8 @@ function messages(locale: Locale) {
         open: "Open conversation",
         snooze: "In 10 minutes",
         dismiss: "Got it",
+        stop: "Stop reminding",
+        stopHint: "Turns this reminder off so it never pops again",
         close: "Close",
         openFailed: "Could not open the conversation. Retry from the sidebar.",
         repeat: "Repeating reminder",
@@ -99,6 +106,8 @@ function messages(locale: Locale) {
         cancel: "Cancel",
         existing: "Reminders for this conversation",
         none: "No reminders yet.",
+        resume: "Resume",
+        stopped: "Off",
         remove: "Delete",
         invalidMessage: "Enter the reminder text.",
         invalidTime: "Pick a time later than now.",
@@ -185,9 +194,11 @@ export function installRendererReminders(options: RendererRemindersOptions): {
   snooze.append(createElement(Timer, { width: 15, height: 15, "aria-hidden": "true" }));
   const dismiss = document.createElement("button");
   dismiss.append(createElement(Check, { width: 15, height: 15, "aria-hidden": "true" }));
+  const stop = document.createElement("button");
+  stop.append(createElement(BellOff, { width: 15, height: 15, "aria-hidden": "true" }));
   const actions = document.createElement("div");
   actions.className = "codexhost-reminder-actions";
-  actions.append(open, snooze, dismiss);
+  actions.append(open, snooze, dismiss, stop);
   card.actions.append(actions);
 
   const style = document.createElement("style");
@@ -199,6 +210,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
 [${MODAL}] .codexhost-reminder-time{display:block;margin-top:10px;color:GrayText;font-size:12px}
 [${MODAL}] .codexhost-reminder-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
 [${MODAL}] .codexhost-reminder-actions button{border-color:color-mix(in srgb,Highlight 45%,transparent)}
+[${MODAL}] .codexhost-reminder-actions button[hidden]{display:none}
 [${DIALOG}]{box-sizing:border-box;width:min(460px,calc(100vw - 32px));max-height:calc(100vh - 40px);overflow:auto;padding:18px;border:1px solid var(--color-border,#8884);border-radius:10px;background:var(--color-token-dropdown-background,light-dark(#fff,#24262c));color:var(--color-token-text-primary,light-dark(#202020,#eee));box-shadow:0 12px 48px #0004;font:13px/1.5 system-ui,sans-serif;color-scheme:inherit}
 [${DIALOG}]::backdrop{background:#0005}
 [${DIALOG}] h2{font-size:15px;margin:0 0 6px}
@@ -214,6 +226,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
 [${DIALOG}] .codexhost-reminder-list{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;max-height:180px;overflow:auto}
 [${DIALOG}] .codexhost-reminder-list li{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid #8884;border-radius:6px}
 [${DIALOG}] .codexhost-reminder-list li>span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+[${DIALOG}] .codexhost-reminder-list li>button{flex:none;white-space:nowrap}
 [${DIALOG}] .codexhost-reminder-buttons{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px}
 [${DIALOG}] button{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid #8884;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer}
 [${DIALOG}] button:hover:not(:disabled){background:color-mix(in srgb,currentColor 8%,transparent)}
@@ -289,6 +302,10 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     open.textContent = copy.open;
     snooze.textContent = copy.snooze;
     dismiss.textContent = copy.dismiss;
+    stop.textContent = copy.stop;
+    stop.title = copy.stopHint;
+    // 一次性提醒触发即停用，“不再提醒”只在还有下一轮时才有意义。
+    stop.hidden = entry.schedule.kind !== "interval";
     // 完成提醒卡片正在正前方时先排队：到期状态、计数与已触发语义照常推进，
     // 等那张卡片让位后由 onAvailable 重新渲染，绝不把它盖掉。
     card.show();
@@ -398,7 +415,32 @@ export function installRendererReminders(options: RendererRemindersOptions): {
       for (const entry of entries) {
         const item = document.createElement("li");
         const label = document.createElement("span");
-        label.textContent = `${reminderScheduleLabel(entry.schedule, locale, now())} · ${entry.message}`;
+        // 停用项没有“下一次”，只保留间隔描述，不给出已经过去的时刻。
+        const schedule = reminderScheduleLabel(
+          entry.schedule,
+          locale,
+          entry.enabled ? now() : Number.POSITIVE_INFINITY,
+        );
+        label.textContent = entry.enabled
+          ? `${schedule} · ${entry.message}`
+          : `${copy.stopped} · ${schedule} · ${entry.message}`;
+        item.append(label);
+        // 卡片上的“不再提醒”只停用记录；这里给回一个恢复入口，不必删掉重建。
+        if (!entry.enabled) {
+          const resume = document.createElement("button");
+          resume.type = "button";
+          resume.append(
+            createElement(AlarmClock, { width: 13, height: 13, "aria-hidden": "true" }),
+          );
+          resume.append(copy.resume);
+          resume.addEventListener("click", () => {
+            model.setEnabled(entry.id, true);
+            renderExisting();
+            render();
+            scheduleNext();
+          });
+          item.append(resume);
+        }
         const remove = document.createElement("button");
         remove.type = "button";
         remove.append(createElement(Trash2, { width: 13, height: 13, "aria-hidden": "true" }));
@@ -409,7 +451,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
           render();
           scheduleNext();
         });
-        item.append(label, remove);
+        item.append(remove);
         list.append(item);
       }
     };
@@ -517,6 +559,15 @@ export function installRendererReminders(options: RendererRemindersOptions): {
     render();
     scheduleNext();
   };
+  // 不再提醒：直接停用这条提醒，不再推进到下一轮；停用项保留在对话框列表里，
+  // 用户可以恢复或删除。
+  const onStop = (): void => {
+    if (!visible) return;
+    model.setEnabled(visible.id, false);
+    visible = null;
+    render();
+    scheduleNext();
+  };
   const onDismiss = (): void => onCardClose();
   const onNext = (): void => {
     const due = model.due();
@@ -536,6 +587,7 @@ export function installRendererReminders(options: RendererRemindersOptions): {
   open.addEventListener("click", onOpen);
   snooze.addEventListener("click", onSnooze);
   dismiss.addEventListener("click", onDismiss);
+  stop.addEventListener("click", onStop);
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("focus", onFocus);
   window.addEventListener("blur", onBlur);

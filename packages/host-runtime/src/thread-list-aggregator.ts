@@ -88,6 +88,14 @@ export async function aggregateThreadList(input: {
   runtimeFor(threadId: string): ExternalThreadListRuntimeState | null;
   placementOf?(threadId: string): StoredSectionPlacementV1 | undefined;
   requestOfficialPage(params: JsonObject): Promise<OfficialThreadListPage>;
+  /**
+   * Native `thread/list` returns a parent Thread as idle the moment its own Turn stops
+   * generating, even though the Subagent Threads it spawned are still running. Desktop
+   * derives the sidebar spinner from these rows, so the parent must be republished as
+   * active for that span. The Host knows the live parent/child edges; this hook lets it
+   * rewrite the row without teaching the aggregator about Subagents.
+   */
+  projectOfficialRow?(thread: JsonObject): JsonObject;
 }): Promise<AggregatedThreadListPage> {
   const { query } = input;
   if (!query.supportsExternal || query.sortKey === "section_position") {
@@ -151,7 +159,12 @@ export async function aggregateThreadList(input: {
         firstOfficialBackwardsCursor = page.backwardsCursor;
       }
       officialBatch = page;
-      officialEntries = page.data.map((thread) => officialThreadListEntry(thread, externalSortKey));
+      officialEntries = page.data.map((thread) =>
+        officialThreadListEntry(
+          input.projectOfficialRow ? input.projectOfficialRow(thread) : thread,
+          externalSortKey,
+        ),
+      );
       officialIndex = 0;
       if (officialEntries.length === 0) {
         if (page.nextCursor === null || page.nextCursor === officialCursor) {

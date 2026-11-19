@@ -93,6 +93,31 @@ function directionalOfficialSource(rowsAscending: JsonObject[]) {
 }
 
 describe("aggregated Thread list", () => {
+  it("lets the Host republish an official row whose Subagents are still running", async () => {
+    // Codex reports the parent as idle the moment its own Turn stops generating, even
+    // though the Subagent Threads it spawned are still working. Desktop derives the
+    // sidebar spinner from these rows, so the Host rewrites the row.
+    const rows = [
+      { ...official("parent", 3), status: { type: "idle" } },
+      { ...official("child", 2), status: { type: "active" }, parentThreadId: "parent" },
+      official("plain", 1),
+    ];
+    const page = await aggregateThreadList({
+      query: query({ limit: 10 }),
+      records: [],
+      runtimeFor: () => null,
+      projectOfficialRow: (thread) =>
+        thread.id === "parent" ? { ...thread, status: { type: "active" } } : thread,
+      requestOfficialPage: officialSource(rows).request,
+    });
+    expect(page.data).toMatchObject([
+      { id: "parent", status: { type: "active" } },
+      { id: "child", status: { type: "active" } },
+      { id: "plain" },
+    ]);
+    expect(page.data[2]).not.toHaveProperty("status");
+  });
+
   it("paginates shared and local external Threads together, keeping shared live status", async () => {
     const records = [external("local", 4), external("shared", 2)];
     const sharedThreads = [

@@ -682,6 +682,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Native Subagent Threads carry their parent either flattened (`parentThreadId`) or as
+ * `source.subAgent.thread_spawn.parent_thread_id`. Both shapes appear on official Thread
+ * rows, notifications and read results, so accept either.
+ */
+function nativeSubagentParentOf(thread: Record<string, unknown>): string | null {
+  const flat = thread.parentThreadId;
+  if (typeof flat === "string" && flat !== "") return flat;
+  const source = isRecord(thread.source) ? thread.source : null;
+  const subAgent = source && isRecord(source.subAgent) ? source.subAgent : null;
+  const spawn = subAgent && isRecord(subAgent.thread_spawn) ? subAgent.thread_spawn : null;
+  const nested = spawn?.parent_thread_id;
+  return typeof nested === "string" && nested !== "" ? nested : null;
+}
+
 function officialThreadBusy(thread: Record<string, unknown> | null): boolean {
   if (thread && isRecord(thread.status) && thread.status.type === "active") return true;
   const turns = thread && Array.isArray(thread.turns) ? thread.turns : [];
@@ -999,6 +1014,17 @@ export class AppServerHost {
   #nextConsoleRequest = 0;
   #subagentThreadStatuses = new Map<string, "active" | "idle">();
   #runningSubagentsByParent = new Map<string, Set<string>>();
+  /**
+   * Native Subagent Threads (Codex's own `thread_spawn`, `threadSource: "subAgentThreadSpawn"`)
+   * are not External Harness Threads: they flow through the official pass-through. Their
+   * parent still needs the same "work continues" treatment, so parent edges learned from
+   * official notifications are tracked here.
+   */
+  readonly #nativeSubagentParents = new Map<string, string>();
+  readonly #activeNativeSubagentThreads = new Set<string>();
+  /** The last status the Host published on a parent's behalf for a native Subagent span. */
+  readonly #publishedNativeParentStatuses = new Map<string, "active" | "idle">();
+  #nativeSubagentStatusChanged = false;
   #pendingExternalCommandRequests = new Set<string>();
   #manualCompactionTurns = new WeakMap<ExternalThread, HostTurnId>();
   #closeRequested = false;
@@ -1553,6 +1579,7 @@ export class AppServerHost {
       this.#pendingOfficialTurnStarts.size > 0 ||
       this.#activeOfficialTurns.size > 0 ||
       this.#runningSubagentsByParent.size > 0 ||
+      this.#activeNativeSubagentThreads.size > 0 ||
       this.#externalRuntime
         .values()
         .some((thread) => thread.running || thread.activeTurnId !== null)
@@ -3677,9 +3704,17 @@ export class AppServerHost {
       typeof parsed.method === "string" &&
       !("id" in parsed) &&
       !this.#observedSessionUsage.shouldForwardNotification(parsed);
-    if (!privateTelemetry) {
-      if (forwarded === parsed) await this.#writer.frame(input.frame);
-      else await this.#writer.json(forwarded);
+    // Keep a parent at active while the native Subagents it spawned still run; the
+    // Host publishes that span itself and drops the native idle that would end it early.
+    const suppressed = this.#suppressesOfficialStatus(parsed);
+    if (!privateTelemetry && !suppressed) {
+      const projected = this.#projectOfficialThreadResponse(forwarded);
+      if (projected === parsed) await this.#writer.frame(input.frame);
+      else await this.#writer.json(projected as JsonObject);
+    }
+    if (suppressed || this.#nativeSubagentStatusChanged) {
+      this.#nativeSubagentStatusChanged = false;
+      await this.#publishNativeParentStatuses().catch((error: unknown) => this.#diagnose(error));
     }
     // Plugin startup and history I/O must never delay the official protocol. Promise
     // callbacks preserve observation order and the original receipt timestamps.
@@ -3943,6 +3978,22 @@ export class AppServerHost {
   async #observeOfficialTurnLifecycle(value: JsonValue): Promise<void> {
     if (!isRecord(value) || !isRecord(value.params)) return;
     const params = value.params;
+    if (value.method === "thread/started" && isRecord(params.thread)) {
+      this.#observeNativeSubagentParent(params.thread);
+    }
+    if (value.method === "thread/status/changed" && typeof params.threadId === "string") {
+      // Native Subagent Threads report their own status; remember which are still running
+      // so their parent can keep its loading indicator after its own Turn completes.
+      const active = isRecord(params.status) && params.status.type === "active";
+      const changed = active
+        ? !this.#activeNativeSubagentThreads.has(params.threadId)
+        : this.#activeNativeSubagentThreads.delete(params.threadId);
+      if (active) this.#activeNativeSubagentThreads.add(params.threadId);
+      if (changed) {
+        this.#nativeSubagentStatusChanged = true;
+        if (this.#nativeSubagentParents.has(params.threadId)) this.#signalActiveWorkChanged();
+      }
+    }
     if (value.method === "turn/started" && typeof params.threadId === "string") {
       const turn = isRecord(params.turn) ? params.turn : null;
       if (turn && typeof turn.id === "string") {
@@ -4461,8 +4512,9 @@ export class AppServerHost {
       records,
       runtimeFor: (threadId) => {
         const thread = this.#externalRuntime.get(threadId);
-        return thread ? { running: thread.running } : null;
+        return thread ? { running: this.#projectedThreadRunning(thread) } : null;
       },
+      projectOfficialRow: (thread) => this.#projectOfficialRow(thread),
       requestOfficialPage: async (params) =>
         officialThreadListPageFromResponse(await this.#requestOfficial("thread/list", params)),
     });
@@ -4521,6 +4573,7 @@ export class AppServerHost {
           : {}),
         runtimeFor: (threadId) => this.#listRuntimeState(threadId),
         placementOf: (threadId) => placementById.get(threadId),
+        projectOfficialRow: (thread) => this.#projectOfficialRow(thread),
         requestOfficialPage: async (params) =>
           this.#options.externalOnly
             ? { data: [], nextCursor: null, backwardsCursor: null }
@@ -4543,7 +4596,128 @@ export class AppServerHost {
     const subagentStatus = this.#subagentThreadStatuses.get(threadId);
     if (subagentStatus) return { running: subagentStatus === "active" };
     const thread = this.#externalRuntime.get(threadId);
-    return thread ? { running: thread.running } : null;
+    if (!thread) return null;
+    // A parent Turn completes as soon as it stops generating, while the Subagents it
+    // spawned keep working under it. The Host already publishes that span as active,
+    // so the list projection must derive the same status; reporting thread.running
+    // alone republished the parent as idle and Desktop dropped its loading indicator
+    // mid-delegation.
+    return { running: thread.running || this.#threadWorkContinues(threadId) };
+  }
+
+  /**
+   * A Turn that stopped generating does not end the work a Thread owns: its Subagents
+   * keep running under it. Every place that republishes the Thread value must derive
+   * "running" the same way, or Desktop sees idle and drops the loading indicator
+   * while the delegation is still in flight.
+   */
+  #projectedThreadRunning(thread: ExternalThread): boolean {
+    return thread.running || this.#threadWorkContinues(thread.id);
+  }
+
+  /** Learn native Subagent parent edges from an official Thread row or notification. */
+  #observeNativeSubagentParent(thread: JsonObject): void {
+    const threadId = thread.id;
+    const parentThreadId = nativeSubagentParentOf(thread);
+    if (typeof threadId !== "string" || parentThreadId === null) return;
+    if (threadId === parentThreadId) return;
+    if (this.#nativeSubagentParents.get(threadId) === parentThreadId) return;
+    this.#nativeSubagentParents.set(threadId, parentThreadId);
+    this.#signalActiveWorkChanged();
+  }
+
+  /** True when a native Subagent under this Thread is still running. */
+  #hasRunningNativeSubagents(parentThreadId: string): boolean {
+    for (const childThreadId of this.#activeNativeSubagentThreads) {
+      if (this.#nativeSubagentParents.get(childThreadId) === parentThreadId) return true;
+    }
+    return false;
+  }
+
+  /** Work under a Thread that outlives its own Turn, for either Subagent flavour. */
+  #threadWorkContinues(threadId: string): boolean {
+    return this.#hasRunningSubagents(threadId) || this.#hasRunningNativeSubagents(threadId);
+  }
+
+  /**
+   * A native Subagent keeps working after its parent Turn stops, but native Codex still
+   * reports the parent as idle. Desktop takes the open Thread's loading indicator from
+   * `thread/status/changed`, so the Host has to hold the parent at active for that span
+   * and release it once the last Subagent reports idle.
+   */
+  async #publishNativeParentStatuses(): Promise<void> {
+    if (this.#closeRequested) return;
+    // Only parents with running children or an invented status can change here, so the
+    // walk stays proportional to live Subagents instead of every child ever observed.
+    const parents = new Set(this.#publishedNativeParentStatuses.keys());
+    for (const childThreadId of this.#activeNativeSubagentThreads) {
+      const parentThreadId = this.#nativeSubagentParents.get(childThreadId);
+      if (parentThreadId !== undefined) parents.add(parentThreadId);
+    }
+    for (const parentThreadId of parents) {
+      // While the parent runs its own Turn native Codex already reports active, and any
+      // status the Host invented is superseded. Let the native report stand again.
+      if (this.#activeOfficialTurns.has(parentThreadId)) {
+        this.#publishedNativeParentStatuses.delete(parentThreadId);
+        continue;
+      }
+      const running = this.#hasRunningNativeSubagents(parentThreadId);
+      const published = this.#publishedNativeParentStatuses.get(parentThreadId);
+      // Nothing is running and the Host never claimed active: the native status stands.
+      if (!running && published !== "active") continue;
+      const desired = running ? "active" : "idle";
+      if (published === desired) continue;
+      this.#publishedNativeParentStatuses.set(parentThreadId, desired);
+      await this.#writer.json({
+        method: "thread/status/changed",
+        emittedAtMs: Date.now(),
+        params: {
+          threadId: parentThreadId,
+          status: desired === "active" ? { type: "active", activeFlags: [] } : { type: "idle" },
+        },
+      });
+    }
+  }
+
+  /**
+   * Native Codex publishes the parent as idle the moment its own Turn stops generating.
+   * Forwarding that would clear Desktop's loading indicator while the Subagents it
+   * spawned are still working, so the notification is dropped and the Host keeps the
+   * parent active until the last child reports idle.
+   */
+  #suppressesOfficialStatus(value: JsonValue): boolean {
+    if (!isRecord(value) || value.method !== "thread/status/changed") return false;
+    if (!isRecord(value.params)) return false;
+    const threadId = value.params.threadId;
+    if (typeof threadId !== "string") return false;
+    const status = value.params.status;
+    if (!isRecord(status) || status.type === "active") return false;
+    return this.#hasRunningNativeSubagents(threadId);
+  }
+
+  /** `thread/read` and `thread/resume` carry the same status row the list does. */
+  #projectOfficialThreadResponse(value: JsonValue): JsonValue {
+    if (!isRecord(value) || "method" in value) return value;
+    const result = isRecord(value.result) ? value.result : null;
+    const thread = result && isRecord(result.thread) ? result.thread : null;
+    if (!thread || typeof thread.id !== "string") return value;
+    const projected = this.#projectOfficialRow(thread);
+    if (projected === thread) return value;
+    return { ...value, result: { ...result, thread: projected } };
+  }
+
+  /**
+   * Native `thread/list` reports a parent as idle as soon as its own Turn stops
+   * generating, even though the Subagent Threads it spawned are still running. Desktop
+   * derives the sidebar spinner from these rows, so republish the parent as active for
+   * that span. Rows without a continuing child are returned untouched.
+   */
+  #projectOfficialRow(thread: JsonObject): JsonObject {
+    this.#observeNativeSubagentParent(thread);
+    if (typeof thread.id !== "string") return thread;
+    if (isRecord(thread.status) && thread.status.type === "active") return thread;
+    if (!this.#hasRunningNativeSubagents(thread.id)) return thread;
+    return { ...thread, status: { type: "active", activeFlags: [] } };
   }
 
   /** `section_position` lists merge External section placements into the official order. */
@@ -4747,7 +4921,7 @@ export class AppServerHost {
       record,
       turns: [],
       sessionId: thread.sessionId,
-      running: thread.running,
+      running: this.#projectedThreadRunning(thread),
     });
     thread.record = record;
     thread.thread = { ...thread.thread, ...projected, turns: thread.thread.turns ?? [] };
@@ -6356,7 +6530,7 @@ export class AppServerHost {
       record: { ...thread.record, transportModelId },
       turns: thread.turns,
       sessionId: thread.sessionId,
-      running: thread.running,
+      running: this.#projectedThreadRunning(thread),
     });
     return projected;
   }
@@ -6469,7 +6643,7 @@ export class AppServerHost {
           record: { ...thread.record, transportModelId },
           turns: thread.turns,
           sessionId: thread.sessionId,
-          running: thread.running,
+          running: this.#projectedThreadRunning(thread),
         });
       }
       await this.#writer.json(rpcEnvelope(request, { result: jsonValueSchema.parse(projected) }));
@@ -6562,7 +6736,7 @@ export class AppServerHost {
           record: { ...thread.record, transportModelId },
           turns: thread.turns,
           sessionId: thread.sessionId,
-          running: thread.running,
+          running: this.#projectedThreadRunning(thread),
         });
         // Resume restores the saved selection, so an unsaved change must not
         // be reported as a completed selection.

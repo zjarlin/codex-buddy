@@ -77,30 +77,36 @@ describe("installed Harness composition", () => {
   );
 
   // Cold bundle imports can exceed Vitest's 5s default on CI; the loader retains its 30s budget.
-  it("loads all preinstalled plugin factories without static registration or executable discovery", async () => {
-    const registry = await load();
-    try {
-      expect(
-        registry
-          .list()
-          .map(({ id }) => id)
-          .sort(),
-      ).toEqual([...Object.keys(classes), "codex-usage"].sort());
-      expect([...registry.usageAdapters.keys()]).toEqual(["codex-usage"]);
-      for (const [id, adapter] of registry.adapters) {
-        expect(adapter.harnessId).toBe(id);
-        // esbuild may suffix class names when a plugin contains two protocol generations.
-        expect(adapter.constructor.name.replace(/\d+$/u, "")).toBe(
-          classes[id as keyof typeof classes],
+  // Hosted Windows runners cold-compile every plugin bundle under real-time scanning and
+  // have been observed past 35s, which used to fail the release commit's CI.
+  it(
+    "loads all preinstalled plugin factories without static registration or executable discovery",
+    async () => {
+      const registry = await load();
+      try {
+        expect(
+          registry
+            .list()
+            .map(({ id }) => id)
+            .sort(),
+        ).toEqual([...Object.keys(classes), "codex-usage"].sort());
+        expect([...registry.usageAdapters.keys()]).toEqual(["codex-usage"]);
+        for (const [id, adapter] of registry.adapters) {
+          expect(adapter.harnessId).toBe(id);
+          // esbuild may suffix class names when a plugin contains two protocol generations.
+          expect(adapter.constructor.name.replace(/\d+$/u, "")).toBe(
+            classes[id as keyof typeof classes],
+          );
+        }
+        expect(registry.list().find(({ id }) => id === "omp")?.icon).toMatch(
+          /^data:image\/svg\+xml/u,
         );
+      } finally {
+        await registry.close();
       }
-      expect(registry.list().find(({ id }) => id === "omp")?.icon).toMatch(
-        /^data:image\/svg\+xml/u,
-      );
-    } finally {
-      await registry.close();
-    }
-  }, 35_000);
+    },
+    process.platform === "win32" ? 120_000 : 35_000,
+  );
 
   it("provides every built-in command catalog before inspection or Session creation", async () => {
     const expected = {

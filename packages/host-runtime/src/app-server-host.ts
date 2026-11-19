@@ -4009,8 +4009,11 @@ export class AppServerHost {
       this.#forgetPendingOfficialTurnStarts(params.threadId);
       this.#activeOfficialTurns.delete(params.threadId);
       // A finished child Turn is proof it stopped generating even if its idle status never
-      // arrives, so the parent can be released on either signal.
-      if (this.#activeNativeSubagentThreads.delete(params.threadId)) {
+      // arrives, so the parent can be released on either signal. The idle usually lands
+      // first and already removed the child from the running set, so any known child has to
+      // republish the parent here, not only the removal that actually changed something.
+      this.#activeNativeSubagentThreads.delete(params.threadId);
+      if (this.#nativeSubagentParents.has(params.threadId)) {
         this.#nativeSubagentStatusChanged = true;
       }
       const turn = isRecord(params.turn) ? params.turn : null;

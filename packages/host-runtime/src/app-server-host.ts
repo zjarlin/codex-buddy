@@ -1220,6 +1220,10 @@ export class AppServerHost {
         this.#modelCatalogGeneration++;
         this.#pendingOfficialTurnStarts.clear();
         this.#activeOfficialTurns.clear();
+        // A restarted backend reports no history, so its last known Subagent activity is
+        // not evidence of anything still running.
+        this.#activeNativeSubagentThreads.clear();
+        this.#nativeSubagentStatusChanged = false;
         this.#signalActiveWorkChanged();
       },
       output: async (output) =>
@@ -4004,6 +4008,11 @@ export class AppServerHost {
     if (value.method === "turn/completed" && typeof params.threadId === "string") {
       this.#forgetPendingOfficialTurnStarts(params.threadId);
       this.#activeOfficialTurns.delete(params.threadId);
+      // A finished child Turn is proof it stopped generating even if its idle status never
+      // arrives, so the parent can be released on either signal.
+      if (this.#activeNativeSubagentThreads.delete(params.threadId)) {
+        this.#nativeSubagentStatusChanged = true;
+      }
       const turn = isRecord(params.turn) ? params.turn : null;
       const status =
         turn?.status === "failed"
@@ -4626,10 +4635,16 @@ export class AppServerHost {
     this.#signalActiveWorkChanged();
   }
 
-  /** True when a native Subagent under this Thread is still running. */
+  /**
+   * True when a native Subagent under this Thread is still running. Two independent
+   * signals keep this honest: the child's own status notification, and the official Turn
+   * it is running. A missed idle would otherwise pin the parent at active forever.
+   */
   #hasRunningNativeSubagents(parentThreadId: string): boolean {
-    for (const childThreadId of this.#activeNativeSubagentThreads) {
-      if (this.#nativeSubagentParents.get(childThreadId) === parentThreadId) return true;
+    for (const [childThreadId, parent] of this.#nativeSubagentParents) {
+      if (parent !== parentThreadId) continue;
+      if (this.#activeNativeSubagentThreads.has(childThreadId)) return true;
+      if (this.#activeOfficialTurns.has(childThreadId)) return true;
     }
     return false;
   }

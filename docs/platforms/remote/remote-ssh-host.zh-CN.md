@@ -137,6 +137,7 @@ set -eu
 | 更新失败 | 确认发行来源与安装版本；Buddy 不执行上游 npm 升级。 |
 | 另一台电脑看不到同一个会话 | 确认两端都通过 codexhost 启动、版本相同，远程桌面与 SSH 使用同一用户。使用自定义数据目录时，两种启动方式也要保持一致。 |
 | Mac 上安装失败 | 确认远程 Mac 的桌面用户已登录，再执行 `codexhost remote install`。 |
+| 远程会话里的音频、图片显示不可用（如「音频不可用」「Image unavailable」） | Desktop 读取远程媒体字节时硬编码调用 `/bin/cat`。NixOS 等只提供 `/bin/sh` 的系统缺少该路径，远程主机需补 `/bin/cat` 与 `/bin/cp` 指向 coreutils 的符号链接。详见[远程附件读取](../../architecture/external-thread-media.md#远程附件读取)。 |
 
 ## 停止或卸载
 

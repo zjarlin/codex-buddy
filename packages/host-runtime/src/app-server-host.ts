@@ -4706,7 +4706,9 @@ export class AppServerHost {
     const threadId = value.params.threadId;
     if (typeof threadId !== "string") return false;
     const status = value.params.status;
-    if (!isRecord(status) || status.type === "active") return false;
+    // Only idle is a claim that nothing is left to do. A fault or an unload still has to
+    // reach Desktop, so those pass through untouched.
+    if (!isRecord(status) || status.type !== "idle") return false;
     return this.#hasRunningNativeSubagents(threadId);
   }
 
@@ -4730,7 +4732,8 @@ export class AppServerHost {
   #projectOfficialRow(thread: JsonObject): JsonObject {
     this.#observeNativeSubagentParent(thread);
     if (typeof thread.id !== "string") return thread;
-    if (isRecord(thread.status) && thread.status.type === "active") return thread;
+    // Only idle is rewritten. A row reporting a fault or an unload keeps saying so.
+    if (!isRecord(thread.status) || thread.status.type !== "idle") return thread;
     if (!this.#hasRunningNativeSubagents(thread.id)) return thread;
     return { ...thread, status: { type: "active", activeFlags: [] } };
   }

@@ -154,6 +154,40 @@ describe("native Subagent status projection", () => {
     }
   });
 
+  it("forwards a faulted parent untouched while its Subagent runs", async () => {
+    const fixture = createFixture();
+    try {
+      await initialize(fixture);
+      writeRequest(fixture.official.stdout, {
+        method: "thread/started",
+        params: {
+          thread: { id: "fault-child", parentThreadId: "fault-parent", status: { type: "idle" } },
+        },
+      });
+      writeRequest(fixture.official.stdout, {
+        method: "thread/status/changed",
+        params: { threadId: "fault-child", status: { type: "active", activeFlags: [] } },
+      });
+      await fixture.collector.waitFor((message) => threadStatus(message, "fault-parent", "active"));
+      // A fault is not a claim that the work finished; Desktop has to see it.
+      writeRequest(fixture.official.stdout, {
+        method: "thread/status/changed",
+        params: { threadId: "fault-parent", status: { type: "systemError" } },
+      });
+      await expect(
+        fixture.collector.waitFor(
+          (message) =>
+            method(message, "thread/status/changed") &&
+            messageParams(message).threadId === "fault-parent" &&
+            (messageParams(message).status as { type?: string } | undefined)?.type ===
+              "systemError",
+        ),
+      ).resolves.toBeTruthy();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+
   it("passes a parent idle through once no Subagent is running", async () => {
     const fixture = createFixture();
     try {

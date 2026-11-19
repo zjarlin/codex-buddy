@@ -166,6 +166,8 @@ test("creates a one-time reminder from the row menu and fires the shared card", 
   await expect(card).toContainText("一次性提醒");
   await expect(card.getByRole("button", { name: "打开会话", exact: true })).toBeVisible();
   await expect(card.getByRole("button", { name: "稍后 10 分钟", exact: true })).toBeVisible();
+  // 一次性提醒触发即停用，没有“不再提醒”。
+  await expect(card.getByRole("button", { name: "不再提醒", exact: true })).toBeHidden();
 
   // 关闭按钮等同“知道了”：一次性提醒被停用，不再出现。
   await card.getByRole("button", { name: "关闭", exact: true }).click();
@@ -293,6 +295,73 @@ test("snoozes an interval reminder without changing its period", async ({ page }
   expect(fired.schedule.nextAt).toBeGreaterThan(
     await page.evaluate(() => Reflect.get(globalThis, "reminders").clock.now),
   );
+});
+
+test("stops a repeating reminder from the card and can resume it later", async ({ page }) => {
+  await page.evaluate(() => Reflect.get(globalThis, "setupReminders")());
+  await page.evaluate(() => {
+    const reminders = Reflect.get(globalThis, "reminders");
+    localStorage.setItem(
+      "codexhost.thread-reminders.v1",
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            id: "reminder-interval",
+            hostId: "local",
+            threadId: "thread-a",
+            title: "clouddev 迁 macmini 做了嘛",
+            project: "clouddev",
+            message: "**每小时**复查一次",
+            schedule: {
+              kind: "interval",
+              everyMs: 60 * 60 * 1000,
+              nextAt: reminders.clock.now + 60 * 60 * 1000,
+            },
+            enabled: true,
+            createdAt: reminders.clock.now,
+            firedAt: null,
+          },
+        ],
+      }),
+    );
+  });
+  await page.reload();
+  await page.addScriptTag({ content: bundle });
+  await page.evaluate(() => Reflect.get(globalThis, "setupReminders")(true));
+
+  await page.evaluate(() => Reflect.get(globalThis, "reminders").tick(60 * 60_000));
+  const card = page.locator("[data-codexhost-reminder]");
+  await expect(card).toBeVisible();
+  const stop = card.getByRole("button", { name: "不再提醒", exact: true });
+  await expect(stop).toBeVisible();
+
+  await stop.click();
+  await expect(card).toBeHidden();
+  // 停用而不是顺延：下一个周期不再弹，也不再参与计时。
+  expect(
+    await page.evaluate(() => Reflect.get(globalThis, "reminders").state().entries[0]),
+  ).toMatchObject({ enabled: false });
+  await page.evaluate(() => Reflect.get(globalThis, "reminders").tick(3 * 60 * 60_000));
+  await expect(card).toBeHidden();
+
+  // 停用项保留在对话框列表里，可以从那里恢复。
+  await page.locator(SIDEBAR_ROW).hover();
+  await page.locator("[data-codexhost-thread-actions-trigger]").click();
+  await expect(page.getByRole("menuitem", { name: "提醒…", exact: true })).toBeVisible();
+  await page.getByRole("menuitem", { name: "提醒…", exact: true }).click();
+  const dialog = page.locator("[data-codexhost-reminder-dialog]");
+  await expect(dialog.locator(".codexhost-reminder-list")).toContainText("已停用");
+  await dialog.getByRole("button", { name: "恢复", exact: true }).click();
+  const resumed = await page.evaluate(
+    () => Reflect.get(globalThis, "reminders").state().entries[0],
+  );
+  expect(resumed.enabled).toBe(true);
+  expect(new Date(resumed.schedule.nextAt).getTime()).toBeGreaterThan(
+    await page.evaluate(() => Reflect.get(globalThis, "reminders").clock.now),
+  );
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });
 
 test("lists and deletes existing reminders of a conversation", async ({ page }) => {

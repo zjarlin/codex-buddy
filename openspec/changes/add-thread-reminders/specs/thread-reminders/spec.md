@@ -51,7 +51,7 @@
 
 ### Requirement: Due reminders reuse the completion card shell
 
-到点提醒 SHALL 使用与完成提醒相同的非模态弹窗外壳展示，并包含 Host 与项目、会话标题、按 Markdown 渲染的提醒正文与提醒时刻。卡片 SHALL 提供“打开会话”“稍后 10 分钟”与“知道了”动作。
+到点提醒 SHALL 使用与完成提醒相同的非模态弹窗外壳展示，并包含 Host 与项目、会话标题、按 Markdown 渲染的提醒正文与提醒时刻。卡片 SHALL 提供“打开会话”“稍后 10 分钟”与“知道了”动作；周期性提醒 SHALL 另提供“不再提醒”，一次性提醒 MUST NOT 显示该动作。
 
 #### Scenario: A reminder becomes due in the foreground
 
@@ -71,6 +71,12 @@
 - **THEN** 系统 SHALL 记一次触发
 - **AND** MUST NOT 把该会话标为已读或改变侧栏未读状态
 
+#### Scenario: Stopping a repeating reminder from the card
+
+- **WHEN** 用户在周期性提醒的卡片上点击“不再提醒”
+- **THEN** 系统 SHALL 停用该提醒，不再推进到下一轮
+- **AND** 该提醒 SHALL 保留在会话的提醒列表中，标记为已停用并可从那里恢复
+
 #### Scenario: The window is in the background when the reminder is due
 
 - **WHEN** 提醒到期时窗口隐藏或失焦
@@ -85,6 +91,11 @@
 
 - **WHEN** 用户重启应用
 - **THEN** 未处理的提醒 SHALL 仍在原会话下列出并按原调度继续生效
+
+#### Scenario: Restoring a stopped reminder
+
+- **WHEN** 用户在提醒列表里对一条已停用的提醒选择恢复
+- **THEN** 该提醒 SHALL 重新参与调度，且下一次时刻落在恢复之后的未来
 
 #### Scenario: Another window edits the list
 

@@ -316,6 +316,15 @@ export class ExternalThreadRuntime {
     thread.sessionUnavailable = true;
   }
 
+  /**
+   * A finished Turn does not end the Thread's work: delegated Subagents keep running
+   * under it. Republished Thread values must keep reporting active for that span,
+   * otherwise Desktop sees idle and stops its loading indicator mid-delegation.
+   */
+  #projectedRunning(thread: ExternalThread): boolean {
+    return thread.running || this.#hasRunningDescendants(thread.id);
+  }
+
   #idleForRestore(thread: ExternalThread): boolean {
     if (thread.running || thread.activeTurnId !== null) return false;
     if (thread.session.hasBackgroundWork?.()) return false;
@@ -631,7 +640,7 @@ export class ExternalThreadRuntime {
         record: aligned.record,
         turns: aligned.turns,
         sessionId: thread.sessionId,
-        running: thread.running,
+        running: this.#projectedRunning(thread),
       });
       return null;
     } catch {
@@ -753,7 +762,7 @@ export class ExternalThreadRuntime {
         record: aligned.record,
         turns: aligned.turns,
         sessionId: thread.sessionId,
-        running: thread.running,
+        running: this.#projectedRunning(thread),
       });
       thread.outputTask = this.#consumeOutputs(thread);
       this.idleRelease.clearOutputFailed(thread);

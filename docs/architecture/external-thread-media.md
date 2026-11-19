@@ -54,7 +54,32 @@ Grok/DSH 的额外目录仍由各自 Adapter 处理，优先于共享层：
 | Grok | 工作目录、Grok 会话目录及其 `videos/`、`images/`、用户 `Downloads/` | 实时输出与历史 |
 | DeepSeek Harness | 消息产生时 Agent 的工作目录（按事件顺序随 `working-directory/change` 更新，恢复未完成的 Turn 时也一样），再到 Session 工作目录 | 实时输出与历史（`readSnapshot`）；用量刷新不做改写 |
 
-其他外部 Harness 不需要专属媒体接入代码，统一使用 Thread cwd 的相对图片规则。远程或容器文件系统与 Host 不一致时，不保证可用；SSH 媒体读取链及 Windows 实际文件系统行为仍需平台验证。
+其他外部 Harness 不需要专属媒体接入代码，统一使用 Thread cwd 的相对图片规则。远程或容器文件系统与 Host 不一致时，不保证可用；Windows 实际文件系统行为仍需平台验证。
+
+## 远程附件读取
+
+Desktop 读取远程主机上的媒体字节时，由渲染进程向该连接的执行环境发起读取，执行环境在远程主机上 spawn 一条命令来取字节（不走 app-server 的 `fs/readFile`）：
+
+- 读文件：`/bin/cat <路径>`
+- 写文件：`/bin/sh -c '/bin/cat > "$1"' sh <路径>`
+
+两条命令都用绝对路径，不查 `PATH`。因此远程主机必须存在 `/bin/cat`；缺失时读取失败，音频卡片显示「音频不可用」、图片显示「Image unavailable」，而同一路径经 app-server 读取是正常的。
+
+NixOS 的 `/bin` 只提供 `/bin/sh`，需要在远程主机补齐指向 coreutils 的符号链接。用 activation 片段声明，避免系统重建后丢失：
+
+```nix
+system.activationScripts.binCatCompat = {
+  deps = [ "binsh" ];
+  text = ''
+    ln -sfn ${pkgs.coreutils}/bin/cat /bin/.cat.tmp
+    mv /bin/.cat.tmp /bin/cat
+    ln -sfn ${pkgs.coreutils}/bin/cp /bin/.cp.tmp
+    mv /bin/.cp.tmp /bin/cp
+  '';
+};
+```
+
+`/bin/cp` 由 Git 索引时间戳复制使用，缺失时同类操作同样报 `failed to spawn process: No such file or directory (os error 2)`。系统自带的 `binsh` 片段只原子替换 `/bin/sh`，不会清空 `/bin` 下的其他条目。
 
 ## 用户消息：还原图片附件
 

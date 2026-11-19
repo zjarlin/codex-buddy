@@ -230,6 +230,39 @@ it("lists both Composer Hosts despite ambiguous routing and retains them in Sett
   expect(routing.knownHostIds?.()).toEqual([]);
 });
 
+it("resolves each Composer's own Host while document-wide routing stays ambiguous", async () => {
+  const fixture = setup("local");
+  await installRendererDraftPrewarmPolicyDirect(fixture.renderer);
+  const routing = fixture.target.__codexhostHostRoutingV1 as Routing;
+  try {
+    // 第二个 Composer 属于另一个 Host；文档里同时可见时无法唯一确定 Host，
+    // 但单个 Composer 的归属仍然是确定的，选模必须按 Composer 判断。
+    const editor = fixture.editors[0];
+    if (!editor) throw new Error("测试缺少首个编辑器");
+    const composerRoot = (source: typeof editor) => ({
+      querySelectorAll: () => [source],
+    });
+    const localComposer = composerRoot(editor);
+    const remoteEditor = {
+      __reactFiber$host: {
+        ...fixture.fiber,
+        memoizedProps: { executionTargetHostId: fixture.remote.getHostId() },
+      },
+      parentElement: null,
+      querySelectorAll: () => [],
+    };
+    const remoteComposer = composerRoot(remoteEditor);
+    fixture.editors.push(remoteEditor);
+    expect(routing.hostIdForComposer()).toBeNull();
+    expect(routing.hostIdForComposer(localComposer)).toBe("local");
+    expect(routing.hostIdForComposer(remoteComposer)).toBe(fixture.remote.getHostId());
+    fixture.editors.pop();
+    expect(routing.hostIdForComposer(localComposer)).toBe("local");
+  } finally {
+    routing.dispose();
+  }
+});
+
 it.each(["both", "local-disconnected", "remote-disconnected"])(
   "installs with multiple Composer Hosts (%s) without publishing an arbitrary draft route",
   async (mode) => {

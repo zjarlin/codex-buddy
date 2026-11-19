@@ -212,3 +212,56 @@ describe("native Subagent status projection", () => {
     }
   });
 });
+
+describe("native Subagent stop signals that arrive in either order", () => {
+  it("releases the parent when the child reports idle before its Turn completes", async () => {
+    const fixture = createFixture();
+    try {
+      await initialize(fixture);
+
+      writeRequest(fixture.official.stdout, {
+        method: "thread/started",
+        params: {
+          thread: {
+            id: "ordered-child",
+            parentThreadId: "ordered-parent",
+            threadSource: "subAgentThreadSpawn",
+            status: { type: "idle" },
+          },
+        },
+      });
+      writeRequest(fixture.official.stdout, {
+        method: "thread/status/changed",
+        params: { threadId: "ordered-child", status: { type: "active", activeFlags: [] } },
+      });
+      writeRequest(fixture.official.stdout, {
+        method: "turn/started",
+        params: { threadId: "ordered-child", turn: { id: "ordered-child-turn" }, input: [] },
+      });
+      await fixture.collector.waitFor((message) =>
+        threadStatus(message, "ordered-parent", "active"),
+      );
+
+      // Observed order: the child goes idle, and only then completes its Turn. The idle has
+      // already left the running set, so a release that needs a removal never fires.
+      writeRequest(fixture.official.stdout, {
+        method: "thread/status/changed",
+        params: { threadId: "ordered-child", status: { type: "idle" } },
+      });
+      writeRequest(fixture.official.stdout, {
+        method: "turn/completed",
+        params: {
+          threadId: "ordered-child",
+          turn: { id: "ordered-child-turn", status: "completed" },
+          input: [],
+        },
+      });
+
+      await expect(
+        fixture.collector.waitFor((message) => threadStatus(message, "ordered-parent", "idle")),
+      ).resolves.toBeTruthy();
+    } finally {
+      await stopFixture(fixture);
+    }
+  });
+});

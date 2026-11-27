@@ -849,6 +849,24 @@ describe("manually stopped turns", () => {
     expect(f.queue.list("local")).toEqual([]);
   });
 
+  // 停止后官方也可能以 failed 收尾。终态通知不逐条查 Host，但核对发现是停止的回合
+  // 必须把它清出去，且提交续接时仍然拒绝。
+  it("drops and refuses a stopped turn that ended failed", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    expect(f.queue.list("local")).toHaveLength(1);
+    f.client.buddyInterrupted.mockResolvedValue(stopReport("one", "one-turn"));
+    f.client.readThreadTurnState.mockResolvedValue({
+      running: false,
+      status: "failed",
+      turnId: "one-turn",
+      turnStatus: "failed",
+    });
+    await f.queue.reconcile("local", "one", { intervalMs: 0 });
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
   it("still queues an interrupted turn when the Host does not report a stop", async () => {
     const f = fixture();
     f.emit("turn/completed", "one", "one-turn", "interrupted");

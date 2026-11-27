@@ -282,8 +282,9 @@ export function createInterruptedQueue(options: {
       if (!state.turnId) return;
       // 手动停止是用户的终态决定，不是待恢复的中断。判断依据只在 Host 手里：
       // 它见过 turn/interrupt，原生状态却与崩溃同形，所以要先问 Host。
+      // 停止后官方也可能以 failed 收尾，同样不能当成可恢复回合。
       if (
-        state.status === "interrupted" &&
+        interrupted(state.status) &&
         (await stoppedByHost(client, hostId, threadId, state.turnId)) === true
       ) {
         // 同一回合的旧记录就地落墓碑；更早回合的记录也不该再显示。
@@ -511,8 +512,10 @@ export function createInterruptedQueue(options: {
         return;
       const next = put({ ...base, status: interrupted(turn.status) ? turn.status : "completed" });
       if (!interrupted(next.status)) return;
-      // 原生把手动停止也报成 interrupted；入队后立刻向 Host 复核，是用户停下的回合
+      // 原生把手动停止报成 interrupted；入队后立刻向 Host 复核，是用户停下的回合
       // 就地落成墓碑。终态通知本身必须同步入队，否则界面会漏掉这一帧的队列变化。
+      // 停止后也可能以 failed 收尾，那条路径不在这里逐条查 Host（每次终态都多一轮
+      // 原生读取），由低频核对与提交续接前的拦截负责。
       if (turn.status === "interrupted") void dropIfStopped(hostId, manager, threadId, turnId);
       void enrich(next, manager);
     }

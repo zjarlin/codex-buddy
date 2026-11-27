@@ -14,6 +14,7 @@ import type { RendererSettingsMessages } from "./localization.js";
 import { mountIdleReleaseControls } from "./idle-release-controls.js";
 import type { LoadedSessionsClient } from "./loaded-sessions-table.js";
 import { mountTerminalControls, type RendererThreadTerminalClient } from "./terminal-controls.js";
+import { mountDualLaneControls } from "../dual-lane/settings.js";
 import {
   createPreferenceGroup,
   createPreferenceItem,
@@ -87,6 +88,7 @@ export function createAppearanceSettingsPage(
       card.append(row.item);
 
       context.content.append(heading, description, group);
+      const disposeDualLane = mountDualLaneControls(context.content, messages);
       const disposeTerminal = mountTerminalControls(context, messages, getThreadTerminalClient);
       const disposeIdleRelease = mountIdleReleaseControls(
         context,
@@ -94,6 +96,7 @@ export function createAppearanceSettingsPage(
         getLoadedSessionsClient,
       );
       return () => {
+        disposeDualLane();
         disposeTerminal();
         ownerWindow.removeEventListener(REASONING_SOFT_WRAP_CHANGE_EVENT, sync);
         ownerWindow.removeEventListener(RENDERER_SPEECH_CHANGE_EVENT, syncSpeech);

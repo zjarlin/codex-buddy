@@ -60,6 +60,52 @@ const text = (value: unknown) => (typeof value === "string" ? value : "");
 const interrupted = (status: unknown): status is Status =>
   status === "failed" || status === "interrupted" || status === "cancelled";
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+/**
+ * 原生把手动停止和崩溃留下的半途回合都报成 interrupted，只有见过 turn/interrupt
+ * 的 Host 能区分。Host 的单会话扫描是唯一裁决点：没有结论时返回 `false` 或 `null`，
+ * 调用方维持原有的入队行为，绝不把“问不到”当成“用户停止过”。
+ *
+ * 侧栏后台轮询会反复核对同一批次的行，重复查询会把请求量放大；结论按
+ * (Host, 会话, 回合) 缓存：已确认的停止永久复用（换回合自然换键），否定与读取失败
+ * 只在结算前合并并发请求，结算后删除，等待下一次核对重新确认。
+ */
+function createUserStopCheck() {
+  const answers = new Map<string, Promise<boolean | null>>();
+  return (
+    client: RendererModelClient,
+    hostId: string,
+    threadId: string,
+    turnId: string,
+  ): Promise<boolean | null> => {
+    if (!client.buddyInterrupted) return Promise.resolve(null);
+    const key = JSON.stringify([hostId, threadId, turnId]);
+    const cached = answers.get(key);
+    if (cached) return cached;
+    const answer = (async () => {
+      try {
+        const scan = await client.buddyInterrupted?.(threadId);
+        const stopped = scan?.stoppedTurns;
+        return stopped
+          ? stopped.some((entry) => entry.threadId === threadId && entry.turnId === turnId)
+          : null;
+      } catch {
+        return null;
+      }
+    })();
+    answers.set(key, answer);
+    // 只记住“确实是手动停止”：否定可能只是 Host 还没收到 turn/interrupt 或读取失败，
+    // 下次核对必须重新问，否则会把这个回合误判成可恢复中断。
+    void answer.then((value) => {
+      if (value !== true) answers.delete(key);
+    });
+    while (answers.size > 512) {
+      const oldest = answers.keys().next().value;
+      if (oldest === undefined) break;
+      answers.delete(oldest);
+    }
+    return answer;
+  };
+}
 
 // 队列消费通知，并由可见窗口低频全量发现补上漏掉终态通知的会话；
 // 打开会话时另有单会话核对。启动和连接重绑本身不扫描历史。
@@ -76,6 +122,7 @@ export function createInterruptedQueue(options: {
   const pending = new Set<string>();
   const errors = new Map<string, string>();
   const subscriptionErrors = new Map<string, string>();
+  const stoppedByHost = createUserStopCheck();
   let storageError = "";
   let disposed = false;
   const emit = () => {
@@ -233,6 +280,16 @@ export function createInterruptedQueue(options: {
         return;
       }
       if (!state.turnId) return;
+      // 手动停止是用户的终态决定，不是待恢复的中断。判断依据只在 Host 手里：
+      // 它见过 turn/interrupt，原生状态却与崩溃同形，所以要先问 Host。
+      if (
+        state.status === "interrupted" &&
+        (await stoppedByHost(client, hostId, threadId, state.turnId)) === true
+      ) {
+        // 同一回合的旧记录就地落墓碑；更早回合的记录也不该再显示。
+        if (previous && interrupted(previous.status)) remove(previous, "completed");
+        return;
+      }
       // 同一回合已有记录：原生 completed 不代表已经交付，保留原有的中断判断。
       if (previous && interrupted(previous.status) && previous.turnId === state.turnId) return;
       // 会话已经进入新回合，旧回合的中断记录不再可恢复。
@@ -377,6 +434,26 @@ export function createInterruptedQueue(options: {
     }
   }
 
+  /** 终态通知先入队，再向 Host 复核；确认是用户停止的回合就地落墓碑。 */
+  function dropIfStopped(
+    hostId: string,
+    manager: NotificationManager,
+    threadId: string,
+    turnId: string,
+  ): void {
+    const client = options.getClient(hostId);
+    if (!client) return;
+    void stoppedByHost(client, hostId, threadId, turnId).then((stopped) => {
+      if (stopped !== true || disposed) return;
+      // 复核期间可能已经开始新回合、换了连接或被其他窗口处理；
+      // 迟到的结论只能移出它自己那一回合。
+      if (options.getManager(hostId) !== manager || options.getClient(hostId) !== client) return;
+      readStorage();
+      const current = entries.get(keyFor(hostId, threadId));
+      if (current?.turnId === turnId && interrupted(current.status)) remove(current, "completed");
+    });
+  }
+
   function receive(hostId: string, manager: NotificationManager, notification: unknown): void {
     if (
       disposed ||
@@ -433,7 +510,11 @@ export function createInterruptedQueue(options: {
       if (!interrupted(turn.status) && turn.status !== "completed" && turn.status !== "succeeded")
         return;
       const next = put({ ...base, status: interrupted(turn.status) ? turn.status : "completed" });
-      if (interrupted(next.status)) void enrich(next, manager);
+      if (!interrupted(next.status)) return;
+      // 原生把手动停止也报成 interrupted；入队后立刻向 Host 复核，是用户停下的回合
+      // 就地落成墓碑。终态通知本身必须同步入队，否则界面会漏掉这一帧的队列变化。
+      if (turn.status === "interrupted") void dropIfStopped(hostId, manager, threadId, turnId);
+      void enrich(next, manager);
     }
   }
 
@@ -476,6 +557,12 @@ export function createInterruptedQueue(options: {
     const result = await scan.call(client);
     if (disposed || options.getClient(hostId) !== client) return 0;
     readStorage();
+    // 手动停止是终态：Host 明确报告的这些回合不再入队，已排队的旧记录就地落墓碑。
+    for (const stopped of result.stoppedTurns ?? []) {
+      const queued = entries.get(keyFor(hostId, stopped.threadId));
+      if (queued?.turnId === stopped.turnId && interrupted(queued.status))
+        remove(queued, "completed");
+    }
     const running = new Set(result.runningThreadIds);
     for (const entry of result.threads) {
       const key = keyFor(hostId, entry.threadId);
@@ -560,6 +647,17 @@ export function createInterruptedQueue(options: {
       if (state.running || state.turnId !== entry.turnId || settled) {
         remove(entry, "completed");
         throw new Error("会话已运行或最新回合已改变，已移出中断队列。");
+      }
+      // 队列里可能残留手动停止前排入的记录：用户的停止是终态决定，提交继续只会白跑一次。
+      // 就地落成墓碑，之后再点恢复或自动续接也不会重新出现。
+      if (action === "resume") {
+        const stopped =
+          (await stoppedByHost(client, entry.hostId, entry.threadId, entry.turnId)) === true;
+        ensureCurrent();
+        if (stopped) {
+          remove(entry, "completed");
+          throw new Error("该会话已被手动停止，不会继续执行。");
+        }
       }
       if (source === "auto" && action === "resume") {
         readStorage();

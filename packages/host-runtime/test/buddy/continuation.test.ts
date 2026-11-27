@@ -189,6 +189,7 @@ describe("interrupted conversations", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     expect(request).toHaveBeenCalledWith(
@@ -342,6 +343,43 @@ describe("interrupted conversations", () => {
     });
     await expect(f.service.continue("thread", "turn")).rejects.toThrow("仍在运行");
   });
+  // 原生把手动停止也报成 interrupted；Host 见过 turn/interrupt 时，该回合是终态。
+  it("drops a turn the user stopped by hand and refuses to continue it", async () => {
+    const f = fixture();
+    f.status("interrupted");
+    const stopped = new InterruptedConversations(
+      f.request,
+      () => false,
+      async () => true,
+      undefined,
+      (threadId, turnId) => threadId === "thread" && turnId === "turn",
+    );
+    await expect(stopped.list()).resolves.toEqual({
+      threads: [],
+      runningThreadIds: [],
+      stoppedTurns: [{ threadId: "thread", turnId: "turn" }],
+      unreadable: 0,
+    });
+    await expect(stopped.continue("thread", "turn")).rejects.toThrow("手动停止");
+    expect(f.request.mock.calls.some(([method]) => method === "turn/start")).toBe(false);
+  });
+
+  it("keeps crash-interrupted turns recoverable when the user did not stop them", async () => {
+    const f = fixture();
+    f.status("interrupted");
+    const recoverable = new InterruptedConversations(
+      f.request,
+      () => false,
+      async () => true,
+      undefined,
+      () => false,
+    );
+    const listed = await recoverable.list();
+    expect(listed.threads.map((thread) => thread.status)).toEqual(["interrupted"]);
+    expect(listed.stoppedTurns).toEqual([]);
+    await expect(recoverable.continue("thread", "turn")).resolves.toBe("continued");
+  });
+
   it.each(["completed", "succeeded", "unknown"])("excludes and rejects %s", async (status) => {
     const f = fixture();
     f.status(status);
@@ -366,6 +404,7 @@ describe("interrupted conversations", () => {
           },
         ],
         runningThreadIds: [],
+        stoppedTurns: [],
         unreadable: 0,
       });
       await expect(f.service.continue("thread", "turn")).resolves.toBe("continued");
@@ -393,6 +432,7 @@ describe("interrupted conversations", () => {
       await expect(f.service.list()).resolves.toEqual({
         threads: [],
         runningThreadIds: ["thread"],
+        stoppedTurns: [],
         unreadable: 0,
       });
       await expect(f.service.continue("thread", "turn")).rejects.toThrow("仍在运行");
@@ -492,6 +532,7 @@ describe("interrupted conversations", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     expect(calls).toContainEqual({
@@ -535,6 +576,7 @@ describe("interrupted conversations", () => {
         { threadId: "thread", turnId: "turn", title: "Legacy", status: "failed", owner: "codex" },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     expect(request).toHaveBeenCalledWith("thread/read", {
@@ -550,7 +592,12 @@ describe("interrupted conversations", () => {
         ? { result: { data: [{ id: "broken" }] } }
         : { error: { message: "missing source rollout" } },
     );
-    expect(await f.service.list()).toEqual({ threads: [], runningThreadIds: [], unreadable: 1 });
+    expect(await f.service.list()).toEqual({
+      threads: [],
+      runningThreadIds: [],
+      stoppedTurns: [],
+      unreadable: 1,
+    });
     await expect(f.service.continue("broken", "turn")).rejects.toThrow("missing source rollout");
   });
 

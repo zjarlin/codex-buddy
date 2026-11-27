@@ -63,6 +63,7 @@ function fixture(storage = memoryStorage()) {
     buddyInterrupted: vi.fn(async (): Promise<BuddyInterrupted> => ({
       threads: [],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     })),
   };
@@ -383,6 +384,7 @@ describe("interrupted event queue", () => {
           },
         ],
         runningThreadIds: [],
+        stoppedTurns: [],
         unreadable: 0,
       });
       await f.queue.importHistory("local");
@@ -469,6 +471,7 @@ describe("interrupted event queue", () => {
         historical("running"),
       ],
       runningThreadIds: ["running"],
+      stoppedTurns: [],
       unreadable: 2,
     });
     expect(await imported).toBe(2);
@@ -482,6 +485,7 @@ describe("interrupted event queue", () => {
     f.client.buddyInterrupted.mockResolvedValueOnce({
       threads: [historical("archived")],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await f.queue.importHistory("local");
@@ -501,6 +505,7 @@ describe("interrupted event queue", () => {
         { threadId: "one", turnId: "one-turn", title: "one", owner: "codex", status: "failed" },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await imported;
@@ -523,11 +528,13 @@ describe("interrupted event queue", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     };
     restarted.client.buddyInterrupted.mockResolvedValueOnce({
       ...history,
       runningThreadIds: ["one"],
+      stoppedTurns: [],
     });
     await restarted.queue.importHistory("remote");
     expect(restarted.queue.list("remote")).toEqual([]);
@@ -563,6 +570,7 @@ describe("interrupted event queue", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await imported;
@@ -601,6 +609,7 @@ describe("interrupted event queue", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await f.queue.importHistory("local");
@@ -628,6 +637,7 @@ describe("interrupted event queue", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await f.queue.importHistory("local");
@@ -675,6 +685,7 @@ describe("interrupted event queue", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await f.queue.reconcile("local", "one");
@@ -759,6 +770,7 @@ describe("interrupted event queue", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await f.queue.discover("local");
@@ -773,6 +785,7 @@ describe("interrupted event queue", () => {
     const interrupted = (turnId: string): BuddyInterrupted => ({
       threads: [{ threadId: "one", turnId, title: "one", owner: "codex", status: "interrupted" }],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     await f.queue.discover("local");
@@ -812,5 +825,101 @@ describe("interrupted event queue", () => {
     await f.queue.reconcile("local", "one");
     expect(f.client.readThreadTurnState).toHaveBeenCalledTimes(1);
     expect(f.first()).toMatchObject({ turnId: "one-turn", status: "failed" });
+  });
+});
+
+describe("manually stopped turns", () => {
+  /** Host 明确报告的停止回合；原生终态与崩溃同形，只有 Host 能区分。 */
+  const stopReport = (threadId: string, turnId: string): BuddyInterrupted => ({
+    threads: [],
+    runningThreadIds: [],
+    stoppedTurns: [{ threadId, turnId }],
+    unreadable: 0,
+  });
+
+  it("keeps a stopped turn out of the queue even though the native status is interrupted", async () => {
+    const f = fixture();
+    f.client.buddyInterrupted.mockResolvedValue(stopReport("one", "one-turn"));
+    f.emit("turn/completed", "one", "one-turn", "interrupted");
+    await settle();
+    expect(f.queue.list("local")).toEqual([]);
+    // 落成墓碑后，迟到的同回合终态也不会把它带回来。
+    f.emit("turn/completed", "one", "one-turn", "interrupted");
+    await settle();
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("still queues an interrupted turn when the Host does not report a stop", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "interrupted");
+    await settle();
+    expect(f.first()).toMatchObject({ turnId: "one-turn", status: "interrupted" });
+  });
+
+  it("remembers a confirmed stop instead of asking the Host again", async () => {
+    const f = fixture();
+    f.client.readThreadTurnState.mockResolvedValue({
+      running: false,
+      status: "interrupted",
+      turnId: "one-turn",
+      turnStatus: "interrupted",
+    });
+    f.client.buddyInterrupted.mockResolvedValue(stopReport("one", "one-turn"));
+    await f.queue.reconcile("local", "one", { intervalMs: 0 });
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(1);
+    expect(f.client.buddyInterrupted).toHaveBeenCalledWith("one");
+    expect(f.queue.list("local")).toEqual([]);
+    // 再接收到同一回合的迟到终态时不再重复询问 Host。
+    f.emit("turn/completed", "one", "one-turn", "interrupted");
+    await settle();
+    expect(f.client.buddyInterrupted).toHaveBeenCalledTimes(1);
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("re-asks when the Host could not confirm, so a late stop is still caught", async () => {
+    const f = fixture();
+    f.client.readThreadTurnState.mockResolvedValue({
+      running: false,
+      status: "interrupted",
+      turnId: "one-turn",
+      turnStatus: "interrupted",
+    });
+    f.client.buddyInterrupted.mockRejectedValueOnce(new Error("host offline"));
+    await f.queue.reconcile("local", "one", { intervalMs: 0 });
+    expect(f.first().turnId).toBe("one-turn");
+    f.client.buddyInterrupted.mockResolvedValueOnce(stopReport("one", "one-turn"));
+    await f.queue.reconcile("local", "one", { intervalMs: 0 });
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("drops an already queued entry that full history import reports as stopped", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "failed");
+    await settle();
+    expect(f.queue.list("local")).toHaveLength(1);
+    f.client.buddyInterrupted.mockResolvedValueOnce(stopReport("one", "one-turn"));
+    await f.queue.importHistory("local");
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("refuses to submit a continuation for a turn the user stopped", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "interrupted");
+    await settle();
+    f.client.buddyInterrupted.mockResolvedValue(stopReport("one", "one-turn"));
+    await expect(f.queue.resume(f.first())).rejects.toThrow("手动停止");
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+    // 就地落墓碑：自动续接随后也不会再提交同一回合。
+    expect(f.queue.list("local")).toEqual([]);
+  });
+
+  it("never auto-resumes a turn the user stopped", async () => {
+    const f = fixture();
+    f.emit("turn/completed", "one", "one-turn", "interrupted");
+    await settle();
+    f.client.buddyInterrupted.mockResolvedValue(stopReport("one", "one-turn"));
+    await expect(f.queue.resume(f.first(), undefined, { auto: true })).rejects.toThrow("手动停止");
+    expect(f.client.buddyContinue).not.toHaveBeenCalled();
+    expect(f.queue.list("local")).toEqual([]);
   });
 });

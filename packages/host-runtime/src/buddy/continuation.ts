@@ -211,6 +211,11 @@ export class InterruptedConversations {
     private readonly busy: (id: string) => boolean,
     private readonly allowed: () => Promise<boolean>,
     private readonly classifier?: InterruptedTurnClassifier,
+    /**
+     * 该回合是否由用户手动停止。原生终态只有 `interrupted`，与崩溃留下的半途回合
+     * 同形；手动停止是用户的终态决定，不是待恢复的中断。
+     */
+    private readonly userStopped?: (threadId: string, turnId: string) => boolean | Promise<boolean>,
   ) {}
 
   async #checkAllowed(): Promise<void> {
@@ -404,6 +409,11 @@ export class InterruptedConversations {
           return { kind: "running" as const, threadId: metadata.id };
         }
         if (typeof turn.id !== "string") return { kind: "done" as const };
+        // 手动停止是用户已经作出的决定，不是待恢复的中断；连 Laya 都不必问。
+        // 单独报告出来，客户端据此把已排队的旧记录落成终态。
+        if (await this.userStopped?.(metadata.id, turn.id)) {
+          return { kind: "stopped" as const, threadId: metadata.id, turnId: turn.id };
+        }
         const interrupted = (status: RecoverableStatus) => ({
           kind: "interrupted" as const,
           thread: {
@@ -461,6 +471,9 @@ export class InterruptedConversations {
       runningThreadIds: entries.flatMap((entry) =>
         entry.kind === "running" ? [entry.threadId] : [],
       ),
+      stoppedTurns: entries.flatMap((entry) =>
+        entry.kind === "stopped" ? [{ threadId: entry.threadId, turnId: entry.turnId }] : [],
+      ),
       unreadable: entries.filter((entry) => entry.kind === "unreadable").length,
     };
   }
@@ -485,6 +498,9 @@ export class InterruptedConversations {
         if (this.busy(threadId) || object(thread.status).type === "active")
           throw new Error("该会话仍在运行。");
         if (turn.id !== turnId) throw new Error("会话状态已改变，请刷新列表。");
+        // 队列里可能残留停止前排入的旧记录；手动停止的回合不能被继续。
+        if (await this.userStopped?.(threadId, turnId))
+          throw new Error("该会话已被手动停止，不会继续执行。");
         if (recoverableStatus(thread, turn) !== null) return;
         // 官方状态不明确时补读完整尾项：以 Assistant 文本交付且无残留错误的回合才算明确完成。
         const full = await this.#read(threadId, { items: true });

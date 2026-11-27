@@ -79,6 +79,8 @@ describe("native recovery on connections without Buddy recovery RPCs", () => {
           },
         ],
         runningThreadIds: [],
+        // 原生读取看不到 turn/interrupt，分不出手动停止与崩溃。
+        stoppedTurns: [],
         unreadable: 0,
       };
       await expect(f.client.buddyInterrupted()).resolves.toEqual(expected);
@@ -379,6 +381,7 @@ describe("native recovery on connections without Buddy recovery RPCs", () => {
     await expect(f.client.buddyInterrupted()).resolves.toEqual({
       threads: [],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 1,
     });
     await expect(f.client.buddyContinue("thread", "failed-turn")).rejects.toThrow(
@@ -484,6 +487,7 @@ describe("native recovery on connections without Buddy recovery RPCs", () => {
         },
       ],
       runningThreadIds: [],
+      stoppedTurns: [],
       unreadable: 0,
     });
     const client = createRendererModelClient([{ sendRequest: f.send }]);

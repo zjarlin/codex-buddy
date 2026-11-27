@@ -122,6 +122,9 @@ export function createNativeContinuation(options: {
     return {
       threads: entries.filter((entry): entry is InterruptedThread => entry !== null),
       runningThreadIds: [...running],
+      // 原生读取看不到 turn/interrupt，分不出手动停止与崩溃；这条回退路径没有结论，
+      // 空清单让队列沿用原有行为，不把无法判断说成“没有停止过”。
+      stoppedTurns: [],
       unreadable,
     };
   }

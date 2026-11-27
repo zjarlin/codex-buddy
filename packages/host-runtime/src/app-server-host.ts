@@ -62,6 +62,7 @@ import {
 } from "@codexhost/shared-contracts";
 import { MODEL_AVAILABILITY_METHOD } from "@codexhost/shared-contracts";
 import { InterruptedConversations } from "./buddy/continuation.js";
+import { sharedUserStoppedTurns, type UserStoppedTurns } from "./buddy/user-stopped-turns.js";
 import { probeGatewayHealth } from "./buddy/health.js";
 import { readConnection } from "@codexhost/buddy-engine";
 import {
@@ -941,11 +942,18 @@ function gitWorkflowWaitTimeoutMs(environment: NodeJS.ProcessEnv): number {
 
 export class AppServerHost {
   #buddy: BuddyRouter | undefined;
+  /**
+   * 用户手动停止的官方回合。原生终态只有 `interrupted`，与进程崩溃留下的半途回合
+   * 无法区分；只有 Host 见过 `turn/interrupt` 才知道这是用户的选择，因此在那里
+   * 记录，中断扫描与续接据此把该回合当作终态。
+   */
+  #userStoppedTurns: UserStoppedTurns | undefined;
   #interrupted = new InterruptedConversations(
     (method, params) => this.#requestOfficial(method, params),
     (id) => this.#activeOfficialTurns.has(id),
     async () => !(await this.#buddy?.privateMode()),
     async (input) => (await this.#buddy?.classifyInterruptedTurn(input)) ?? null,
+    (threadId, turnId) => this.stoppedByUser(threadId, turnId),
   );
   #privateChat: BuddyPrivateChat | undefined;
   #translator: BuddyTranslator | undefined;
@@ -3382,6 +3390,9 @@ export class AppServerHost {
         await this.#interruptExternalTurn(request, resolution.thread, params.turnId);
         return;
       }
+      // 桌面这条链路直接把帧转发给官方运行时，不经过 #requestOfficial，因此在这里
+      // 同样要记下用户的停止；手机、控制台与委派由 #requestOfficial 统一记录。
+      this.#recordOfficialStop(params);
     }
     if (request.method === "thread/read") {
       const params = routingParams(request);
@@ -3763,10 +3774,38 @@ export class AppServerHost {
     return { ...synced.report, ids: catalog.visibleIds };
   }
 
+  /**
+   * 把一个官方 turn/interrupt 落成“用户已停止”的终态记录。
+   *
+   * 只记 Host 仍在跟踪的回合：停止一个早已结束的旧回合不是对当前工作的决定，
+   * 不能把它的失败或完成改写成用户的选择。请求未带 turnId 时取当前跟踪的那一个。
+   */
+  #recordOfficialStop(params: JsonObject): void {
+    const threadId = typeof params.threadId === "string" ? params.threadId : "";
+    const active = this.#activeOfficialTurns.get(threadId);
+    const turnId = typeof params.turnId === "string" ? params.turnId : active;
+    if (threadId && turnId && active === turnId) this.#stoppedTurns().requested(threadId, turnId);
+  }
+
+  #stoppedTurns(): UserStoppedTurns {
+    this.#userStoppedTurns ??= sharedUserStoppedTurns(this.#options.environment ?? process.env);
+    return this.#userStoppedTurns;
+  }
+
+  /** 原生状态里手动停止与崩溃同形；只有这里见过 `turn/interrupt` 才能区分。 */
+  stoppedByUser(threadId: string, turnId: string): Promise<boolean> {
+    return this.#stoppedTurns().stopped(threadId, turnId);
+  }
+
   async #requestOfficial(method: string, params: JsonObject): Promise<JsonObject> {
     if ((await this.#buddy?.privateMode()) && !privacySafeRequest(method, params)) {
       throw new Error("隐私模式禁止后台模型任务。");
     }
+    // 所有官方 turn/interrupt 都从这里发出（桌面、手机、控制台与委派）。用户在停止
+    // 按钮上作出的决定必须在这里落成终态记录，否则原生只会报一个与崩溃同形的
+    // interrupted，中断队列随后还会把它当作待恢复回合自动续跑。
+    // 只记当前仍在进行的回合：停止一个早已结束的旧回合不是对当前工作的决定。
+    if (method === "turn/interrupt") this.#recordOfficialStop(params);
     if (method === "model/list" && this.#liveCodexModels) {
       const catalog = this.#liveCodexModels;
       // 仅目录数据来自同步快照；每次查询仍保留原生的可用性和管理策略检查。
@@ -4003,6 +4042,7 @@ export class AppServerHost {
       if (turn && typeof turn.id === "string") {
         this.#forgetPendingOfficialTurnStarts(params.threadId);
         this.#activeOfficialTurns.set(params.threadId, turn.id);
+        this.#stoppedTurns().started(params.threadId, turn.id);
       }
     }
     if (value.method === "turn/completed" && typeof params.threadId === "string") {
@@ -4026,6 +4066,8 @@ export class AppServerHost {
       if (turn && typeof turn.id === "string") {
         const threadId = params.threadId;
         const turnId = turn.id;
+        // 旧版本按“待定”写入的停止请求只有落在 interrupted 终态上才算用户停止。
+        this.#stoppedTurns().completed(threadId, turnId, String(turn.status));
         void this.#turnActions
           .completed(threadId, turnId, status)
           .then((suppressAutoPush) =>

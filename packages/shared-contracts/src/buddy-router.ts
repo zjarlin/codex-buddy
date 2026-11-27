@@ -38,6 +38,12 @@ export const buddyInterruptedSchema = z.object({
     )
     .default([]),
   runningThreadIds: z.array(z.string()).default([]),
+  /**
+   * 由用户手动停止的回合。原生终态只有 `interrupted`，与崩溃或客户端退出留下的
+   * 半途回合同形；只有见过 `turn/interrupt` 的 Host 能区分。这些回合是用户的终态决定，
+   * 不出现在 `threads` 里，也不再参与手动恢复或自动续接。
+   */
+  stoppedTurns: z.array(z.object({ threadId: z.string(), turnId: z.string() })).default([]),
   unreadable: z.number(),
 });
 export type BuddyInterrupted = z.infer<typeof buddyInterruptedSchema>;

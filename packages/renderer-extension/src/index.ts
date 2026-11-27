@@ -253,6 +253,34 @@ export {
 } from "./settings/icons.js";
 export type { RendererSettingsIconName } from "./settings/icons.js";
 
+export {
+  DEFAULT_DUAL_LANE_SETTINGS,
+  DUAL_LANE_CHANGE_EVENT,
+  DUAL_LANE_STORAGE_KEY,
+  parseDualLaneSettings,
+  readDualLaneSettings,
+  writeDualLaneSettings,
+} from "./dual-lane/preference.js";
+export type { DualLaneSettings } from "./dual-lane/preference.js";
+export { installDualLane } from "./dual-lane/controller.js";
+export type { DualLaneController, DualLaneStatus } from "./dual-lane/controller.js";
+export {
+  closeSideChat,
+  hasSideChat,
+  laneForComposer,
+  nativeModelMenu,
+  sideChatTarget,
+  visibleComposers,
+} from "./dual-lane/native.js";
+export type {
+  Lane,
+  NativeModelMenu,
+  NativeModelMenuBinding,
+  NativeModelOption,
+  SideChatTarget,
+} from "./dual-lane/native.js";
+export { mountDualLaneControls } from "./dual-lane/settings.js";
+
 export const rendererBuildMetadata = {
   name: "@codexhost/renderer-extension",
   target: "browser",

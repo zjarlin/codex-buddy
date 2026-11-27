@@ -48,6 +48,7 @@
 | [`product/thread-question-titles.md`](product/thread-question-titles.md) | 会话名称按最后一次用户提问截取、原生与 External Harness 的持久化路径、附件正文提取及自动标题禁用边界。 |
 | [`product/sidebar-thread-context.md`](product/sidebar-thread-context.md) | 标题栏显示当前会话的项目名、左侧树自动对齐到当前会话；维护侧栏定位体验时阅读。 |
 | [`product/goal-thread-badges.md`](product/goal-thread-badges.md) | 目标模式会话在侧栏显示按 Goal 状态着色的徽标；维护 Goal 区分或侧栏装饰时阅读。 |
+| [`product/dual-lane.md`](product/dual-lane.md) | 默认双栏：左栏主会话用 `free`、右栏原生侧边聊天用 `ds`；改双栏开关、默认模型或右栏展开条件时阅读。 |
 
 ## Harness 专项
 

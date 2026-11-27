@@ -77,6 +77,22 @@ describe("Renderer settings localization", () => {
     expect(chinese.aboutParagraphs).toHaveLength(3);
     expect(chinese.aboutStarCallout).toContain("请给我们一个 Star");
     expect(chinese.aboutRepository).toBe("开源仓库");
+    // 双栏设置的两个语言版本必须同时存在，缺一会在界面上留下空白行。
+    expect(chinese.dualLaneGroup).toBe("双栏");
+    expect(chinese.dualLaneEnabledTitle).toBe("在会话右侧打开侧边聊天");
+    expect(chinese.dualLaneEnabledDescription).toContain("默认开启");
+    expect(english.dualLaneGroup).toBe("Split view");
+    expect(english.dualLaneEnabledTitle).toBe("Open a side chat next to the conversation");
+    expect(english.dualLaneEnabledDescription).toContain("On by default");
+    for (const messages of [english, chinese]) {
+      expect(messages.dualLaneMainModelTitle.trim()).not.toBe("");
+      expect(messages.dualLaneMainModelDescription.trim()).not.toBe("");
+      expect(messages.dualLaneSideModelTitle.trim()).not.toBe("");
+      expect(messages.dualLaneSideModelDescription.trim()).not.toBe("");
+      expect(messages.dualLaneHelpLabel.trim()).not.toBe("");
+      expect(messages.dualLaneHelp.length).toBeGreaterThanOrEqual(3);
+      expect(messages.dualLaneHelp.every((line) => line.trim() !== "")).toBe(true);
+    }
     expect(Object.keys(chinese.pageLabels)).toEqual(Object.keys(english.pageLabels));
     expect(Object.isFrozen(english)).toBe(true);
     expect(Object.isFrozen(chinese.pageLabels)).toBe(true);

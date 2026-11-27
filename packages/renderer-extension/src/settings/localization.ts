@@ -82,6 +82,15 @@ export interface RendererSettingsMessages {
   readonly threadAutoArchiveInvalid: string;
   readonly reasoningSoftWrapTitle: string;
   readonly reasoningSoftWrapDescription: string;
+  readonly dualLaneGroup: string;
+  readonly dualLaneEnabledTitle: string;
+  readonly dualLaneEnabledDescription: string;
+  readonly dualLaneHelpLabel: string;
+  readonly dualLaneHelp: readonly string[];
+  readonly dualLaneMainModelTitle: string;
+  readonly dualLaneMainModelDescription: string;
+  readonly dualLaneSideModelTitle: string;
+  readonly dualLaneSideModelDescription: string;
   readonly speechAnnouncementTitle: string;
   readonly speechAnnouncementDescription: string;
   readonly terminalSection: string;
@@ -430,6 +439,21 @@ const ENGLISH_MESSAGES: RendererSettingsMessages = Object.freeze({
   threadAutoArchiveInvalid: "Enter a whole number from 1 to 3650.",
   reasoningSoftWrapTitle: "Wrap thinking text",
   reasoningSoftWrapDescription: "Wrap long lines in thinking blocks. Shell output is unaffected.",
+  dualLaneGroup: "Split view",
+  dualLaneEnabledTitle: "Open a side chat next to the conversation",
+  dualLaneEnabledDescription:
+    "On by default. The right pane starts a native side chat with its own conversation and Model.",
+  dualLaneHelpLabel: "About split view",
+  dualLaneHelp: Object.freeze([
+    "The left pane is the main conversation; the right pane is a native side chat. Each pane keeps its own Model and context.",
+    "The right pane opens once the current conversation has started. Closing it does not reopen it for that conversation.",
+    "Models are native Model IDs, for example free or ds. Leave empty to inherit the native choice.",
+  ]),
+  dualLaneMainModelTitle: "Default Model in the left pane",
+  dualLaneMainModelDescription:
+    "Applied to new conversations only. Empty keeps the native selection.",
+  dualLaneSideModelTitle: "Default Model in the right pane",
+  dualLaneSideModelDescription: "Used when a side chat opens. Empty follows the left pane.",
   speechAnnouncementTitle: "Speak the result when a conversation finishes",
   speechAnnouncementDescription:
     "Automatic speech is off by default. Click the speaker in the completion card's top right to play a summary through the gateway Manbo voice.",
@@ -830,6 +854,19 @@ const CHINESE_MESSAGES: RendererSettingsMessages = Object.freeze({
   threadAutoArchiveInvalid: "请输入 1～3650 之间的整数。",
   reasoningSoftWrapTitle: "换行显示思考文本",
   reasoningSoftWrapDescription: "思考块中的长行自动换行，不影响 Shell 输出。",
+  dualLaneGroup: "双栏",
+  dualLaneEnabledTitle: "在会话右侧打开侧边聊天",
+  dualLaneEnabledDescription: "默认开启。右栏用原生侧边聊天，是独立会话，有自己的模型和上下文。",
+  dualLaneHelpLabel: "双栏说明",
+  dualLaneHelp: Object.freeze([
+    "左栏是主会话，右栏是原生侧边聊天。两栏各自保留自己的模型和上下文，互不影响。",
+    "当前会话开始后右栏才会展开；手动关掉后，这个会话不会再自动重开。",
+    "模型填写原生模型 ID，例如 free、ds。留空表示沿用原生选择。",
+  ]),
+  dualLaneMainModelTitle: "左栏默认模型",
+  dualLaneMainModelDescription: "只对新建会话生效。留空表示沿用原生选择。",
+  dualLaneSideModelTitle: "右栏默认模型",
+  dualLaneSideModelDescription: "展开侧边聊天时使用。留空表示跟随左栏。",
   speechAnnouncementTitle: "会话完成语音播报",
   speechAnnouncementDescription:
     "自动播报默认关闭。手动点击完成卡片右上角的小喇叭，用网关曼波配音朗读结果摘要。",

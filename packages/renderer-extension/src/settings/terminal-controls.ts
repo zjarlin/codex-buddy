@@ -4,6 +4,7 @@ import {
   getSharedThreadTerminalPreferenceStore,
   type ThreadTerminalPreferenceStore,
 } from "../thread-terminal-preference.js";
+import { isMethodUnavailable } from "../renderer-request-sender.js";
 import type { RendererSettingsPageMountContext } from "./core.js";
 import type { RendererSettingsMessages } from "./localization.js";
 import { createPreferenceGroup, createPreferenceItem, preferenceId } from "./preference-ui.js";
@@ -112,9 +113,12 @@ export function mountTerminalControls(
           select.replaceChildren();
           const option = document.createElement("option");
           option.value = "";
-          option.textContent = `${messages.terminalLoadFailed} ${
-            error instanceof Error ? error.message : String(error)
-          }`;
+          // 这个连接没有终端设置 RPC 不是「读取失败」：不要把 RPC 原文当错误给用户。
+          option.textContent = isMethodUnavailable(error)
+            ? messages.terminalUnavailable
+            : `${messages.terminalLoadFailed} ${
+                error instanceof Error ? error.message : String(error)
+              }`;
           select.append(option);
           select.disabled = true;
         },

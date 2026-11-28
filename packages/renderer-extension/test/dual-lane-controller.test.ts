@@ -386,6 +386,35 @@ describe("dual lane controller", () => {
     controller.dispose();
   });
 
+  it("reopens the pane when split view is turned off and back on", async () => {
+    const openSide = vi.fn().mockResolvedValue("side-id");
+    const main = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [{ conversationId: "conv-8", hostId: "local", onCreateSideConversation: openSide }],
+    });
+    const { controller, store, events, setPaneOpen } = setup({ composers: [main] });
+    expect(openSide).toHaveBeenCalledOnce();
+    // 原生创建是异步的，等它在途请求结束再切开关。
+    await flush();
+    // 关掉后收起，再打开是明确意图，应该重新展开同一个会话。
+    setPaneOpen(true);
+    store.set(
+      DUAL_LANE_STORAGE_KEY,
+      JSON.stringify({ enabled: false, mainModel: "free", sideModel: "ds" }),
+    );
+    events.dispatchEvent(new Event(DUAL_LANE_CHANGE_EVENT));
+    setPaneOpen(false);
+    store.set(
+      DUAL_LANE_STORAGE_KEY,
+      JSON.stringify({ enabled: true, mainModel: "free", sideModel: "ds" }),
+    );
+    events.dispatchEvent(new Event(DUAL_LANE_CHANGE_EVENT));
+    await flush();
+    expect(openSide).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
   it("reacts to the preference change event", () => {
     const openSide = vi.fn().mockResolvedValue("side-id");
     const main = fakeComposer({

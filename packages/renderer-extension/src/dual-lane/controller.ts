@@ -204,8 +204,13 @@ export function installDualLane(
         },
         onMutate: notify,
       }));
-  // 关闭双栏只收起本功能展开的右栏；不碰用户自己开的侧边聊天。
+  /**
+   * 关闭双栏只收起本功能展开的右栏；不碰用户自己开的侧边聊天。同时清掉
+   * “本会话已尝试过”的记录：重新打开开关是明确的意图，应该重新展开一次。
+   */
   const collapseOpened = (): void => {
+    opened.clear();
+    unconfirmed = 0;
     if (openedByUs.size === 0) return;
     openedByUs.clear();
     closeSideChat(doc);

@@ -142,19 +142,12 @@ describe("dual lane controller", () => {
     controller.dispose();
   });
 
-  it("opens the native right pane immediately, including for a new draft", () => {
+  it("opens the native right pane as soon as the conversation has started", () => {
     const openSide = vi.fn().mockResolvedValue("side-id");
     const main = fakeComposer({
       lane: "main",
       selected: "free",
-      props: [
-        {
-          browserConversationId: "client-new-thread:draft-9",
-          conversationId: "conv-9",
-          hostId: "local",
-          onCreateSideConversation: openSide,
-        },
-      ],
+      props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
     });
     const { controller } = setup({ composers: [main] });
     expect(openSide).toHaveBeenCalledExactlyOnceWith({
@@ -163,6 +156,45 @@ describe("dual lane controller", () => {
       collaborationMode: { mode: "default", settings: { model: "ds" } },
     });
     expect(controller.status()).toMatchObject({ sideAvailable: true, sideOpen: false });
+    controller.dispose();
+  });
+
+  it("keeps a started conversation on its own Model even though the draft id is still published", () => {
+    // 原生在已有会话的 Composer 上同样保留 browserConversationId；只看草稿
+    // ID 会把正常会话误判成新会话，追着改用户的模型。
+    const main = fakeComposer({
+      lane: "main",
+      selected: "ds",
+      props: [
+        {
+          browserConversationId: "client-new-thread:stale",
+          conversationId: "conv-9",
+          hostId: "local",
+        },
+      ],
+    });
+    const { controller } = setup({ composers: [main] });
+    expect(main.menu?.onSelectModel).not.toHaveBeenCalled();
+    expect(controller.status()).toMatchObject({ draft: false, mainApplied: false });
+    controller.dispose();
+  });
+
+  it("does not try to open a pane before the conversation has started", () => {
+    const openSide = vi.fn().mockResolvedValue("side-id");
+    const draft = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [
+        {
+          browserConversationId: "client-new-thread:draft-9",
+          hostId: "local",
+          onCreateSideConversation: openSide,
+        },
+      ],
+    });
+    const { controller } = setup({ composers: [draft] });
+    expect(openSide).not.toHaveBeenCalled();
+    expect(controller.status()).toMatchObject({ draft: true, sideAvailable: false });
     controller.dispose();
   });
 
@@ -180,34 +212,7 @@ describe("dual lane controller", () => {
     controller.dispose();
   });
 
-  it("opens the side chat at most once for a draft even after the native conversation id changes", () => {
-    // 原生建侧边聊天时会把主 Composer 的 conversationId 换成新会话；按会话
-    // 去重会失效，草稿阶段必须只尝试一次，否则页面会被无限重建拖死。
-    const openSide = vi.fn().mockResolvedValue("side-id");
-    const main = fakeComposer({
-      lane: "main",
-      selected: "free",
-      props: [
-        {
-          browserConversationId: "client-new-thread:draft-9",
-          conversationId: "conv-9",
-          hostId: "local",
-          onCreateSideConversation: openSide,
-        },
-      ],
-    });
-    const { controller, notify } = setup({ composers: [main] });
-    expect(openSide).toHaveBeenCalledOnce();
-    const props = main.props[0];
-    if (props) props.conversationId = "conv-10";
-    notify();
-    if (props) props.conversationId = "conv-11";
-    notify();
-    expect(openSide).toHaveBeenCalledOnce();
-    controller.dispose();
-  });
-
-  it("opens at most once per started conversation even after the native id changes", async () => {
+  it("opens at most once per conversation even when notified repeatedly", () => {
     const openSide = vi.fn().mockResolvedValue("side-id");
     const main = fakeComposer({
       lane: "main",
@@ -215,13 +220,59 @@ describe("dual lane controller", () => {
       props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
     });
     const { controller, notify } = setup({ composers: [main] });
-    expect(openSide).toHaveBeenCalledOnce();
-    await flush();
-    const props = main.props[0];
-    if (props) props.conversationId = "conv-10";
     notify();
-    // 会话身份变了就是另一个会话，允许为新会话再展开一次。
-    expect(openSide).toHaveBeenCalledTimes(2);
+    notify();
+    expect(openSide).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("caps retries when the native hands back a new conversation id without materializing a pane", async () => {
+    // 原生建侧边聊天有可能改掉主会话身份；按会话去重会失效。没有右栏出现
+    // 时不能无限重试，否则页面会被反复重建拖死。
+    const openSide = vi.fn().mockResolvedValue("side-id");
+    const main = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
+    });
+    const { controller, notify } = setup({ composers: [main] });
+    const props = main.props[0];
+    for (let index = 0; index < 10; index += 1) {
+      if (props) props.conversationId = `conv-${index + 10}`;
+      notify();
+      await flush();
+    }
+    expect(openSide.mock.calls.length).toBeGreaterThan(1);
+    expect(openSide.mock.calls.length).toBeLessThanOrEqual(3);
+    controller.dispose();
+  });
+
+  it("refills the retry budget once the right pane is actually visible", async () => {
+    const openSide = vi.fn().mockResolvedValue("side-id");
+    const main = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
+    });
+    const { controller, notify, setPaneOpen } = setup({ composers: [main] });
+    const props = main.props[0];
+    for (let index = 0; index < 6; index += 1) {
+      if (props) props.conversationId = `conv-a${index}`;
+      notify();
+      await flush();
+    }
+    const capped = openSide.mock.calls.length;
+    expect(capped).toBe(3);
+    // 右栏真的出现了，随后用户自己关掉；预算应回满，新会话仍能展开。
+    setPaneOpen(true);
+    notify();
+    await flush();
+    expect(openSide.mock.calls.length).toBe(capped);
+    setPaneOpen(false);
+    if (props) props.conversationId = "conv-b1";
+    notify();
+    await flush();
+    expect(openSide.mock.calls.length).toBe(capped + 1);
     controller.dispose();
   });
 

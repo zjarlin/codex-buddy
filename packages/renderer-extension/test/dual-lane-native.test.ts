@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { laneForComposer, nativeModelMenu, sideChatTarget } from "../src/dual-lane/native.js";
+import {
+  composerIdentity,
+  laneForComposer,
+  nativeModelMenu,
+  sideChatTarget,
+} from "../src/dual-lane/native.js";
 
 const FIBER_PREFIX = "__reactFiber$";
 
@@ -166,5 +171,24 @@ describe("dual lane native contract", () => {
     // 新会话草稿只有 browserConversationId，没有可用的会话 ID。
     expect(sideChatTarget(composer("", [{ onCreateSideConversation: vi.fn() }]))).toBeNull();
     expect(sideChatTarget(composer("", [{ conversationId: "conv-3" }]))).toBeNull();
+  });
+
+  it("reads the draft id and the conversation id as separate signals", () => {
+    // 原生在已有会话上同样保留 browserConversationId；两个字段必须各自报告，
+    // 让上层能区分“还没开始”和“已经开始但带着草稿 ID”。
+    expect(
+      composerIdentity(
+        composer("", [{ browserConversationId: "client-new-thread:draft", conversationId: "c-1" }]),
+      ),
+    ).toEqual({
+      draftId: "client-new-thread:draft",
+      conversationId: "c-1",
+      hostId: null,
+    });
+    expect(composerIdentity(composer("", [{ browserConversationId: "other-id" }]))).toEqual({
+      draftId: null,
+      conversationId: null,
+      hostId: null,
+    });
   });
 });

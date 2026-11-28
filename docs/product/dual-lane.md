@@ -19,7 +19,7 @@ Renderer 默认把对话界面变成左右两栏：左栏是当前主会话，�
 | 左栏（主栏） | `free` | 新会话草稿的原生模型菜单 |
 | 右栏（侧边聊天） | `ds` | 展开 side chat 时传入的 `collaborationMode` |
 
-- 左栏默认模型**只写新会话草稿**。草稿的原生身份是 `browserConversationId = client-new-thread:<uuid>`；已经开始的会话保留它自己的模型，不会被追溯改写。
+- 左栏默认模型**只写新会话草稿**。草稿的原生身份是 `browserConversationId = client-new-thread:<uuid>` **且 `conversationId` 尚未发布**；原生在已有会话的 Composer 上也会保留那个草稿 ID，只看草稿 ID 会把正常会话误判成新会话。已经开始的会话保留它自己的模型，不会被追溯改写。
 - 右栏默认模型通过原生 side chat 创建入口的 `collaborationMode.settings.model` 传入，不需要打开侧栏后再点一次菜单。
 - 强度（reasoning effort）跟随目标模型：目标模型不支持当前强度时，退到该模型自己的默认强度。例如 `free` 只支持 `none`，从 `ds` 的 `high` 切过去会落到 `none`。
 - 模型 ID 直接使用原生 ID（`free`、`ds`、`auto`……），不经过自定义目录。留空表示该栏沿用原生选择（右栏留空则跟随左栏）。
@@ -28,10 +28,10 @@ Renderer 默认把对话界面变成左右两栏：左栏是当前主会话，�
 
 展开需要两个原生条件同时成立，缺一就不展开，也不报错：
 
-1. **原生发布了创建入口**。Desktop 在 Composer 上注入 `onCreateSideConversation`；入口还没发布时留给下一次扫描，不抢写。新会话草稿同样会立即尝试展开，这样默认视图就是双栏。
+1. **会话已经开始**。Desktop 只在已有会话内给 Composer 注入 `onCreateSideConversation`；新会话草稿阶段没有这个入口，此时保持单栏。发出第一条消息、或点开任意已有会话后，右栏自动展开。
 2. **当前没有展开的 side chat**。已经有可见的 `sidechat:` 面板时不重复创建。
 
-去重不能只按会话身份：原生创建侧边聊天会给主 Composer 换一个 `conversationId`，草稿阶段尤其如此。因此草稿最多尝试一次（进程内），已开始的会话按 `hostId:conversationId` 各尝试一次；同时只允许一个创建请求在途，避免原生异步创建期间被重复触发。
+去重按 `hostId:conversationId` 各尝试一次。原生创建侧边聊天有可能在返回前改掉主 Composer 的会话身份，此时按会话去重会失效；因此再加一层“未确认尝试”预算（3 次）封顶，右栏一旦真的出现就清零，避免重复创建把页面拖死。同一时刻只允许一个创建请求在途。
 
 用户自己关掉右栏后，该会话不再自动重开——这是“我暂时不想看”，不是配置变更。把双栏开关关掉再打开则会重新展开，因为那是明确的功能意图。
 
@@ -53,4 +53,5 @@ Renderer 默认把对话界面变成左右两栏：左栏是当前主会话，�
 - 只操作原生已有的结构：模型菜单的 `onSelectModel`、Composer 的 `onCreateSideConversation`、右栏标签页的关闭按钮。任一处结构变化时按“暂不支持”保持单栏，不猜测替代入口。
 - 不改写 `turn/start`、不复制消息、不介入流式投影。
 - 运行在 Renderer，不新增 Host 协议，也不需要 Rust 侧改动。
+- 启动后停在“新聊天”空草稿时只有单栏：原生此时还没有可挂载侧边聊天的会话。它不是一个可以绕开的状态，也不应该靠自动跳到某个历史会话去伪造。
 - Desktop 升级后若右栏标记或 Composer props 改名，表现为右栏不再自动展开；此时按 `codexhost-update-impact-audit` 重新核对本文列出的契约。

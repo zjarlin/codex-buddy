@@ -130,6 +130,40 @@ export function nativeModelMenu(composer: Element): NativeModelMenuBinding | nul
   return null;
 }
 
+/** 原生把新会话草稿的浏览器身份写成这个前缀；有它才说明会话还没开始。 */
+export const DRAFT_PREFIX = "client-new-thread:";
+
+export interface ComposerIdentity {
+  /** 新会话草稿身份；已有会话也可能带上它，所以不能单独用来判断草稿。 */
+  draftId: string | null;
+  /** 原生会话 ID；新会话草稿阶段为 null。 */
+  conversationId: string | null;
+  hostId: string | null;
+}
+
+/**
+ * Composer 上原生发布的三段身份。草稿判定必须同时看 `draftId` 与
+ * `conversationId`：原生在已有会话的 Composer 上也会保留草稿 ID，只看草稿
+ * ID 会把正常会话误判成新会话。
+ */
+export function composerIdentity(composer: Element): ComposerIdentity {
+  let draftId: string | null = null;
+  let conversationId: string | null = null;
+  let hostId: string | null = null;
+  for (const fiber of committedReactAncestors(fiberOf(composer))) {
+    const props = record(fiber.memoizedProps);
+    if (!props) continue;
+    if (draftId === null && typeof props.browserConversationId === "string") {
+      if (props.browserConversationId.startsWith(DRAFT_PREFIX))
+        draftId = props.browserConversationId;
+    }
+    if (conversationId === null && typeof props.conversationId === "string")
+      conversationId = props.conversationId;
+    if (hostId === null && typeof props.hostId === "string") hostId = props.hostId;
+  }
+  return { draftId, conversationId, hostId };
+}
+
 /** 右栏 side chat 的原生会话身份，用于判断同一会话是否已经展开。 */
 export interface SideChatTarget {
   conversationId: string;
@@ -143,19 +177,17 @@ export interface SideChatTarget {
  */
 export function sideChatTarget(composer: Element): SideChatTarget | null {
   let create: ((input: Record<string, unknown>) => Promise<unknown>) | null = null;
-  let conversationId: string | null = null;
-  let hostId: string | null = null;
   for (const fiber of committedReactAncestors(fiberOf(composer))) {
     const props = record(fiber.memoizedProps);
     if (!props) continue;
-    if (!create && typeof props.onCreateSideConversation === "function")
+    if (!create && typeof props.onCreateSideConversation === "function") {
       create = props.onCreateSideConversation as (
         input: Record<string, unknown>,
       ) => Promise<unknown>;
-    if (!conversationId && typeof props.conversationId === "string")
-      conversationId = props.conversationId;
-    if (hostId === null && typeof props.hostId === "string") hostId = props.hostId;
+      break;
+    }
   }
+  const { conversationId, hostId } = composerIdentity(composer);
   if (!create || !conversationId) return null;
   // hostId 只在解析到时传入：显式 null 会让原生改用默认 Host 而不是当前会话。
   const source: Record<string, unknown> = { sourceConversationId: conversationId };

@@ -137,12 +137,19 @@ describe("dual lane controller", () => {
     controller.dispose();
   });
 
-  it("opens the right pane with the side Model once the conversation has started", () => {
+  it("opens the native right pane immediately, including for a new draft", () => {
     const openSide = vi.fn().mockResolvedValue("side-id");
     const main = fakeComposer({
       lane: "main",
       selected: "free",
-      props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
+      props: [
+        {
+          browserConversationId: "client-new-thread:draft-9",
+          conversationId: "conv-9",
+          hostId: "local",
+          onCreateSideConversation: openSide,
+        },
+      ],
     });
     const { controller } = setup({ composers: [main] });
     expect(openSide).toHaveBeenCalledExactlyOnceWith({
@@ -193,12 +200,8 @@ describe("dual lane controller", () => {
     controller.dispose();
   });
 
-  it("waits for the native side chat entry instead of failing when the chat has not started", () => {
-    const main = fakeComposer({
-      lane: "main",
-      selected: "free",
-      props: [{ browserConversationId: "client-new-thread:abc" }],
-    });
+  it("waits for the native side chat entry instead of failing when it is not published yet", () => {
+    const main = fakeComposer({ lane: "main", selected: "free" });
     const { controller } = setup({ composers: [main] });
     expect(controller.status()).toMatchObject({
       sideAvailable: false,

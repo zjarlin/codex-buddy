@@ -159,7 +159,9 @@ export function installDualLane(
     if (!settings.enabled) return;
     // 只有新会话才写主栏默认；已有会话保留它自己的模型。
     if (draftId) applyMainDefault(main, draftId, settings.mainModel);
-    if (!draftId && !state.sideOpen) openSide(main, settings);
+    // 原生 side chat 在新草稿阶段也有创建入口；直接打开，才能让默认视图
+    // 真正呈现为左右两栏，而不是等用户先发送一条消息。
+    if (!state.sideOpen) openSide(main, settings);
   };
 
   const materializeIntervalMs = options.materializeIntervalMs ?? MATERIALIZE_INTERVAL_MS;

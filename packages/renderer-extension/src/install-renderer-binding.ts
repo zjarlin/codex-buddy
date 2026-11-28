@@ -15,7 +15,16 @@ export function installRendererBinding(
   window.__codexhostRendererBindingProbeV1?.dispose();
   const binding = installRendererBindingProbe({ ...(enabledAgents ? { enabledAgents } : {}) });
   dualLane?.dispose();
-  dualLane = installDualLane({ ownerDocument: document, ownerWindow: window });
+  dualLane = null;
+  try {
+    dualLane = installDualLane({ ownerDocument: document, ownerWindow: window });
+  } catch (error) {
+    // 双栏是附加视图；安装失败不能连带阻断原生宿主路由与 Adapter。
+    console.error(
+      "codexhost dual lane installation failed",
+      error instanceof Error ? error.name : "UnknownError",
+    );
+  }
   try {
     const adapter = installCurrentRendererAdapter();
     binding.setAdapter(

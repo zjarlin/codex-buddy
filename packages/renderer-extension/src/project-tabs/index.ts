@@ -601,6 +601,9 @@ export function installProjectTabs(options: {
       item.className = anchor.className;
       item.setAttribute("role", "menuitem");
       item.setAttribute(MOVE, "");
+      // 自己注入的项也标成 renderer 写入：否则「插完项」会被菜单订阅当成新菜单，
+      // 再触发一轮 refresh（结果一致，但白白多一次整侧栏 Fiber 回溯）。
+      item.setAttribute(RENDERER_INJECTED_ATTRIBUTE, "");
       item.tabIndex = -1;
       item.textContent = label;
       item.addEventListener("click", (event) => {
@@ -922,6 +925,21 @@ export function installProjectTabs(options: {
       next.focus();
     }
   };
+  // 原生菜单 portal 到 document.body，不在 #app-shell-sidebar 子树里：只订阅
+  // 侧栏会让「移动到 Tab…」在菜单打开期间永远等不到 refresh（实测侧栏无其他
+  // 变更时注入数为 0，要等聊天流水碰巧触发一次才出现）。这里单独订阅菜单出现，
+  // 范围仍是菜单本身，不扩大到整页流水。
+  //
+  // 注入必须同步完成，不能排进 requestAnimationFrame：菜单打开后用户（或脚本）
+  // 会立刻按 ArrowDown，而一个「没有渲染需求」的帧可以被推迟到键盘事件之后，
+  // 结果就是菜单项在、焦点却已经走过去。refreshMenus 只遍历菜单项并比对标签，
+  // 不回溯 Fiber，同步调用没有性能风险。
+  const stopObservingMenus = getDomMutationHub(document).subscribe({
+    kinds: ["childList"],
+    test: (record) =>
+      !mutationIsRendererOwnedWrite(record) && mutationAffectsElements(record, '[role="menu"]'),
+    onMutate: () => refreshMenus(),
+  });
   const onStorage = (event: StorageEvent): void => {
     // 另一个窗口改了保留来源：按它重新分组即可，不重读项目 Tab 配置。
     if (
@@ -1042,6 +1060,7 @@ export function installProjectTabs(options: {
       refreshQueued = false;
       clearReadRetry();
       stopObserving();
+      stopObservingMenus();
       if (refreshFrame !== null) window.cancelAnimationFrame(refreshFrame);
       refreshFrame = null;
       document.removeEventListener("keydown", onKeyDown, true);

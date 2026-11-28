@@ -455,7 +455,9 @@ test("creating a project while a custom tab is selected assigns it to that tab",
 
   await page.getByRole("button", { name: "创建项目", exact: true }).click();
   await expect(rows(page)).toHaveCount(3);
-  await expect(rows(page)).toContainText("新建项目 1");
+  // rows() 是多元素 locator：toContainText 在 strict 模式下会直接报歧义，
+  // 这里指名新建的那一行，才真正验到「新建项目落在当前选中的 Tab 里」。
+  await expect(rows(page).filter({ hasText: "新建项目 1" })).toHaveCount(1);
   await page.screenshot({ path: info.outputPath("created-in-tab.png") });
 
   await category(page, "项目").click();
@@ -464,7 +466,7 @@ test("creating a project while a custom tab is selected assigns it to that tab",
 
   await page.getByRole("button", { name: "重新安装扩展", exact: true }).click();
   await category(page, "公司的项目").click();
-  await expect(rows(page)).toContainText("新建项目 1");
+  await expect(rows(page).filter({ hasText: "新建项目 1" })).toHaveCount(1);
 });
 
 test("searches project tabs by name and activates the chosen tab", async ({ page }, info) => {
@@ -547,6 +549,68 @@ test("manual move overrides prefixes, survives rename/reinstall and restores aut
   await category(page, "项目").click();
   await expect(rows(page)).toHaveCount(2);
   await expect(rows(page).first()).toContainText("renamed-company");
+});
+
+test("injects the move item into a portal menu even when the sidebar stays untouched", async ({
+  page,
+}) => {
+  // 原生项目菜单 portal 到 document.body，不在 #app-shell-sidebar 子树里。
+  // 早期实现只订阅侧栏，菜单打开期间侧栏没有任何变更时「移动到 Tab…」永远不
+  // 出现（要等聊天流水碰巧刷新一次）。这里用 fixed 定位的菜单模拟 portal，
+  // 并断言在没有任何其他 DOM 变更的前提下注入项同步存在。
+  await setup(page);
+  await expect(rows(page)).toHaveCount(1);
+  await page.evaluate(() => {
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.style.position = "fixed";
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[aria-label="other-project 项目操作"]',
+    );
+    if (!trigger) throw new Error("project menu trigger missing");
+    trigger.onclick = () => {
+      const close = () => menu.remove();
+      const fiber = (props: unknown, parent: unknown = null, key: string | null = null) => ({
+        memoizedProps: props,
+        return: parent,
+        key,
+      });
+      const owner = fiber(
+        {
+          getContextMenuItems: () => [{ id: "edit-project" }],
+          onOpenChange: close,
+        },
+        fiber({
+          project: {
+            projectKind: "local",
+            projectId: "local",
+            label: "other-project",
+            path: "/workspace/local",
+          },
+        }),
+      );
+      for (const [id, label] of [
+        ["edit-project", "编辑"],
+        ["remove-project", "移除项目"],
+      ] as const) {
+        const item = document.createElement("div");
+        item.setAttribute("role", "menuitem");
+        item.textContent = label;
+        Object.defineProperty(item, "__reactFiber$portal", {
+          enumerable: true,
+          value: fiber({}, fiber({}, owner, id)),
+        });
+        item.onclick = close;
+        menu.append(item);
+      }
+      document.body.append(menu);
+      (menu.firstElementChild as HTMLElement | null)?.focus();
+    };
+  });
+  await page.getByRole("button", { name: "other-project 项目操作", exact: true }).click();
+  // 不触发任何侧栏变更，直接断言注入项已经存在（同步完成，不等动画帧）。
+  await expect(page.getByRole("menuitem", { name: "移动到 Tab…" })).toBeVisible();
+  await page.screenshot({ path: "test-results/portal-menu-move.png" });
 });
 
 test("moving a project hides it from Projects immediately and after reinstall", async ({

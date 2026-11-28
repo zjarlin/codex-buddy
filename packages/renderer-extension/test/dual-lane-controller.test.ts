@@ -8,6 +8,8 @@ interface FakeComposer {
   element: Element;
   menu?: { selected: string; onSelectModel: ReturnType<typeof vi.fn> };
   openSide?: ReturnType<typeof vi.fn>;
+  /** 原生读取的 React props；测试直接改写它模拟原生换会话。 */
+  props: Record<string, unknown>[];
 }
 
 function fiberChain(propsList: Record<string, unknown>[]) {
@@ -36,10 +38,8 @@ function fakeComposer(input: {
     ],
     onSelectModel,
   };
-  const chain = fiberChain([
-    {},
-    ...(input.props ?? [{ conversationId: "conv-1", hostId: "local" }]),
-  ]);
+  const props = input.props ?? [{ conversationId: "conv-1", hostId: "local" }];
+  const chain = fiberChain([{}, ...props]);
   const button: Record<string, unknown> = {};
   Object.defineProperty(button, `${FIBER_PREFIX}x`, { value: fiberChain([menuProps]) });
   const element = {
@@ -50,7 +50,12 @@ function fakeComposer(input: {
       input.lane === "side" && selector.includes("right-panel") ? { marker: true } : null,
   } as unknown as Element;
   Object.defineProperty(element, `${FIBER_PREFIX}x`, { value: chain });
-  return { element, menu: { selected: input.selected ?? "ds", onSelectModel } };
+  return { element, props, menu: { selected: input.selected ?? "ds", onSelectModel } };
+}
+
+/** 让原生入口返回的 Promise 与其 then/catch 链走完。 */
+async function flush(): Promise<void> {
+  for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
 }
 
 function setup(input: {
@@ -172,6 +177,71 @@ describe("dual lane controller", () => {
     notify();
     notify();
     expect(openSide).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("opens the side chat at most once for a draft even after the native conversation id changes", () => {
+    // 原生建侧边聊天时会把主 Composer 的 conversationId 换成新会话；按会话
+    // 去重会失效，草稿阶段必须只尝试一次，否则页面会被无限重建拖死。
+    const openSide = vi.fn().mockResolvedValue("side-id");
+    const main = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [
+        {
+          browserConversationId: "client-new-thread:draft-9",
+          conversationId: "conv-9",
+          hostId: "local",
+          onCreateSideConversation: openSide,
+        },
+      ],
+    });
+    const { controller, notify } = setup({ composers: [main] });
+    expect(openSide).toHaveBeenCalledOnce();
+    const props = main.props[0];
+    if (props) props.conversationId = "conv-10";
+    notify();
+    if (props) props.conversationId = "conv-11";
+    notify();
+    expect(openSide).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
+  it("opens at most once per started conversation even after the native id changes", async () => {
+    const openSide = vi.fn().mockResolvedValue("side-id");
+    const main = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
+    });
+    const { controller, notify } = setup({ composers: [main] });
+    expect(openSide).toHaveBeenCalledOnce();
+    await flush();
+    const props = main.props[0];
+    if (props) props.conversationId = "conv-10";
+    notify();
+    // 会话身份变了就是另一个会话，允许为新会话再展开一次。
+    expect(openSide).toHaveBeenCalledTimes(2);
+    controller.dispose();
+  });
+
+  it("keeps working when the native entry throws synchronously", () => {
+    const openSide = vi.fn(() => {
+      throw new Error("native-boom");
+    });
+    const main = fakeComposer({
+      lane: "main",
+      selected: "free",
+      props: [{ conversationId: "conv-9", hostId: "local", onCreateSideConversation: openSide }],
+    });
+    const { controller, notify } = setup({ composers: [main] });
+    expect(openSide).toHaveBeenCalledOnce();
+    expect(controller.status().error).toBe("native-boom");
+    // 同步抛错不能把“正在打开”的闸门永久卡住。
+    const props = main.props[0];
+    if (props) props.conversationId = "conv-10";
+    notify();
+    expect(openSide).toHaveBeenCalledTimes(2);
     controller.dispose();
   });
 

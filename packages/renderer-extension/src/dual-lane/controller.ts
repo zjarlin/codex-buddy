@@ -94,6 +94,13 @@ export function installDualLane(
   const sideAttempted = new Set<string>();
   /** 由本功能展开、仍未收起的会话；关闭双栏时只收起这些。 */
   const openedByUs = new Set<string>();
+  /**
+   * 草稿阶段原生会为新侧边聊天另建会话，主 Composer 的 conversationId 随之
+   * 改变，按会话去重会失效并无限重建。草稿最多尝试一次。
+   */
+  let draftAttempted = false;
+  /** 原生创建是异步的；同一时刻只允许一个请求在途。 */
+  let opening = false;
   const state: DualLaneStatus = {
     enabled: readDualLaneSettings(win).enabled,
     draft: false,
@@ -126,24 +133,41 @@ export function installDualLane(
     }
   };
 
-  const openSide = (composer: Element, settings: DualLaneSettings): void => {
+  const openSide = (composer: Element, settings: DualLaneSettings, draft: boolean): void => {
+    if (opening) return;
     const target = sideChatTarget(composer);
     state.sideAvailable = target !== null;
     if (!target) return;
     const key = `${target.hostId ?? "local"}:${target.conversationId}`;
-    if (sideAttempted.has(key)) return;
+    if (draft) {
+      if (draftAttempted) return;
+      draftAttempted = true;
+    } else if (sideAttempted.has(key)) {
+      return;
+    }
     sideAttempted.add(key);
     openedByUs.add(key);
     remaining = MATERIALIZE_ATTEMPTS;
     const model = settings.sideModel || settings.mainModel;
-    void target
-      .open(model ? { model } : undefined)
-      .then(() => {
-        state.error = null;
-      })
-      .catch((error: unknown) => {
-        state.error = error instanceof Error ? error.message : "side-chat-open-failed";
-      });
+    opening = true;
+    try {
+      // 同步调用：原生入口在同一个任务里就会改会话身份，晚一拍调用会让去重
+      // 依据失真。同步抛错也要保证闸门复位，否则双栏会永久停在这里。
+      const pending = target.open(model ? { model } : undefined);
+      void Promise.resolve(pending)
+        .then(() => {
+          state.error = null;
+        })
+        .catch((error: unknown) => {
+          state.error = error instanceof Error ? error.message : "side-chat-open-failed";
+        })
+        .finally(() => {
+          opening = false;
+        });
+    } catch (error) {
+      state.error = error instanceof Error ? error.message : "side-chat-open-failed";
+      opening = false;
+    }
   };
 
   const scan = (): void => {
@@ -159,9 +183,9 @@ export function installDualLane(
     if (!settings.enabled) return;
     // 只有新会话才写主栏默认；已有会话保留它自己的模型。
     if (draftId) applyMainDefault(main, draftId, settings.mainModel);
-    // 原生 side chat 在新草稿阶段也有创建入口；直接打开，才能让默认视图
-    // 真正呈现为左右两栏，而不是等用户先发送一条消息。
-    if (!state.sideOpen) openSide(main, settings);
+    // 原生 side chat 在新草稿阶段也有创建入口，直接打开才能让默认视图就是
+    // 两栏；草稿只尝试一次，避免原生换会话后反复重建。
+    if (!state.sideOpen) openSide(main, settings, draftId !== null);
   };
 
   const materializeIntervalMs = options.materializeIntervalMs ?? MATERIALIZE_INTERVAL_MS;

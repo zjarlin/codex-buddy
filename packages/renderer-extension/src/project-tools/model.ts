@@ -239,6 +239,7 @@ export function projectToolLabels(locale: string): {
   completed: string;
   failed: string;
   running: string;
+  unavailable: string;
 } {
   if (locale !== "zh-CN") {
     return {
@@ -282,6 +283,7 @@ export function projectToolLabels(locale: string): {
       completed: "Script completed",
       failed: "Script failed",
       running: "Running",
+      unavailable: "This Host connection does not expose project actions.",
     };
   }
   return {
@@ -321,5 +323,6 @@ export function projectToolLabels(locale: string): {
     completed: "脚本执行完成",
     failed: "脚本执行失败",
     running: "执行中",
+    unavailable: "当前 Host 连接不支持项目快捷操作。",
   };
 }

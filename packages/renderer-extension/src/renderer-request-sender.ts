@@ -31,6 +31,18 @@ export function isUnsupportedMethod(error: unknown, method: string): boolean {
   );
 }
 
+/** True when this connection explicitly lacks the RPC method.
+ *
+ * Capability absence never heals on the same connection: distinguishing it from a
+ * real read/write failure keeps "this Host has no such RPC" out of user-facing
+ * error surfaces (and out of retry loops).
+ */
+export function isMethodUnavailable(error: unknown): boolean {
+  if (error instanceof RendererMethodUnavailableError) return true;
+  if (typeof error !== "object" || error === null) return false;
+  return "code" in error && (error as { code?: unknown }).code === -32601;
+}
+
 /** One sender per request client. Only explicit method absence is remembered;
  * successes, params, Harness availability and transient failures are not cached. */
 export function createRendererRequestSender(

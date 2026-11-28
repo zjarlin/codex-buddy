@@ -27,6 +27,7 @@ import { PROJECT_ROW_SELECTOR, rowProject } from "../project-tabs/native-binding
 import type { SidebarProject } from "../project-tabs/model.js";
 import { EDITOR_SELECTOR, sendButtonWithin } from "../renderer-composer-dom.js";
 import { insertNativeTextAtSelection } from "../renderer-native-composer-controller.js";
+import { isMethodUnavailable } from "../renderer-request-sender.js";
 import { nativeProjectStart } from "../renderer-native-project-start.js";
 import { sessionDraftText } from "../renderer-session-targets.js";
 import { findComposerModelTarget } from "../versioned-renderer-adapter.js";
@@ -107,6 +108,8 @@ export function installProjectTools(options: {
   let failure: unknown = null;
   let loadedClient: ProjectToolsPersistenceClient | null = null;
   let loading = false;
+  // 明确没有 project-tools RPC 的连接：能力缺失不会自愈，只有换连接实例才值得重试。
+  const unreadableClients = new WeakSet<object>();
   let resolveReady: () => void = () => undefined;
   let readySettled = false;
   const ready = new Promise<void>((resolve) => {
@@ -512,6 +515,14 @@ export function installProjectTools(options: {
   };
   const persist = async (next: ProjectToolsConfig): Promise<void> => {
     const client = persistenceClient();
+    if (client && unreadableClients.has(client)) {
+      // 连接明确没有 project-tools RPC：Host 侧永远不会写成功，而且这个连接也
+      // 不会给出 metadataPath。此时保存只能落本地镜像，不该报「元数据路径未就绪」。
+      mirror(next);
+      failure = null;
+      refresh();
+      return;
+    }
     if (!client) {
       if (!metadataPath) {
         throw new Error("Codex Buddy 元数据路径尚未就绪，无法保存配置。");
@@ -522,7 +533,18 @@ export function installProjectTools(options: {
       refresh();
       return;
     }
-    const state = await client.setProjectTools(next);
+    let state: Awaited<ReturnType<typeof client.setProjectTools>>;
+    try {
+      state = await client.setProjectTools(next);
+    } catch (error) {
+      if (!isMethodUnavailable(error)) throw error;
+      // 写的时候才发现这个连接没有该 RPC：同样按「能力缺失」处理，落本地镜像。
+      unreadableClients.add(client);
+      mirror(next);
+      failure = null;
+      refresh();
+      return;
+    }
     if (!state.config) throw new Error("Local Host returned an empty project tools configuration");
     mirror(state.config);
     loadedClient = client;
@@ -598,7 +620,12 @@ export function installProjectTools(options: {
         showToast(result.state === "running" ? labels.started : labels.completed);
       }
     } catch (error) {
-      showToast(error instanceof Error ? error.message : String(error), "failed");
+      if (isMethodUnavailable(error)) {
+        unreadableClients.add(client);
+        showToast(labels.unavailable, "failed");
+      } else {
+        showToast(error instanceof Error ? error.message : String(error), "failed");
+      }
     } finally {
       busy.delete(key);
       refresh();
@@ -783,8 +810,9 @@ export function installProjectTools(options: {
   const refresh = (): void => {
     if (disposed) return;
     const client = persistenceClient();
-    if (!client) resolveReady();
-    if (client && client !== loadedClient && !loading) {
+    // 该连接没有 project-tools RPC：静默退回本地镜像，既不重复请求也不报错。
+    if (!client || unreadableClients.has(client)) resolveReady();
+    if (client && !unreadableClients.has(client) && client !== loadedClient && !loading) {
       loading = true;
       loadedClient = client;
       void client
@@ -798,6 +826,15 @@ export function installProjectTools(options: {
             resolveReady();
           },
           (error) => {
+            if (disposed) return;
+            if (isMethodUnavailable(error)) {
+              // 「Host 不支持」不是读写失败：标记连接并保持本地镜像可用。
+              unreadableClients.add(client);
+              loadedClient = null;
+              failure = null;
+              resolveReady();
+              return;
+            }
             failure = error;
           },
         )

@@ -31,6 +31,7 @@ import {
 import { sidebarThreadNativeStatus } from "../renderer-sidebar-thread-status.js";
 import { nativeProjectStart } from "../renderer-native-project-start.js";
 import { createPendingFolderThreads, type PendingThreadRow } from "./pending-threads.js";
+import { isMethodUnavailable } from "../renderer-request-sender.js";
 
 const BAR_ATTRIBUTE = "data-codexhost-thread-folders";
 const MOVE_ATTRIBUTE = "data-codexhost-thread-folder-move";
@@ -144,6 +145,9 @@ export function installThreadFolders(options: {
   let revision = 0;
   let loadedClient: ThreadFoldersClient | null = null;
   let loadingClient: ThreadFoldersClient | null = null;
+  // 明确没有 thread-folders RPC 的连接：能力缺失不会自愈，重试只会把同一句
+  // 「Host 不支持」重复渲染到每个项目的 bar 上。
+  const unreadableClients = new WeakSet<object>();
   let hostWrite = Promise.resolve();
   let disposed = false;
   let scheduled = false;
@@ -217,7 +221,8 @@ export function installThreadFolders(options: {
   const persist = async (next: ThreadFoldersConfig): Promise<void> => {
     try {
       const client = persistenceClient();
-      if (!client) {
+      // 没有 thread-folders RPC 的连接与「没有连接」等价：只落本地镜像。
+      if (!client || unreadableClients.has(client)) {
         revision += 1;
         mirror(next, true);
         failure = null;
@@ -232,6 +237,16 @@ export function installThreadFolders(options: {
       failure = null;
       refresh();
     } catch (error) {
+      if (isMethodUnavailable(error)) {
+        // 写不进去的原因是这个连接没有该能力：静默降级为本地镜像。
+        const client = persistenceClient();
+        if (client) unreadableClients.add(client);
+        revision += 1;
+        mirror(next, true);
+        failure = null;
+        refresh();
+        return;
+      }
       failure = error;
       refresh();
       throw error;
@@ -719,7 +734,12 @@ export function installThreadFolders(options: {
     scheduled = false;
     if (disposed) return;
     const client = persistenceClient();
-    if (client && client !== loadedClient && client !== loadingClient) {
+    if (
+      client &&
+      !unreadableClients.has(client) &&
+      client !== loadedClient &&
+      client !== loadingClient
+    ) {
       loadingClient = client;
       const startedRevision = revision;
       let localSnapshot: string | null = null;
@@ -749,6 +769,13 @@ export function installThreadFolders(options: {
           if (disposed || loadingClient !== client) return;
           loadingClient = null;
           loadedClient = client;
+          if (isMethodUnavailable(error)) {
+            // 「Host 不支持」不是读写失败：静默退回本地镜像，文件夹仍照常投影。
+            unreadableClients.add(client);
+            failure = null;
+            refresh();
+            return;
+          }
           failure = error;
           refresh();
         }

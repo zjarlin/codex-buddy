@@ -43,7 +43,7 @@ import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { createRecentSectionCollapse } from "./recent-section.js";
 import { createProjectTabSearch } from "./search-picker.js";
 import { projectTabsStyle } from "./styles.js";
-import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
+import { isMethodUnavailable } from "../renderer-request-sender.js";
 
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const HIDDEN = "data-codexhost-project-tab-hidden";
@@ -314,12 +314,7 @@ export function installProjectTabs(options: {
 
   // 只有「该连接明确没有这个方法」才算永久失败：换一个连接实例还可能成功，
   // 同一个连接重试一万次也不会多出方法。
-  const isPermanentReadFailure = (error: unknown): boolean => {
-    if (error instanceof RendererMethodUnavailableError) return true;
-    if (typeof error !== "object" || error === null) return false;
-    const code = "code" in error ? (error as { code?: unknown }).code : undefined;
-    return code === -32601;
-  };
+  const isPermanentReadFailure = isMethodUnavailable;
   const clearReadRetry = (): void => {
     if (readRetryTimer !== null) window.clearTimeout(readRetryTimer);
     readRetryTimer = null;

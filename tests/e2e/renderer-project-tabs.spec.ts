@@ -11,7 +11,7 @@ const { outputFiles } = await build({
     contents: `
       import { installProjectTabs } from "./packages/renderer-extension/src/project-tabs/index.ts";
       import { installRendererProjectActions } from "./packages/renderer-extension/src/renderer-project-actions.ts";
-      globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null, threads = false, sourceProjects = null, origins = null, unavailableHosts = [] } = {}) => {
+      globalThis.setup = ({ dark = false, corrupt = false, failSave = false, persistentHost = false, initialConfig = null, recent = null, threads = false, sourceProjects = null, origins = null, unavailableHosts = [], unsupportedHost = false } = {}) => {
         document.documentElement.lang = "zh-CN";
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
         document.body.innerHTML = '<style>body{margin:0;font:14px/1.5 system-ui;background:light-dark(#fff,#202020);color:light-dark(#222,#eee)}aside{width:310px;padding:12px;background:light-dark(#fafafa,#252525);min-height:100vh;box-sizing:border-box}h2{font-size:14px;color:#888;margin:8px}button{color:inherit;cursor:pointer}section>div[role=listitem]{padding:10px 8px}.row{display:flex;gap:8px}.row>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.row button{border:0;background:transparent}.thread{margin:8px 0 4px 22px;color:#888}nav{display:flex;gap:5px;padding:8px}nav button{border:1px solid #8885;border-radius:5px;padding:4px 8px;background:transparent}[role=menu]{position:fixed;top:170px;left:100px;z-index:10;background:light-dark(#fff,#292929);padding:6px;border:1px solid #8884;border-radius:8px;min-width:180px;box-shadow:0 4px 18px #0002}[role=menuitem]{padding:5px 8px;border-radius:4px}[role=menuitem]:focus{background:#8883;outline:none}footer{padding:12px;display:flex;gap:4px;flex-wrap:wrap}</style><aside id="app-shell-sidebar"><h2>项目</h2><nav><button id="all">全部</button><button id="active">进行中</button></nav><section id="projects"></section><footer><button id="create" data-app-action-sidebar-project-create>创建项目</button><button id="rename">重命名公司项目</button><button id="rerender">重新渲染项目</button><button id="dispose">卸载扩展</button><button id="restart">重新安装扩展</button></footer></aside>';
@@ -140,13 +140,19 @@ const { outputFiles } = await build({
           saveGate = null;
           releaseSave?.();
         };
+        const unsupported = () => Object.assign(
+          new Error("codexhost/settings/project-tabs/get is unsupported on this Host connection"),
+          { name: "RendererMethodUnavailableError", code: -32601 },
+        );
         const hostClient = {
           getProjectTabs: async () => {
             hostReads += 1;
+            if (unsupportedHost) throw unsupported();
             if (hostReadError) throw new Error(hostReadError);
             return { config: hostConfig };
           },
           setProjectTabs: async (config) => {
+            if (unsupportedHost) throw unsupported();
             if (saveGate) await saveGate;
             return { config: hostConfig = structuredClone(config) };
           },
@@ -210,6 +216,7 @@ const { outputFiles } = await build({
   format: "iife",
   platform: "browser",
   target: "es2024",
+  loader: { ".css": "text", ".png": "dataurl", ".svg": "dataurl" },
   write: false,
 });
 const bundle = (() => {
@@ -233,6 +240,7 @@ async function setup(
     sourceProjects?: unknown[];
     origins?: Record<string, string | null>;
     unavailableHosts?: string[];
+    unsupportedHost?: boolean;
   } = {},
 ) {
   await page.setViewportSize({ width: options.width ?? 960, height: 760 });
@@ -965,4 +973,27 @@ test("groups projects without Git by name and keeps distinct Git repositories ap
   await expect(dialog.locator(".project-source-choice")).toHaveCount(2);
   await dialog.getByRole("button", { name: "稍后决定" }).click();
   await expect(page.locator("[data-sidebar-project-container-id]:visible")).toHaveCount(4);
+});
+
+test("a Host connection without project-tab RPCs backs off instead of retrying forever", async ({
+  page,
+}, info) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(String(error)));
+  await setup(page, { persistentHost: true, unsupportedHost: true });
+  // Host 明确拒绝该 RPC 时，旧实现会在微任务里「失败 → refresh → 再失败」，
+  // 真机实测 1 秒内打出约 1.6 万次请求、主线程 100%，页面表现为「无响应」。
+  await page.waitForTimeout(500);
+  const reads = await page.evaluate(() => Reflect.get(globalThis, "projectTabsHostReads")());
+  expect(reads).toBeLessThanOrEqual(3);
+  // 能力缺失不是读写失败：侧栏顶上不该出现红字提示。
+  await expect(page.locator("[data-codexhost-project-tabs-error]")).toBeHidden();
+  // 页面必须仍然可交互：本地镜像照常分类。
+  await category(page, "公司的项目").click();
+  await expect(category(page, "公司的项目")).toHaveAttribute("aria-pressed", "true");
+  await page.screenshot({ path: info.outputPath("unsupported-host-local-only.png") });
+  // 第二个退避窗口内不得再有新的读取（跨窗口的风暴同样会饿死主线程）。
+  await page.waitForTimeout(1_000);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "projectTabsHostReads")())).toBe(reads);
+  expect(pageErrors).toEqual([]);
 });

@@ -43,6 +43,7 @@ import { getDomMutationHub } from "../renderer-mutation-hub.js";
 import { createRecentSectionCollapse } from "./recent-section.js";
 import { createProjectTabSearch } from "./search-picker.js";
 import { projectTabsStyle } from "./styles.js";
+import { RendererMethodUnavailableError } from "../renderer-request-sender.js";
 
 const SIDEBAR_SCOPE = "#app-shell-sidebar";
 const HIDDEN = "data-codexhost-project-tab-hidden";
@@ -53,6 +54,11 @@ const SIDEBAR_THREAD_ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
 const SIDEBAR_THREAD_ID_ATTRIBUTE = "data-app-action-sidebar-thread-id";
 const SIDEBAR_THREAD_HOST_ID_ATTRIBUTE = "data-app-action-sidebar-thread-host-id";
 const CREATE_INTENT_TTL_MS = 2 * 60 * 1000;
+// Host 读取失败后的重试节奏。读失败曾经在微任务里立刻重试（catch 里直接
+// refresh()），而 refresh() 又会立刻 replay 同一个失败读取 —— 宏任务永远排不上，
+// 主线程被 1.6 万次/秒的 RPC 打满，整个页面表现为「无响应」。任何重试都必须
+// 落到定时器上，且必须退避。
+const HOST_READ_RETRY_DELAYS_MS = [1_000, 5_000, 15_000, 60_000] as const;
 
 interface ProjectTabsPersistenceClient {
   getProjectTabs?(): Promise<ProjectTabsState>;
@@ -140,6 +146,14 @@ export function installProjectTabs(options: {
   const menus = new Map<HTMLElement, { anchor: HTMLElement; item: HTMLElement }>();
   let loadedClient: Required<ProjectTabsPersistenceClient> | null = null;
   let loadingClient: Required<ProjectTabsPersistenceClient> | null = null;
+  // 明确不支持项目 Tab RPC 的连接：能力缺失不会自愈，只有换成另一个连接实例
+  // 才值得重新尝试。放在 WeakSet 里，连接被替换后自然重新读取。
+  const unreadableClients = new WeakSet<object>();
+  let readRetryTimer: number | null = null;
+  let readRetryAttempt = 0;
+  let readRetryAt = 0;
+  let refreshing = false;
+  let refreshQueued = false;
   let hostWrite = Promise.resolve();
   // Host 客户端尚未就绪时，选择先落到 localStorage 镜像并在这里排队；
   // 客户端出现后必须先补写这份更新，再读取 Host，否则旧 Host 配置会覆盖
@@ -298,6 +312,31 @@ export function installProjectTabs(options: {
     picker.showModal();
   };
 
+  // 只有「该连接明确没有这个方法」才算永久失败：换一个连接实例还可能成功，
+  // 同一个连接重试一万次也不会多出方法。
+  const isPermanentReadFailure = (error: unknown): boolean => {
+    if (error instanceof RendererMethodUnavailableError) return true;
+    if (typeof error !== "object" || error === null) return false;
+    const code = "code" in error ? (error as { code?: unknown }).code : undefined;
+    return code === -32601;
+  };
+  const clearReadRetry = (): void => {
+    if (readRetryTimer !== null) window.clearTimeout(readRetryTimer);
+    readRetryTimer = null;
+  };
+  // 下一轮读取只能由定时器发起；绝不在失败路径里同步重进 refresh()。
+  const scheduleReadRetry = (): void => {
+    if (disposed || readRetryTimer !== null) return;
+    const last = HOST_READ_RETRY_DELAYS_MS[HOST_READ_RETRY_DELAYS_MS.length - 1] ?? 60_000;
+    const delay = HOST_READ_RETRY_DELAYS_MS[readRetryAttempt] ?? last;
+    readRetryAttempt += 1;
+    readRetryAt = Date.now() + delay;
+    readRetryTimer = window.setTimeout(() => {
+      readRetryTimer = null;
+      readRetryAt = 0;
+      refresh();
+    }, delay);
+  };
   const persistenceClient = (): Required<ProjectTabsPersistenceClient> | null => {
     const client = options.getClient?.();
     return client?.getProjectTabs && client.setProjectTabs
@@ -341,9 +380,10 @@ export function installProjectTabs(options: {
         config = next;
         refresh();
       }
-      if (!client) {
-        // Host 暂不可用不是存储失败：先保住本地镜像和待同步配置，界面照常
-        // 更新；等 setAdapter() 带来新客户端时再由 refresh() 补写并读取。
+      if (!client || unreadableClients.has(client)) {
+        // Host 暂不可用（或该连接明确没有项目 Tab RPC）不是存储失败：先保住
+        // 本地镜像和待同步配置，界面照常更新；等 setAdapter() 带来新客户端时
+        // 再由 refresh() 补写并读取。
         mirror(next, true);
         pendingHostConfig = { revision: requestedRevision, config: next };
         failure = null;
@@ -356,6 +396,20 @@ export function installProjectTabs(options: {
       failure = null;
       refresh();
     } catch (error) {
+      if (isPermanentReadFailure(error)) {
+        // 写不进去的原因是这个连接没有该能力：标记后静默降级为本地镜像，
+        // 不把「Host 不支持」渲染成用户可见的读写失败。
+        const client = persistenceClient();
+        if (client) unreadableClients.add(client);
+        clearReadRetry();
+        readRetryAt = 0;
+        readRetryAttempt = 0;
+        pendingHostConfig = { revision, config: next };
+        mirror(next);
+        failure = null;
+        refresh();
+        throw error;
+      }
       failure = error;
       refresh();
       throw error;
@@ -600,6 +654,10 @@ export function installProjectTabs(options: {
         }
         if (localReadFailure) localReadFailure = null;
         failure = null;
+        // 读取成功：退避状态与永久不可用标记一起复位，后续 refresh() 正常直读。
+        clearReadRetry();
+        readRetryAt = 0;
+        readRetryAttempt = 0;
         refresh();
       } catch (error) {
         if (disposed || loadingClient !== client) return;
@@ -607,21 +665,68 @@ export function installProjectTabs(options: {
         // 读取失败后不记成已加载：下一次 refresh()（侧栏变化、Host 路由切换、
         // storage 事件或适配器更新）会重试，而不是永久停在“读写失败”。
         loadedClient = null;
+        if (isPermanentReadFailure(error)) {
+          // 连接没有项目 Tab RPC：重试毫无意义，重试还会把主线程烧死。标记该
+          // 连接并静默退回本地镜像。
+          unreadableClients.add(client);
+          clearReadRetry();
+          readRetryAt = 0;
+          readRetryAttempt = 0;
+          // 用户明确做过的选择已在本地镜像里；能力缺失不是读写失败。
+          // 待补写的配置保留着：将来换成可读连接时仍然要先写回再读。
+          failure = null;
+          refresh();
+          return;
+        }
         failure = error;
+        // 关键：失败后只能退避重试，绝不能同步重进 refresh()。
+        scheduleReadRetry();
         refresh();
       }
     })();
   };
+  // 重入保护：refresh 由观察者、storage、Host 回调、对话框等多路触发，
+  // 任何一条路径在 refresh 里再次同步触发 refresh 都会把主线程锁死。
+  // 重入时只记一次「稍后再跑」，跑完再补一轮。
   function refresh(): void {
+    if (disposed) {
+      return;
+    }
+    if (refreshing) {
+      refreshQueued = true;
+      return;
+    }
+    refreshing = true;
+    try {
+      runRefresh();
+    } finally {
+      refreshing = false;
+      if (refreshQueued && !disposed) {
+        refreshQueued = false;
+        refresh();
+      }
+    }
+  }
+  function runRefresh(): void {
     if (disposed) {
       return;
     }
     collapseRecents(config.selected);
     const client = persistenceClient();
-    if (client && client !== loadedClient && client !== loadingClient) {
-      syncLoadedClient(client, pendingHostConfig);
-    } else if (!client && localReadFailure) {
+    if (!client && localReadFailure) {
       failure = localReadFailure;
+    }
+    if (
+      client &&
+      client !== loadedClient &&
+      client !== loadingClient &&
+      !unreadableClients.has(client) &&
+      Date.now() >= readRetryAt
+    ) {
+      syncLoadedClient(client, pendingHostConfig);
+    } else if (client && !loadedClient && !loadingClient && !unreadableClients.has(client)) {
+      // 仍在退避窗口内：等定时器，不在这里重进。
+      scheduleReadRetry();
     }
     const rows = [...document.querySelectorAll<HTMLElement>(PROJECT_ROW_SELECTOR)];
     const rowProjects = rows.map((row) => ({ row, project: rowProject(row) }));
@@ -934,6 +1039,8 @@ export function installProjectTabs(options: {
     revealThread,
     dispose() {
       disposed = true;
+      refreshQueued = false;
+      clearReadRetry();
       stopObserving();
       if (refreshFrame !== null) window.cancelAnimationFrame(refreshFrame);
       refreshFrame = null;
